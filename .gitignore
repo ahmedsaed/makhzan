@@ -35,3 +35,6 @@ seed/*.dump
 # Playwright MCP scratch output (page snapshots, console logs)
 .playwright-mcp/
 seed/makhzan-prod-latest.dump
+
+# Agent worktrees (Claude Code); never part of the repo.
+.claude/worktrees/

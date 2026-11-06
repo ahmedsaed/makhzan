@@ -27,7 +27,7 @@ per-domain strategies** and makes suppliers **data-driven** instead of hardcoded
 | Cross-supplier dedup | `packages/schemas/makhzan_schemas/grouping.py` | MPN-centric `base_key`; `_AMBIGUOUS`/`_NOISE` electronics tokens |
 | Search ranking | `packages/schemas/makhzan_schemas/search.py` | `part_number` weighted first |
 | Normalize wiring | `apps/ingestion/worker/normalize.py` | hardcodes `extract_part_number()` per item |
-| UI copy | `apps/web/lib/i18n.ts`, `apps/web/components/popular-categories.tsx` | "part number", "try ESP32", electronics emoji map |
+| UI copy | page copy in `apps/web/app/` (English only since the November 2026 redesign) | examples such as "ESP32" in the search placeholder |
 | Supplier list | `apps/ingestion/worker/sources/*.py` | hardcoded `register(...)` calls |
 
 **Core gap:** there is no first-class notion of a **domain/vertical**. Category is a
