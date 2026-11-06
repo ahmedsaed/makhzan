@@ -1,0 +1,147 @@
+"""reindex_all — the product documents it writes, with Meilisearch faked.
+
+What is pinned here is `supplier_slugs`, which powers "search within this shop".
+It is not a Product column but is gathered from the product's listings, so a
+mistake shows up only as a shop page quietly missing or keeping products.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.enums import ListingStatus, SourceType
+from makhzan_schemas.models import Listing, Product, Supplier
+from makhzan_schemas.search import FILTERABLE_ATTRIBUTES
+
+from worker.indexer import reindex_all
+
+
+class _Task:
+    task_uid = 0
+
+
+class FakeIndex:
+    def __init__(self) -> None:
+        self.documents: list[dict] = []
+        self.settings: dict = {}
+
+    def update_settings(self, settings: dict) -> _Task:
+        self.settings = settings
+        return _Task()
+
+    def delete_all_documents(self) -> _Task:
+        self.documents = []
+        return _Task()
+
+    def add_documents(self, docs: list[dict]) -> _Task:
+        self.documents.extend(docs)
+        return _Task()
+
+
+class FakeClient:
+    def __init__(self) -> None:
+        self.products = FakeIndex()
+
+    def create_index(self, name: str, options: dict) -> _Task:
+        return _Task()
+
+    def wait_for_task(self, uid: int) -> None:
+        pass
+
+    def index(self, name: str) -> FakeIndex:
+        return self.products
+
+
+def _supplier(slug: str) -> Supplier:
+    return Supplier(id=uuid.uuid4(), slug=slug, name=slug, source_type=SourceType.SCRAPED)
+
+
+def _listing(supplier: Supplier, product: Product, status=ListingStatus.ACTIVE) -> Listing:
+    return Listing(
+        id=uuid.uuid4(),
+        supplier_id=supplier.id,
+        product_id=product.id,
+        source=supplier.slug,
+        source_type=SourceType.SCRAPED,
+        external_id=str(uuid.uuid4()),
+        title_en="LM358 Op-Amp",
+        status=status,
+        images=[],
+        attributes={},
+    )
+
+
+async def _reindex() -> dict[str, dict]:
+    client = FakeClient()
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+    return {doc["title_en"]: doc for doc in client.products.documents}
+
+
+async def _seed(*rows) -> None:
+    async with SessionLocal() as session:
+        session.add_all([r for r in rows if not isinstance(r, Listing)])
+        await session.flush()
+        session.add_all([r for r in rows if isinstance(r, Listing)])
+        await session.commit()
+
+
+async def test_documents_name_every_shop_with_an_active_offer():
+    shop_a, shop_b, shop_c = _supplier("shop-a"), _supplier("shop-b"), _supplier("shop-c")
+    shared = Product(id=uuid.uuid4(), group_key="mpn:lm358", title_en="shared")
+    single = Product(id=uuid.uuid4(), group_key="single:x", title_en="single")
+    await _seed(
+        shop_a,
+        shop_b,
+        shop_c,
+        shared,
+        single,
+        _listing(shop_b, shared),
+        _listing(shop_a, shared),
+        # Two offers from one shop name it once.
+        _listing(shop_a, shared),
+        _listing(shop_c, single),
+    )
+
+    docs = await _reindex()
+
+    assert docs["shared"]["supplier_slugs"] == ["shop-a", "shop-b"]
+    assert docs["single"]["supplier_slugs"] == ["shop-c"]
+
+
+async def test_an_archived_offer_does_not_keep_a_product_in_a_shop():
+    """A sweep archives what a shop dropped; its search must drop it too."""
+    live, gone = _supplier("shop-a"), _supplier("shop-b")
+    product = Product(id=uuid.uuid4(), group_key="mpn:ne555", title_en="ne555")
+    await _seed(
+        live,
+        gone,
+        product,
+        _listing(live, product),
+        _listing(gone, product, status=ListingStatus.ARCHIVED),
+    )
+
+    docs = await _reindex()
+
+    assert docs["ne555"]["supplier_slugs"] == ["shop-a"]
+
+
+async def test_a_product_without_listings_has_an_empty_list():
+    """Empty, not missing: a filter on a missing attribute and on an empty one
+    both match nothing, but a document shape that varies is a trap for readers."""
+    await _seed(Product(id=uuid.uuid4(), group_key="single:orphan", title_en="orphan"))
+
+    docs = await _reindex()
+
+    assert docs["orphan"]["supplier_slugs"] == []
+
+
+async def test_supplier_slugs_is_filterable():
+    """The shop filter is silently empty unless the index lists it as filterable."""
+    client = FakeClient()
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+
+    assert "supplier_slugs" in FILTERABLE_ATTRIBUTES
+    assert "supplier_slugs" in client.products.settings["filterableAttributes"]

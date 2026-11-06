@@ -77,6 +77,7 @@ async def test_filters_are_forwarded_verbatim(client, backend):
         "min_price": 50.0,
         "max_price": 500.0,
         "min_suppliers": None,
+        "shop": None,
         "sort": "price:asc",
         "limit": 10,
         "offset": 20,
@@ -97,6 +98,7 @@ async def test_defaults_when_nothing_is_supplied(client, backend):
         "min_price": None,
         "max_price": None,
         "min_suppliers": None,
+        "shop": None,
         "sort": None,
         "limit": 24,
         "offset": 0,
@@ -226,3 +228,30 @@ async def test_the_response_says_whether_the_query_was_identifier_shaped(
     body = (await client.get(f"/search?q={query}")).json()
 
     assert body["identifier_query"] is expected
+
+
+async def test_shop_is_forwarded(client, backend):
+    """Search within a shop: the shop page's search box."""
+    await client.get("/search?q=LM358&shop=shop-a&facets=true")
+
+    assert backend.call["shop"] == "shop-a"
+    assert backend.call["facets"] is True
+
+
+@pytest.mark.parametrize(
+    "shop",
+    [
+        'shop-a" OR domain = "tools',  # a quote would end the filter's string
+        "shop a",  # whitespace
+        "shop%2Fa",  # a path separator
+        "",  # present but empty
+        "x" * 121,  # longer than any slug column allows
+    ],
+)
+async def test_a_shop_that_is_not_a_slug_is_rejected(client, backend, shop):
+    """The value is interpolated into a Meilisearch filter expression, so the
+    pattern is the allow-list that keeps anything else out of it."""
+    response = await client.get("/search", params={"shop": shop})
+
+    assert response.status_code == 422
+    assert backend.calls == []
