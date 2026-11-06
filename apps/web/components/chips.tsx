@@ -67,7 +67,7 @@ export function ChipBar({
     <nav
       aria-label={label}
       className={cn(
-        "-my-1 flex items-center gap-2 overflow-x-auto py-1 [scrollbar-width:none]",
+        "-my-1 flex [scrollbar-width:none] items-center gap-2 overflow-x-auto py-1",
         className,
       )}
     >

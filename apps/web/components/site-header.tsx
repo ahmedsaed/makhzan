@@ -33,7 +33,14 @@ export function SiteHeader({ search = true }: { search?: boolean }) {
         {search && (
           // The fallback is the same field without the current query: the
           // header must never render without its search, even for a moment.
-          <Suspense fallback={<SearchField compact className="order-last w-full md:order-none md:max-w-xl md:flex-1" />}>
+          <Suspense
+            fallback={
+              <SearchField
+                compact
+                className="order-last w-full md:order-none md:max-w-xl md:flex-1"
+              />
+            }
+          >
             <HeaderSearch className="order-last w-full md:order-none md:max-w-xl md:flex-1" />
           </Suspense>
         )}
