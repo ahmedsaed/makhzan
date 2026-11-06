@@ -85,6 +85,11 @@ function listing(id, productId, supplier) {
   };
 }
 
+/** A fixture shop's display name, for search hits scoped to it. */
+export function shopName(slug) {
+  return summaries().find((s) => s.slug === slug)?.name ?? null;
+}
+
 /** `[status, body]` for a shop route, or null when the path is not one. */
 export function shopRoute(path) {
   const shops = summaries();
