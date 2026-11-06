@@ -237,7 +237,8 @@ function Carries({ supplier }: { supplier: SupplierProfile }) {
             {share.domain ? (
               <Link
                 href={shopSearchUrl(supplier.slug, { domain: share.domain })}
-                className="hover:text-ink hover:underline"
+                // 44px to tap on phones (S4), though it reads as a line of text.
+                className="inline-flex min-h-11 items-center hover:text-ink hover:underline lg:min-h-0"
               >
                 {share.label}
               </Link>

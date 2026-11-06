@@ -44,8 +44,10 @@ export function Chip({
 export function chipClass(active = false): string {
   return cn(
     // 36px drawn, 44px tappable (S4): an invisible 4px extension above and
-    // below, which the chip bar's own padding leaves room for.
-    "relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm whitespace-nowrap after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']",
+    // below the border, which the chip bar's own padding leaves room for. 5px
+    // from the padding box, which is where an absolute child is measured from,
+    // and which sits 1px inside the border.
+    "relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm whitespace-nowrap after:absolute after:inset-x-0 after:-inset-y-[5px] after:content-['']",
     active
       ? "border-chip-on bg-chip-on text-chip-on-ink"
       : "border-line-strong bg-surface text-ink hover:border-ink-3",
