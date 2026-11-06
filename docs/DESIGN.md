@@ -56,8 +56,8 @@ Measured on 60.9k active listings (November 2026).
 ├── /trades                     All 16 trades, each saying what's inside
 │   └── /trades/{trade}         Group tiles, category tiles, results underneath
 │       └── /trades/{trade}/{category}   the same page, narrowed
-├── /shops                      Every shop with products, in stock, last checked
-│   └── /shops/{shop}           Freshness, search this shop, what they carry
+├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
+│   └── /shops/{shop}           Freshness, what they carry, its products as scoped results
 ├── /how-we-crawl               The crawling policy, written for suppliers
 └── /for-suppliers              Remove, add or correct a shop (requests, by email)
 
@@ -107,10 +107,18 @@ and its top categories in words ("O-rings, bearings, oil seals"). The top 8, the
 tiles; the selected group's categories as smaller object tiles; then results with the
 chip bar. No page is a dead-end list of links.
 
-**All shops and a shop.** Each shop with products, in stock and last checked. A shop
-page: name, stat tiles (products, in stock, last checked), a plain-language note when
-its data is stale, "Visit {site}", search within the shop, what it carries (a bar by
-trade), biggest categories, and "Own this shop? Add your details."
+**All shops and a shop.** Each shop with products, in stock and last checked: rows in
+one card on phones; from `md` a grid of cards (2 across, 4 from `xl`), each adding a bar
+of what the shop carries and its two counts as figures. A shop page: a header band with
+name, stat tiles (products, in stock, last checked), a plain-language note when its data
+is stale, "Visit {site}", search within the shop and what it carries (a bar by trade).
+On desktop the band uses the full width: name and search on the left, tiles and "Visit"
+on the right, the note and the bar across. Below it the page is search scoped to the
+shop, on the same URL (`/shops/{shop}?category=…`): chips, rail, toolbar, list/grid,
+paging. Rows leave out the shop's name, which would only repeat the heading (the one
+exception to C1's "shop name"); a product other shops sell keeps its "N shops" badge.
+"Biggest categories" is a phone list only, since the desktop rail already lists them.
+Then "Own this shop? Add your details."
 
 **Desktop.** Results get a side rail (category, price); the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
