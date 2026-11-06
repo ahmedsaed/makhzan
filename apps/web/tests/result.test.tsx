@@ -59,6 +59,28 @@ describe.each([
     expect(item.queryByText(/shops$/)).not.toBeInTheDocument();
   });
 
+  it("on the shop's own page, leaves its name out but keeps the rest", () => {
+    const { container } = render(
+      <ul>
+        <Component hit={{ ...hit, supplier_count: 1, max_price: 260 }} now={NOW} hideShop />
+      </ul>,
+    );
+    const item = within(container);
+    expect(item.queryByText("Shop A")).not.toBeInTheDocument();
+    expect(item.queryByText("·")).not.toBeInTheDocument();
+    expect(item.getByText("EGP 260")).toBeInTheDocument();
+    expect(item.getByText("checked 13 days ago")).toBeInTheDocument();
+  });
+
+  it("on the shop's own page, still says when other shops sell it too", () => {
+    const { container } = render(
+      <ul>
+        <Component hit={hit} now={NOW} hideShop />
+      </ul>,
+    );
+    expect(within(container).getByText("3 shops")).toBeInTheDocument();
+  });
+
   it("says 'Price on request' rather than a number when unpriced", () => {
     const { container } = renderIn(Component, { ...hit, min_price: null, max_price: null });
     expect(within(container).getByText("Price on request")).toBeInTheDocument();

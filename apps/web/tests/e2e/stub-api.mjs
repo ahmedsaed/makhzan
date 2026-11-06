@@ -17,7 +17,7 @@ import { createServer } from "node:http";
 
 import { productFixture } from "./fixtures/product.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
-import { shopRoute } from "./fixtures/shops.mjs";
+import { shopName, shopRoute } from "./fixtures/shops.mjs";
 import { FAILING_TRADE, TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
 
 const PORT = Number(process.env.STUB_PORT ?? 8787);
@@ -181,6 +181,13 @@ function search(url) {
   if (q.toLowerCase().includes("nothing")) hits = [];
   if (domain === "tools") hits = [];
   if (minSuppliers > 1) hits = [HIT];
+  // Within one shop, a one-shop result is that shop's own.
+  const shop = url.searchParams.get("shop");
+  if (shop) {
+    hits = hits.map((hit) =>
+      hit.supplier_count === 1 ? { ...hit, supplier_name: shopName(shop) ?? shop } : hit,
+    );
+  }
 
   const body = {
     query: q,
@@ -237,7 +244,12 @@ const server = createServer((req, res) => {
   // The offers are listings too, so opening one has somewhere to land.
   if (path === "/listings/off-1") return send(200, { ...LISTING, id: "off-1" });
   if (path === "/listings/off-2")
-    return send(200, { ...LISTING, id: "off-2", price: null, supplier: { ...SUPPLIER, id: "sup-2", slug: "shop-b", name: "Shop B" } });
+    return send(200, {
+      ...LISTING,
+      id: "off-2",
+      price: null,
+      supplier: { ...SUPPLIER, id: "sup-2", slug: "shop-b", name: "Shop B" },
+    });
   if (path === "/listings/listing-gone") return send(200, WITHDRAWN);
   if (path === "/listings/listing-orphan")
     return send(200, { ...LISTING, id: "listing-orphan", product_id: null });

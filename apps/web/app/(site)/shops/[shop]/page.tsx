@@ -3,26 +3,30 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { Link } from "@/components/link";
-import { ResultList } from "@/components/result-list";
+import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
 import { Container, SectionHeading } from "@/components/section";
 import { ShopLink } from "@/components/shop-link";
-import { fetchSupplier, fetchSupplierListings, type SupplierProfile } from "@/lib/api";
+import {
+  categoryNameOf,
+  fetchCategories,
+  fetchSupplier,
+  type Category,
+  type SupplierProfile,
+} from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
-import { routes } from "@/lib/routes";
+import { routes, withParams } from "@/lib/routes";
 import {
-  formatDay,
-  hitFromListing,
-  hostOf,
-  isStale,
-  shopSearchUrl,
-  tradeShares,
-} from "@/lib/shops";
+  fetchResults,
+  parseResultsQuery,
+  type RawParams,
+  type ResultsQuery,
+} from "@/lib/results-query";
+import { formatDay, hostOf, isStale, tradeShares } from "@/lib/shops";
 import { cn } from "@/lib/utils";
 
-/** How many in-stock products the page shows before handing off to search. */
-const PREVIEW_SIZE = 6;
+import { TradeBar } from "../_components/trade-bar";
 
 /**
  * One shop and what makhzan has seen of it.
@@ -31,6 +35,12 @@ const PREVIEW_SIZE = 6;
  * owner is emailed a link to it (docs/PRODUCT.md). So it says plainly when
  * its data is old and why (F3), links out to the shop's own site, and tells the
  * owner how to add or correct their details.
+ *
+ * Below the header band the page is the search page scoped to this shop
+ * (components/results.tsx, on the lib/results-query.ts contract): chips, the
+ * category and price rail on desktop, sort, list or grid, paging. The shop is
+ * fixed by the path, and its name is left off every row, where it would only
+ * repeat the heading.
  */
 export async function generateMetadata({
   params,
@@ -43,126 +53,83 @@ export async function generateMetadata({
     ? {
         title: supplier.name,
         description: `${formatCount(supplier.listing_count)} products from ${supplier.name}, with prices and when each was last checked.`,
+        alternates: { canonical: routes.shop(supplier.slug) },
       }
     : {};
 }
 
-export default async function ShopPage({ params }: { params: Promise<{ shop: string }> }) {
+export default async function ShopPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ shop: string }>;
+  searchParams: Promise<RawParams>;
+}) {
   const { shop } = await params;
-  const [supplier, listings] = await Promise.all([
+  // The path decides the shop; a `?shop=` would only contradict it.
+  const { shop: _ignored, ...raw } = await searchParams;
+  void _ignored;
+  const query: ResultsQuery = { ...parseResultsQuery(raw), shop };
+  const [supplier, data, categories] = await Promise.all([
     fetchSupplier(shop),
-    fetchSupplierListings(shop, { inStock: true, limit: PREVIEW_SIZE }),
+    fetchResults(query),
+    fetchCategories().catch((): Category[] => []),
   ]);
   if (!supplier) notFound();
 
-  const now = new Date();
-  const verified = parseVerified(supplier.last_verified_at);
-  const stale = isStale(supplier.last_verified_at, now);
-  const hits = (listings?.items ?? []).flatMap((listing) => hitFromListing(listing) ?? []);
-  const location = [supplier.area, supplier.governorate].filter(Boolean).join(", ");
+  const pathname = routes.shop(supplier.slug);
+  const names = new Map(categories.map((c) => [c.ref, categoryNameOf(c)]));
+  const narrow = (key: "category" | "domain", value: string) =>
+    withParams(pathname, raw, { [key]: value });
 
   return (
     <>
-      <section className="border-b border-line bg-surface">
-        <Container className="flex max-w-5xl flex-col gap-3 py-5">
-          <div>
-            <h1 className="text-2xl leading-tight sm:text-3xl">{supplier.name}</h1>
-            {location && <p className="mt-1 text-sm text-ink-2">{location}</p>}
-          </div>
+      <ShopHeader supplier={supplier} narrow={narrow} />
 
-          <dl className="grid grid-cols-3 gap-2 sm:max-w-xl">
-            <Stat label="Products" value={formatCount(supplier.listing_count)} />
-            <Stat label="In stock" value={formatCount(supplier.in_stock_count)} />
-            <Stat
-              label="Last checked"
-              value={verified ? agoText(daysSince(verified, now)) : "Not yet"}
-              tier={verified ? freshnessTier(verified, now) : "quiet"}
+      <Container className="flex flex-col gap-6 py-6 lg:gap-4">
+        {supplier.top_categories.length > 0 && (
+          // Phones only: from `lg` the rail beside the results lists every
+          // category with its count, so this would say the same thing twice.
+          <section className="lg:hidden">
+            <SectionHeading>Biggest categories here</SectionHeading>
+            <ul className="overflow-hidden rounded-card border border-line bg-surface">
+              {supplier.top_categories.map((category) => (
+                <li key={category.ref} className="border-b border-line last:border-b-0">
+                  <Link
+                    href={narrow("category", category.ref)}
+                    className="flex min-h-11 items-center gap-3 px-3 py-2 text-[15px] text-ink hover:bg-ground"
+                  >
+                    <span className="flex-1">{category.name_en}</span>
+                    <span className="text-sm text-ink-3 tabular">
+                      {formatCount(category.count)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <section data-shop-products>
+          <SectionHeading className="lg:mb-4">Products</SectionHeading>
+          {data.result ? (
+            <Results
+              pathname={pathname}
+              raw={raw}
+              query={query}
+              data={{ ...data, result: data.result }}
+              names={names}
+              locked={["shop"]}
+              shopName={supplier.name}
+              hideShop
             />
-          </dl>
-
-          {stale && verified && (
-            <p
-              role="note"
-              data-stale-note
-              className="flex gap-2.5 rounded-control border border-warn-line bg-warn p-3 text-sm leading-snug text-warn-ink sm:max-w-xl"
-            >
-              <Clock aria-hidden="true" className="mt-px size-[18px] shrink-0" />
-              <span>
-                We can&apos;t reach this shop&apos;s site at the moment. Its prices and stock are as
-                of {formatDay(verified, now)} and may have changed.
-              </span>
-            </p>
-          )}
-
-          {supplier.website_url && (
-            <ShopLink
-              href={supplier.website_url}
-              shop={supplier.slug}
-              className="flex h-11 items-center justify-center gap-2 rounded-control border-[1.5px] border-link px-4 font-semibold text-link hover:bg-ground sm:max-w-xl"
-            >
-              Visit {hostOf(supplier.website_url)}
-              <ArrowUpRight aria-hidden="true" className="size-4" />
-            </ShopLink>
-          )}
-        </Container>
-      </section>
-
-      <Container className="grid max-w-5xl gap-8 py-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-        <div className="flex min-w-0 flex-col gap-6">
-          <SearchField
-            compact
-            scope={{ shop: supplier.slug }}
-            label={`Search ${supplier.name}`}
-            placeholder={`Search ${supplier.name}`}
-          />
-
-          {supplier.domains.length > 0 && <Carries supplier={supplier} />}
-        </div>
-
-        <aside>
-          {supplier.top_categories.length > 0 && (
-            <section>
-              <SectionHeading>Biggest categories here</SectionHeading>
-              <ul className="overflow-hidden rounded-card border border-line bg-surface">
-                {supplier.top_categories.map((category) => (
-                  <li key={category.ref} className="border-b border-line last:border-b-0">
-                    <Link
-                      href={shopSearchUrl(supplier.slug, { category: category.ref })}
-                      className="flex min-h-11 items-center gap-3 px-3 py-2 text-[15px] text-ink hover:bg-ground"
-                    >
-                      <span className="flex-1">{category.name_en}</span>
-                      <span className="text-sm text-ink-3 tabular">
-                        {formatCount(category.count)}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-        </aside>
-      </Container>
-
-      <Container className="max-w-5xl pb-4">
-        <section>
-          <SectionHeading>In stock here</SectionHeading>
-          {hits.length > 0 ? (
-            <ResultList hits={hits} now={now} className="-mx-4 md:mx-0" />
           ) : (
-            <p className="text-sm text-ink-2">Nothing from this shop is marked in stock.</p>
-          )}
-          {supplier.listing_count > 0 && (
-            <Link
-              href={shopSearchUrl(supplier.slug)}
-              className="mt-3 inline-flex h-11 items-center text-sm font-semibold text-link hover:underline"
-            >
-              All {formatCount(supplier.listing_count)} products from {supplier.name}
-            </Link>
+            <NotAnswering />
           )}
         </section>
 
-        <p className="mt-6 text-sm leading-relaxed text-ink-2">
-          {location
+        <p className="text-sm leading-relaxed text-ink-2">
+          {supplier.area || supplier.governorate
             ? "Phone and opening hours aren't listed yet."
             : "Address and phone aren't listed yet."}{" "}
           <Link href={routes.forSuppliers()} className="font-semibold text-link hover:underline">
@@ -171,6 +138,87 @@ export default async function ShopPage({ params }: { params: Promise<{ shop: str
         </p>
       </Container>
     </>
+  );
+}
+
+/**
+ * The band at the top. Phones: one column — name, figures, the stale note,
+ * "Visit", search, what they carry. From `lg` it uses the width: the name and
+ * search on the left, the figures and "Visit" on the right, and the note and
+ * the trade bar each across the whole band.
+ */
+function ShopHeader({
+  supplier,
+  narrow,
+}: {
+  supplier: SupplierProfile;
+  narrow: (key: "category" | "domain", value: string) => string;
+}) {
+  const now = new Date();
+  const verified = parseVerified(supplier.last_verified_at);
+  const stale = isStale(supplier.last_verified_at, now);
+  const location = [supplier.area, supplier.governorate].filter(Boolean).join(", ");
+
+  return (
+    <section className="border-b border-line bg-surface">
+      <Container className="flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7 lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'carries_carries']">
+        <div className="lg:self-center lg:[grid-area:name]">
+          <h1 className="text-2xl leading-tight sm:text-3xl lg:text-4xl">{supplier.name}</h1>
+          {location && <p className="mt-1 text-sm text-ink-2">{location}</p>}
+        </div>
+
+        <dl className="grid grid-cols-3 gap-2 sm:max-w-xl lg:max-w-none lg:[grid-area:stats]">
+          <Stat label="Products" value={formatCount(supplier.listing_count)} />
+          <Stat label="In stock" value={formatCount(supplier.in_stock_count)} />
+          <Stat
+            label="Last checked"
+            value={verified ? agoText(daysSince(verified, now)) : "Not yet"}
+            tier={verified ? freshnessTier(verified, now) : "quiet"}
+          />
+        </dl>
+
+        {stale && verified && (
+          <p
+            role="note"
+            data-stale-note
+            className="flex gap-2.5 rounded-control border border-warn-line bg-warn p-3 text-sm leading-snug text-warn-ink sm:max-w-xl lg:max-w-none lg:[grid-area:note]"
+          >
+            <Clock aria-hidden="true" className="mt-px size-[18px] shrink-0" />
+            <span>
+              We can&apos;t reach this shop&apos;s site at the moment. Its prices and stock are as
+              of {formatDay(verified, now)} and may have changed.
+            </span>
+          </p>
+        )}
+
+        {supplier.website_url && (
+          <ShopLink
+            href={supplier.website_url}
+            shop={supplier.slug}
+            className="flex h-11 items-center justify-center gap-2 rounded-control border-[1.5px] border-link px-4 font-semibold text-link hover:bg-ground sm:max-w-xl lg:max-w-none lg:[grid-area:visit]"
+          >
+            Visit {hostOf(supplier.website_url)}
+            <ArrowUpRight aria-hidden="true" className="size-4" />
+          </ShopLink>
+        )}
+
+        <SearchField
+          compact
+          scope={{ shop: supplier.slug }}
+          label={`Search ${supplier.name}`}
+          placeholder={`Search ${supplier.name}`}
+          className="mt-2 sm:max-w-xl lg:mt-0 lg:max-w-none lg:[grid-area:search]"
+        />
+
+        {supplier.domains.length > 0 && (
+          <Carries
+            supplier={supplier}
+            narrow={narrow}
+            className="mt-2 lg:mt-1 lg:[grid-area:carries]"
+          />
+        )}
+      </Container>
+    </section>
   );
 }
 
@@ -191,14 +239,14 @@ function Stat({
     <div
       data-tier={tier}
       className={cn(
-        "rounded-control border p-2.5",
+        "rounded-control border p-2.5 lg:px-3.5 lg:py-3",
         tier === "warn" ? "border-warn-line bg-warn text-warn-ink" : "border-transparent bg-ground",
       )}
     >
       <dt className={cn("text-xs", tier === "warn" ? "text-warn-ink" : "text-ink-2")}>{label}</dt>
       <dd
         className={cn(
-          "mt-0.5 figure text-[17px] leading-tight",
+          "mt-0.5 figure text-[17px] leading-tight lg:text-xl",
           tier === "warn" ? "text-warn-ink" : tier === "muted" ? "text-age-muted" : "text-ink",
         )}
       >
@@ -208,35 +256,34 @@ function Stat({
   );
 }
 
-/** Bar segments, largest first. Opacity steps of the one accent rather than new
- *  colours: the palette has none to spare, and order already says which is which. */
-const SEGMENT = ["bg-action", "bg-action/55", "bg-action/30", "bg-ink-3/40"];
-
 /**
  * What the shop carries: a bar by trade, and the same numbers in words. The
- * bar is decoration; the words are what a screen reader gets.
+ * bar is decoration; the words are what a screen reader gets. Each trade
+ * narrows the products below to it.
  */
-function Carries({ supplier }: { supplier: SupplierProfile }) {
+function Carries({
+  supplier,
+  narrow,
+  className,
+}: {
+  supplier: SupplierProfile;
+  narrow: (key: "category" | "domain", value: string) => string;
+  className?: string;
+}) {
   const shares = tradeShares(supplier.domains);
   return (
-    <section>
-      <SectionHeading>What they carry</SectionHeading>
-      <div aria-hidden="true" className="flex h-2 overflow-hidden rounded-full bg-line">
-        {shares.map((share, index) => (
-          <span
-            key={share.domain ?? "other"}
-            className={SEGMENT[Math.min(index, SEGMENT.length - 1)]}
-            style={{ width: `${share.percent}%` }}
-          />
-        ))}
-      </div>
+    <section className={className}>
+      <SectionHeading className="lg:mb-2 lg:font-sans lg:text-[13px] lg:font-semibold lg:text-ink-2">
+        What they carry
+      </SectionHeading>
+      <TradeBar shares={shares} />
       <p className="mt-2 text-[13px] text-ink-2">
         {shares.map((share, index) => (
           <span key={share.domain ?? "other"}>
             {index > 0 && " · "}
             {share.domain ? (
               <Link
-                href={shopSearchUrl(supplier.slug, { domain: share.domain })}
+                href={narrow("domain", share.domain)}
                 // 44px to tap on phones (S4), though it reads as a line of text.
                 className="inline-flex min-h-11 items-center hover:text-ink hover:underline lg:min-h-0"
               >

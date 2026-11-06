@@ -29,12 +29,15 @@ function useResultView(): ResultView {
 export function ResultList({
   hits,
   now,
+  hideShop,
   className,
 }: {
   hits: SearchHit[];
   /** The server render's clock. A Date crosses the server/client boundary
    *  intact, so the hydrated list counts days from the same instant. */
   now?: Date;
+  /** The page is one shop's own: results leave its name out (see ResultRow). */
+  hideShop?: boolean;
   className?: string;
 }) {
   const view = useResultView();
@@ -49,7 +52,7 @@ export function ResultList({
         )}
       >
         {hits.map((hit, index) => (
-          <ResultCard key={hit.id} hit={hit} now={now} priority={index < 4} />
+          <ResultCard key={hit.id} hit={hit} now={now} priority={index < 4} hideShop={hideShop} />
         ))}
       </ul>
     );
@@ -57,7 +60,7 @@ export function ResultList({
   return (
     <ul data-view="list" className={cn("border-t border-line bg-surface", className)}>
       {hits.map((hit, index) => (
-        <ResultRow key={hit.id} hit={hit} now={now} priority={index < 3} />
+        <ResultRow key={hit.id} hit={hit} now={now} priority={index < 3} hideShop={hideShop} />
       ))}
     </ul>
   );
