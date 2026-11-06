@@ -190,7 +190,11 @@ export function datasheetLabel(url: string, label: string | null | undefined): s
  */
 export function shopDetails(product: Product): ShopDetails | null {
   const offer = leadOffer(product.offers);
-  if (!offer) return null;
+  return offer ? offerDetails(offer) : null;
+}
+
+/** One offer's specs and datasheets, or null when its shop published neither. */
+export function offerDetails(offer: Offer): ShopDetails | null {
   const specs = Object.entries(offer.specs ?? {})
     .filter(([name, value]) => name.trim() && typeof value === "string" && value.trim())
     .map(([name, value]) => ({ name, value, identifier: isPartNumberSpec(name, value) }));
@@ -199,6 +203,54 @@ export function shopDetails(product: Product): ShopDetails | null {
     .map((doc) => ({ url: doc.url, label: datasheetLabel(doc.url, doc.label) }));
   if (specs.length === 0 && datasheets.length === 0) return null;
   return { offer, shopName: offer.supplier?.name ?? "the shop", specs, datasheets };
+}
+
+/** What one shop wrote about a product: the "From:" tabs on the product page. */
+export type DetailSource = {
+  offer: Offer;
+  /** The tab: the shop's name, numbered when one shop has several offers. */
+  label: string;
+  description: string | null;
+  details: ShopDetails | null;
+};
+
+/** Most "From:" tabs; more than this many shops describing one part is unheard of. */
+export const MAX_DETAIL_SOURCES = 8;
+
+/**
+ * Every offer whose shop wrote something (a description, specs or datasheets),
+ * richest first, so the page opens on the most informative one. Offers whose
+ * shop wrote nothing get no tab: an empty tab is an empty section (rule C4).
+ * Ties keep the offers' own order, cheapest in stock first.
+ */
+export function detailSources(
+  offers: Offer[],
+  descriptions: ReadonlyMap<string, string | null>,
+): DetailSource[] {
+  const ordered = orderOffers(offers);
+  const sources = ordered
+    .map((offer, index) => {
+      const description = descriptions.get(offer.id)?.trim() || null;
+      const details = offerDetails(offer);
+      const score =
+        (description ? 2 + Math.min(description.length, 1500) / 300 : 0) +
+        (details?.specs.length ?? 0) +
+        3 * (details?.datasheets.length ?? 0);
+      return { offer, description, details, score, index };
+    })
+    .filter((source) => source.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, MAX_DETAIL_SOURCES);
+
+  const names = sources.map((source) => source.offer.supplier?.name ?? "Unknown shop");
+  const seen = new Map<string, number>();
+  return sources.map(({ offer, description, details }, i) => {
+    const name = names[i];
+    const count = (seen.get(name) ?? 0) + 1;
+    seen.set(name, count);
+    const repeated = names.filter((n) => n === name).length > 1;
+    return { offer, description, details, label: repeated ? `${name} (${count})` : name };
+  });
 }
 
 /**

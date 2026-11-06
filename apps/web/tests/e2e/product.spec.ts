@@ -110,7 +110,7 @@ test.describe("several offers", () => {
 
   test("lists in-stock offers lowest price first, each led by its own title", async ({ page }) => {
     await page.goto("/products/p-multi");
-    const rows = page.locator("section[aria-labelledby=offers-heading] > div > table [data-offer]");
+    const rows = page.locator("section[aria-labelledby=offers-heading] > div > ul [data-offer]");
     await expect(rows.locator("[data-price]")).toHaveText([
       "EGP 260",
       "EGP 270",
@@ -239,14 +239,20 @@ test.describe("what the shop published (C4)", () => {
     await expect(links.first().locator("svg")).toHaveCount(1);
   });
 
-  test("a wide screen puts them in the left column, under the description", async ({ page }) => {
+  test("a wide screen gives them the wide column, beside the photo and price", async ({ page }) => {
     await page.goto("/products/p-specs");
     const description = (await page.locator("[data-description]").boundingBox())!;
     const specs = (await page.locator("[data-specs]").boundingBox())!;
-    const title = (await page.locator("h1").boundingBox())!;
+    const photo = (await page.locator("[data-gallery]").boundingBox())!;
+    const buy = (await page.locator("[data-buy]").boundingBox())!;
     expect(specs.y).toBeGreaterThan(description.y + description.height - 1);
     expect(specs.x).toBeCloseTo(description.x, 0);
-    expect(specs.x + specs.width).toBeLessThan(title.x);
+    // The narrow column holds the photo and the way to the shop; the text is
+    // to its right and wider than it.
+    expect(specs.x).toBeGreaterThan(photo.x + photo.width);
+    expect(buy.x).toBeCloseTo(photo.x, 0);
+    expect(buy.y).toBeGreaterThan(photo.y + photo.height - 1);
+    expect(specs.width).toBeGreaterThan(photo.width);
   });
 
   test("a phone shows them after the description", async ({ page }) => {
@@ -269,13 +275,30 @@ test.describe("what the shop published (C4)", () => {
     await expect(page.getByRole("heading", { name: "Specifications" })).toHaveCount(0);
   });
 
-  test("several shops: only the lead offer's, named", async ({ page }) => {
+  test("several shops: a tab per shop that wrote something, richest first", async ({ page }) => {
     await page.goto("/products/p-multi");
-    const specs = page.locator("[data-specs]");
+    const tabs = page.locator("[data-details-tab]");
+    await expect(tabs).toHaveText(["Delta Bench", "Nile Parts"]);
+    const specs = page.locator("[data-specs]:visible");
+    await expect(specs).toHaveCount(1);
     await expect(specs).toContainText("From Delta Bench's listing");
     await expect(specs.locator("dt")).toHaveText(["Flash Memory", "GPIO Pins"]);
-    await expect(page.getByText("USB Chip")).toHaveCount(0);
+    await expect(page.getByText("USB Chip")).toBeHidden();
+
+    await tabs.filter({ hasText: "Nile Parts" }).click();
+    await expect(specs).toContainText("From Nile Parts's listing");
+    await expect(specs.locator("dt")).toHaveText(["USB Chip"]);
     await expect(page.locator("[data-datasheets]")).toHaveCount(0);
+  });
+
+  test.describe("without JavaScript", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("the shop tabs still switch", async ({ page }) => {
+      await page.goto("/products/p-multi");
+      await page.locator("[data-details-tab]", { hasText: "Nile Parts" }).click();
+      await expect(page.locator("[data-specs]:visible dt")).toHaveText(["USB Chip"]);
+    });
   });
 });
 
@@ -337,10 +360,12 @@ test.describe("full-size photos", () => {
     expect(back()).toEqual([]);
 
     await photos.nth(1).scrollIntoViewIfNeeded();
-    await expect.poll(back).toEqual([
-      `${MEDIA}/2025-01-10/product/image/ut61e-back.jpeg`,
-      `${MEDIA}/2025-01-10/product/image/ut61e-back.png`,
-    ]);
+    await expect
+      .poll(back)
+      .toEqual([
+        `${MEDIA}/2025-01-10/product/image/ut61e-back.jpeg`,
+        `${MEDIA}/2025-01-10/product/image/ut61e-back.png`,
+      ]);
   });
 
   test.describe("without JavaScript", () => {

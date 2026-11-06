@@ -1,7 +1,7 @@
 /**
- * Which specs, datasheets and brand the product page shows (rule C4): the lead
- * offer's only, never merged across shops, and nothing at all when the shop
- * published none.
+ * Which specs, datasheets and brand the product page shows (rule C4): one
+ * shop's at a time, never merged across shops, and nothing at all when no
+ * shop published any.
  */
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +9,7 @@ import type { Offer, Product, StockSignal } from "@/lib/api";
 import {
   brandOf,
   datasheetLabel,
+  detailSources,
   isPartNumberSpec,
   leadOffer,
   primaryOffer,
@@ -148,5 +149,40 @@ describe("brand", () => {
     expect(brandOf(product([lead], { brand: "Zeta" }))).toBe("Zeta");
     expect(brandOf(product([lead]))).toBe("Acme");
     expect(brandOf(product([offer("a", 1, "in_stock")]))).toBeNull();
+  });
+});
+
+describe('detailSources: the product page\'s "From" tabs', () => {
+  const plain = offer("a", 100, "in_stock");
+  const specced = offer("b", 120, "in_stock", { specs: { Voltage: "5V", Current: "2A" } });
+  const sheeted = offer("c", 130, "in_stock", {
+    documents: [{ url: "https://shop-c.test/ds.pdf", label: "Datasheet" }],
+  });
+
+  it("gives no tab to a shop that wrote nothing", () => {
+    const sources = detailSources([plain, specced], new Map());
+    expect(sources.map((s) => s.offer.id)).toEqual(["b"]);
+  });
+
+  it("puts the richest first, ties in the offers' own order", () => {
+    const described = new Map([["a", "A long description. ".repeat(40)]]);
+    const sources = detailSources([plain, specced, sheeted], described);
+    // a: 2 + 1500/300 = 7; c: one datasheet = 3; b: two specs = 2.
+    expect(sources.map((s) => s.offer.id)).toEqual(["a", "c", "b"]);
+    expect(sources[0].description).toMatch(/^A long description/);
+  });
+
+  it("is empty when no shop wrote anything", () => {
+    expect(detailSources([plain], new Map([["a", "   "]]))).toEqual([]);
+  });
+
+  it("numbers the tabs of one shop's several offers", () => {
+    const one = offer("x", 100, "in_stock", { specs: { Pins: "30" } });
+    const two = {
+      ...offer("y", 110, "in_stock", { specs: { Pins: "38" } }),
+      supplier: one.supplier,
+    };
+    const labels = detailSources([one, two], new Map()).map((s) => s.label);
+    expect(labels).toEqual(["Shop X (1)", "Shop X (2)"]);
   });
 });

@@ -92,7 +92,8 @@ const PRODUCTS = {
   ),
   "p-multi": product("p-multi", "ESP32 Development Board 30 pin", [
     // Deliberately not in price order: the page sorts.
-    // Two shops publish specs; the page shows only the lead offer's (o-m1).
+    // Two shops publish specs; the page opens on the richer one (o-m1, two
+    // specs) and keeps the other behind its "From" tab.
     offer("o-m3", NILE, "ESP32 Development Board 30-Pin with CP2102", 280, "in_stock", 20, [], {
       specs: { "USB Chip": "CP2102" },
     }),

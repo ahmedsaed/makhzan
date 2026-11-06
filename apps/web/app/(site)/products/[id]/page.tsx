@@ -27,13 +27,13 @@ import { freshnessTier, parseVerified } from "@/lib/freshness";
 import {
   brandOf,
   categoryTrail,
+  detailSources,
   galleryImages,
-  isInStock,
   jsonLdText,
-  leadOffer,
+  MAX_DETAIL_SOURCES,
+  orderOffers,
   primaryOffer,
   productJsonLd,
-  shopDetails,
   splitOffers,
   summarizeOffers,
   summaryText,
@@ -43,10 +43,9 @@ import { absoluteUrl } from "@/lib/site";
 import { tradeLabel } from "@/lib/trades";
 import { cn } from "@/lib/utils";
 
-import { Description } from "./description";
+import { Details } from "./details";
 import { Gallery } from "./gallery";
 import { Offers } from "./offers";
-import { ShopDetails } from "./shop-details";
 
 /**
  * One product: where a buyer decides, and leaves for the shop.
@@ -107,22 +106,30 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const title = displayTitle(product);
   const several = product.offers.length >= 2;
   const primary = primaryOffer(product.offers);
-  // The description, specs and datasheets shown are the primary offer's: the
-  // shop the button opens.
-  const described = leadOffer(product.offers) ?? product.offers[0];
-  const details = shopDetails(product);
   const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
+  // Descriptions are not part of an offer; each comes from its listing. Capped
+  // like the tabs they feed, and in the offers' own order.
+  const described = orderOffers(product.offers).slice(0, MAX_DETAIL_SOURCES);
 
   // Everything but the product itself is garnish: a failure there must not
   // take the page down with it.
-  const [similar, categories, listing, shop] = await Promise.all([
+  const [similar, categories, listings, shop] = await Promise.all([
     fetchSimilar(id, 8).catch(() => []),
     product.category ? fetchCategories().catch(() => []) : Promise.resolve([]),
-    fetchListing(described.id).catch(() => null),
+    Promise.all(described.map((offer) => fetchListing(offer.id).catch(() => null))),
     soleShop ? fetchSupplier(soleShop).catch(() => null) : Promise.resolve(null),
   ]);
-  const description = listing?.description_en || listing?.description_ar || null;
+  const descriptions = new Map(
+    described.map((offer, i) => [
+      offer.id,
+      listings[i]?.description_en || listings[i]?.description_ar || null,
+    ]),
+  );
+  const sources = detailSources(product.offers, descriptions);
+  // With nothing written by any shop, the wide column would hold only the
+  // title; the offers go there instead, as before.
+  const split = sources.length > 0;
   const images = galleryImages(product);
 
   return (
@@ -154,10 +161,26 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
         />
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-x-8">
+      {/* Phones read top to bottom in DOM order: photo, title, price or
+          offers, then what the shops wrote. A wide screen puts the photo and
+          the way to the shop in the narrow column and gives the wide one to
+          the shops' text, which is the long part:
+
+            photo  | title
+            photo  | details
+            offers | details
+
+          Row 3 is the flexible one, so the offers start right under the photo
+          however long the details run. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:grid-rows-[auto_auto_1fr] lg:gap-x-10">
         {/* With several offers a phone shows a thumbnail beside the title
             instead, so the offers come up sooner. */}
-        <div className={several ? "hidden lg:block" : "mb-3.5 lg:mb-0"}>
+        <div
+          className={cn(
+            several ? "hidden lg:block" : "mb-3.5 lg:mb-0",
+            "lg:col-start-1 lg:row-span-2 lg:row-start-1",
+          )}
+        >
           <Gallery
             images={images}
             alt={title}
@@ -166,7 +189,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           />
         </div>
 
-        <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+        <div className="min-w-0 lg:col-start-2 lg:row-start-1">
           <div className="flex gap-3">
             {several && (
               <PhotoFrame
@@ -203,10 +226,20 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               )}
             </div>
           </div>
+        </div>
 
+        <div
+          data-buy
+          className={cn(
+            "min-w-0",
+            split
+              ? "lg:col-start-1 lg:row-start-3 lg:self-start"
+              : "lg:col-start-2 lg:row-span-2 lg:row-start-2",
+          )}
+        >
           {several ? (
             <>
-              <Summary product={product} primary={primary} />
+              <Summary product={product} primary={primary} narrow={split} />
               <Offers {...splitOffers(product.offers)} productTitle={title} now={now} />
             </>
           ) : (
@@ -214,21 +247,9 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           )}
         </div>
 
-        {(description || details) && (
-          <div className="min-w-0 lg:col-start-1 lg:row-start-2">
-            {description && (
-              <Description
-                heading={
-                  !several
-                    ? "From the shop's description"
-                    : primary && isInStock(primary.stock_signal)
-                      ? "From the cheapest shop's description"
-                      : `From ${described.supplier?.name ?? "the shop"}'s description`
-                }
-                text={description}
-              />
-            )}
-            {details && <ShopDetails details={details} />}
+        {split && (
+          <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-2">
+            <Details sources={sources} single={!several} />
           </div>
         )}
       </div>
@@ -322,7 +343,16 @@ function OneOffer({
 }
 
 /** Several offers: how many are in stock where, for how much, and the way out. */
-function Summary({ product, primary }: { product: Product; primary: Offer | null }) {
+function Summary({
+  product,
+  primary,
+  narrow,
+}: {
+  product: Product;
+  primary: Offer | null;
+  /** In the narrow column: the button takes the full width under the price. */
+  narrow: boolean;
+}) {
   const summary = summarizeOffers(product.offers);
   return (
     <section
@@ -347,7 +377,7 @@ function Summary({ product, primary }: { product: Product; primary: Offer | null
         <ShopLink
           href={primary.source_url}
           shop={primary.supplier.slug}
-          className={cn(PRIMARY, "ms-auto hidden lg:inline-flex")}
+          className={cn(PRIMARY, "hidden lg:inline-flex", narrow ? "lg:w-full" : "ms-auto")}
         >
           {primary.price !== null && summary.state !== "out_of_stock"
             ? `${formatPrice(primary.price, primary.currency)} at ${primary.supplier.name}`

@@ -10,15 +10,16 @@ import { plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { isInStock } from "@/lib/product";
 import { routes } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 
 /**
  * Every offer of a product in one list (rule P3), with the out-of-stock ones
  * folded underneath (C2) in a `<details>`, which opens without JavaScript.
  *
- * One `<table>` serves both widths: from `lg` it is the desktop comparison
- * table, and below that each row is laid out as a two-line card. One copy of
- * the markup means one set of rows, so nothing can say one thing on a phone and
- * another on a laptop.
+ * Each offer is a two-line card at every width: on a wide screen the offers
+ * sit in the page's narrow column, under the photo, and the wide one is left
+ * to what the shops wrote. One layout also means nothing can say one thing on
+ * a phone and another on a laptop.
  */
 export function Offers({
   listed,
@@ -45,22 +46,21 @@ export function Offers({
         Each offer shows the shop&apos;s own title.
       </p>
       <div className="-mx-4 overflow-hidden border-y border-line bg-surface md:mx-0 md:rounded-card md:border">
-        <OfferTable offers={listed} productTitle={productTitle} now={now} />
+        <OfferList offers={listed} productTitle={productTitle} now={now} />
         {outOfStock.length > 0 && (
           <details data-out-of-stock className="group border-t border-line">
-            <summary className="flex h-12 cursor-pointer list-none items-center gap-1.5 px-4 text-sm font-medium text-link lg:px-3.5 [&::-webkit-details-marker]:hidden">
+            <summary className="flex h-12 cursor-pointer list-none items-center gap-1.5 px-4 text-sm font-medium text-link [&::-webkit-details-marker]:hidden">
               <span className="group-open:hidden">
                 Show {plural(outOfStock.length, "out of stock offer")}
               </span>
               <span className="hidden group-open:inline">Hide out of stock offers</span>
               <ChevronDown aria-hidden="true" className="size-4 group-open:rotate-180" />
             </summary>
-            <OfferTable
+            <OfferList
               offers={outOfStock}
               productTitle={productTitle}
               now={now}
               className="border-t border-line"
-              hiddenHeader
             />
           </details>
         )}
@@ -69,49 +69,23 @@ export function Offers({
   );
 }
 
-const CELL = "lg:px-3.5 lg:py-3 lg:align-middle";
-
-function OfferTable({
+function OfferList({
   offers,
   productTitle,
   now,
   className,
-  hiddenHeader = false,
 }: {
   offers: Offer[];
   productTitle: string;
   now: Date;
   className?: string;
-  /** The folded table repeats the columns of the one above it. */
-  hiddenHeader?: boolean;
 }) {
   return (
-    <table className={`w-full border-collapse text-sm max-lg:block ${className ?? ""}`}>
-      <thead className={hiddenHeader ? "sr-only" : "max-lg:hidden"}>
-        <tr className="border-b border-line text-start text-xs tracking-wide text-ink-2 uppercase">
-          <th scope="col" className={`${CELL} text-start font-semibold`}>
-            Their listing
-          </th>
-          <th scope="col" className={`${CELL} text-start font-semibold`}>
-            Shop
-          </th>
-          <th scope="col" className={`${CELL} text-start font-semibold`}>
-            Checked
-          </th>
-          <th scope="col" className={`${CELL} text-end font-semibold`}>
-            Price
-          </th>
-          <th scope="col" className={CELL}>
-            <span className="sr-only">Link</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody className="max-lg:block">
-        {offers.map((offer) => (
-          <OfferRow key={offer.id} offer={offer} productTitle={productTitle} now={now} />
-        ))}
-      </tbody>
-    </table>
+    <ul className={cn("text-sm", className)}>
+      {offers.map((offer) => (
+        <OfferRow key={offer.id} offer={offer} productTitle={productTitle} now={now} />
+      ))}
+    </ul>
   );
 }
 
@@ -127,11 +101,11 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
   const supplier = offer.supplier;
   const title = titleOf(offer) || productTitle;
   return (
-    <tr
+    <li
       data-offer={offer.id}
-      className="border-b border-line last:border-b-0 max-lg:grid max-lg:grid-cols-[auto_minmax(0,1fr)_auto] max-lg:items-start max-lg:gap-x-1.5 max-lg:gap-y-1 max-lg:px-4 max-lg:py-3 max-lg:[grid-template-areas:'title_title_price'_'shop_fresh_view']"
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'] last:border-b-0"
     >
-      <td className={`${CELL} [grid-area:title]`}>
+      <div className="[grid-area:title]">
         <span
           data-offer-title
           dir="auto"
@@ -139,8 +113,8 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
         >
           {title}
         </span>
-      </td>
-      <td className={`${CELL} text-[13px] [grid-area:shop] lg:text-sm`}>
+      </div>
+      <div className="text-[13px] [grid-area:shop]">
         <span className="flex flex-wrap items-baseline gap-x-1.5">
           {supplier ? (
             <Link
@@ -156,17 +130,17 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
               is the row's business. */}
           {!isInStock(offer.stock_signal) && <StockBadge signal={offer.stock_signal} />}
         </span>
-      </td>
-      <td className={`${CELL} text-[13px] [grid-area:fresh] lg:text-sm lg:whitespace-nowrap`}>
-        <span aria-hidden="true" className="me-1.5 text-ink-3 lg:hidden">
+      </div>
+      <div className="text-[13px] [grid-area:fresh]">
+        <span aria-hidden="true" className="me-1.5 text-ink-3">
           ·
         </span>
         <Freshness lastVerified={parseVerified(offer.last_verified_at)} now={now} />
-      </td>
-      <td className={`${CELL} text-end [grid-area:price] max-lg:ps-3`}>
+      </div>
+      <div className="ps-3 text-end [grid-area:price]">
         <PriceRange min={offer.price} currency={offer.currency} className="text-base" />
-      </td>
-      <td className={`${CELL} text-end [grid-area:view] max-lg:ps-3`}>
+      </div>
+      <div className="ps-3 text-end [grid-area:view]">
         {offer.source_url && supplier && (
           <ShopLink
             href={offer.source_url}
@@ -178,7 +152,7 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
             <ExternalLink aria-hidden="true" className="size-3.5" />
           </ShopLink>
         )}
-      </td>
-    </tr>
+      </div>
+    </li>
   );
 }
