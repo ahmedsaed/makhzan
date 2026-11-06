@@ -52,10 +52,9 @@ test("a fresh shop page: stats, the way out, search and what it carries", async 
   await expect(results).toHaveCount(1);
   await expect(results.getByRole("link")).toHaveAttribute("href", "/products/prod-1");
 
-  await expect(page.getByRole("link", { name: "Own this shop? Add your details." })).toHaveAttribute(
-    "href",
-    "/for-suppliers",
-  );
+  await expect(
+    page.getByRole("link", { name: "Own this shop? Add your details." }),
+  ).toHaveAttribute("href", "/for-suppliers");
 });
 
 test("searching a shop submits to /search scoped to it, without JavaScript", async ({
@@ -98,7 +97,9 @@ test("for suppliers offers three requests, each an email to the crawler's addres
     ["add", "Add my shop to makhzan"],
     ["correct", "Correct my shop's details on makhzan"],
   ]) {
-    const href = await page.locator(`[data-request="${id}"] a[href^="mailto:"]`).getAttribute("href");
+    const href = await page
+      .locator(`[data-request="${id}"] a[href^="mailto:"]`)
+      .getAttribute("href");
     expect(href).not.toBeNull();
     const url = new URL(href!);
     expect(url.pathname).toBe("crawler@merope.dev");

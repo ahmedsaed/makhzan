@@ -67,7 +67,10 @@ export function FilterSheet({
   return (
     <details ref={ref} className={cn("group lg:hidden", className)}>
       <summary
-        className={cn(chipClass(activeCount > 0), "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}
+        className={cn(
+          chipClass(activeCount > 0),
+          "cursor-pointer list-none [&::-webkit-details-marker]:hidden",
+        )}
       >
         <SlidersHorizontal aria-hidden="true" className="size-3.5" />
         {label}

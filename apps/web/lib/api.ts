@@ -22,12 +22,7 @@ const API_BASE =
 const TAXONOMY_TTL = 300;
 const DETAIL_TTL = 120;
 
-export type StockSignal =
-  | "in_stock"
-  | "low_stock"
-  | "out_of_stock"
-  | "made_to_order"
-  | "unknown";
+export type StockSignal = "in_stock" | "low_stock" | "out_of_stock" | "made_to_order" | "unknown";
 
 export type ListingStatus = "active" | "pending_review" | "hidden" | "archived";
 
