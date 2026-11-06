@@ -4,8 +4,9 @@ import { PhotoFrame } from "@/components/photo-frame";
 import { PriceRange } from "@/components/price";
 import { ShopsBadge } from "@/components/shops-badge";
 import { titleOf, type SearchHit } from "@/lib/api";
-import { parseVerified } from "@/lib/freshness";
+import { freshnessTier, parseVerified } from "@/lib/freshness";
 import { routes } from "@/lib/routes";
+import { cn } from "@/lib/utils";
 
 /**
  * One search result, as a list row or a grid card.
@@ -31,7 +32,7 @@ export type ResultProps = {
 /** The product's shop when there is one, the badge when there are several. */
 function Shops({ hit }: { hit: SearchHit }) {
   if (hit.supplier_count >= 2) return <ShopsBadge count={hit.supplier_count} />;
-  return <span className="truncate text-ink-2">{hit.supplier_name ?? "1 shop"}</span>;
+  return <span className="min-w-0 truncate text-ink-2">{hit.supplier_name ?? "1 shop"}</span>;
 }
 
 function displayTitle(hit: SearchHit): string {
@@ -46,6 +47,10 @@ function displayTitle(hit: SearchHit): string {
 export function ResultRow({ hit, now, priority = false }: ResultProps) {
   const title = displayTitle(hit);
   const verified = parseVerified(hit.last_verified_at);
+  // A stale price's warning is longer than a phone's line: it goes under the
+  // shop rather than beside it, so no separator is left dangling at a wrap.
+  // Otherwise "checked 12 days ago" never wraps and the shop name truncates.
+  const stacked = verified !== null && freshnessTier(verified, now) === "warn";
   return (
     <li data-result="row" className="border-b border-line">
       {/* Grid areas rather than two copies of the markup: each fact exists
@@ -77,12 +82,24 @@ export function ResultRow({ hit, now, priority = false }: ResultProps) {
           currency={hit.currency}
           className="text-base [grid-area:price] md:text-end"
         />
-        <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 self-start text-[13px] [grid-area:meta] md:flex-col md:items-start md:self-center">
+        <span
+          data-meta={stacked ? "stacked" : "inline"}
+          className={cn(
+            "flex min-w-0 gap-x-1.5 gap-y-1 self-start text-[13px] [grid-area:meta] md:flex-col md:items-start md:self-center",
+            stacked ? "flex-col items-start" : "items-center",
+          )}
+        >
           <Shops hit={hit} />
-          <span aria-hidden="true" className="text-ink-3 md:hidden">
-            ·
-          </span>
-          <Freshness lastVerified={verified} now={now} />
+          {!stacked && (
+            <span aria-hidden="true" className="text-ink-3 md:hidden">
+              ·
+            </span>
+          )}
+          <Freshness
+            lastVerified={verified}
+            now={now}
+            className={stacked ? undefined : "shrink-0 whitespace-nowrap"}
+          />
         </span>
       </Link>
     </li>

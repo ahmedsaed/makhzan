@@ -24,7 +24,7 @@ export function Breadcrumb({
   if (items.length === 0) return null;
   return (
     <nav aria-label="Breadcrumb" className={cn("text-[13px] text-ink-2", className)}>
-      <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+      <ol className="flex flex-wrap items-center gap-x-1.5">
         {items.map((item, index) => {
           const last = index === items.length - 1;
           const current = last && !trail;
@@ -32,7 +32,11 @@ export function Breadcrumb({
             <Fragment key={`${index}:${item.label}`}>
               <li className="min-w-0">
                 {item.href && !current ? (
-                  <Link href={item.href} className="hover:text-ink hover:underline">
+                  // 44px to tap on phones and tablets (S4).
+                  <Link
+                    href={item.href}
+                    className="inline-flex min-h-11 items-center hover:text-ink hover:underline lg:min-h-0"
+                  >
                     {item.label}
                   </Link>
                 ) : (
