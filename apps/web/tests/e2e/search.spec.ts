@@ -10,7 +10,7 @@ const count = (page: Page) => page.locator("[data-count]");
 
 test("out of stock is hidden by default, and the page says how many (C2)", async ({ page }) => {
   await page.goto("/search?q=relay");
-  await expect(count(page)).toHaveText("30 results · 6 more out of stock");
+  await expect(count(page)).toHaveText("30 in stock · 6 more out of stock");
   await expect(page.getByRole("link", { name: "In stock" })).toHaveAttribute(
     "aria-current",
     "true",
@@ -27,7 +27,7 @@ test("the chips toggle and combine", async ({ page }) => {
   await page.getByRole("link", { name: "2+ shops" }).click();
   await expect(page).toHaveURL(/min_suppliers=2/);
   // 0, 4, 8 … 28 in stock; 32 is out of stock.
-  await expect(count(page)).toHaveText("8 results · 1 more out of stock");
+  await expect(count(page)).toHaveText("8 in stock · 1 more out of stock");
 
   await page.getByRole("link", { name: "In stock" }).click();
   await expect(page).toHaveURL(/min_suppliers=2.*in_stock=all|in_stock=all.*min_suppliers=2/);
@@ -141,7 +141,7 @@ test("a search within a shop says so and can be widened", async ({ page }) => {
   await page.goto("/search?q=relay&shop=shop-a");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Results for “relay” in Shop A");
   // 0, 3, 4, 6, 8, 9, 12 … — every product Shop A sells, alone or with others.
-  await expect(count(page)).toContainText("15 results");
+  await expect(count(page)).toContainText("15 in stock");
   await page.getByRole("link", { name: "Search all shops" }).click();
   await expect(page).toHaveURL("/search?q=relay");
 });
