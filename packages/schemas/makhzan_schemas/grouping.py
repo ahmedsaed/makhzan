@@ -1,24 +1,32 @@
 """Product grouping — derive canonical products from listings.
 
 Every active listing maps to exactly one product:
-  - a confident part number  -> shared product  "mpn:<PN>"
+  - a confident part number  -> shared product  "mpn:<PN>:<signature>"
   - otherwise                 -> singleton       "single:<source>:<external_id>"
 
-Precision guard: a handful of part numbers are ambiguous *families* (ESP32,
-ATMEGA328P, STM32, L298...) that get built into many distinct products. For
-those — and only those — we sub-cluster the group by significant-title-token
-similarity, so identical variants across suppliers merge (ESP32-CAM ×3) while
-different ones split (ESP32-CAM vs ESP32 T-Beam). Specific parts (LM358, DS3231)
-are untouched — their varied descriptions are synonyms that should stay merged.
+A shared part number is evidence, not proof, so every group that shares one is
+sub-clustered (`_subcluster`): listings merge only when their titles agree, and
+any of these vetoes a merge outright —
 
-Singleton keys are derived from the listing's natural key so a product's identity
-(and URL) stays stable across re-scrapes. `rebuild_products` is a full, idempotent
-recompute — cheap at this scale; can be made incremental later.
+  - the two listings come from the same supplier (a shop's two SKUs are two
+    products);
+  - their titles state different values of the same unit (30-pin vs 38-pin,
+    40 °C vs 140 °C, 180° vs 360°, a 3-pack vs one) — see `makhzan_schemas.values`;
+  - their titles state different forms (a bare chip vs a module, or an
+    accessory such as a bracket vs the part it fits) — see
+    `DomainProfile.form_markers`;
+  - their prices are implausibly far apart.
+
+Keys are derived from stable listing data, so a product's identity (and URL)
+survives re-scrapes. `rebuild_products` is a full, idempotent recompute — cheap
+at this scale; can be made incremental later.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
@@ -26,6 +34,7 @@ from decimal import Decimal
 from makhzan_schemas.domains import get_profile
 from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import Listing, Product
+from makhzan_schemas.values import value_tokens, values_conflict
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -76,30 +85,92 @@ def _span_ok(prices: list[Decimal], candidate: Decimal | None, max_ratio: float)
     return (max(known) / min(known)) <= Decimal(str(max_ratio))
 
 
+_FORM_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+
+
+def _form(title: str | None, mpn: str, domain: str | None = None) -> str | None:
+    """The physical form a title states ("chip", "module"...), or None if silent.
+
+    Read before noise stripping, because the noise list is exactly where the
+    words that say it ("ic", "module", "board") are thrown away.
+    """
+    profile = get_profile(domain)
+    compiled = _FORM_CACHE.get(profile.slug)
+    if compiled is None:
+        compiled = [(form, re.compile(pattern)) for form, pattern in profile.form_markers]
+        _FORM_CACHE[profile.slug] = compiled
+    text = (title or "").lower().replace(mpn.lower(), " ")
+    return next((form for form, pattern in compiled if pattern.search(text)), None)
+
+
+def _forms_conflict(a: str | None, b: str | None, strict: frozenset[str]) -> bool:
+    """Two stated forms that differ conflict; silence conflicts only with a strict one."""
+    if a == b:
+        return False
+    if a and b:
+        return True
+    return (a or b) in strict
+
+
+@dataclass
+class _Evidence:
+    """What one listing's title says about it, read once."""
+
+    tokens: set[str]
+    values: dict[str, frozenset[Decimal]]
+    form: str | None
+
+
 @dataclass
 class _Cluster:
     """One sub-product being accumulated out of a shared-identifier group."""
 
     #: Tokens of the member that seeded it — the stable part of the group key.
     seed_tokens: set[str]
-    #: Every member's tokens. A candidate is compared against all of them, not
+    #: Every member's evidence. A candidate is compared against all of them, not
     #: just the seed: the seed can be title-poor ("ESP32 Development Board 30
     #: pin" reduces to {pin} once noise is stripped), and comparing only against
     #: it made the cluster unmatchable by title and so a price-only magnet.
-    token_sets: list[set[str]]
+    evidence: list[_Evidence]
     prices: list[Decimal]
     members: list[Listing]
+    suppliers: set[uuid.UUID]
 
-    def admits(
-        self, tokens: set[str], price: Decimal | None, threshold: float, ratio: float
-    ) -> bool:
-        if not any(_jaccard(tokens, known) >= threshold for known in self.token_sets):
-            return False
-        return _span_ok(self.prices, price, ratio)
+    def similarity(
+        self,
+        listing: Listing,
+        ev: _Evidence,
+        threshold: float,
+        ratio: float,
+        strict: frozenset[str] = frozenset(),
+    ) -> float | None:
+        """How well a candidate matches, or None if it may not join at all.
 
-    def add(self, listing: Listing, tokens: set[str]) -> None:
+        Title similarity admits; everything else can only veto. Each veto is
+        checked against *every* member, because a cluster is joined through
+        whichever member matches best — checking only that one is how a 30-pin
+        board chained a 38-pin one in through a third, vaguer title.
+        """
+        # A shop lists two SKUs because they differ. Two of its own listings in
+        # one product were, in practice, always variants collapsed together:
+        # KSD301 switches from 40 to 140 °C, thirteen trimpot values, 180° and
+        # 360° servos. A shop's genuine duplicate stays a separate product, which
+        # is the honest under-merge.
+        if listing.supplier_id in self.suppliers:
+            return None
+        if any(values_conflict(ev.values, known.values) for known in self.evidence):
+            return None
+        if any(_forms_conflict(ev.form, known.form, strict) for known in self.evidence):
+            return None
+        best = max(_jaccard(ev.tokens, known.tokens) for known in self.evidence)
+        if best < threshold or not _span_ok(self.prices, listing.price, ratio):
+            return None
+        return best
+
+    def add(self, listing: Listing, ev: _Evidence) -> None:
         self.members.append(listing)
-        self.token_sets.append(tokens)
+        self.evidence.append(ev)
+        self.suppliers.add(listing.supplier_id)
         if listing.price is not None:
             self.prices.append(listing.price)
 
@@ -134,18 +205,30 @@ def _subcluster(
 
     clusters: list[_Cluster] = []
     for listing in ordered:
-        tokens = _sig_tokens(listing.title_en or listing.title_ar, mpn, domain)
+        title = listing.title_en or listing.title_ar
+        ev = _Evidence(
+            tokens=_sig_tokens(title, mpn, domain),
+            values=value_tokens((title or "").lower().replace(mpn.lower(), " ")),
+            form=_form(title, mpn, domain),
+        )
+        # The best-matching cluster, not the first that will have it: with a
+        # shop's variants now kept apart, a listing can be admissible to several
+        # sibling clusters and should join the one it most resembles.
+        best: tuple[float, _Cluster] | None = None
         for cluster in clusters:
-            if cluster.admits(tokens, listing.price, threshold, max_ratio):
-                cluster.add(listing, tokens)
-                break
+            score = cluster.similarity(listing, ev, threshold, max_ratio, profile.accessory_forms)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, cluster)
+        if best is not None:
+            best[1].add(listing, ev)
         else:
             clusters.append(
                 _Cluster(
-                    seed_tokens=tokens,
-                    token_sets=[tokens],
+                    seed_tokens=ev.tokens,
+                    evidence=[ev],
                     prices=[listing.price] if listing.price is not None else [],
                     members=[listing],
+                    suppliers={listing.supplier_id},
                 )
             )
 
@@ -154,8 +237,15 @@ def _subcluster(
         members = cluster.members
         sig = "-".join(sorted(cluster.seed_tokens)) or "base"
         key = f"{mpn_key}:{sig}"
-        while key in result:  # guard against signature collisions
-            key += "_"
+        if key in result:
+            # Variants of one shop often word their titles identically apart from
+            # the value ("Thermal Switch NC 40°C" / "… 90°C"), so signatures
+            # collide. Disambiguate by the seed listing's own natural key, which
+            # survives a re-scrape, rather than by position, which shifts whenever
+            # a sibling appears or disappears.
+            seed = members[0]
+            natural = f"{seed.source}:{seed.external_id or seed.id}"
+            key += "~" + hashlib.sha1(natural.encode()).hexdigest()[:10]
         result[key] = members
     return result
 

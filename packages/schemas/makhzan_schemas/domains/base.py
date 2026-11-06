@@ -60,6 +60,17 @@ class DomainProfile:
     #: each other even when their wording differs. Suppliers describe the same
     #: part very differently, so price is the second opinion.
     merge_price_ratio: float = 4.0
+    #: (form, pattern) pairs, highest priority first: what physical *form* a
+    #: title says it is, when the noise list has stripped the words that say it.
+    #: Two listings sharing an identifier but stating different forms are not
+    #: merged — a bare TP4056 chip is not a TP4056 charger module. A title
+    #: matching several patterns takes the first. Empty means no form check.
+    form_markers: tuple[tuple[str, str], ...] = ()
+    #: Forms that a title stating *no* form can never be. Ordinarily silence is
+    #: not a conflict ("TP4056 Lithium Battery Charger" may well be the module),
+    #: but a bracket, holder or case names the part it fits, so a title that does
+    #: not say "holder" is not the holder.
+    accessory_forms: frozenset[str] = frozenset()
 
     #: Meilisearch searchable attributes, highest-ranked first.
     search_attributes: tuple[str, ...] = ("title_en", "title_ar", "brand")
