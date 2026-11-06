@@ -77,6 +77,11 @@ class ShopifyAdapter(SourceAdapter):
         if max_partitions_per_run is not None:
             self.max_partitions_per_run = max_partitions_per_run
 
+    def source_categories(self, raw: RawItem) -> list[str]:
+        """The shop's own `product_type`, so drift and the "Services" skip see it."""
+        product_type = ((raw.raw or {}).get("product_type") or "").strip()
+        return [product_type] if product_type else []
+
     def category_for(self, raw: RawItem) -> tuple[str, str] | None:
         """Resolve a listing's category from the shop's own `product_type`.
 
