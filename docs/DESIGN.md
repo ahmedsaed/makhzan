@@ -25,7 +25,7 @@ Measured on 60.9k active listings (November 2026).
 | A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). |
 | Arabic titles 0.1%, Arabic descriptions 3% | **English only.** Arabic search queries keep working; the Arabic interface is gone. |
 | Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions are clamped. |
-| No specs; brand on 2%; part numbers on 15% | No spec table, no brand filter. Part numbers matter to ranking, not as a field. |
+| No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
 | 16 trades, very uneven (three hold 88% of products) | Trades are listed by size and each says what's inside; never equal tiles of names. |
@@ -97,6 +97,7 @@ and its top categories in words ("O-rings, bearings, oil seals"). The top 8, the
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
   shop page, the description (clamped), similar products. A fixed bottom bar on phones:
   price, "checked …" and **View at {shop}**.
+- Specifications and datasheets, when the shop provides them: name/value rows and PDF links, labelled with their source ("From Shop A's listing"); on a several-shop product, those of the offer the page leads with. Absent data means no section, never an empty one.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
@@ -156,8 +157,8 @@ Each is meant to be checked by a test.
 **Content**
 - **C1** Every result, list or grid, shows: title, price (or range), shop name or "N shops", freshness. List and grid carry the same facts.
 - **C2** Out of stock is hidden by default; when anything is hidden the page says how many and offers to show them.
-- **C3** No per-unit price is ever implied; ranges read "EGP 260 – 400".
-- **C4** No spec table, no brand filter, no Arabic interface text.
+- **C3** No per-unit price is ever implied; ranges read "EGP 260 – 400". Prices are the current price only: no struck-through "before" prices, no discount badges (some shops' before prices are standing markups).
+- **C4** Specs and datasheets appear only when the shop provides them, with their source; never an empty or placeholder table. No brand filter, no Arabic interface text.
 
 **Freshness**
 - **F1** Every price shows when it was last checked, relative ("checked 12 days ago").
