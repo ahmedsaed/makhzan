@@ -15,6 +15,8 @@
  */
 import { createServer } from "node:http";
 
+import { searchFixture } from "./fixtures/search.mjs";
+
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
 const CATEGORIES = [
@@ -210,6 +212,8 @@ const server = createServer((req, res) => {
     const domain = url.searchParams.get("domain");
     return send(200, domain ? CATEGORIES.filter((c) => c.domain === domain) : CATEGORIES);
   }
+  const fixture = path === "/search" && searchFixture(url);
+  if (fixture) return send(fixture.status, fixture.body);
   if (path === "/search") return send(200, search(url));
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
