@@ -15,6 +15,8 @@
  */
 import { createServer } from "node:http";
 
+import { TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
+
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
 const CATEGORIES = [
@@ -208,9 +210,10 @@ const server = createServer((req, res) => {
   if (path === "/stats") return send(200, { products: 57207, suppliers: 8, categories: 249 });
   if (path === "/categories") {
     const domain = url.searchParams.get("domain");
-    return send(200, domain ? CATEGORIES.filter((c) => c.domain === domain) : CATEGORIES);
+    const all = [...CATEGORIES, ...TRADE_CATEGORIES];
+    return send(200, domain ? all.filter((c) => c.domain === domain) : all);
   }
-  if (path === "/search") return send(200, search(url));
+  if (path === "/search") return send(200, tradeSearch(url) ?? search(url));
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
     const summary = { ...PRODUCT };

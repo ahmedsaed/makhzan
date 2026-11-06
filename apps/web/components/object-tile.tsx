@@ -1,3 +1,5 @@
+import { Package, type LucideIcon } from "lucide-react";
+
 import { Link } from "@/components/link";
 import { PhotoFrame } from "@/components/photo-frame";
 import { formatCount } from "@/lib/format";
@@ -9,13 +11,15 @@ import { cn } from "@/lib/utils";
  * is recognised faster than its name is read, and a category name alone
  * ("Fasteners") rarely says what is inside.
  *
- * `hint` is the line that does say it ("O-rings, bearings, oil seals").
- * `current` marks the selected group on a trade page.
+ * The frame leads and the name sits under it, so a row of five still fits a
+ * phone. `hint` is the line that says what is inside ("O-rings, bearings, oil
+ * seals"). `current` marks the selected group or category on a trade page.
  */
 export function ObjectTile({
   href,
   label,
   image = null,
+  icon: Icon = Package,
   count,
   hint,
   current = false,
@@ -24,8 +28,10 @@ export function ObjectTile({
 }: {
   href: string;
   label: string;
-  /** A representative product photo; the part glyph stands in without one. */
+  /** A representative product photo; `icon` stands in without one. */
   image?: string | null;
+  /** A neutral line icon for when there is no photo yet. */
+  icon?: LucideIcon;
   count?: number;
   hint?: string;
   current?: boolean;
@@ -37,23 +43,41 @@ export function ObjectTile({
     <Link
       href={href}
       aria-current={current ? "true" : undefined}
-      className={cn(
-        "flex h-full flex-col gap-2 rounded-card border bg-surface p-2.5 hover:border-line-strong",
-        current ? "border-chip-on" : "border-line",
-        className,
-      )}
+      className={cn("group flex h-full flex-col gap-1.5 text-ink", className)}
     >
-      <PhotoFrame src={image} alt="" className={size === "sm" ? "rounded-md" : undefined} />
+      <span
+        className={cn(
+          "relative block aspect-square w-full overflow-hidden bg-photo-frame",
+          size === "sm" ? "rounded-md" : "rounded-control",
+          current ? "border-2 border-chip-on" : "border border-line group-hover:border-line-strong",
+        )}
+      >
+        {image ? (
+          <PhotoFrame src={image} alt="" className="rounded-none border-0" />
+        ) : (
+          // ink-3 reads on the white frame in both themes, as the part glyph does.
+          <Icon
+            aria-hidden="true"
+            strokeWidth={1.25}
+            className="absolute inset-0 m-auto size-1/2 text-ink-3"
+          />
+        )}
+      </span>
       <span className="flex min-w-0 flex-col gap-0.5">
         <span
           className={cn(
-            "leading-tight font-semibold text-ink",
-            size === "sm" ? "text-[13px]" : "text-sm",
+            // Hyphenated rather than broken anywhere: "Transmis-sion", not "Transmissi on".
+            "leading-tight break-words hyphens-auto",
+            size === "sm" ? "text-xs" : "text-center text-[11px] sm:text-[13px]",
+            current ? "font-semibold" : "font-normal",
           )}
         >
           {label}
           {count !== undefined && (
-            <span className="tabular ms-1.5 font-normal text-ink-3">{formatCount(count)}</span>
+            <>
+              {" "}
+              <span className="font-normal text-ink-3 tabular">{formatCount(count)}</span>
+            </>
           )}
         </span>
         {hint && <span className="line-clamp-2 text-xs leading-snug text-ink-2">{hint}</span>}

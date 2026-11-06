@@ -1,17 +1,34 @@
 import type { Metadata } from "next";
 
-import { Container } from "@/components/section";
+import { Container, Empty } from "@/components/section";
+import { TradeList } from "@/components/trade-list";
+import { fetchCategories } from "@/lib/api";
+import { tradeSummaries } from "@/lib/trades";
 
-export const metadata: Metadata = { title: "Trades" };
+export const metadata: Metadata = {
+  title: "All trades",
+  description: "Every trade makhzan covers, largest first, with what is inside each.",
+};
 
-/** Placeholder: all 16 trades, each saying what's inside, is built here next. */
-export default function TradesPage() {
+/** Every trade as the home page lists its top eight: largest first, each
+ *  saying what is inside. */
+export default async function TradesPage() {
+  const trades = tradeSummaries(await fetchCategories());
+
   return (
-    <Container className="py-10">
-      <h1 className="text-2xl">Trades</h1>
-      <p className="mt-2 text-ink-2">
-        Every trade makhzan covers, largest first, with what is inside each.
-      </p>
+    <Container className="max-w-3xl py-5">
+      <h1 className="mb-3 text-2xl">All {trades.length} trades</h1>
+      {trades.length > 0 ? (
+        <TradeList trades={trades} />
+      ) : (
+        <Empty title="No trades yet" hint="The catalogue is empty right now." />
+      )}
     </Container>
   );
 }
+
+/**
+ * Rendered per request, not at build time. The catalogue lives in an API this
+ * build has no access to. SSR still gives crawlers complete HTML.
+ */
+export const dynamic = "force-dynamic";
