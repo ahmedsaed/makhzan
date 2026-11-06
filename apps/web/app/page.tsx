@@ -1,65 +1,108 @@
-import { Link } from "@/components/link";
+import {
+  ExampleSearches,
+  ForShops,
+  HomeShops,
+  HomeStats,
+  HomeTrades,
+  HowItWorks,
+  SeveralShops,
+} from "@/components/home-sections";
+import { Container } from "@/components/section";
 import { SearchField } from "@/components/search-field";
 import { SiteHeader } from "@/components/site-header";
-import { TradeList } from "@/components/trade-list";
-import { fetchCategories, fetchStats } from "@/lib/api";
+import { fetchCategories, fetchStats, fetchSuppliers, searchProducts } from "@/lib/api";
 import { formatCount } from "@/lib/format";
-import { routes } from "@/lib/routes";
+import { tradeCards } from "@/lib/home";
+import { listedShops } from "@/lib/shops";
 import { tradeSummaries } from "@/lib/trades";
 
-/** Trades on the home page; the rest are one link away. */
-const HOME_TRADES = 8;
+/** Products in the "sold by several shops" strip: one row of six on desktop. */
+const SEVERAL_SHOPS = 6;
 
 /**
- * Two jobs: take a query from someone who knows what they want, and show the
- * shape of the catalogue to someone who doesn't. A headline, one large search,
- * the totals, then the biggest trades, each saying what is inside.
+ * Two jobs: take a query from someone who knows what they want, and show a
+ * first-time visitor what makhzan is and what is in it without their having to
+ * search. A headline, one large search with example queries, the totals; then
+ * the trades and their biggest categories, products several shops sell, the
+ * shops themselves, how it works, and a word for shop owners.
  *
- * Neither the totals nor the trades are allowed to take the page down: without
- * them it is still a working search box.
+ * Desktop uses the full container: the hero sits beside "How makhzan works",
+ * and every section below spans the width. Phones read top to bottom, with the
+ * explainer moved below the browsing sections so the trades stay near the top.
+ *
+ * Every section fails soft. Each fetch is caught on its own, and a section
+ * whose data did not arrive is left out; with nothing at all the page is still
+ * a working search box.
  */
 export default async function HomePage() {
-  const [categories, stats] = await Promise.all([
+  const [categories, stats, shops, several] = await Promise.all([
     fetchCategories().catch(() => []),
     fetchStats().catch(() => null),
+    fetchSuppliers().catch(() => null),
+    searchProducts({
+      q: "",
+      minSuppliers: 2,
+      inStock: true,
+      sort: "supplier_count:desc",
+      limit: SEVERAL_SHOPS,
+    }).catch(() => null),
   ]);
-  const trades = tradeSummaries(categories);
+  const rows = tradeSummaries(categories);
+  const cards = tradeCards(categories);
+  const listed = shops ? listedShops(shops) : [];
+  const now = new Date();
 
   return (
     <>
       <SiteHeader search={false} />
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-10 md:px-6">
-        <section className="flex flex-col gap-3 pt-6 pb-5 sm:pt-12 sm:pb-8">
-          <h1 className="max-w-[24ch] text-[26px] leading-[1.15] font-extrabold sm:text-4xl">
-            Find parts and materials across Cairo&apos;s suppliers.
-          </h1>
-          <SearchField autoFocus placeholder="ESP32, M8 bolt, digital caliper" className="w-full" />
-          {stats && (
-            <p className="text-sm text-ink-2">
-              <span className="tabular">{formatCount(stats.products)}</span> products from{" "}
-              <span className="tabular">{formatCount(stats.suppliers)}</span> shops. Prices
-              rechecked about weekly.
-            </p>
-          )}
-        </section>
-
-        {trades.length > 0 && (
-          <section aria-labelledby="trades-heading" className="flex flex-col gap-2">
-            <h2
-              id="trades-heading"
-              className="font-sans text-[13px] font-semibold tracking-[0.06em] text-ink-2 uppercase"
-            >
-              Browse by trade
-            </h2>
-            <TradeList trades={trades.slice(0, HOME_TRADES)} />
-            <Link
-              href={routes.trades()}
-              className="flex min-h-11 items-center self-start text-[15px] font-medium text-link hover:underline"
-            >
-              All {trades.length} trades
-            </Link>
+      <main className="flex-1 pb-12">
+        <Container className="flex flex-col gap-10 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-x-12 lg:gap-y-14">
+          <section
+            aria-label="Search"
+            data-home-section="hero"
+            className="flex flex-col gap-3 pt-6 sm:pt-12 lg:col-start-1 lg:row-start-1 lg:pb-2"
+          >
+            <h1 className="max-w-[24ch] text-[26px] leading-[1.15] font-extrabold sm:text-4xl lg:text-5xl lg:leading-[1.08]">
+              Find parts and materials across Cairo&apos;s suppliers.
+            </h1>
+            <SearchField
+              autoFocus
+              placeholder="ESP32, oil seal, digital caliper"
+              className="mt-1 w-full lg:mt-3"
+            />
+            {stats && (
+              <p className="text-sm text-ink-2 lg:hidden">
+                <span className="tabular">{formatCount(stats.products)}</span> products from{" "}
+                <span className="tabular">{formatCount(stats.suppliers)}</span> shops. Prices
+                rechecked about weekly.
+              </p>
+            )}
+            <HomeStats stats={stats} trades={cards.length} className="mt-2 hidden lg:grid" />
+            <ExampleSearches className="mt-2" />
           </section>
-        )}
+
+          <HowItWorks className="max-lg:order-1 lg:col-start-2 lg:row-start-1 lg:mt-12 lg:self-start" />
+
+          {cards.length > 0 && (
+            <div className="lg:col-span-2">
+              <HomeTrades cards={cards} rows={rows} />
+            </div>
+          )}
+
+          {several && several.hits.length > 0 && (
+            <div className="lg:col-span-2">
+              <SeveralShops hits={several.hits} total={several.total} now={now} />
+            </div>
+          )}
+
+          {listed.length > 0 && (
+            <div className="max-lg:order-2 lg:col-span-2">
+              <HomeShops shops={listed} now={now} />
+            </div>
+          )}
+
+          <ForShops className="max-lg:order-2 lg:col-span-2" />
+        </Container>
       </main>
     </>
   );

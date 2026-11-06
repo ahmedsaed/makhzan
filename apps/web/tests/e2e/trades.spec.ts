@@ -1,34 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * Home, all trades, a trade and a category. Stub data: tests/e2e/fixtures/trades.mjs.
+ * All trades, a trade and a category; home is in home.spec.ts. Stub data:
+ * tests/e2e/fixtures/trades.mjs.
  */
-
-test("home lists the eight biggest trades, each saying what is inside", async ({ page }) => {
-  await page.goto("/");
-  await expect(
-    page.getByRole("heading", {
-      level: 1,
-      name: "Find parts and materials across Cairo's suppliers.",
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("57,207 products from 8 shops. Prices rechecked about weekly."),
-  ).toBeVisible();
-
-  const rows = page.locator("[data-trade]");
-  await expect(rows).toHaveCount(8);
-  // Largest first, and the "Other" bucket never describes a trade.
-  const first = rows.first();
-  await expect(first).toHaveAttribute("data-trade", "seals-bearings");
-  await expect(first).toContainText("Seals & Bearings");
-  await expect(first).toContainText("1,580");
-  await expect(first).toContainText("O-Rings, bearings, oil seals, gaskets");
-  await expect(first).not.toContainText("Other");
-
-  await page.getByRole("link", { name: "All 11 trades" }).click();
-  await expect(page).toHaveURL("/trades");
-});
 
 test("all trades lists every trade by size", async ({ page }) => {
   await page.goto("/trades");
