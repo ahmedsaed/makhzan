@@ -97,7 +97,12 @@ and its top categories in words ("O-rings, bearings, oil seals"). The top 8, the
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
   shop page, the description (clamped), similar products. A fixed bottom bar on phones:
   price, "checked …" and **View at {shop}**.
-- Specifications and datasheets, when the shop provides them: name/value rows and PDF links, labelled with their source ("From Shop A's listing"); on a several-shop product, those of the offer the page leads with. Absent data means no section, never an empty one.
+- What the shops wrote: description, specifications (name/value rows) and datasheets
+  (PDF links), each labelled with its source ("From Shop A's listing"). With several
+  shops, a **Details** section with a "From:" tab per shop that wrote anything, richest
+  first; one shop at a time, never merged (shops contradict each other). The tabs are
+  radio buttons and work without JavaScript. A shop that wrote nothing gets no tab;
+  absent data means no section, never an empty one.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
@@ -114,7 +119,12 @@ trade), biggest categories, and "Own this shop? Add your details."
 
 **Desktop.** Results get a side rail (category, price); the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
-Product pages go two columns, offers as a table.
+Product pages go two columns: a narrow one (about 26rem) with the photo and, under it,
+the way to the shop (price box, or the summary and the offers as two-line cards); and a
+wide one with the title and what the shops wrote, which is the long part. A product no
+shop wrote anything about keeps its offers in the wide column instead. Every page is
+checked at 1280, 1440 and 1920px as well as on a phone: no content in a narrow strip
+beside empty space.
 
 ## Style
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -52,6 +52,19 @@ export function PhotoFrame({
   const [loaded, setLoaded] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
 
+  // A photo can finish loading before React hydrates and attaches `onLoad`
+  // (server-rendered, or from the cache), and then the event never reaches
+  // us: the frame would spin forever over a photo that is there. So the
+  // element's own state is read once it is mounted.
+  const settle = useCallback(
+    (img: HTMLImageElement | null) => {
+      if (!img || !src || !img.complete) return;
+      if (img.naturalWidth > 0) setLoaded(src);
+      else setFailed(src);
+    },
+    [src],
+  );
+
   const broken = !src || failed === src;
   const ready = !!src && (preloaded || loaded === src);
 
@@ -76,6 +89,7 @@ export function PhotoFrame({
               See docs/decisions/0003-supplier-images-load-direct.md. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
+            ref={settle}
             src={src}
             alt={alt}
             // Offscreen rows never fetch at all, so a 24-row page costs the
