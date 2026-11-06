@@ -18,7 +18,7 @@ apps/web         Next.js consumer frontend (pnpm, shadcn/Base UI, English only, 
 apps/api         FastAPI read-only API over Postgres + Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue
 packages/schemas  SQLAlchemy models, Alembic migrations, taxonomy, grouping, search contract
-scripts/          Operational scripts (deploy, backup, reindex)
+scripts/          Operational scripts (deploy, backup, probes)
 config/           sources.example.toml only; the real configuration is ../makhzan-config (private)
 ```
 

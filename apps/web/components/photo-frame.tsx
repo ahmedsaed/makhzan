@@ -32,6 +32,7 @@ export function PhotoFrame({
   size,
   className,
   priority = false,
+  preloaded = false,
 }: {
   src: string | null;
   /** Describes the product, not the photo: usually its title. */
@@ -41,6 +42,9 @@ export function PhotoFrame({
   className?: string;
   /** Above the fold: load it eagerly and at high priority instead of lazily. */
   priority?: boolean;
+  /** The caller has already loaded this exact URL: show it at once, without
+   *  the loading state (a thumbnail swapped for its original). */
+  preloaded?: boolean;
 }) {
   // Tracked per-URL rather than as a bare boolean so that a frame reused for a
   // different product (same DOM node, new src) starts from "loading" again
@@ -49,7 +53,7 @@ export function PhotoFrame({
   const [failed, setFailed] = useState<string | null>(null);
 
   const broken = !src || failed === src;
-  const ready = !!src && loaded === src;
+  const ready = !!src && (preloaded || loaded === src);
 
   return (
     <div

@@ -326,6 +326,23 @@ test.describe("full-size photos", () => {
     );
   });
 
+  test("an original is fetched only once its photo is on screen", async ({ page }) => {
+    // Each original costs the shop bandwidth: the second photo's is not asked
+    // for until the strip is swiped to it.
+    const requested = await serveMedia(page);
+    await page.goto("/products/p-specs");
+    const photos = page.locator("[data-gallery] img");
+    await expect(photos.first()).toHaveAttribute("src", /ut61e-front\.png$/);
+    const back = () => requested.filter((url) => url.includes("/image/ut61e-back."));
+    expect(back()).toEqual([]);
+
+    await photos.nth(1).scrollIntoViewIfNeeded();
+    await expect.poll(back).toEqual([
+      `${MEDIA}/2025-01-10/product/image/ut61e-back.jpeg`,
+      `${MEDIA}/2025-01-10/product/image/ut61e-back.png`,
+    ]);
+  });
+
   test.describe("without JavaScript", () => {
     test.use({ javaScriptEnabled: false });
 

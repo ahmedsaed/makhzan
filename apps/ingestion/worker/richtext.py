@@ -101,6 +101,14 @@ _WIRING_COLUMN = {"function", "functions", "purpose", "connection", "connect to"
 #: ("Excellent IR Rejection: provides >99% typical infrared rejection across…")
 #: has the same shape, and only its length tells it apart.
 _KV_LINE = re.compile(r"^(?P<k>[^\W\d_][\w /().,+°%-]{0,39}?)\s*[:：]\s*(?P<v>\S.*)$")
+#: "Note: check the pinout", "Slogan: Power your ideas": shaped like a spec line,
+#: but advice or marketing. Checked in the prose only; a spec table's rows are
+#: specs by construction.
+_NOT_A_SPEC = {
+    "note", "notes", "slogan", "warning", "caution", "attention", "important", "tip",
+    "tips", "hint", "reminder", "remark", "remarks", "disclaimer", "shipping",
+    "delivery", "contact", "contact us", "ps", "p.s", "nb", "n.b",
+}  # fmt: skip
 _MAX_KEY_WORDS = 5
 _MAX_VALUE = 60
 _MAX_SPECS = 40
@@ -158,7 +166,7 @@ def specs_from_html(html: str | None) -> dict[str, str]:
     body = tree.body or tree.root
     for line in ((html_to_text(body.html) if body else None) or "").split("\n"):
         match = _KV_LINE.match(line.removeprefix("• "))
-        if match:
+        if match and _strip_label(match.group("k")).lower().rstrip(".") not in _NOT_A_SPEC:
             _add(specs, match.group("k"), match.group("v"))
 
     return specs
@@ -185,13 +193,13 @@ def documents_from_html(html: str | None, base_url: str) -> list[dict[str, str]]
     seen: set[str] = set()
     for a in HTMLParser(html).css("a[href]"):
         href = (a.attributes.get("href") or "").strip()
-        if not href.lower().split("?")[0].endswith(".pdf"):
+        if not re.split(r"[?#]", href.lower(), maxsplit=1)[0].endswith(".pdf"):
             continue
         url = urljoin(base_url + "/", href)
         # A "mailto:…?subject=x.pdf" or a script link is not a document.
         if url in seen or not url.startswith(("http://", "https://")):
             continue
         seen.add(url)
-        label = _cell_text(a) or url.rsplit("/", 1)[-1].split("?")[0]
+        label = _cell_text(a) or re.split(r"[?#]", url.rsplit("/", 1)[-1], maxsplit=1)[0]
         docs.append({"label": label, "url": url})
     return docs
