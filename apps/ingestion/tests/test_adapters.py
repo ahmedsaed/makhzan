@@ -12,6 +12,7 @@ from worker.sources import odoo as odoo_mod
 from worker.sources import woocommerce as woo_mod
 from worker.sources.base import SupplierInfo
 from worker.http import BROWSER_HEADERS, CHROME_VERSION
+from worker.normalize import not_a_product
 from worker.sources.odoo import OdooAdapter
 from worker.sources.shopify import ShopifyAdapter
 from worker.sources.woocommerce import WooCommerceAdapter
@@ -262,6 +263,21 @@ def test_shopify_unmapped_product_types_fall_through(product_type):
 def test_shopify_adapter_without_a_crosswalk_maps_nothing():
     adapter = _shopify()
     assert adapter.category_for(adapter._to_raw(_shopify_product())) is None
+
+
+@pytest.mark.parametrize(
+    ("product_type", "expected"), [("Sensor ", ["Sensor"]), ("", []), (None, [])]
+)
+def test_shopify_reports_its_product_type_as_the_source_category(product_type, expected):
+    """Without it, crosswalk drift saw nothing and a "Services" entry was kept."""
+    adapter = _shopify(SHOPIFY_CROSSWALK)
+    assert adapter.source_categories(adapter._to_raw(_shopify_product(product_type))) == expected
+
+
+def test_a_shopify_service_is_not_a_product():
+    adapter = _shopify()
+    raw = adapter._to_raw(_shopify_product("Services"))
+    assert not_a_product(raw.title, adapter.source_categories(raw)) == "filed as a service"
 
 
 # --------------------------------------------------------------------------- #
