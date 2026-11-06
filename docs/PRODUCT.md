@@ -56,6 +56,14 @@ and the referral numbers.
 - **Parts-list import** belongs in the plan, but not in this phase.
 - **Accounts matter**: they unlock most postponed features (Ahmed's view; how and when
   is still open, below).
+- **Enrichment without extra requests ships now** (brand, specs, datasheets, cleaner
+  descriptions and titles from what the crawler already downloads). **Anything that
+  costs a request per product waits until the shops have answered** the outreach
+  emails: a marketplace title backfill, the Odoo shop's product pages, the Shopify
+  shop's stock counts. Afterwards, details for new products only.
+- **Current price only.** The crawler keeps shops' "before" prices, but makhzan shows
+  no discounts: one shop's before prices are a standing markup on most of its stock.
+- **Specs and datasheets are shown when the shop provides them** (DESIGN.md, C4).
 
 ## Proposed, not yet discussed
 
