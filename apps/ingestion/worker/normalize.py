@@ -43,6 +43,21 @@ def clean_text(text: str | None) -> str | None:
     return cleaned or None
 
 
+def clean_description(text: str | None) -> str | None:
+    """`clean_text`, line by line: a description keeps the line breaks it came with.
+
+    The product page shows descriptions with `white-space: pre-line`, so a list
+    or a spec table an adapter rendered one item per line stays readable instead
+    of becoming one paragraph. Blank lines are dropped; text without line breaks
+    comes out exactly as `clean_text` would make it.
+    """
+    if not text:
+        return None
+    lines = (clean_text(line) for line in text.splitlines())
+    cleaned = "\n".join(line for line in lines if line)
+    return cleaned or None
+
+
 def parse_price(price_text: str | None) -> Decimal | None:
     if not price_text:
         return None
@@ -133,7 +148,7 @@ def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing
     if confidence < REVIEW_THRESHOLD and ReviewReason.LOW_CONFIDENCE not in reasons:
         reasons.append(ReviewReason.LOW_CONFIDENCE)
 
-    description = clean_text(raw.description)
+    description = clean_description(raw.description)
     desc_is_ar = bool(description and _has_arabic(description))
 
     return NormalizedListing(
