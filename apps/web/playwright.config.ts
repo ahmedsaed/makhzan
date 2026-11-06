@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 /**
  * Browser tests for the things unit tests cannot see: that a page is genuinely
- * server-rendered in the right direction, that the URL is the only state, and
+ * server-rendered, that the URL is the only state, that old URLs redirect, and
  * that the site works with JavaScript switched off.
  *
  * Hermetic on purpose. The app talks to a stub API (tests/e2e/stub-api.mjs)
@@ -10,8 +10,10 @@ import { defineConfig, devices } from "@playwright/test";
  * Python and cannot fail because the catalogue changed. The API is tested
  * separately.
  */
-const WEB_PORT = 3210;
-const STUB_PORT = 8787;
+// Overridable so several checkouts (git worktrees) can run the suite at once
+// without fighting over a port: `WEB_PORT=3301 STUB_PORT=8801 pnpm test:e2e`.
+const WEB_PORT = Number(process.env.WEB_PORT ?? 3210);
+const STUB_PORT = Number(process.env.STUB_PORT ?? 8787);
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -40,7 +42,8 @@ export default defineConfig({
       // break the suite.
       command: `npx next build && npx next start --port ${WEB_PORT}`,
       port: WEB_PORT,
-      env: { API_INTERNAL_URL: `http://localhost:${STUB_PORT}` },
+      // SITE_URL is read at runtime: the canonical and JSON-LD tests assert it.
+      env: { API_INTERNAL_URL: `http://localhost:${STUB_PORT}`, SITE_URL: "https://makhzan.test" },
       reuseExistingServer: !process.env.CI,
       timeout: 240_000,
       stdout: "ignore",

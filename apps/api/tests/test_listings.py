@@ -149,3 +149,26 @@ async def test_the_nested_category_can_be_turned_into_a_browse_link(client, db):
     assert category["domain"] == "tools"
     assert category["ref"] == "tools:measurement"
     assert category["ref"] != f"electronics:{category['slug']}"
+
+
+async def test_a_listing_carries_the_shops_specs_and_datasheets_only(client, db):
+    supplier = await make_supplier(db)
+    listing = await make_listing(
+        db,
+        supplier=supplier,
+        attributes={
+            "specs": {"Range": "0-200 mm"},
+            "documents": [{"url": "https://shop-a.test/manual.pdf", "label": "Manual"}],
+            "regular_price": "99.00",
+            "sku": "A-2002",
+        },
+    )
+
+    response = await client.get(f"/listings/{listing.id}")
+    body = response.json()
+
+    assert body["specs"] == {"Range": "0-200 mm"}
+    assert body["documents"] == [{"url": "https://shop-a.test/manual.pdf", "label": "Manual"}]
+    assert "attributes" not in body
+    assert "regular_price" not in response.text
+    assert "A-2002" not in response.text

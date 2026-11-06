@@ -35,6 +35,11 @@ FILTERABLE_ATTRIBUTES = [
     # domain, so "measurement" names both an electronics leaf and a tools one.
     # Filtering on the bare slug silently mixes verticals.
     "category_ref",
+    # The leaf's ref and every ancestor's, leaf first. Products are filed on
+    # leaves, so a filter on `category_ref` alone can never narrow to a group
+    # ("Passives") whose products all sit on its children. The API's category
+    # filter matches here, so a group page narrows like a leaf page does.
+    "category_refs",
     "category_slug",
     "domain",
     "in_stock",
@@ -44,6 +49,11 @@ FILTERABLE_ATTRIBUTES = [
     # one thing no single supplier's own site can show — is a query rather than
     # a post-filter over a page of results.
     "supplier_count",
+    # Every shop with an offer on the product, so "search within this shop" is a
+    # filter over the same product index rather than a second, listing-level
+    # search with its own ranking. An array: a product sold by three shops
+    # matches a filter on any one of them.
+    "supplier_slugs",
 ]
 
 #: Facets returned with a search so a browse rail can show counts without a
@@ -102,9 +112,23 @@ def build_product_document(
     category_slug: str | None,
     category_name: str | None,
     category_domain: str | None = None,
+    supplier_slugs: list[str] | None = None,
+    category_refs: list[str] | None = None,
 ) -> dict:
-    """Project a Product (with its aggregates) into a flat Meilisearch document."""
+    """Project a Product (with its aggregates) into a flat Meilisearch document.
+
+    `supplier_slugs` is not a Product column — it comes from the product's active
+    listings, so the caller passes it in. Sorted, so a rebuild of an unchanged
+    product produces an identical document.
+
+    `category_refs` is the category's ref followed by its ancestors' (the caller
+    walks the tree). Omitted, it is just the leaf's own ref; a product with no
+    category gets an empty list rather than a missing attribute.
+    """
     lv = product.last_verified_at
+    leaf = category_ref(category_domain or product.domain, category_slug)
+    if category_refs is None:
+        category_refs = [leaf] if leaf else []
     return {
         "id": str(product.id),
         "domain": product.domain,
@@ -113,10 +137,12 @@ def build_product_document(
         "title_ar": product.title_ar,
         "brand": product.brand,
         "category_slug": category_slug,
-        "category_ref": category_ref(category_domain or product.domain, category_slug),
+        "category_ref": leaf,
+        "category_refs": list(dict.fromkeys(category_refs)),
         "category_name": category_name,
         "supplier_name": product.supplier_name,
         "supplier_count": product.supplier_count,
+        "supplier_slugs": sorted(set(supplier_slugs or [])),
         "offer_count": product.offer_count,
         "min_price": float(product.min_price) if product.min_price is not None else None,
         "max_price": float(product.max_price) if product.max_price is not None else None,

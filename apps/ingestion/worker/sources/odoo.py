@@ -11,6 +11,12 @@ Three Odoo quirks handled here:
   - product ids live in the URL slug's trailing "-<id>" — used as external_id.
   - stock shows as a ribbon (`.o_ribbon`) only when NOT normally available
     ("Out of stock" / "Arriving Soon"); no ribbon means in stock.
+
+A card also carries the internal reference (in the image alt), a struck-through
+list price when the product is reduced, and a short subtitle that some shops use
+for the brand ("Acme Brand") or the warranty. All of it is read here. The full
+description, the photo gallery and datasheet links are only on the product page —
+one request per product, which is why they are not.
 """
 
 from __future__ import annotations
@@ -25,10 +31,26 @@ from makhzan_schemas.enums import SourceType
 from selectolax.parser import HTMLParser
 
 from worker.http import get_text, make_client
+from worker.normalize import parse_price
+from worker.richtext import html_to_text
 from worker.sources.base import Page, SourceAdapter, SupplierInfo
 
 MAX_PAGES = 300
 _ID_RE = re.compile(r"-(\d+)$")
+
+#: Odoo names a product "[<internal reference>] <name>" wherever it shows the
+#: display name, and the card's image alt is one of those places.
+_REFERENCE_RE = re.compile(r"^\s*\[([^\]\s][^\]]{0,62})\]")
+
+#: A line of the card subtitle naming the maker: "Acme Brand", "Original Acme®
+#: Brand", "Original Brand Acme®". Whole-line only, so "Brand New" and a brand
+#: mentioned mid-sentence are not read as one.
+_BRAND_LINES = (
+    re.compile(r"^(?:original\s+)?(?P<b>[^\W_][\w.&+' -]{0,30}?)\s*[®™]?\s+brand$", re.I),
+    re.compile(r"^original\s+brand\s+(?P<b>[^\W_][\w.&+' -]{0,30}?)\s*[®™]?$", re.I),
+)
+_NOT_A_BRAND = {"original", "new", "the", "top", "best", "high quality", "famous", "oem"}
+_WARRANTY_RE = re.compile(r"\b\d+\s*(?:years?|months?)\s+warranty\b", re.I)
 
 
 class OdooAdapter(SourceAdapter):
@@ -156,25 +178,41 @@ class OdooAdapter(SourceAdapter):
         currency_el = card.css_first('[itemprop="priceCurrency"]')
         currency = currency_el.text(strip=True) if currency_el else "EGP"
 
+        # The card's subtitle (Odoo's "sales description"). Its lines are <br>s,
+        # and reading it with text(strip=True) ran them together: "Switching
+        # Mode Power Supply1 YEAR Warranty".
         desc_el = card.css_first('[itemprop="description"]')
-        description = desc_el.text(strip=True) if desc_el else None
+        description = html_to_text(desc_el.html) if desc_el else None
+        lines = description.split("\n") if description else []
 
         img = card.css_first("img")
         img_src = (img.attributes.get("src") or img.attributes.get("data-src")) if img else None
         images = [urljoin(self.base_url, img_src)] if img_src else []
 
+        raw: dict = {"platform": "odoo", "category": partition or None}
+        if sku := _internal_reference(img):
+            raw["sku"] = sku
+        if compare_at := _compare_at(card, price_text):
+            raw["compare_at_price"] = compare_at
+        if warranty := next((m.group(0) for m in map(_WARRANTY_RE.search, lines) if m), None):
+            raw["warranty"] = warranty
+
         return RawItem(
             source=self.source_id,
             external_id=external_id,
-            source_url=urljoin(self.base_url, href),
+            # Without the query: the card links carry "?page=N" (or the category
+            # being browsed), which changes as the catalogue shifts and is not
+            # part of the product's address.
+            source_url=urljoin(self.base_url, href.split("?")[0]),
             title=title,
             description=description,
+            brand=_brand(lines),
             price_text=price_text,
             currency=currency,
             availability_text=self._stock_hint(card),
             category_hint=partition or None,
             images=images,
-            raw={"platform": "odoo", "category": partition or None},
+            raw=raw,
         )
 
     @staticmethod
@@ -189,3 +227,35 @@ class OdooAdapter(SourceAdapter):
         if "arriving soon" in text:
             return "arriving soon"
         return "in stock"
+
+
+def _internal_reference(img) -> str | None:
+    """The shop's own product code, from the image alt "[CODE] Name".
+
+    A private catalogue code like every supplier SKU — kept for reference, never
+    for grouping (see CLAUDE.md: across suppliers they coincide by accident).
+    """
+    alt = (img.attributes.get("alt") or "") if img else ""
+    match = _REFERENCE_RE.match(alt)
+    return match.group(1).strip() if match else None
+
+
+def _compare_at(card, price_text: str | None) -> str | None:
+    """The struck-through list price Odoo shows beside a reduced one."""
+    was_el = card.css_first("del .oe_currency_value")
+    was = parse_price(was_el.text(strip=True)) if was_el else None
+    now = parse_price(price_text)
+    if was is None or (now is not None and was <= now):
+        return None
+    return str(was)
+
+
+def _brand(lines: list[str]) -> str | None:
+    for line in lines:
+        for pattern in _BRAND_LINES:
+            match = pattern.match(line.strip())
+            if match:
+                brand = match.group("b").strip()
+                if brand.lower() not in _NOT_A_BRAND:
+                    return brand
+    return None

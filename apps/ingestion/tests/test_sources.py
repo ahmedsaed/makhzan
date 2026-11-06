@@ -139,6 +139,45 @@ def test_a_crosswalk_with_partitions_drives_a_category_sweep(tmp_path, monkeypat
     assert adapter.authoritative_categories is True
 
 
+def test_a_crosswalk_preference_reaches_a_tag_cloud_adapter(tmp_path, monkeypatch):
+    _crosswalks(
+        tmp_path,
+        monkeypatch,
+        shop_a="""
+        prefer = ["LEDs"]
+        [categories]
+        "Displays (LCD & LED)" = "electronics:displays"
+        "LEDs" = "electronics:leds"
+        """,
+    )
+    adapter = build_adapter(_row(config={"crosswalk": "shop_a"}))
+    raw = adapter._to_raw(
+        {
+            "id": 1,
+            "name": "LED 3mm Red",
+            "categories": [{"name": "Displays (LCD & LED)"}, {"name": "LEDs"}],
+        },
+        "in stock",
+    )
+    assert adapter.category_for(raw) == ("electronics", "leds")
+
+
+def test_a_preference_on_a_single_category_source_is_refused(tmp_path, monkeypatch):
+    """A Shopify product has one product_type, so there is nothing to rank; a
+    `prefer` there is a mistake and fails the build rather than being ignored."""
+    _crosswalks(
+        tmp_path,
+        monkeypatch,
+        shop_c="""
+        prefer = ["sensor"]
+        [categories]
+        "sensor" = "electronics:sensors"
+        """,
+    )
+    with pytest.raises(TypeError, match="prefer"):
+        build_adapter(_row(adapter="shopify", config={"crosswalk": "shop_c"}))
+
+
 def test_a_missing_crosswalk_is_an_error(tmp_path, monkeypatch):
     _crosswalks(tmp_path, monkeypatch)
     with pytest.raises(FileNotFoundError):

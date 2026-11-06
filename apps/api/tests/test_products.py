@@ -99,6 +99,68 @@ async def test_every_offer_carries_the_supplier_it_belongs_to(client, db):
     assert offer["source_url"] == "https://a.test/p/1"
 
 
+#: What a shop's listing carries in `attributes` once ingestion has read it: the
+#: public details beside a crossed-out price and internal keys that must not leak.
+SHOP_ATTRIBUTES = {
+    "specs": {"Operating Voltage": "5V", "Channels": 2, "Pinout": {"1": "VCC"}},
+    "documents": [
+        "https://shop-a.test/files/lm358.pdf",
+        {"url": "https://shop-a.test/files/app-note.pdf", "label": "Application note"},
+        "javascript:alert(1)",
+        "https://shop-a.test/files/lm358.pdf",
+    ],
+    "regular_price": "15.00",
+    "compare_at_price": "15.00",
+    "sku": "A-1001",
+    "platform": "shop-platform",
+    "price_id": 77,
+}
+
+
+async def test_an_offer_carries_the_shops_brand_specs_and_datasheets(client, db):
+    product = await make_product(db)
+    supplier = await make_supplier(db, slug="shop-a")
+    await make_listing(
+        db, supplier=supplier, product=product, brand="Acme", attributes=SHOP_ATTRIBUTES
+    )
+
+    (offer,) = (await client.get(f"/products/{product.id}")).json()["offers"]
+
+    assert offer["brand"] == "Acme"
+    # Scalars become text; a nested value is not a spec row.
+    assert offer["specs"] == {"Operating Voltage": "5V", "Channels": "2"}
+    # Web links only, each once.
+    assert offer["documents"] == [
+        {"url": "https://shop-a.test/files/lm358.pdf", "label": None},
+        {"url": "https://shop-a.test/files/app-note.pdf", "label": "Application note"},
+    ]
+
+
+async def test_an_offer_never_exposes_before_prices_or_internal_keys(client, db):
+    """Rule C3: current price only. The attributes bag is whitelisted, not passed on."""
+    product = await make_product(db)
+    supplier = await make_supplier(db)
+    await make_listing(db, supplier=supplier, product=product, attributes=SHOP_ATTRIBUTES)
+
+    raw = (await client.get(f"/products/{product.id}")).text
+
+    assert "attributes" not in raw
+    for leaked in ("regular_price", "compare_at_price", "A-1001", "price_id", "shop-platform"):
+        assert leaked not in raw
+
+
+async def test_an_offer_without_details_has_empty_specs_and_documents(client, db):
+    product = await make_product(db)
+    supplier = await make_supplier(db)
+    await make_listing(db, supplier=supplier, product=product)
+
+    (offer,) = (await client.get(f"/products/{product.id}")).json()["offers"]
+
+    assert offer["brand"] is None
+    assert offer["specs"] == {}
+    assert offer["documents"] == []
+
+
 async def test_listings_of_other_products_are_not_included(client, db):
     product = await make_product(db, group_key="mpn:LM358")
     other = await make_product(db, group_key="mpn:NE555")

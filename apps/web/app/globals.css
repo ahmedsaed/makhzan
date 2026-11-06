@@ -5,39 +5,65 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ---------------------------------------------------------------------------
- * Design language 04 — see docs/DESIGN.md.
+ * The palette — docs/DESIGN.md, "Style". Burnt orange for actions, hairlines,
+ * no shadows.
  *
- * Souk's build (geometric display, 2px edges, 7px radius) on Ledger's palette
- * (warm paper, oxblood, muted green). Every colour is defined here in the bare
- * :root and redefined in .dark; nothing is declared only inside .dark, or the
- * un-themed first paint renders one theme's text on the other theme's ground.
+ * This file is the only place a literal colour may appear (rule S1, enforced by
+ * tests/style-rules.test.ts), and the contrast pairs in rule S2 are measured
+ * from the values below by the same suite — change a value and the test tells
+ * you whether it still reads.
+ *
+ * Every token is defined in the bare :root and redefined in .dark; nothing is
+ * declared only inside .dark, or the un-themed first paint renders one theme's
+ * text on the other theme's ground.
  * ------------------------------------------------------------------------- */
 :root {
-  --ground: #fcfbf7;
+  --ground: #f6f6f3;
   --surface: #ffffff;
-  --ink: #1a1a17;
-  --ink-muted: #6e6c63;
-  --rule: #e5e3da;
-  --accent: #7a2e2e;
-  --accent-ink: #ffffff;
-  --ok: #3f6b46;
-  --ok-bg: #edf2ed;
-  --chip: #f2f0e8;
-  --radius: 7px;
+  --ink: #15171c;
+  --ink-2: #4a4f5a;
+  --ink-3: #6b7080;
+  --line: #e3e3de;
+  --line-strong: #d5d5cf;
+  --action: #c2410c;
+  --action-ink: #ffffff;
+  --link: #c2410c;
+  --badge: #fdece3;
+  --badge-ink: #9a3412;
+  --chip-on: #15171c;
+  --chip-on-ink: #ffffff;
+  --warn: #fef9c3;
+  --warn-line: #e5d36a;
+  --warn-ink: #574500;
+  --age-muted: #6e5a00;
+  /* White in both themes: supplier photos are shot on white, and a dark frame
+   * around a white photo reads as a hole in the page (rule S5). */
+  --photo-frame: #ffffff;
 }
 
 .dark {
-  --ground: #121210;
-  --surface: #1a1a17;
-  --ink: #ece9e0;
-  --ink-muted: #98958a;
-  --rule: #2a2a25;
-  /* Deliberately not Ledger's #C97A70 — against this geometry it read washed. */
-  --accent: #ce7263;
-  --accent-ink: #17110f;
-  --ok: #86b08c;
-  --ok-bg: #1c2620;
-  --chip: #232320;
+  --ground: #121316;
+  --surface: #1b1d21;
+  --ink: #ececea;
+  --ink-2: #b5b8bf;
+  --ink-3: #9095a0;
+  --line: #2c2f35;
+  --line-strong: #3a3e45;
+  /* The button keeps its light-theme orange and white text; only the link
+   * lightens, because text on the dark ground needs the lift and a filled
+   * button does not. */
+  --action: #c2410c;
+  --action-ink: #ffffff;
+  --link: #fb923c;
+  --badge: #3a2416;
+  --badge-ink: #fdba8c;
+  --chip-on: #ececea;
+  --chip-on-ink: #121316;
+  --warn: #2a2710;
+  --warn-line: #57501c;
+  --warn-ink: #f3e08a;
+  --age-muted: #d9c46c;
+  --photo-frame: #ffffff;
 }
 
 /* shadcn/Base UI primitives speak these names. Mapping them onto the palette
@@ -51,35 +77,44 @@
   --card-foreground: var(--ink);
   --popover: var(--surface);
   --popover-foreground: var(--ink);
-  --primary: var(--accent);
-  --primary-foreground: var(--accent-ink);
-  --secondary: var(--chip);
+  --primary: var(--action);
+  --primary-foreground: var(--action-ink);
+  --secondary: var(--ground);
   --secondary-foreground: var(--ink);
-  --muted: var(--chip);
-  --muted-foreground: var(--ink-muted);
-  --accent-color: var(--chip);
+  --muted: var(--ground);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--ground);
   --accent-foreground: var(--ink);
-  --destructive: var(--accent);
-  --border: var(--rule);
-  --input: var(--rule);
-  --ring: var(--accent);
+  --destructive: var(--action);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--link);
 }
 
 @theme inline {
   --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-tajawal), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 
   --color-ground: var(--ground);
   --color-surface: var(--surface);
   --color-ink: var(--ink);
-  --color-ink-muted: var(--ink-muted);
-  --color-rule: var(--rule);
-  --color-accent: var(--accent);
-  --color-accent-ink: var(--accent-ink);
-  --color-ok: var(--ok);
-  --color-ok-bg: var(--ok-bg);
-  --color-chip: var(--chip);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-action: var(--action);
+  --color-action-ink: var(--action-ink);
+  --color-link: var(--link);
+  --color-badge: var(--badge);
+  --color-badge-ink: var(--badge-ink);
+  --color-chip-on: var(--chip-on);
+  --color-chip-on-ink: var(--chip-on-ink);
+  --color-warn: var(--warn);
+  --color-warn-line: var(--warn-line);
+  --color-warn-ink: var(--warn-ink);
+  --color-age-muted: var(--age-muted);
+  --color-photo-frame: var(--photo-frame);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -93,21 +128,37 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --radius-sm: 3px;
-  --radius-md: 5px;
-  --radius-lg: var(--radius);
-  --radius-xl: 10px;
+  /* 10px controls, 12px cards and photo frames, pills fully round. */
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+}
+
+/* Digits that get compared must line up: prices, counts (rule S3). */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A price or a headline count: Archivo 700 with tabular figures. */
+@utility figure {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 @layer base {
   * {
-    border-color: var(--rule);
+    border-color: var(--line);
   }
 
   body {
@@ -117,32 +168,43 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Display face carries the titles; tight tracking is part of the language. */
   h1,
   h2,
   h3,
   h4 {
     font-family: var(--font-display);
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
     text-wrap: balance;
   }
 
-  /* Digits that get compared must line up: prices, counts, part numbers. */
-  .tabular,
   [data-numeric] {
     font-variant-numeric: tabular-nums;
   }
 
+  a {
+    text-underline-offset: 3px;
+  }
+
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--link);
     outline-offset: 2px;
     border-radius: 2px;
   }
 
-  /* Part numbers stay LTR inside Arabic text, or ESP32-WROOM-32 reorders
-   * around its hyphens. See docs/DESIGN.md. */
+  /* A page with a fixed bottom bar (the product page on a phone) makes room
+   * for it below everything, footer included, rather than covering the end. */
+  @media (width < 64rem) {
+    body:has([data-bottom-bar]) {
+      padding-bottom: calc(5.25rem + env(safe-area-inset-bottom));
+    }
+  }
+
+  /* Part numbers are monospace (S3) and isolated, so a part number quoted
+   * inside other text cannot reorder around its hyphens. */
   [data-identifier] {
+    font-family: var(--font-mono);
+    font-weight: 500;
     direction: ltr;
     unicode-bidi: isolate;
   }

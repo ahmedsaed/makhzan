@@ -88,6 +88,10 @@ Edit `.env.prod`:
 - `WEB_PORT` — the host port your proxy targets (the API stays internal)
 - `NEXT_PUBLIC_API_URL` — leave `/api` (the web app rewrites it to the API);
   `API_INTERNAL_URL` (default `http://api:8000`) is the internal rewrite target
+- `SITE_URL` — the site's public origin, e.g. `https://makhzan.merope.dev`.
+  Canonical links and the product pages' structured data are built from it (at
+  runtime, never from request headers). `deploy.sh` stops if it is unset,
+  because the fallback is `http://localhost:3000`
 - `WEB_ORIGINS` — CORS allow-list; unused in the default same-origin topology
 
 ### 3. Seed the data
@@ -144,6 +148,37 @@ Nightly backup cron:
 ```
 
 ## Deploying
+
+### November 2026 release
+
+Once, in this order, on the server from `~/Documents/Projects/makhzan`:
+
+1. **Set `SITE_URL`** in `.env.prod`: `SITE_URL=https://makhzan.merope.dev`.
+   `deploy.sh` stops without it.
+2. **Merge the code and wait for `build.yml` to publish the images** before
+   anything pulls the private configuration. Its crosswalks now use `prefer`, and
+   an image older than this release rejects a crosswalk key it does not know: the
+   `migrate` service's sources sync fails and the deploy stops (as would the
+   worker's next run). `deploy.sh` pulls the configuration itself, so do not
+   pull it by hand beforehand.
+3. **Deploy:** `make deploy`.
+4. **Regroup once.** Grouping changed, and the command also rebuilds the search
+   index, which gains `supplier_slugs` (search within a shop) and `category_refs`
+   (a category and its ancestors). Until it runs, `/search?shop=`, every category
+   filter and the trade pages' results fail:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup
+   ```
+
+   Product ids follow group keys (`docs/decisions/0004-stable-product-ids.md`), so
+   the products the new rules split off get new ids, about 1,000, once; on the
+   local snapshot 21 shared products lose their old id. Never `worker.backfill`
+   here: it erases crosswalk categories.
+5. **Resume the crawl:** `./makhzan crawl on`. Categories, specs and the other
+   enrichment, and the removal of non-products, land as each source is
+   re-crawled: one cycle per source, about a week. Two sources still block the
+   server's address and will not refresh until their shops allowlist it.
 
 One command on the server, from `~/Documents/Projects/makhzan`:
 

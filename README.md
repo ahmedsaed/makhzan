@@ -2,8 +2,7 @@
 
 **One place to find project materials in Egypt.**
 
-makhzan is a bilingual (English / Arabic) directory of Egyptian hardware and
-electronics suppliers. Instead of hunting across dozens of shops, it brings their
+makhzan is a directory of Egyptian hardware and electronics suppliers. Instead of hunting across dozens of shops, it brings their
 products and prices into one searchable catalogue, then hands you off to the
 supplier to buy. It is a **directory, not a store**: no cart, no payment, no
 delivery.
@@ -26,14 +25,14 @@ it:
   `Crawl-delay` in robots.txt is a floor on that, never a ceiling.
 - **A full pass is spread across about a week.** Each daily run takes only a
   slice of a catalogue, so a shop sees a steady trickle, not a spike.
-- **The crawler identifies itself** in every request (`From: crawler@makhzan.eg`).
+- **The crawler identifies itself** in every request (`From: crawler@merope.dev`).
 - **No circumvention.** If a site blocks us, we ask its owner; we do not route
   around a control they chose to switch on.
 - **Suppliers can ask us to stop, slow down, or change anything**, and we will.
   Being listed is meant to send them buyers, not to cost them anything.
 
 The same policy, for suppliers, is at
-[`/how-we-crawl`](https://makhzan.merope.dev/en/how-we-crawl).
+[`/how-we-crawl`](https://makhzan.merope.dev/how-we-crawl).
 
 ## What is, and is not, in this repository
 
@@ -52,7 +51,7 @@ path from your own package.
 ## Architecture
 
 ```
-apps/web          Next.js frontend: search, browse, product and supplier pages; RTL, dark mode
+apps/web          Next.js frontend: search, trades, product and shop pages; dark mode
 apps/api          FastAPI, read-only, over Postgres and Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalise -> upsert -> group -> index
 packages/schemas  SQLAlchemy models, migrations, taxonomies, grouping, search contract

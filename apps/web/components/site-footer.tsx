@@ -1,56 +1,39 @@
 import { Link } from "@/components/link";
-
-import { fetchStats } from "@/lib/api";
-import { getDictionary, localeOf, type Lang } from "@/lib/i18n";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { routes } from "@/lib/routes";
 
-/** Closes every page with what makhzan is and, crucially, what it is not. */
-export async function SiteFooter({ lang }: { lang: Lang }) {
-  const t = getDictionary(lang);
-  const locale = localeOf(lang);
-  const stats = await fetchStats().catch(() => null);
-
+/**
+ * The pages a supplier needs — how we crawl, and how to be removed, added or
+ * corrected — on every page, because a shop owner can arrive anywhere.
+ *
+ * No data fetching, for the same reason as the header: it renders on error
+ * pages and must not depend on the API.
+ */
+export function SiteFooter() {
   return (
-    <footer className="mt-12 border-t-2 border-rule bg-surface">
-      <div className="mx-auto flex max-w-6xl flex-wrap gap-x-12 gap-y-6 px-4 py-8 text-sm">
-        <div className="flex flex-col gap-1">
-          <span className="font-display text-xs tracking-widest text-ink uppercase">
-            {t.footerCatalogue}
-          </span>
-          {stats && (
-            <>
-              <span data-numeric className="text-ink-muted">
-                {stats.products.toLocaleString(locale)} {t.statProducts}
-              </span>
-              <span data-numeric className="text-ink-muted">
-                {stats.suppliers.toLocaleString(locale)} {t.statSuppliers}
-              </span>
-            </>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <span className="font-display text-xs tracking-widest text-ink uppercase">
-            {t.footerAbout}
-          </span>
-          <Link href={routes.search(lang)} className="text-ink-muted hover:text-ink">
-            {t.browseAll}
+    <footer className="mt-12 border-t border-line bg-surface">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-6 text-sm md:px-6">
+        <nav aria-label="About" className="flex flex-wrap items-center gap-x-5">
+          <Link
+            href={routes.forSuppliers()}
+            className="flex h-11 items-center text-ink-2 hover:text-ink"
+          >
+            For suppliers
           </Link>
-          <Link href={`/${lang}/how-we-crawl`} className="text-ink-muted hover:text-ink">
-            {t.freshness}
+          <Link
+            href={routes.howWeCrawl()}
+            className="flex h-11 items-center text-ink-2 hover:text-ink"
+          >
+            How we crawl
           </Link>
-        </div>
-
-        <div className="flex max-w-sm flex-col gap-2 text-ink-muted">
-          <p>{t.handoffNote}</p>
-          <p>
-            {t.madeBy}{" "}
-            <a href="https://merope.dev" className="underline hover:text-ink">
-              Merope
-            </a>
-            .
-          </p>
-        </div>
+        </nav>
+        <ThemeToggle />
+        <p className="text-ink-2 sm:ms-auto">
+          Made by{" "}
+          <a href="https://merope.dev" className="text-link underline">
+            Merope
+          </a>
+        </p>
       </div>
     </footer>
   );

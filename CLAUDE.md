@@ -6,19 +6,19 @@ diagnoses.
 
 ## What makhzan is
 
-A bilingual (EN/AR) **directory / discovery** aggregator for Egyptian hardware
-suppliers. It finds products across supplier catalogs and hands the buyer off to
+An English-language **directory / discovery** aggregator for Egyptian hardware
+suppliers (supplier titles may be Arabic; the interface is not). It finds products across supplier catalogs and hands the buyer off to
 the supplier. There is no cart, payment, or delivery, and adding one is out of
 scope — see `docs/PLAN.md`.
 
 ## Layout
 
 ```
-apps/web         Next.js consumer frontend (pnpm, shadcn/Base UI, RTL, dark mode)
+apps/web         Next.js consumer frontend (pnpm, shadcn/Base UI, English only, dark mode)
 apps/api         FastAPI read-only API over Postgres + Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue
 packages/schemas  SQLAlchemy models, Alembic migrations, taxonomy, grouping, search contract
-scripts/          Operational scripts (deploy, backup, reindex)
+scripts/          Operational scripts (deploy, backup, probes)
 config/           sources.example.toml only; the real configuration is ../makhzan-config (private)
 ```
 
@@ -199,6 +199,13 @@ across every tag; never read a fixed position. The same ordering is why a generi
 bucket must never be mapped: `category_for` takes the first tag that matches, and
 "Accessories" sorts ahead of the "Sensors" beside it.
 
+When two *mapped* tags disagree, a crosswalk's top-level `prefer = [...]` ranks the
+ones that should win, ahead of the alphabet: shop 2's "Displays (LCD & 7-Seg &
+LED)" sorts before its "LEDs", and filed 33 plain 3 mm LEDs as displays until
+`prefer = ["LEDs"]`. A preference is global to that shop, so before adding one,
+list every listing that carries both tags and read what moves. An image older than
+`prefer` rejects the key outright, so publish the code before the crosswalk that uses it.
+
 **A tag name is a hint; check what is actually under it.** Shop 1's "3D Printer
 Filament" holds 94 listings of which 21 are filament — the rest are bearings,
 nozzles and a stepper driver. The Shopify shop's `product_type: "ic"` covers real ICs but also
@@ -309,6 +316,23 @@ There is deliberately **no list of "ambiguous" part families**. One used to exis
 and was unmaintainable by construction: SG90 and CR10 were never on it, and there
 was no reason to expect the next one to be. Corroboration applies to every group.
 
+**Title agreement admits; three things veto, checked against every member.**
+(1) *Same shop never merges*: a shop lists two SKUs because they differ, and its
+two listings in one product were always variants collapsed together (KSD301 at
+40 and 140 °C). (2) *Value tokens* (`makhzan_schemas.values`): titles stating
+different values of one unit — 30 vs 38 pin, 180° vs 360°, a 3-pack vs one — are
+different products. (3) *Form* (`DomainProfile.form_markers`): a bare chip, a
+module and an accessory are not one product, and an accessory conflicts even with
+a title silent on form. Form words must say what the listing *is*: "PCB Mount",
+"Panel Mount" and "with adapter" describe the part, and matching bare `mount`
+kept DB15 and WAGO connectors from merging across shops.
+
+**Non-products are skipped before they are stored** (`normalize.not_a_product`):
+placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
+under exactly "Services". Narrow on purpose — a false positive deletes real stock.
+It reads `source_categories`, so an adapter that does not implement it is never
+checked for services.
+
 Suppliers do publish SKUs, but they are **private catalogue codes, not MPNs**
 (one shop uses numeric ids, another descriptive ones). Across ~10k SKUs only 15
 are shared by two suppliers, and those are coincidences. Do not group on them.
@@ -337,10 +361,10 @@ are shared by two suppliers, and those are coincidences. Do not group on them.
 
 See `docs/ROADMAP.md` for what is done, in progress, and next.
 
-The `apps/web` rewrite has a settled design language and layout system —
-`docs/DESIGN.md`. Read it before touching the frontend; it records decisions that
-are cheap to make once and expensive to reverse (language as a URL rather than
-React state, `object-fit: contain` on supplier photos, the accent budget).
+The frontend is built to `docs/DESIGN.md` (the November 2026 redesign): the data
+behind each layout decision, the page tree and URLs, the style tokens, and rules
+(C1–S5) that tests enforce. Read it before touching the frontend. What comes next
+(projects, blog, accounts, supplier pages) is `docs/PRODUCT.md`.
 
 `apps/web` has vitest unit tests and Playwright e2e specs under `apps/web/tests`
 (`pnpm exec vitest run`, `pnpm exec playwright test`); they are not part of

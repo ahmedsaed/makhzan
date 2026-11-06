@@ -91,6 +91,7 @@ async def make_listing(
     stock_signal: StockSignal = StockSignal.IN_STOCK,
     status: ListingStatus = ListingStatus.ACTIVE,
     images: list[str] | None = None,
+    attributes: dict | None = None,
     source_url: str | None = "https://example.test/p/1",
     last_verified_at: datetime = BASE_TIME,
 ) -> Listing:
@@ -114,6 +115,7 @@ async def make_listing(
         stock_signal=stock_signal,
         status=status,
         images=images if images is not None else [],
+        attributes=attributes if attributes is not None else {},
         last_verified_at=last_verified_at,
     )
     session.add(listing)

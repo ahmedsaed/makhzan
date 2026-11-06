@@ -156,32 +156,39 @@ make test-api            # or: cd apps/api && poetry run pytest
 
 Endpoints:
 - `GET /health`
-- `GET /search?q=ESP32&category=resistors&in_stock=true&min_price=&max_price=&supplier=&sort=price:asc&limit=&offset=`
+- `GET /search?q=ESP32&category=electronics:resistors&in_stock=true&min_price=&max_price=&shop=&sort=price:asc&limit=&offset=`
+  (`shop` is a supplier slug: only products with an offer from that shop)
 - `GET /listings/{id}` (includes nested supplier + category + description)
 - `GET /categories` (taxonomy with per-category listing counts)
+- `GET /suppliers` (every shop: active/in-stock counts, last checked, domains)
+- `GET /suppliers/{slug}` (the same, plus location and top categories)
+- `GET /suppliers/{slug}/listings?in_stock=&limit=&offset=` (in stock first, then freshest)
 - `GET /docs` (OpenAPI UI)
 
-Web routes: `/` (search, category bar, load-more) and `/listings/[id]` (detail).
+Web routes: the page tree in `docs/DESIGN.md` (`/`, `/search`, `/products/[id]`,
+`/trades/…`, `/shops/…`, `/how-we-crawl`, `/for-suppliers`).
 
 **Categories:** the taxonomy + keyword resolver live in `makhzan_schemas/taxonomy.py`.
-Backfill existing listings + reindex with `poetry run python -m worker.backfill`
-(from `apps/ingestion`). New ingestion assigns categories automatically.
+New ingestion assigns categories automatically. To regroup products and rebuild the
+index, `poetry run python -m worker.regroup` (from `apps/ingestion`; `make reindex`).
+Never `worker.backfill` for that: it re-infers every category from titles and erases
+the ones crosswalks set.
 
 ## 7. Web (Next.js + shadcn/ui)
 Uses **pnpm** (shadcn's Base UI template). Enable via corepack if needed: `corepack enable pnpm`.
 ```bash
 cd apps/web
 pnpm install
-NEXT_PUBLIC_API_URL=http://localhost:8000 pnpm dev   # http://localhost:3000
+API_INTERNAL_URL=http://localhost:8000 pnpm dev   # http://localhost:3000
 ```
-Add UI components: `pnpm dlx shadcn@latest add <name>`.
-The browser calls the API cross-origin, so the API must allow the web origin —
-set `WEB_ORIGINS` when starting the API (default already allows :3000).
+Pages fetch on the server, so `API_INTERNAL_URL` is where the Next server reaches
+the API; the browser only ever calls `/api`. `apps/web/README.md` has the details
+and the test commands.
 
 > **Port conflicts:** if 3000/8000 are already in use, run the web app on another
-> port (`npm run dev -- -p 3100`), start the API on a free port
-> (`uvicorn ... --port 8001`) with `WEB_ORIGINS=http://localhost:3100`, and set
-> `NEXT_PUBLIC_API_URL=http://localhost:8001` for the web app.
+> port (`pnpm dev -p 3100`), start the API on a free port
+> (`uvicorn ... --port 8001`), and set `API_INTERNAL_URL=http://localhost:8001`
+> for the web app.
 
 > Full containerized run (`docker compose up` building api/ingestion images) also
 > works, but the above host-side loop is faster for iterating.

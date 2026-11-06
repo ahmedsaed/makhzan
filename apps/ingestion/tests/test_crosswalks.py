@@ -152,6 +152,44 @@ def test_keys_that_collide_once_normalized_are_refused_at_load(tmp_path):
         load_crosswalk("shop", tmp_path)
 
 
+def test_a_crosswalk_can_rank_the_tags_that_win_a_conflict(tmp_path):
+    _write(
+        tmp_path,
+        """
+        prefer = ["LEDs"]
+        [categories]
+        "Displays (LCD & LED)" = "electronics:displays"
+        "LEDs" = "electronics:leds"
+        """,
+    )
+    assert load_crosswalk("shop", tmp_path).prefer == ("LEDs",)
+
+
+def test_preferring_a_name_that_is_not_mapped_is_refused(tmp_path):
+    """It could never fire: a typo, or a mapping removed since. Kept, it would
+    look like a decision that is being honoured."""
+    _write(
+        tmp_path,
+        """
+        prefer = ["LED"]
+        [categories]
+        "LEDs" = "electronics:leds"
+        """,
+    )
+    with pytest.raises(ValueError, match="not mapped"):
+        load_crosswalk("shop", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [('"LEDs"', "list of strings"), ("[1]", "list of strings"), ('["LEDs", "leds"]', "twice")],
+)
+def test_a_malformed_preference_is_refused(tmp_path, value, error):
+    _write(tmp_path, f'prefer = {value}\n[categories]\n"LEDs" = "electronics:leds"\n')
+    with pytest.raises(ValueError, match=error):
+        load_crosswalk("shop", tmp_path)
+
+
 def test_the_directory_comes_from_the_environment(tmp_path, monkeypatch):
     """How configuration kept outside the repository is found."""
     _write(tmp_path, '[categories]\n"Fans" = "electronics:fans-cooling"\n', name="elsewhere")

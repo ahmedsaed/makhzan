@@ -3,15 +3,13 @@
  *
  * Every call here runs on the server during render. The previous app fetched
  * from `useEffect` in client components, which meant the HTML shipped empty —
- * fatal for a discovery product whose value is being found for "LM358 القاهرة".
+ * fatal for a discovery product whose value is being found by search engines.
  *
  * Caching is deliberate rather than uniform. The catalogue moves at the pace of
  * the ingestion cycle (about a week), so taxonomy and supplier profiles are
  * cached for minutes; search is not cached at all, because a filtered query is
  * unique to one visitor and caching it wastes memory to no benefit.
  */
-
-import type { Lang } from "@/lib/i18n";
 
 /**
  * Server-to-server where possible: a server component calling the public URL
@@ -24,12 +22,7 @@ const API_BASE =
 const TAXONOMY_TTL = 300;
 const DETAIL_TTL = 120;
 
-export type StockSignal =
-  | "in_stock"
-  | "low_stock"
-  | "out_of_stock"
-  | "made_to_order"
-  | "unknown";
+export type StockSignal = "in_stock" | "low_stock" | "out_of_stock" | "made_to_order" | "unknown";
 
 export type ListingStatus = "active" | "pending_review" | "hidden" | "archived";
 
@@ -59,7 +52,27 @@ export type Supplier = {
   website_url: string | null;
 };
 
-export type SupplierProfile = Omit<Supplier, "id"> & { listing_count: number };
+/** One shop as `/suppliers` lists it. Counts cover active listings only, and
+ *  `last_verified_at` is the newest check among them: a shop the crawler can no
+ *  longer reach keeps its listings but stops advancing it. */
+export type ShopSummary = {
+  slug: string;
+  name: string;
+  name_ar: string | null;
+  website_url: string | null;
+  listing_count: number;
+  in_stock_count: number;
+  last_verified_at: string | null;
+  /** Listings per trade, largest first. */
+  domains: { domain: string; count: number }[];
+};
+
+export type SupplierProfile = ShopSummary & {
+  area: string | null;
+  governorate: string | null;
+  /** Its largest categories, biggest first. */
+  top_categories: { ref: string; name_en: string; name_ar: string | null; count: number }[];
+};
 
 export type ProductSummary = {
   id: string;
@@ -89,6 +102,21 @@ export type Offer = {
   images: string[];
   last_verified_at: string;
   supplier: Supplier | null;
+  /** The brand the shop names, when it names one. */
+  brand?: string | null;
+} & ShopDetailsFields;
+
+/** A file a shop links from its listing: a datasheet, a manual. */
+export type ShopDocument = { url: string; label: string | null };
+
+/**
+ * What the shop published about its listing beyond title and price: its own
+ * spec rows and the files it links. Empty when it published none (most do not).
+ * Optional so the page keeps working against an API that predates them.
+ */
+type ShopDetailsFields = {
+  specs?: Record<string, string>;
+  documents?: ShopDocument[];
 };
 
 export type Product = ProductSummary & { offers: Offer[] };
@@ -114,7 +142,7 @@ export type Listing = {
   last_verified_at: string;
   supplier: Supplier | null;
   category: CategoryRef | null;
-};
+} & ShopDetailsFields;
 
 /** A search hit is the flat Meilisearch document, not a ProductSummary. */
 export type SearchHit = {
@@ -162,6 +190,8 @@ export type SearchParams = {
   minPrice?: number;
   maxPrice?: number;
   minSuppliers?: number;
+  /** A supplier slug: search within one shop. */
+  shop?: string;
   sort?: string;
   limit?: number;
   offset?: number;
@@ -193,12 +223,14 @@ export class ApiError extends Error {
 }
 
 /** Fetch that turns "not found" into `null` and lets everything else throw.
- *  A missing product is a 404 page; a broken API is an error page. */
+ *  A missing product is a 404 page; a broken API is an error page. A 422 is
+ *  the API refusing a malformed id (not a UUID): from the visitor's side that
+ *  is a page that does not exist, not a fault. */
 async function getOrNull<T>(path: string, options?: FetchOptions): Promise<T | null> {
   try {
     return await get<T>(path, options);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return null;
+    if (error instanceof ApiError && (error.status === 404 || error.status === 422)) return null;
     throw error;
   }
 }
@@ -233,6 +265,7 @@ export function searchProducts(params: SearchParams): Promise<SearchResponse> {
       min_price: params.minPrice,
       max_price: params.maxPrice,
       min_suppliers: params.minSuppliers,
+      shop: params.shop,
       sort: params.sort,
       limit: params.limit ?? 24,
       offset: params.offset || undefined,
@@ -244,46 +277,95 @@ export function searchProducts(params: SearchParams): Promise<SearchResponse> {
 }
 
 export function fetchProduct(id: string): Promise<Product | null> {
-  return getOrNull<Product>(`/products/${id}`);
+  return getOrNull<Product>(`/products/${encodeURIComponent(id)}`);
 }
 
 export function fetchSimilar(id: string, limit = 8): Promise<ProductSummary[]> {
-  return get<ProductSummary[]>(`/products/${id}/similar${query({ limit })}`);
+  return get<ProductSummary[]>(`/products/${encodeURIComponent(id)}/similar${query({ limit })}`);
 }
 
 export function fetchListing(id: string): Promise<Listing | null> {
-  return getOrNull<Listing>(`/listings/${id}`);
+  return getOrNull<Listing>(`/listings/${encodeURIComponent(id)}`);
+}
+
+/** Every shop, biggest first — including ones with no active listings, which
+ *  the page decides whether to show. */
+export function fetchSuppliers(): Promise<ShopSummary[]> {
+  return get<ShopSummary[]>("/suppliers", { revalidate: TAXONOMY_TTL });
 }
 
 export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
-  return getOrNull<SupplierProfile>(`/suppliers/${slug}`, { revalidate: TAXONOMY_TTL });
+  return getOrNull<SupplierProfile>(`/suppliers/${encodeURIComponent(slug)}`, {
+    revalidate: TAXONOMY_TTL,
+  });
 }
 
+/** A shop's listings, in stock first. */
 export function fetchSupplierListings(
   slug: string,
-  { limit = 24, offset = 0 }: { limit?: number; offset?: number } = {},
+  {
+    limit = 24,
+    offset = 0,
+    inStock = false,
+  }: { limit?: number; offset?: number; inStock?: boolean } = {},
 ): Promise<{ total: number; limit: number; offset: number; items: Listing[] } | null> {
-  return getOrNull(`/suppliers/${slug}/listings${query({ limit, offset })}`);
+  return getOrNull(
+    `/suppliers/${encodeURIComponent(slug)}/listings${query({
+      in_stock: inStock ? true : undefined,
+      limit,
+      offset: offset || undefined,
+    })}`,
+  );
 }
 
 // --------------------------------------------------------------------------- //
 // Display helpers that depend on the shape above
 // --------------------------------------------------------------------------- //
 
-/** Titles are supplier prose, so a language may simply be missing. Fall back
- *  rather than render an empty heading. */
-export function titleOf(
-  item: { title_en: string | null; title_ar: string | null },
-  lang: Lang,
-): string {
-  const preferred = lang === "ar" ? item.title_ar : item.title_en;
-  return preferred || item.title_en || item.title_ar || "";
+/**
+ * The interface is English only, but titles are supplier prose and a few are
+ * Arabic only (0.1%). Fall back rather than render an empty heading — and never
+ * translate: a listing is evidence about what is on a shop's shelf.
+ */
+export function titleOf(item: { title_en: string | null; title_ar: string | null }): string {
+  return item.title_en || item.title_ar || "";
 }
 
-export function categoryNameOf(category: CategoryRef, lang: Lang): string {
-  return (lang === "ar" ? category.name_ar : category.name_en) || category.name_en;
+export function categoryNameOf(category: CategoryRef): string {
+  return category.name_en;
 }
 
-export function supplierNameOf(supplier: Supplier, lang: Lang): string {
-  return (lang === "ar" ? supplier.name_ar : supplier.name) || supplier.name;
+/**
+ * A ProductSummary (similar products, rails) in the shape of a search hit, so
+ * every list of products renders through ResultRow / ResultCard and carries the
+ * same facts (rule C1).
+ *
+ * A summary does not name its shop; pass `supplierName` when the caller knows it.
+ */
+export function hitFromSummary(
+  product: ProductSummary,
+  supplierName: string | null = null,
+): SearchHit {
+  const verified = product.last_verified_at ? Date.parse(product.last_verified_at) : NaN;
+  return {
+    id: product.id,
+    domain: product.category?.domain ?? "",
+    part_number: product.part_number,
+    title_en: product.title_en,
+    title_ar: product.title_ar,
+    brand: product.brand,
+    category_slug: product.category?.slug ?? null,
+    category_ref: product.category?.ref ?? null,
+    category_name: product.category?.name_en ?? null,
+    supplier_name: supplierName,
+    supplier_count: product.supplier_count,
+    offer_count: product.offer_count,
+    min_price: product.min_price,
+    max_price: product.max_price,
+    currency: product.currency,
+    in_stock: product.in_stock,
+    image: product.image,
+    // The index stores epoch seconds; match it.
+    last_verified_at: Number.isNaN(verified) ? null : Math.floor(verified / 1000),
+  };
 }

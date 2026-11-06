@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { categoryNameOf, supplierNameOf, titleOf } from "@/lib/api";
-import { labelFor, verticalsFrom } from "@/components/browse-menu";
-import { rowFromHit, rowFromSummary } from "@/components/product-row";
-import type { Category, ProductSummary, SearchHit } from "@/lib/api";
+import { hitFromSummary, titleOf } from "@/lib/api";
+import type { Category, ProductSummary } from "@/lib/api";
+import { tradeLabel, tradesFrom } from "@/lib/trades";
 
 const category = (over: Partial<Category>): Category => ({
   ref: "electronics:resistors",
@@ -17,108 +16,77 @@ const category = (over: Partial<Category>): Category => ({
 });
 
 describe("supplier prose falls back rather than rendering empty", () => {
-  it("prefers the reader's language", () => {
-    expect(titleOf({ title_en: "LM358", title_ar: "إل إم" }, "ar")).toBe("إل إم");
-    expect(titleOf({ title_en: "LM358", title_ar: "إل إم" }, "en")).toBe("LM358");
+  it("prefers the English title", () => {
+    expect(titleOf({ title_en: "LM358", title_ar: "إل إم" })).toBe("LM358");
   });
 
-  it("uses whatever the supplier did publish when the other language is missing", () => {
-    // Titles are supplier prose, so a language is often simply absent.
-    expect(titleOf({ title_en: "LM358", title_ar: null }, "ar")).toBe("LM358");
-    expect(titleOf({ title_en: null, title_ar: "مقاومة" }, "en")).toBe("مقاومة");
-    expect(titleOf({ title_en: null, title_ar: null }, "en")).toBe("");
-  });
-
-  it("does the same for categories and suppliers", () => {
-    expect(categoryNameOf(category({}), "ar")).toBe("مقاومات");
-    expect(categoryNameOf(category({ name_ar: null }), "ar")).toBe("Resistors");
-    expect(supplierNameOf({ name: "Shop A", name_ar: null } as never, "ar")).toBe("Shop A");
+  it("shows an Arabic-only title as published rather than nothing", () => {
+    // The interface is English, but a listing is evidence about a shop's
+    // shelf and is never translated or hidden.
+    expect(titleOf({ title_en: null, title_ar: "مقاومة" })).toBe("مقاومة");
+    expect(titleOf({ title_en: null, title_ar: null })).toBe("");
   });
 });
 
-describe("verticals are rolled up from categories", () => {
-  it("sums each domain's categories and orders by size", () => {
-    const verticals = verticalsFrom(
-      [
-        category({ ref: "electronics:a", domain: "electronics", count: 10 }),
-        category({ ref: "electronics:b", domain: "electronics", count: 5 }),
-        category({ ref: "tools:c", domain: "tools", count: 20 }),
-      ],
-      "en",
-    );
-    expect(verticals.map((v) => [v.domain, v.count])).toEqual([
+describe("trades are rolled up from categories", () => {
+  it("sums each trade's categories and orders by size", () => {
+    const trades = tradesFrom([
+      category({ ref: "electronics:a", domain: "electronics", count: 10 }),
+      category({ ref: "electronics:b", domain: "electronics", count: 5 }),
+      category({ ref: "tools:c", domain: "tools", count: 20 }),
+    ]);
+    expect(trades.map((t) => [t.domain, t.count])).toEqual([
       ["tools", 20],
       ["electronics", 15],
     ]);
   });
 
-  it("titles a slug for English and uses authored Arabic", () => {
-    expect(labelFor("seals-bearings", "en")).toBe("Seals & Bearings");
-    expect(labelFor("electronics", "ar")).toBe("إلكترونيات");
-    // An unknown domain still renders something rather than a blank tile.
-    expect(labelFor("brand-new", "ar")).toBe("Brand & New");
+  it("titles a slug", () => {
+    expect(tradeLabel("seals-bearings")).toBe("Seals & Bearings");
+    expect(tradeLabel("electronics")).toBe("Electronics");
   });
 });
 
-describe("rows", () => {
-  const hit: SearchHit = {
-    id: "1",
-    domain: "electronics",
-    part_number: "LM358N",
-    title_en: "LM358N Dual Op-Amp",
+describe("a product summary renders as a search hit", () => {
+  const summary = {
+    id: "2",
+    part_number: null,
+    title_en: "Servo",
     title_ar: null,
-    brand: "TI",
-    category_slug: "ics",
-    category_ref: "electronics:ics",
-    category_name: "ICs",
-    supplier_name: "Shop A",
-    supplier_count: 3,
-    offer_count: 3,
-    min_price: 12.5,
-    max_price: 20,
-    currency: "EGP",
-    in_stock: true,
+    brand: null,
     image: null,
-    last_verified_at: 1_760_000_000,
-  };
+    supplier_count: 1,
+    offer_count: 1,
+    min_price: 62,
+    max_price: 62,
+    currency: "EGP",
+    in_stock: false,
+    last_verified_at: "2026-09-01T10:00:00Z",
+    category: {
+      ref: "electronics:motors",
+      domain: "electronics",
+      slug: "motors",
+      name_en: "Motors",
+      name_ar: null,
+    },
+  } satisfies ProductSummary;
 
-  it("reads the index's epoch-second timestamp as a date", () => {
-    const row = rowFromHit(hit, "en");
-    expect(row.verifiedAt).toEqual(new Date(1_760_000_000 * 1000));
+  it("converts the ISO timestamp to the index's epoch seconds", () => {
+    expect(hitFromSummary(summary).last_verified_at).toBe(
+      Date.parse("2026-09-01T10:00:00Z") / 1000,
+    );
+    expect(hitFromSummary({ ...summary, last_verified_at: null }).last_verified_at).toBeNull();
   });
 
-  it("tolerates a hit with no timestamp", () => {
-    expect(rowFromHit({ ...hit, last_verified_at: null }, "en").verifiedAt).toBeNull();
-  });
-
-  it("falls back to the part number when a title is missing entirely", () => {
-    expect(rowFromHit({ ...hit, title_en: null, title_ar: null }, "en").title).toBe("LM358N");
+  it("carries the category and the shop when the caller knows it", () => {
+    const hit = hitFromSummary(summary, "Shop A");
+    expect(hit.category_ref).toBe("electronics:motors");
+    expect(hit.domain).toBe("electronics");
+    expect(hit.supplier_name).toBe("Shop A");
   });
 
   it("keeps a null price null rather than turning it into zero", () => {
     // "Price on request" must never sort or display as free.
-    expect(rowFromHit({ ...hit, min_price: null }, "en").minPrice).toBeNull();
-  });
-
-  it("maps a product summary, whose timestamp is an ISO string", () => {
-    const summary = {
-      id: "2",
-      part_number: null,
-      title_en: "Servo",
-      title_ar: null,
-      brand: null,
-      image: null,
-      supplier_count: 1,
-      offer_count: 1,
-      min_price: 62,
-      max_price: 62,
-      currency: "EGP",
-      in_stock: false,
-      last_verified_at: "2026-09-01T10:00:00Z",
-      category: null,
-    } satisfies ProductSummary;
-    const row = rowFromSummary(summary, "en", "note");
-    expect(row.verifiedAt?.toISOString()).toBe("2026-09-01T10:00:00.000Z");
-    expect(row.note).toBe("note");
+    expect(hitFromSummary({ ...summary, min_price: null, max_price: null }).min_price).toBeNull();
   });
 });
