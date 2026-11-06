@@ -15,6 +15,7 @@
  */
 import { createServer } from "node:http";
 
+import { productFixture } from "./fixtures/product.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopRoute } from "./fixtures/shops.mjs";
 import { TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
@@ -237,6 +238,9 @@ const server = createServer((req, res) => {
     return send(200, { ...LISTING, id: "listing-orphan", product_id: null });
   const shop = shopRoute(path);
   if (shop) return send(...shop);
+
+  const fixture = productFixture(path);
+  if (fixture) return send(...fixture);
 
   return send(404, { detail: "not found" });
 });

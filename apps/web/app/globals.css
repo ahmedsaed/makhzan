@@ -192,6 +192,14 @@
     border-radius: 2px;
   }
 
+  /* A page with a fixed bottom bar (the product page on a phone) makes room
+   * for it below everything, footer included, rather than covering the end. */
+  @media (width < 64rem) {
+    body:has([data-bottom-bar]) {
+      padding-bottom: calc(5.25rem + env(safe-area-inset-bottom));
+    }
+  }
+
   /* Part numbers are monospace (S3) and isolated, so a part number quoted
    * inside other text cannot reorder around its hyphens. */
   [data-identifier] {

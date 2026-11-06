@@ -14,10 +14,15 @@ import { cn } from "@/lib/utils";
 export function Freshness({
   lastVerified,
   now,
+  compact = false,
   className,
 }: {
   lastVerified: Date | null;
   now?: Date;
+  /** "checked 74 days ago" even in the warn tier, still in the warn colours:
+   *  for a tight spot (the phone bottom bar) on a page that states the full
+   *  warning elsewhere, with StaleNote. */
+  compact?: boolean;
   className?: string;
 }) {
   if (!lastVerified) {
@@ -36,7 +41,7 @@ export function Freshness({
           className,
         )}
       >
-        Price may be out of date ({days} days)
+        {compact ? `checked ${agoText(days)}` : `Price may be out of date (${days} days)`}
       </span>
     );
   }
