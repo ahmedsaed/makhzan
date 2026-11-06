@@ -1,6 +1,6 @@
 import { ChevronRight, ExternalLink } from "lucide-react";
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 
 import { Breadcrumb } from "@/components/breadcrumb";
 import { Freshness, StaleNote } from "@/components/freshness";
@@ -15,6 +15,7 @@ import {
   fetchCategories,
   fetchListing,
   fetchProduct,
+  fetchProductRedirect,
   fetchSimilar,
   fetchSupplier,
   hitFromSummary,
@@ -68,6 +69,10 @@ function displayTitle(product: Product): string {
 }
 
 /**
+ * An id a regroup replaced redirects, permanently, to the product its offers
+ * moved to: the old URL may be shared or indexed. 308 rather than a page under
+ * the old URL, so links and search engines move over.
+ *
  * A product with no offers left is one every shop has withdrawn. For now that
  * is a 404, the same as an id that never existed. When products get stable ids
  * across regrouping, this is where a "no longer listed" page goes instead:
@@ -75,7 +80,12 @@ function displayTitle(product: Product): string {
  */
 async function loadProduct(id: string): Promise<Product> {
   const product = await fetchProduct(id);
-  if (!product || product.offers.length === 0) notFound();
+  if (!product) {
+    const moved = await fetchProductRedirect(id).catch(() => null);
+    if (moved && moved !== id) permanentRedirect(routes.product(moved));
+    notFound();
+  }
+  if (product.offers.length === 0) notFound();
   return product;
 }
 
