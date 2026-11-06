@@ -25,6 +25,14 @@ async def search(
     min_suppliers: int | None = Query(
         None, ge=1, le=50, description="Only products offered by at least this many suppliers"
     ),
+    shop: str | None = Query(
+        None,
+        # A slug, and nothing else: the value is interpolated into a Meilisearch
+        # filter expression, so the pattern is what keeps a quote out of it.
+        pattern="^[A-Za-z0-9_-]+$",
+        max_length=120,
+        description="Only products with an offer from this supplier (slug)",
+    ),
     facets: bool = Query(False, description="Include per-domain and per-category counts"),
     sort: str | None = Query(
         None,
@@ -43,6 +51,7 @@ async def search(
         min_price=min_price,
         max_price=max_price,
         min_suppliers=min_suppliers,
+        shop=shop,
         sort=sort,
         limit=limit,
         offset=offset,

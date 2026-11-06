@@ -8,9 +8,11 @@ indexes incrementally as it ingests.
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 
 import meilisearch
-from makhzan_schemas.models import Category, Product
+from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.models import Category, Listing, Product, Supplier
 from makhzan_schemas.search import (
     FILTERABLE_ATTRIBUTES,
     INDEX_NAME,
@@ -85,12 +87,26 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
             select(Product, Category).outerjoin(Category, Category.id == Product.category_id)
         )
     ).all()
+    # Which shops sell each product. Active listings only, matching how the
+    # product's own aggregates are computed: an archived offer must not keep a
+    # product in a shop's search after the shop dropped it.
+    shops: dict = defaultdict(set)
+    for product_id, slug in (
+        await session.execute(
+            select(Listing.product_id, Supplier.slug)
+            .join(Supplier, Supplier.id == Listing.supplier_id)
+            .where(Listing.status == ListingStatus.ACTIVE, Listing.product_id.is_not(None))
+            .distinct()
+        )
+    ).all():
+        shops[product_id].add(slug)
     docs = [
         build_product_document(
             product,
             cat.slug if cat else None,
             cat.name_en if cat else None,
             cat.domain if cat else None,
+            list(shops.get(product.id, ())),
         )
         for product, cat in rows
     ]
