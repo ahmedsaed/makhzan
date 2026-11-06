@@ -49,8 +49,16 @@ security · automotive
 
 Everything below is genuinely outstanding; the finished work is described above.
 
-### 1. The `apps/web` rewrite — done (2026-09-07)
-Built to `docs/DESIGN.md`. Nine server-rendered surfaces under `/en` and `/ar`
+### 0. The November redesign — in progress (2026-11-06)
+The frontend is being redesigned from the data up: English only, direction D,
+burnt orange on Archivo and Inter. `docs/DESIGN.md` is the specification (it
+replaces the September design below); `docs/PRODUCT.md` holds what comes after it
+(projects, blog, accounts, supplier pages) and the polish list to finish before the
+suppliers are contacted. Product ids becoming permanent is
+`docs/decisions/0004-stable-product-ids.md`.
+
+### 1. The `apps/web` rewrite — done (2026-09-07), superseded by 0
+Built to the September version of `docs/DESIGN.md`. Nine server-rendered surfaces under `/en` and `/ar`
 with `hreflang` pairs; language is a route rather than React state, so an Arabic
 page is finally linkable and indexable. Search, sort, facets and paging are links
 and a GET form, so the site works with JavaScript disabled.
