@@ -15,6 +15,8 @@
  */
 import { createServer } from "node:http";
 
+import { productFixture } from "./fixtures/product.mjs";
+
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
 const CATEGORIES = [
@@ -231,6 +233,9 @@ const server = createServer((req, res) => {
   if (path === "/suppliers/shop-a") return send(200, { ...SUPPLIER, listing_count: 120 });
   if (path === "/suppliers/shop-a/listings")
     return send(200, { total: 1, limit: 24, offset: 0, items: [LISTING] });
+
+  const fixture = productFixture(path);
+  if (fixture) return send(...fixture);
 
   return send(404, { detail: "not found" });
 });
