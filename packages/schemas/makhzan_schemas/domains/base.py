@@ -123,11 +123,18 @@ def _compiled_rules(profile: DomainProfile) -> list[tuple[str, re.Pattern[str]]]
     cached = _RULE_CACHE.get(profile.slug)
     if cached is None:
         cached = [
-            (slug, re.compile("|".join(rf"(?<![a-z0-9]){re.escape(kw)}" for kw in kws)))
+            (slug, re.compile("|".join(_keyword_pattern(kw) for kw in kws)))
             for slug, kws in profile.category_rules
         ]
         _RULE_CACHE[profile.slug] = cached
     return cached
+
+
+def _keyword_pattern(keyword: str) -> str:
+    """A rule keyword as a regex: left word boundary always; right only for "\\b"."""
+    if keyword.endswith("\\b"):
+        return rf"(?<![a-z0-9]){re.escape(keyword[:-2])}(?![a-z0-9])"
+    return rf"(?<![a-z0-9]){re.escape(keyword)}"
 
 
 PROFILES: dict[str, DomainProfile] = {}
