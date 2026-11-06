@@ -60,6 +60,17 @@ class DomainProfile:
     #: each other even when their wording differs. Suppliers describe the same
     #: part very differently, so price is the second opinion.
     merge_price_ratio: float = 4.0
+    #: (form, pattern) pairs, highest priority first: what physical *form* a
+    #: title says it is, when the noise list has stripped the words that say it.
+    #: Two listings sharing an identifier but stating different forms are not
+    #: merged — a bare TP4056 chip is not a TP4056 charger module. A title
+    #: matching several patterns takes the first. Empty means no form check.
+    form_markers: tuple[tuple[str, str], ...] = ()
+    #: Forms that a title stating *no* form can never be. Ordinarily silence is
+    #: not a conflict ("TP4056 Lithium Battery Charger" may well be the module),
+    #: but a bracket, holder or case names the part it fits, so a title that does
+    #: not say "holder" is not the holder.
+    accessory_forms: frozenset[str] = frozenset()
 
     #: Meilisearch searchable attributes, highest-ranked first.
     search_attributes: tuple[str, ...] = ("title_en", "title_ar", "brand")
@@ -112,11 +123,18 @@ def _compiled_rules(profile: DomainProfile) -> list[tuple[str, re.Pattern[str]]]
     cached = _RULE_CACHE.get(profile.slug)
     if cached is None:
         cached = [
-            (slug, re.compile("|".join(rf"(?<![a-z0-9]){re.escape(kw)}" for kw in kws)))
+            (slug, re.compile("|".join(_keyword_pattern(kw) for kw in kws)))
             for slug, kws in profile.category_rules
         ]
         _RULE_CACHE[profile.slug] = cached
     return cached
+
+
+def _keyword_pattern(keyword: str) -> str:
+    """A rule keyword as a regex: left word boundary always; right only for "\\b"."""
+    if keyword.endswith("\\b"):
+        return rf"(?<![a-z0-9]){re.escape(keyword[:-2])}(?![a-z0-9])"
+    return rf"(?<![a-z0-9]){re.escape(keyword)}"
 
 
 PROFILES: dict[str, DomainProfile] = {}
