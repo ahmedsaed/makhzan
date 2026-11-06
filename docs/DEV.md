@@ -169,8 +169,10 @@ Web routes: the page tree in `docs/DESIGN.md` (`/`, `/search`, `/products/[id]`,
 `/trades/…`, `/shops/…`, `/how-we-crawl`, `/for-suppliers`).
 
 **Categories:** the taxonomy + keyword resolver live in `makhzan_schemas/taxonomy.py`.
-Backfill existing listings + reindex with `poetry run python -m worker.backfill`
-(from `apps/ingestion`). New ingestion assigns categories automatically.
+New ingestion assigns categories automatically. To regroup products and rebuild the
+index, `poetry run python -m worker.regroup` (from `apps/ingestion`; `make reindex`).
+Never `worker.backfill` for that: it re-infers every category from titles and erases
+the ones crosswalks set.
 
 ## 7. Web (Next.js + shadcn/ui)
 Uses **pnpm** (shadcn's Base UI template). Enable via corepack if needed: `corepack enable pnpm`.
