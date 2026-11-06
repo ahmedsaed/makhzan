@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { Link } from "@/components/link";
 import { Container } from "@/components/section";
 import { crawlingContent as content } from "@/lib/content/crawling";
+import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 
 /**
@@ -11,11 +12,11 @@ import { routes } from "@/lib/routes";
  * and readable even when the catalogue is not: it fetches nothing, and neither
  * does the chrome around it, so it is prerendered at build time.
  */
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: content.title,
   description: content.lead,
-  alternates: { canonical: "/how-we-crawl" },
-};
+  path: routes.howWeCrawl(),
+});
 
 export default function HowWeCrawlPage() {
   return (

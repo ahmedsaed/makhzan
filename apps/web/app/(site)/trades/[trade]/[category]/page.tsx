@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { categoryNameOf, fetchCategories } from "@/lib/api";
+import { categoryDescription, pageMetadata } from "@/lib/metadata";
 import { joinRef, routes } from "@/lib/routes";
-import { tradeLabel } from "@/lib/trades";
+import { totalOf, tradeLabel } from "@/lib/trades";
 
 import { TradeBrowse, type RawParams } from "../../_components/trade-browse";
 
@@ -19,11 +20,15 @@ export async function generateMetadata({
   const { trade, category: slug } = await params;
   const categories = await fetchCategories(trade).catch(() => []);
   const category = categories.find((c) => c.slug === slug);
-  return {
+  return pageMetadata({
     // The trade disambiguates: "Accessories" is a category in several.
     title: `${category ? categoryNameOf(category) : slug} · ${tradeLabel(trade)}`,
-    alternates: { canonical: routes.category(joinRef(trade, slug)) },
-  };
+    description: category
+      ? categoryDescription(category, totalOf(category.ref, categories))
+      : undefined,
+    path: routes.category(joinRef(trade, slug)),
+    ownCard: true,
+  });
 }
 
 export default async function CategoryPage({
