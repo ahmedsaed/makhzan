@@ -30,6 +30,12 @@ def get_client() -> meilisearch.Client:
     return _client
 
 
+def _quoted(value: str) -> str:
+    """A Meilisearch filter string literal. The category arrives straight from a
+    URL, and an unescaped quote in it would turn a bad link into an API error."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def search_products(
     query: str,
     *,
@@ -48,17 +54,19 @@ def search_products(
     """Search products. Sync (Meilisearch client is sync) — call via run_in_threadpool."""
     filters: list[str] = []
     if category:
-        # A ref ("tools:measurement") names one category exactly. A bare slug is
-        # accepted for older links, but matches that slug in every domain — which
-        # is ambiguous, because slugs are only unique within a domain.
-        field = "category_ref" if ":" in category else "category_slug"
-        filters.append(f'{field} = "{category}"')
+        # A ref ("tools:measurement") names one category exactly, and matches it
+        # or anything filed beneath it: `category_refs` holds the product's leaf
+        # and all its ancestors, so a group narrows to its children's products.
+        # A bare slug is accepted for older links, but matches that leaf slug in
+        # every domain — ambiguous, because slugs are only unique per domain.
+        field = "category_refs" if ":" in category else "category_slug"
+        filters.append(f"{field} = {_quoted(category)}")
     if domain:
         # Scopes results to one vertical. Deliberately opt-in: search is
         # cross-domain by default, because someone searching "multimeter" should
         # see electronics and tools together and let ranking decide the order.
         # Only browse — which names a vertical explicitly — passes this.
-        filters.append(f'domain = "{domain}"')
+        filters.append(f"domain = {_quoted(domain)}")
     if in_stock:
         filters.append("in_stock = true")
     # Price filters/sort act on the product's cheapest offer (min_price).

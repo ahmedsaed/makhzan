@@ -16,6 +16,7 @@ import pytest
 from app.search import search_products
 from makhzan_schemas.search import (
     FACET_ATTRIBUTES,
+    FILTERABLE_ATTRIBUTES,
     INDEX_NAME,
     SEARCHABLE_ATTRIBUTES,
     TEXT_SEARCH_ATTRIBUTES,
@@ -75,7 +76,24 @@ async def test_no_filter_key_when_nothing_is_filtered(meili):
 async def test_a_category_ref_filters_on_the_domain_qualified_attribute(meili):
     search_products("", category="tools:measurement")
 
-    assert filters_of(meili) == ['category_ref = "tools:measurement"']
+    assert filters_of(meili) == ['category_refs = "tools:measurement"']
+
+
+async def test_a_category_ref_matches_the_category_and_everything_beneath_it(meili):
+    """Products are filed on leaves. `category_refs` carries a product's leaf and
+    every ancestor, so filtering on a group's ref narrows to its children's
+    products; filtering `category_ref` (the leaf alone) would match nothing."""
+    search_products("", category="electronics:passives")
+
+    assert filters_of(meili) == ['category_refs = "electronics:passives"']
+    assert "category_refs" in FILTERABLE_ATTRIBUTES
+
+
+async def test_a_quote_in_a_category_cannot_break_the_filter(meili):
+    """The value comes straight from a URL; it is escaped, not interpolated raw."""
+    search_products("", category='tools:a"b')
+
+    assert filters_of(meili) == ['category_refs = "tools:a\\"b"']
 
 
 async def test_a_bare_slug_still_works_but_filters_on_the_ambiguous_attribute(meili):
@@ -104,7 +122,7 @@ async def test_a_domain_and_a_category_can_be_combined(meili):
     holds both in its URL state must not produce a contradictory filter."""
     search_products("", category="tools:measurement", domain="tools")
 
-    assert filters_of(meili) == ['category_ref = "tools:measurement"', 'domain = "tools"']
+    assert filters_of(meili) == ['category_refs = "tools:measurement"', 'domain = "tools"']
 
 
 async def test_in_stock_is_only_filtered_when_asked_for(meili):
@@ -135,7 +153,7 @@ async def test_filters_combine(meili):
     search_products("", category="electronics:resistors", in_stock=True, max_price=99)
 
     assert filters_of(meili) == [
-        'category_ref = "electronics:resistors"',
+        'category_refs = "electronics:resistors"',
         "in_stock = true",
         "min_price <= 99",
     ]
