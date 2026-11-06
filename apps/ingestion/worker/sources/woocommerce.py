@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import html
 import re
-from urllib.parse import urljoin
 
 from makhzan_schemas.contracts import RawItem
 from makhzan_schemas.enums import SourceType
@@ -27,6 +26,7 @@ from makhzan_schemas.enums import SourceType
 from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_category_name
 
 from worker.http import get_json, make_client
+from worker.richtext import documents_from_html, html_to_text, merge_specs, specs_from_html
 from worker.sources.base import Page, SourceAdapter, SupplierInfo
 from worker.util import strip_html
 
@@ -52,8 +52,6 @@ _BRAND_ATTRIBUTES = {"brand", "manufacturer"}
 
 #: "68 in stock", "Only 1 left in stock" — the count the shop itself prints.
 _STOCK_COUNT = re.compile(r"(\d[\d,]*)\s+(?:left\s+)?in stock", re.I)
-
-_PDF_LINK = re.compile(r"""href\s*=\s*["']([^"']+?\.pdf)(?:[?#][^"']*)?["']""", re.I)
 
 #: A catalogue page has no business linking more datasheets than this; past it
 #: the description is a link farm and none of them is about this product.
@@ -194,7 +192,11 @@ class WooCommerceAdapter(SourceAdapter):
             # Checked one at a time, not `description or short_description`: a
             # description of "<p>&nbsp;</p>" is truthy and flattens to nothing,
             # which would hide a perfectly good short description behind it.
-            description=strip_html(p.get("description")) or strip_html(p.get("short_description")),
+            # Line by line, as the Shopify and Odoo shops' are: a list or a spec
+            # table stays one item per line on the product page.
+            description=(
+                html_to_text(p.get("description")) or html_to_text(p.get("short_description"))
+            ),
             brand=self._brand(p),
             price_text=price_text,
             currency=prices.get("currency_code"),
@@ -250,6 +252,11 @@ class WooCommerceAdapter(SourceAdapter):
                 options[name] = terms
             else:
                 specs[name] = " / ".join(terms)
+        # Then the description's own spec table and "Name: value" lines, by the
+        # same reader (and caps) as Shopify's. The attributes are the shop's
+        # structured statement, so a name both give keeps the attribute's value.
+        for field in ("description", "short_description"):
+            specs = merge_specs(specs, specs_from_html(p.get(field)))
         if specs:
             out["specs"] = specs
         if options:
@@ -291,12 +298,11 @@ class WooCommerceAdapter(SourceAdapter):
 
         # Datasheets and manuals linked from the description: flattening it to
         # text keeps the words and drops the links, which are the useful part.
-        documents: list[str] = []
+        documents: list[dict[str, str]] = []
         for field in ("description", "short_description"):
-            for href in _PDF_LINK.findall(p.get(field) or ""):
-                url = urljoin(f"{self.base_url}/", html.unescape(href).strip())
-                if url.startswith(("http://", "https://")) and url not in documents:
-                    documents.append(url)
+            for doc in documents_from_html(p.get(field), self.base_url):
+                if all(doc["url"] != known["url"] for known in documents):
+                    documents.append(doc)
         if documents:
             out["documents"] = documents[:_MAX_DOCUMENTS]
 

@@ -103,8 +103,11 @@ def test_keeps_what_the_store_api_already_carries():
     assert "dimensions" not in attrs  # "N/A" is a placeholder, not a size
     assert attrs["tags"] == ["Meter", "Tools & Kits"]
     assert attrs["documents"] == [
-        "https://widgetworks.test/wp-content/uploads/wm3-datasheet.pdf",
-        "https://vendor.test/docs/WM3%20Manual.PDF",
+        {
+            "label": "Datasheet",
+            "url": "https://widgetworks.test/wp-content/uploads/wm3-datasheet.pdf",
+        },
+        {"label": "manual", "url": "https://vendor.test/docs/WM3%20Manual.PDF?v=2"},
     ]
     assert len(raw.images) == 2
 
@@ -202,4 +205,38 @@ def test_documents_are_capped_and_only_web_links():
     links += '<a href="mailto:x@widgetworks.test?subject=a.pdf">mail</a>'
     raw = _woo()._to_raw(_rich_product(description=links), "in stock")
     assert len(raw.raw["documents"]) == 10
-    assert all(u.startswith("https://") for u in raw.raw["documents"])
+    assert all(d["url"].startswith("https://") for d in raw.raw["documents"])
+
+
+def test_the_description_keeps_its_lines():
+    """Flattened to one line, a feature list became a wall of text on the product page."""
+    raw = _woo()._to_raw(
+        _rich_product(description="<p>A meter.</p><ul><li>Fast</li><li>Small</li></ul>"),
+        "in stock",
+    )
+    assert raw.description == "A meter.\n• Fast\n• Small"
+
+
+def test_description_spec_lines_join_the_attribute_specs():
+    """Read as Shopify's are; the structured attribute wins a name both state."""
+    description = (
+        "<p>Operating Voltage: 5V</p><p>Range: 0-100%</p>"
+        "<table><tr><td>Weight</td><td>27 g</td></tr></table>"
+    )
+    raw = _woo()._to_raw(
+        _rich_product(description=description, short_description="<p>Interface: I2C</p>"),
+        "in stock",
+    )
+    assert raw.raw["specs"] == {
+        "Range": "0–75%",
+        "Display": "LCD / LED",
+        "Operating Voltage": "5V",
+        "Weight": "27 g",
+        "Interface": "I2C",
+    }
+
+
+def test_a_feature_bullet_is_not_a_spec():
+    long = "Excellent rejection: provides better than 99 percent rejection across the whole band"
+    raw = _woo()._to_raw(_rich_product(description=f"<ul><li>{long}</li></ul>"), "in stock")
+    assert raw.raw["specs"] == {"Range": "0–75%", "Display": "LCD / LED"}
