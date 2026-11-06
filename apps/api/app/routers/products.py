@@ -7,7 +7,7 @@ import uuid
 from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
-from makhzan_schemas.models import Listing, Product
+from makhzan_schemas.models import Listing, Product, ProductRedirect
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -54,6 +54,24 @@ async def get_product(
         category=product.category,
         offers=[OfferRead.model_validate(o) for o in offers],
     )
+
+
+@router.get("/products/{product_id}/redirect")
+async def product_redirect(
+    product_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """Where a product id that no longer exists now leads, as `{"id": …}`.
+
+    A regroup replaces a product when its group key changes, and records the
+    product its offers moved to (`ProductRedirect`). 404 when the id was never
+    replaced, or its offers are all gone: then there is nowhere to send anyone.
+    """
+    new_id = await session.scalar(
+        select(ProductRedirect.new_id).where(ProductRedirect.old_id == product_id)
+    )
+    if new_id is None:
+        raise HTTPException(status_code=404, detail="no redirect for this product")
+    return {"id": str(new_id)}
 
 
 @router.get("/products/{product_id}/similar", response_model=list[ProductSummary])

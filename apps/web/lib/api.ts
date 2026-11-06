@@ -280,6 +280,16 @@ export function fetchProduct(id: string): Promise<Product | null> {
   return getOrNull<Product>(`/products/${encodeURIComponent(id)}`);
 }
 
+/**
+ * The product a replaced product id now leads to, or null. A regroup replaces
+ * a product when its group key changes and records where its offers went
+ * (docs/decisions/0004-stable-product-ids.md).
+ */
+export async function fetchProductRedirect(id: string): Promise<string | null> {
+  const moved = await getOrNull<{ id: string }>(`/products/${encodeURIComponent(id)}/redirect`);
+  return moved?.id ?? null;
+}
+
 export function fetchSimilar(id: string, limit = 8): Promise<ProductSummary[]> {
   return get<ProductSummary[]>(`/products/${encodeURIComponent(id)}/similar${query({ limit })}`);
 }

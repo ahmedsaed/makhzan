@@ -171,6 +171,10 @@ export function productFixture(path) {
     delete summary.offers;
     return [200, [summary, { ...summary, id: "p-similar-2", title_en: "Mini Buck Module" }]];
   }
+  // A product a regroup replaced: its offers moved to p-multi.
+  if (path === "/products/p-replaced/redirect") return [200, { id: "p-multi" }];
+  if (/^\/products\/[^/]+\/redirect$/.test(path)) return [404, { detail: "no redirect" }];
+
   const productId = path.match(/^\/products\/([^/]+)$/)?.[1];
   if (productId && PRODUCTS[productId]) return [200, PRODUCTS[productId]];
 
