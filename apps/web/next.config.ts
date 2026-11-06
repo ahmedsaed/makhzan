@@ -1,4 +1,4 @@
-import type { NextConfig } from "next"
+import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   // Emit a self-contained server bundle (.next/standalone) for a small runtime
@@ -10,9 +10,9 @@ const nextConfig: NextConfig = {
   // hits the relative "/api"; the Next server forwards to API_INTERNAL_URL.
   // Evaluated at server startup, so API_INTERNAL_URL is a runtime env.
   async rewrites() {
-    const api = process.env.API_INTERNAL_URL ?? "http://api:8000"
-    return [{ source: "/api/:path*", destination: `${api}/:path*` }]
+    const api = process.env.API_INTERNAL_URL ?? "http://api:8000";
+    return [{ source: "/api/:path*", destination: `${api}/:path*` }];
   },
-}
+};
 
-export default nextConfig
+export default nextConfig;

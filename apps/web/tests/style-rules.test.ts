@@ -93,7 +93,8 @@ function sources(dir: string): string[] {
 describe("S1 · colours come only from the tokens", () => {
   // Hex literals, and the CSS colour functions. `#` followed by hex digits
   // also matches an id-looking URL fragment, so it must stand alone.
-  const LITERAL = /(?<![\w&/-])#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(/gi;
+  const LITERAL =
+    /(?<![\w&/-])#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(/gi;
 
   const files = [...sources(join(ROOT, "app")), ...sources(join(ROOT, "components"))].filter(
     (path) => !path.endsWith("globals.css"),

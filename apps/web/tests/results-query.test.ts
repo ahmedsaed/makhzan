@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_MIN_SUPPLIERS,
   apiParams,
+  countText,
   flatParams,
   groupCategoryFacet,
   hiddenOutOfStock,
@@ -71,6 +73,27 @@ describe("parseResultsQuery", () => {
       offset: 24,
     });
     expect(apiParams(query)).toMatchObject({ shop: "shop-a", minPrice: 100, maxPrice: 500 });
+  });
+
+  it("clamps min_suppliers to what the API accepts", () => {
+    expect(parseResultsQuery({ min_suppliers: "500" }).minSuppliers).toBe(MAX_MIN_SUPPLIERS);
+    expect(parseResultsQuery({ min_suppliers: "50" }).minSuppliers).toBe(50);
+    expect(parseResultsQuery({ min_suppliers: "3" }).minSuppliers).toBe(3);
+    expect(parseResultsQuery({ min_suppliers: "0" }).minSuppliers).toBeUndefined();
+    expect(MAX_MIN_SUPPLIERS).toBe(50);
+  });
+
+  it("links to everything with in_stock=all, the one way to say it", () => {
+    const raw = { q: "relay" };
+    const links = resultsLinks("/trades/tools", raw, parseResultsQuery(raw));
+    expect(links.showOutOfStock).toBe("/trades/tools?q=relay&in_stock=all");
+    expect(links.inStock).toBe("/trades/tools?q=relay&in_stock=all");
+  });
+
+  it("counts what the stock filter shows in its own words", () => {
+    expect(countText(1234, true)).toBe("1,234 in stock");
+    expect(countText(1, false)).toBe("1 result");
+    expect(countText(36, false)).toBe("36 results");
   });
 
   it("takes the first of a repeated parameter", () => {

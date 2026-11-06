@@ -10,7 +10,7 @@
  *   shop           a supplier slug: search within one shop
  *   in_stock       absent → in stock only (rule C2); `all` → everything.
  *                  `false` is read as `all`, `true` as the default.
- *   min_suppliers  `2` → sold by 2+ shops
+ *   min_suppliers  `2` → sold by 2+ shops (2..50, the API's cap)
  *   min_price, max_price   EGP, on the product's cheapest offer
  *   sort           price:asc | supplier_count:desc | last_verified_at:desc
  *   offset         paging
@@ -18,12 +18,17 @@
  * Unknown or malformed values are dropped rather than passed on, so a mangled
  * link shows results instead of an API error.
  */
-import type { Facets, SearchParams } from "@/lib/api";
+import { searchProducts, type Facets, type SearchParams, type SearchResponse } from "@/lib/api";
+import { formatCount, plural } from "@/lib/format";
 import { withParams } from "@/lib/routes";
 
 export type RawParams = Record<string, string | string[] | undefined>;
 
 export const PAGE_SIZE = 24;
+
+/** The API refuses `min_suppliers` above this; a link asking for more is
+ *  clamped to it rather than turned into an error. */
+export const MAX_MIN_SUPPLIERS = 50;
 
 /** What `in_stock` is set to to show out-of-stock results too. */
 export const SHOW_ALL_STOCK = "all";
@@ -78,7 +83,10 @@ export function parseResultsQuery(raw: RawParams): ResultsQuery {
     domain: one(raw.domain),
     shop: one(raw.shop),
     inStockOnly: stock !== SHOW_ALL_STOCK && stock !== "false",
-    minSuppliers: Number.isFinite(minSuppliers) && minSuppliers > 1 ? minSuppliers : undefined,
+    minSuppliers:
+      Number.isFinite(minSuppliers) && minSuppliers > 1
+        ? Math.min(minSuppliers, MAX_MIN_SUPPLIERS)
+        : undefined,
     minPrice: minPrice || undefined,
     maxPrice,
     sort: SORTS.some((s) => s.value && s.value === sort) ? sort : undefined,
@@ -103,6 +111,51 @@ export function apiParams(query: ResultsQuery): SearchParams {
     limit: PAGE_SIZE,
     facets: true,
   };
+}
+
+export type ResultsData = {
+  /** Null when the API failed: the page says so instead of erroring. */
+  result: SearchResponse | null;
+  /** The same search without the stock filter, for the hidden count. */
+  unfiltered: SearchResponse | null;
+  /** The same search without the picked category, for the category list. */
+  wide: SearchResponse | null;
+};
+
+/**
+ * Every search a results page needs, run together, each failure caught so a
+ * broken API degrades the page instead of taking it down.
+ *
+ * `baseCategory` is the category the page itself is (a category page's own);
+ * the category list is counted against that, not against the whole catalogue.
+ */
+export async function fetchResults(
+  query: ResultsQuery,
+  { baseCategory }: { baseCategory?: string } = {},
+): Promise<ResultsData> {
+  const params = apiParams(query);
+  // Counts only: one hit is the least the API will return.
+  const countOnly = { limit: 1, offset: undefined, sort: undefined };
+  const [result, unfiltered, wide] = await Promise.all([
+    searchProducts(params).catch(() => null),
+    // Facets are counted over the filtered set, so how many the in-stock
+    // default hides needs the same search without it.
+    query.inStockOnly
+      ? searchProducts({ ...params, ...countOnly, inStock: false }).catch(() => null)
+      : null,
+    // Likewise the category list: with one picked, the main search's facet
+    // holds only that one, and the others must stay pickable.
+    query.category !== baseCategory
+      ? searchProducts({ ...params, ...countOnly, category: baseCategory }).catch(() => null)
+      : null,
+  ]);
+  return { result, unfiltered, wide: wide ?? result };
+}
+
+/** The toolbar's count. With the default stock filter on it says so, so a
+ *  header's catalogue count and this one never look like a contradiction. */
+export function countText(total: number, inStockOnly: boolean): string {
+  return inStockOnly ? `${formatCount(total)} in stock` : plural(total, "result");
 }
 
 /**

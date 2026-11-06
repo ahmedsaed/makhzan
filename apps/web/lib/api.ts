@@ -22,12 +22,7 @@ const API_BASE =
 const TAXONOMY_TTL = 300;
 const DETAIL_TTL = 120;
 
-export type StockSignal =
-  | "in_stock"
-  | "low_stock"
-  | "out_of_stock"
-  | "made_to_order"
-  | "unknown";
+export type StockSignal = "in_stock" | "low_stock" | "out_of_stock" | "made_to_order" | "unknown";
 
 export type ListingStatus = "active" | "pending_review" | "hidden" | "archived";
 
@@ -213,12 +208,14 @@ export class ApiError extends Error {
 }
 
 /** Fetch that turns "not found" into `null` and lets everything else throw.
- *  A missing product is a 404 page; a broken API is an error page. */
+ *  A missing product is a 404 page; a broken API is an error page. A 422 is
+ *  the API refusing a malformed id (not a UUID): from the visitor's side that
+ *  is a page that does not exist, not a fault. */
 async function getOrNull<T>(path: string, options?: FetchOptions): Promise<T | null> {
   try {
     return await get<T>(path, options);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return null;
+    if (error instanceof ApiError && (error.status === 404 || error.status === 422)) return null;
     throw error;
   }
 }
@@ -265,15 +262,15 @@ export function searchProducts(params: SearchParams): Promise<SearchResponse> {
 }
 
 export function fetchProduct(id: string): Promise<Product | null> {
-  return getOrNull<Product>(`/products/${id}`);
+  return getOrNull<Product>(`/products/${encodeURIComponent(id)}`);
 }
 
 export function fetchSimilar(id: string, limit = 8): Promise<ProductSummary[]> {
-  return get<ProductSummary[]>(`/products/${id}/similar${query({ limit })}`);
+  return get<ProductSummary[]>(`/products/${encodeURIComponent(id)}/similar${query({ limit })}`);
 }
 
 export function fetchListing(id: string): Promise<Listing | null> {
-  return getOrNull<Listing>(`/listings/${id}`);
+  return getOrNull<Listing>(`/listings/${encodeURIComponent(id)}`);
 }
 
 /** Every shop, biggest first — including ones with no active listings, which

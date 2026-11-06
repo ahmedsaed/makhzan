@@ -39,6 +39,15 @@ if [ ! -f "${config_dir}/sources.toml" ]; then
   echo "(or set MAKHZAN_CONFIG_DIR in .env.prod): docs/DEPLOYMENT.md, 'Private configuration'." >&2
   exit 1
 fi
+# Canonical links and structured data are built from SITE_URL. Unset, the web
+# app falls back to localhost and every canonical in production points there,
+# which is silent until a search engine reads it.
+site_url="$(set -a; . ./.env.prod; echo "${SITE_URL:-}")"
+if [ -z "$site_url" ]; then
+  echo "SITE_URL is not set in .env.prod. Set it to the public origin," >&2
+  echo "e.g. SITE_URL=https://makhzan.example.com: docs/DEPLOYMENT.md." >&2
+  exit 1
+fi
 if [ "${SKIP_PULL:-0}" != "1" ]; then
   echo "==> Updating the configuration in ${config_dir}"
   git -C "$config_dir" pull --ff-only

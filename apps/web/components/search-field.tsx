@@ -11,6 +11,10 @@ import { cn } from "@/lib/utils";
  *
  * `scope` adds fixed parameters to the query, so one field can search inside
  * one shop (`{ shop: "shop-a" }`) and still be a plain GET form.
+ *
+ * `scopeToggle` is a scope the visitor can drop: a checked box beside the
+ * field ("This shop only"). Unticked, the parameter is simply not submitted,
+ * so searching everything needs no JavaScript either.
  */
 export function SearchField({
   defaultValue = "",
@@ -19,6 +23,7 @@ export function SearchField({
   autoFocus = false,
   label = "Search",
   scope,
+  scopeToggle,
   className,
 }: {
   defaultValue?: string;
@@ -30,6 +35,7 @@ export function SearchField({
   /** Parameters submitted with the query, e.g. `{ domain: "tools" }` for
    *  "Search in Tools". Hidden inputs, so scoping needs no JavaScript either. */
   scope?: Record<string, string>;
+  scopeToggle?: { name: string; value: string; label: string };
   className?: string;
 }) {
   return (
@@ -58,6 +64,18 @@ export function SearchField({
           className="h-full min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-ink-3"
         />
       </label>
+      {scopeToggle && (
+        <label className="flex h-11 shrink-0 cursor-pointer items-center gap-1.5 text-[13px] whitespace-nowrap text-ink-2">
+          <input
+            type="checkbox"
+            name={scopeToggle.name}
+            value={scopeToggle.value}
+            defaultChecked
+            className="size-4 accent-action"
+          />
+          {scopeToggle.label}
+        </label>
+      )}
       <button
         type="submit"
         className={cn(
