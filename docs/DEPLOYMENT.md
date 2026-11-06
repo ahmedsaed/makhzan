@@ -113,7 +113,7 @@ terminate TLS there, and you're live.
 ## Day-2 operations
 
 `./makhzan` (repo root) wraps the common ones: `status`, `deploy`, `crawl on|off`,
-`logs`, `stop`, `start`, `backup`, `migrate`. Run it on the server, or from a
+`logs`, `stop`, `start`, `backup`, `migrate`, `retire`. Run it on the server, or from a
 laptop with `DEPLOY_HOST` set (it re-runs itself over SSH). `status` is the one
 to reach for first: containers, health, whether the crawl is paused, and the full
 crawler report from `scripts/status.py`, read from the live database.
@@ -125,6 +125,7 @@ crawler report from `scripts/status.py`, read from the live database.
 | Run migrations only | `./scripts/migrate.sh` |
 | Re-seed from a dump | `./scripts/restore-seed.sh [path]` |
 | Full re-scrape + reindex now | `./scripts/seed.sh` |
+| Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker |
 | Back up the DB | `./scripts/backup-db.sh` → `backups/*.sql.gz` |
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
