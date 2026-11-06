@@ -164,6 +164,55 @@ def test_crosswalk_still_matches_after_the_shop_retypes_the_punctuation():
     assert adapter.category_for(raw) == ("electronics", "diodes")
 
 
+# A fictional shop whose display bucket also names LEDs, and whose printer-parts
+# bucket holds filament — the two shapes that misfiled real listings.
+TAG_CLOUD = {
+    "Displays (LCD & LED)": ("electronics", "displays"),
+    "LEDs": ("electronics", "leds"),
+    "CNC & Printer Parts": ("electronics", "printer-parts"),
+    "Filament": ("electronics", "filament"),
+    "Stepper Motors": ("electronics", "motors"),
+}
+
+
+def _tagged(*names, prefer=()):
+    adapter = WooCommerceAdapter(
+        "t", "https://example.test", SUPPLIER, categories=TAG_CLOUD, prefer=prefer
+    )
+    product = _product()
+    product["categories"] = [{"name": n} for n in names]
+    return adapter.category_for(adapter._to_raw(product, "in stock"))
+
+
+def test_without_a_preference_the_first_mapped_tag_wins():
+    """The Store API's alphabetical order: "Displays (LCD & LED)" sorts before
+    "LEDs", so a plain 3 mm LED is filed as a display."""
+    assert _tagged("Displays (LCD &amp; LED)", "LEDs") == ("electronics", "displays")
+
+
+def test_a_preferred_tag_beats_one_that_sorts_before_it():
+    assert _tagged("Displays (LCD &amp; LED)", "LEDs", prefer=["LEDs"]) == ("electronics", "leds")
+
+
+def test_preference_is_ranked_and_only_decides_between_mapped_tags():
+    prefer = ["Filament", "Stepper Motors"]
+    assert _tagged("CNC &amp; Printer Parts", "Filament", prefer=prefer)[1] == "filament"
+    assert _tagged("CNC &amp; Printer Parts", "Stepper Motors", prefer=prefer)[1] == "motors"
+    # Both preferred: the higher-ranked one wins, whatever the alphabet says.
+    assert _tagged("Filament", "Stepper Motors", prefer=["Stepper Motors", "Filament"])[1] == (
+        "motors"
+    )
+    # Unpreferred tags keep the source's order among themselves.
+    assert _tagged("CNC &amp; Printer Parts", "LEDs", prefer=prefer)[1] == "printer-parts"
+    # A preferred name the listing does not carry changes nothing.
+    assert _tagged("LEDs", prefer=prefer) == ("electronics", "leds")
+
+
+def test_preference_matches_through_the_normalizer():
+    """Written readably in the crosswalk, received escaped and re-punctuated."""
+    assert _tagged("Displays (LCD &amp; LED)", "LEDs", prefer=["leds"])[1] == "leds"
+
+
 # --------------------------------------------------------------------------- #
 # Shopify crosswalk
 # --------------------------------------------------------------------------- #
