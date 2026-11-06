@@ -2,8 +2,7 @@
 
 **One place to find project materials in Egypt.**
 
-makhzan is a bilingual (English / Arabic) directory of Egyptian hardware and
-electronics suppliers. Instead of hunting across dozens of shops, it brings their
+makhzan is a directory of Egyptian hardware and electronics suppliers. Instead of hunting across dozens of shops, it brings their
 products and prices into one searchable catalogue, then hands you off to the
 supplier to buy. It is a **directory, not a store**: no cart, no payment, no
 delivery.
@@ -52,7 +51,7 @@ path from your own package.
 ## Architecture
 
 ```
-apps/web          Next.js frontend: search, browse, product and supplier pages; RTL, dark mode
+apps/web          Next.js frontend: search, trades, product and shop pages; dark mode
 apps/api          FastAPI, read-only, over Postgres and Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalise -> upsert -> group -> index
 packages/schemas  SQLAlchemy models, migrations, taxonomies, grouping, search contract

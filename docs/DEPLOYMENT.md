@@ -145,6 +145,12 @@ Nightly backup cron:
 
 ## Deploying
 
+> **November 2026 redesign: rebuild the search index once after deploying.** The
+> index gains a `supplier_slugs` field (search within a shop). The daily crawl
+> rebuilds the index, but not while the crawl is paused, and until it is rebuilt
+> `/search?shop=` fails. After `make deploy`:
+> `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.reindex`
+
 One command on the server, from `~/Documents/Projects/makhzan`:
 
 ```bash
