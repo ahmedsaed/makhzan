@@ -191,5 +191,10 @@ async def supplier_listings(
         "total": total,
         "limit": limit,
         "offset": offset,
-        "items": [ListingRead.model_validate(row) for row in rows],
+        # The shop page lists rows, not details: specs and datasheets are the
+        # product page's, and would multiply the payload by up to fifty fields a row.
+        "items": [
+            ListingRead.model_validate(row).model_dump(mode="json", exclude={"specs", "documents"})
+            for row in rows
+        ],
     }

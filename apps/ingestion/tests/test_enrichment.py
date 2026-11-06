@@ -145,6 +145,20 @@ def _product(**kw):
     return product
 
 
+def test_advice_and_marketing_lines_are_not_specs():
+    html = (
+        "<p>Slogan: Power your ideas</p><p>Note: check the pinout before use</p>"
+        "<p>N.B.: ships in a bag</p><p>Warning: do not reverse polarity</p>"
+        "<p>Operating Voltage: 5V</p>"
+    )
+    assert specs_from_html(html) == {"Operating Voltage": "5V"}
+
+
+def test_a_datasheet_link_with_a_page_anchor_is_a_document():
+    docs = documents_from_html('<a href="/d/ds.pdf#page=2">Datasheet</a>', "https://shop.test")
+    assert docs == [{"label": "Datasheet", "url": "https://shop.test/d/ds.pdf#page=2"}]
+
+
 def test_shopify_reads_specs_documents_and_compare_at_price():
     raw = _volta()._to_raw(_product())
     assert raw.raw["specs"]["Contact Rating"] == "10 A / 250 V AC"
