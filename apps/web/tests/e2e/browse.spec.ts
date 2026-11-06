@@ -47,24 +47,30 @@ test("a phrase gets no identifier band", async ({ page }) => {
   await expect(page.getByText(/ranked by identifier match first/)).toHaveCount(0);
 });
 
-test("a facet narrows by navigation and can be undone", async ({ page }) => {
+test("a filter narrows by navigation and can be undone", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/search?q=ESP32");
-  await page.getByRole("complementary", { name: "Filters" }).getByRole("link", { name: /Electronics/ }).click();
-  await expect(page).toHaveURL(/domain=electronics/);
+  await page
+    .getByRole("complementary", { name: "Filters" })
+    .getByRole("radio", { name: /Integrated Circuits/ })
+    .check();
+  await expect(page).toHaveURL(/category=electronics%3Aics/);
 
   // The active filter is visible as a chip, so the result count is explained.
-  const chip = page.getByRole("link", { name: /Electronics ✕/ });
+  const chip = page.getByRole("link", { name: /Integrated Circuits ✕/ });
   await expect(chip).toBeVisible();
   await chip.click();
-  await expect(page).not.toHaveURL(/domain=/);
+  await expect(page).not.toHaveURL(/category=/);
 });
 
 test("a chip toggles its parameter on and off", async ({ page }) => {
   await page.goto("/search?q=ESP32");
   await page.getByRole("link", { name: "2+ shops" }).click();
   await expect(page).toHaveURL(/min_suppliers=2/);
-  await expect(page.getByRole("link", { name: "2+ shops" })).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("link", { name: "2+ shops" })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await page.getByRole("link", { name: "2+ shops" }).click();
   await expect(page).not.toHaveURL(/min_suppliers/);
 });
@@ -89,7 +95,7 @@ test("on a phone the filters open as a sheet", async ({ page }) => {
   await expect(page.getByRole("complementary", { name: "Filters" })).toBeHidden();
   await page.locator("summary", { hasText: "Category, price" }).click();
   const sheet = page.getByRole("dialog", { name: "Category, price" });
-  await expect(sheet.getByRole("link", { name: /Electronics/ })).toBeVisible();
+  await expect(sheet.getByRole("radio", { name: /Integrated Circuits/ })).toBeVisible();
   await page.getByRole("button", { name: "Close filters" }).click();
   await expect(sheet).toBeHidden();
 });

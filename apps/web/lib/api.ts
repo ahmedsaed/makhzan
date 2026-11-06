@@ -160,6 +160,8 @@ export type SearchParams = {
   minPrice?: number;
   maxPrice?: number;
   minSuppliers?: number;
+  /** A supplier slug: search within one shop. */
+  shop?: string;
   sort?: string;
   limit?: number;
   offset?: number;
@@ -231,6 +233,7 @@ export function searchProducts(params: SearchParams): Promise<SearchResponse> {
       min_price: params.minPrice,
       max_price: params.maxPrice,
       min_suppliers: params.minSuppliers,
+      shop: params.shop,
       sort: params.sort,
       limit: params.limit ?? 24,
       offset: params.offset || undefined,
