@@ -30,7 +30,7 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
 - **migrate** is a one-shot service that runs `alembic upgrade head` on every
   deploy before api/ingestion start.
 
-Images: CI pushes `ghcr.io/<owner>/makhzan-{api,web,ingestion}`. The server pulls
+Images: CI pushes `ghcr.io/<owner>/makhzan/{api,web,ingestion}`. The server pulls
 them (it can also `docker compose ... build` if you prefer).
 
 ## One-time setup
@@ -47,8 +47,14 @@ Workflows live in `.github/workflows/`:
   dispatch or when a Release is published. Add repo **Secrets**: `DEPLOY_HOST`,
   `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` (e.g. `~/Documents/Projects/makhzan`).
 
-After the first `build.yml` run, make the three `makhzan-*` packages **public**,
-or keep them private and `docker login ghcr.io` on the server.
+The web image bakes in the repo **variable** `NEXT_PUBLIC_UMAMI_WEBSITE_ID`
+(Settings → Secrets and variables → Actions → Variables); unset, it ships without
+analytics.
+
+After the first `build.yml` run, make the three `makhzan/*` packages **public**:
+they are built from this repository and carry no supplier configuration, which
+is mounted at runtime instead. Or keep them private and `docker login ghcr.io` on
+the server.
 
 ### 2. Server
 
