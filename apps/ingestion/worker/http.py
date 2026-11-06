@@ -48,7 +48,7 @@ BROWSER_HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-origin",
-    "From": "crawler@makhzan.eg",
+    "From": "crawler@merope.dev",
 }
 
 #: Default seconds to wait between paginated requests to the same host.

@@ -43,7 +43,7 @@ probe() { # host-label, url, chrome-version
     -H 'Sec-Fetch-Dest: empty' \
     -H 'Sec-Fetch-Mode: cors' \
     -H 'Sec-Fetch-Site: same-origin' \
-    -H 'From: crawler@makhzan.eg' \
+    -H 'From: crawler@merope.dev' \
     "$2" 2>/dev/null || echo "ERR"
 }
 
