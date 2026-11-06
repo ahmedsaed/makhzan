@@ -25,6 +25,7 @@ from makhzan_schemas.models import (
     Listing,
     Product,
     ReviewQueueItem,
+    Source,
     SourceCursor,
     Supplier,
 )
@@ -114,6 +115,12 @@ async def sweep_progress(session, source_filter: str | None) -> None:
     """Per-source cycle progress, from the durable cursors."""
     _header("SWEEP PROGRESS")
     declared = await _declared_partitions(session)
+    paused = {
+        row
+        for row in (
+            await session.execute(select(Source.source_id).where(Source.enabled.is_(False)))
+        ).scalars()
+    }
     active = await _active_sources(session)
     finished = await _last_finished(session)
     query = select(SourceCursor).order_by(SourceCursor.source, SourceCursor.partition_key)
@@ -133,7 +140,14 @@ async def sweep_progress(session, source_filter: str | None) -> None:
         total = declared.get(source, len(rows))
         starts = [r.cycle_started_at for r in rows if r.cycle_started_at]
 
-        if starts:
+        if source in paused:
+            # `enabled = false` in sources.toml: the daily run skips it on
+            # purpose, so an open cycle here is not a stalled one.
+            state = f"{DIM}paused{RESET}"
+            cycle = "paused: enabled = false in sources.toml; the daily run skips it"
+            if starts:
+                cycle += f" (cycle started {_age(min(starts))})"
+        elif starts:
             cycle = f"cycle started {_age(min(starts))}"
             if source in active:
                 # A run is actually executing right now.
