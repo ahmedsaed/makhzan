@@ -52,10 +52,9 @@ test("a fresh shop page: stats, the way out, search and what it carries", async 
   await expect(results).toHaveCount(1);
   await expect(results.getByRole("link")).toHaveAttribute("href", "/products/prod-1");
 
-  await expect(page.getByRole("link", { name: "Own this shop? Add your details." })).toHaveAttribute(
-    "href",
-    "/for-suppliers",
-  );
+  await expect(
+    page.getByRole("link", { name: "Own this shop? Add your details." }),
+  ).toHaveAttribute("href", "/for-suppliers");
 });
 
 test("searching a shop submits to /search scoped to it, without JavaScript", async ({
@@ -69,6 +68,24 @@ test("searching a shop submits to /search scoped to it, without JavaScript", asy
   await field.press("Enter");
   await expect(page).toHaveURL(/\/search\?shop=shop-a&q=lm358$/);
   await context.close();
+});
+
+test("the header search keeps a shop's scope, and can drop it", async ({ page }) => {
+  await page.goto("/search?q=relay&shop=shop-a");
+  const header = page.getByRole("banner");
+  const field = header.getByRole("searchbox");
+  await expect(header.getByRole("checkbox", { name: "This shop only" })).toBeChecked();
+  await field.fill("lm358");
+  await field.press("Enter");
+  await expect(page).toHaveURL(/\/search\?shop=shop-a&q=lm358$|\/search\?q=lm358&shop=shop-a$/);
+
+  // On the shop's own page too; unticked, it searches every shop.
+  await page.goto("/shops/shop-a");
+  await header.getByRole("checkbox", { name: "This shop only" }).uncheck();
+  await header.getByRole("searchbox").fill("relay");
+  await header.getByRole("searchbox").press("Enter");
+  await expect(page).toHaveURL(/\/search\?q=relay$/);
+  await expect(header.getByRole("checkbox")).toHaveCount(0);
 });
 
 test("a stale shop says so in plain language (F3)", async ({ page }) => {
@@ -98,7 +115,9 @@ test("for suppliers offers three requests, each an email to the crawler's addres
     ["add", "Add my shop to makhzan"],
     ["correct", "Correct my shop's details on makhzan"],
   ]) {
-    const href = await page.locator(`[data-request="${id}"] a[href^="mailto:"]`).getAttribute("href");
+    const href = await page
+      .locator(`[data-request="${id}"] a[href^="mailto:"]`)
+      .getAttribute("href");
     expect(href).not.toBeNull();
     const url = new URL(href!);
     expect(url.pathname).toBe("crawler@merope.dev");

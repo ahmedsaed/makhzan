@@ -7,6 +7,11 @@
  * hidden count has something to count. Then enough single-category trades to
  * push the total past the eight the home page shows.
  *
+ * The search filters `category` the way the API does since products carry
+ * their ancestors (`category_refs`): a group's ref matches everything filed
+ * under it. Two ways to make the API fail, for the pages' degraded states: a
+ * search in the Gaskets category, and the taxonomy of the `catfail` trade.
+ *
  * The shops are made up: the repository is public.
  */
 
@@ -81,22 +86,60 @@ const HITS = [
   }),
 ];
 
-/** The search response for this fixture's trade, or null for anything else. */
+/** A category's ref and every ancestor's, as the index stores them. */
+function ancestry(ref) {
+  const refs = [];
+  for (let at = ref; at; at = TRADE_CATEGORIES.find((c) => c.ref === at)?.parent ?? null) {
+    refs.push(at);
+  }
+  return refs;
+}
+
+function count(hits, key) {
+  const out = {};
+  for (const hit of hits) out[String(hit[key])] = (out[String(hit[key])] ?? 0) + 1;
+  return out;
+}
+
+/** `/categories?domain=catfail` fails: the trade pages' "not answering" state. */
+export const FAILING_TRADE = "catfail";
+
+/** `{status, body}` for this fixture's trade, or null for anything else. */
 export function tradeSearch(url) {
-  if (url.searchParams.get("domain") !== "seals-bearings") return null;
-  const category = url.searchParams.get("category");
+  const params = url.searchParams;
+  if (params.get("domain") !== "seals-bearings") return null;
+  const category = params.get("category");
+  if (category === "seals-bearings:gaskets") {
+    return { status: 500, body: { detail: "meilisearch unreachable" } };
+  }
   let hits = HITS;
-  if (category) hits = hits.filter((h) => h.category_ref === category);
-  if (url.searchParams.get("in_stock") === "true") hits = hits.filter((h) => h.in_stock);
-  if (Number(url.searchParams.get("min_suppliers") ?? 0) > 1)
-    hits = hits.filter((h) => h.supplier_count > 1);
-  const limit = Number(url.searchParams.get("limit") ?? 24);
-  return {
-    query: url.searchParams.get("q") ?? "",
+  if (category) hits = hits.filter((h) => ancestry(h.category_ref).includes(category));
+  if (params.get("in_stock") === "true") hits = hits.filter((h) => h.in_stock);
+  // The API refuses more than 50 (and the page must never send it).
+  const minSuppliers = Number(params.get("min_suppliers") ?? 0);
+  if (minSuppliers > 50) return { status: 422, body: { detail: "min_suppliers ≤ 50" } };
+  if (minSuppliers > 1) hits = hits.filter((h) => h.supplier_count >= minSuppliers);
+  const sort = params.get("sort");
+  if (sort && !/^(price|last_verified_at|supplier_count):(asc|desc)$/.test(sort)) {
+    return { status: 422, body: { detail: "bad sort" } };
+  }
+  if (sort === "price:asc") hits = [...hits].sort((a, b) => a.min_price - b.min_price);
+  const limit = Number(params.get("limit") ?? 24);
+  const offset = Number(params.get("offset") ?? 0);
+  const body = {
+    query: params.get("q") ?? "",
     identifier_query: false,
     total: hits.length,
     limit,
-    offset: Number(url.searchParams.get("offset") ?? 0),
-    hits: hits.slice(0, limit),
+    offset,
+    hits: hits.slice(offset, offset + limit),
   };
+  if (params.get("facets") === "true") {
+    body.facets = {
+      domain: count(hits, "domain"),
+      category_ref: count(hits, "category_ref"),
+      in_stock: count(hits, "in_stock"),
+    };
+  }
+  return { status: 200, body };
 }

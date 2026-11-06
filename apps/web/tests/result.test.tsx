@@ -72,6 +72,28 @@ describe.each([
   });
 });
 
+describe("a row's shop and freshness on a phone", () => {
+  const meta = (value: SearchHit) =>
+    renderIn(ResultRow, value).container.querySelector("[data-meta]")!;
+
+  it("share a line, with a separator, while the price is fresh", () => {
+    const line = meta({ ...hit, supplier_count: 1 });
+    expect(line).toHaveAttribute("data-meta", "inline");
+    expect(line.textContent).toBe("Shop A·checked 13 days ago");
+  });
+
+  it("stack with no separator when the stale badge would wrap", () => {
+    const line = meta({
+      ...hit,
+      supplier_count: 1,
+      last_verified_at: NOW.getTime() / 1000 - 74 * 86_400,
+    });
+    expect(line).toHaveAttribute("data-meta", "stacked");
+    expect(line.textContent).not.toContain("·");
+    expect(line).toHaveTextContent("Price may be out of date (74 days)");
+  });
+});
+
 describe("row and card agree", () => {
   it("carry exactly the same text (rule C1)", () => {
     // Whitespace aside, switching views must not add or drop a fact.

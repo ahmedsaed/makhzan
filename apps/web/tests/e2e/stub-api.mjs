@@ -18,7 +18,7 @@ import { createServer } from "node:http";
 import { productFixture } from "./fixtures/product.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopRoute } from "./fixtures/shops.mjs";
-import { TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
+import { FAILING_TRADE, TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
 
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
@@ -213,12 +213,15 @@ const server = createServer((req, res) => {
   if (path === "/stats") return send(200, { products: 57207, suppliers: 8, categories: 249 });
   if (path === "/categories") {
     const domain = url.searchParams.get("domain");
+    if (domain === FAILING_TRADE) return send(500, { detail: "database unreachable" });
     const all = [...CATEGORIES, ...TRADE_CATEGORIES];
     return send(200, domain ? all.filter((c) => c.domain === domain) : all);
   }
   const fixture = path === "/search" && searchFixture(url);
   if (fixture) return send(fixture.status, fixture.body);
-  if (path === "/search") return send(200, tradeSearch(url) ?? search(url));
+  const trade = path === "/search" && tradeSearch(url);
+  if (trade) return send(trade.status, trade.body);
+  if (path === "/search") return send(200, search(url));
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
     const summary = { ...PRODUCT };
@@ -228,6 +231,8 @@ const server = createServer((req, res) => {
     ]);
   }
   if (path === "/products/prod-1") return send(200, PRODUCT);
+  // What the API says to an id that is not a UUID.
+  if (path === "/products/malformed-id") return send(422, { detail: "not a valid uuid" });
   if (path === "/listings/listing-1") return send(200, LISTING);
   // The offers are listings too, so opening one has somewhere to land.
   if (path === "/listings/off-1") return send(200, { ...LISTING, id: "off-1" });

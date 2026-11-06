@@ -75,7 +75,7 @@ function ShopRow({ shop, now }: { shop: ShopSummary; now: Date }) {
         <Freshness
           lastVerified={parseVerified(shop.last_verified_at)}
           now={now}
-          className="self-start text-[13px] md:justify-self-end md:self-center"
+          className="self-start text-[13px] md:self-center md:justify-self-end"
         />
       </Link>
     </li>

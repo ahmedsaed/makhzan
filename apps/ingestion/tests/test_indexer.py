@@ -11,7 +11,7 @@ import uuid
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType
-from makhzan_schemas.models import Listing, Product, Supplier
+from makhzan_schemas.models import Category, Listing, Product, Supplier
 from makhzan_schemas.search import FILTERABLE_ATTRIBUTES
 
 from worker.indexer import reindex_all
@@ -145,3 +145,52 @@ async def test_supplier_slugs_is_filterable():
 
     assert "supplier_slugs" in FILTERABLE_ATTRIBUTES
     assert "supplier_slugs" in client.products.settings["filterableAttributes"]
+
+
+async def test_documents_carry_their_category_and_every_ancestor():
+    """A group page filters on the group's ref, but products are filed on
+    leaves: without the ancestors in the document a group could never narrow."""
+    top = Category(id=uuid.uuid4(), domain="electronics", slug="passives", name_en="Passives")
+    mid = Category(
+        id=uuid.uuid4(),
+        domain="electronics",
+        slug="resistors",
+        name_en="Resistors",
+        parent_id=top.id,
+    )
+    leaf = Category(
+        id=uuid.uuid4(),
+        domain="electronics",
+        slug="smd-resistors",
+        name_en="SMD resistors",
+        parent_id=mid.id,
+    )
+    filed = Product(id=uuid.uuid4(), group_key="single:r", title_en="filed", category_id=leaf.id)
+    loose = Product(id=uuid.uuid4(), group_key="single:l", title_en="loose")
+    async with SessionLocal() as session:
+        session.add(top)
+        await session.flush()
+        session.add(mid)
+        await session.flush()
+        session.add(leaf)
+        await session.flush()
+        session.add_all([filed, loose])
+        await session.commit()
+
+    docs = await _reindex()
+
+    assert docs["filed"]["category_ref"] == "electronics:smd-resistors"
+    assert docs["filed"]["category_refs"] == [
+        "electronics:smd-resistors",
+        "electronics:resistors",
+        "electronics:passives",
+    ]
+    assert docs["loose"]["category_refs"] == []
+
+
+async def test_category_refs_is_filterable():
+    client = FakeClient()
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+
+    assert "category_refs" in client.products.settings["filterableAttributes"]

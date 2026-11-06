@@ -11,26 +11,6 @@
  * the same thing, and only URLs and copy use the new name.
  */
 
-export type SearchQuery = {
-  q?: string;
-  category?: string;
-  domain?: string;
-  inStock?: boolean;
-  sort?: string;
-  minSuppliers?: number;
-  offset?: number;
-};
-
-function qs(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === "" || value === false) continue;
-    search.set(key, String(value));
-  }
-  const out = search.toString();
-  return out ? `?${out}` : "";
-}
-
 /** Split `domain:slug` into its parts. Returns null for a bare slug, which is
  *  not addressable. */
 export function splitRef(ref: string): { domain: string; slug: string } | null {
@@ -46,19 +26,6 @@ export function joinRef(domain: string, slug: string): string {
 export const routes = {
   home: () => "/",
 
-  search: (query: SearchQuery = {}) =>
-    `/search${qs({
-      q: query.q,
-      category: query.category,
-      domain: query.domain,
-      in_stock: query.inStock,
-      sort: query.sort,
-      min_suppliers: query.minSuppliers,
-      // Page zero is the same page as no page. Emitting `offset=0` would give
-      // one page two URLs.
-      offset: query.offset || undefined,
-    })}`,
-
   trades: () => "/trades",
   trade: (domain: string) => `/trades/${encodeURIComponent(domain)}`,
 
@@ -66,7 +33,7 @@ export const routes = {
    *  slug, which is the honest answer: we cannot tell which trade was meant. */
   category: (ref: string) => {
     const parts = splitRef(ref);
-    if (!parts) return `/search${qs({ category: ref })}`;
+    if (!parts) return `/search?${new URLSearchParams({ category: ref })}`;
     return `/trades/${encodeURIComponent(parts.domain)}/${encodeURIComponent(parts.slug)}`;
   },
 

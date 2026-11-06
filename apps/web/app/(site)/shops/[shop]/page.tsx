@@ -131,7 +131,7 @@ export default async function ShopPage({ params }: { params: Promise<{ shop: str
                       className="flex min-h-11 items-center gap-3 px-3 py-2 text-[15px] text-ink hover:bg-ground"
                     >
                       <span className="flex-1">{category.name_en}</span>
-                      <span className="tabular text-sm text-ink-3">
+                      <span className="text-sm text-ink-3 tabular">
                         {formatCount(category.count)}
                       </span>
                     </Link>
@@ -198,7 +198,7 @@ function Stat({
       <dt className={cn("text-xs", tier === "warn" ? "text-warn-ink" : "text-ink-2")}>{label}</dt>
       <dd
         className={cn(
-          "figure mt-0.5 text-[17px] leading-tight",
+          "mt-0.5 figure text-[17px] leading-tight",
           tier === "warn" ? "text-warn-ink" : tier === "muted" ? "text-age-muted" : "text-ink",
         )}
       >
@@ -237,7 +237,8 @@ function Carries({ supplier }: { supplier: SupplierProfile }) {
             {share.domain ? (
               <Link
                 href={shopSearchUrl(supplier.slug, { domain: share.domain })}
-                className="hover:text-ink hover:underline"
+                // 44px to tap on phones (S4), though it reads as a line of text.
+                className="inline-flex min-h-11 items-center hover:text-ink hover:underline lg:min-h-0"
               >
                 {share.label}
               </Link>

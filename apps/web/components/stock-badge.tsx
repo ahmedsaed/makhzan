@@ -21,11 +21,7 @@ export function StockBadge({ signal, className }: { signal: StockSignal; classNa
   const positive = signal === "in_stock" || signal === "low_stock";
   return (
     <span
-      className={cn(
-        "text-[13px]",
-        positive ? "font-semibold text-ink" : "text-ink-2",
-        className,
-      )}
+      className={cn("text-[13px]", positive ? "font-semibold text-ink" : "text-ink-2", className)}
     >
       {LABELS[signal]}
     </span>

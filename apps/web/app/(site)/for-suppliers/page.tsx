@@ -109,3 +109,9 @@ function RequestCard({
     </section>
   );
 }
+
+/**
+ * Rendered per request, not at build time, so its canonical link resolves
+ * against the runtime SITE_URL rather than whatever the build machine had.
+ */
+export const dynamic = "force-dynamic";

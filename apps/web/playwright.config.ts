@@ -42,7 +42,8 @@ export default defineConfig({
       // break the suite.
       command: `npx next build && npx next start --port ${WEB_PORT}`,
       port: WEB_PORT,
-      env: { API_INTERNAL_URL: `http://localhost:${STUB_PORT}` },
+      // SITE_URL is read at runtime: the canonical and JSON-LD tests assert it.
+      env: { API_INTERNAL_URL: `http://localhost:${STUB_PORT}`, SITE_URL: "https://makhzan.test" },
       reuseExistingServer: !process.env.CI,
       timeout: 240_000,
       stdout: "ignore",
