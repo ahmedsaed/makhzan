@@ -118,7 +118,10 @@ test("empty results say so instead of showing an empty list", async ({ page }) =
 
 test("a category is addressed through its trade, never a bare slug", async ({ page }) => {
   await page.goto("/trades/electronics");
-  await page.getByRole("link", { name: /Integrated Circuits/ }).click();
+  await page
+    .getByRole("navigation", { name: "Categories" })
+    .getByRole("link", { name: /Integrated Circuits/ })
+    .click();
   await expect(page).toHaveURL("/trades/electronics/ics");
 });
 
