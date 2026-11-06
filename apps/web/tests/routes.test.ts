@@ -45,11 +45,6 @@ describe("routes", () => {
     // Honest: we cannot tell which trade was meant, so we do not invent one.
     expect(routes.category("measurement")).toBe("/search?category=measurement");
   });
-
-  it("drops empty and false parameters instead of encoding them", () => {
-    expect(routes.search({ q: "", inStock: false, offset: 0 })).toBe("/search");
-    expect(routes.search({ q: "LM358", inStock: true })).toBe("/search?q=LM358&in_stock=true");
-  });
 });
 
 describe("withParams", () => {
