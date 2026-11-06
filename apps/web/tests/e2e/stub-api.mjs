@@ -13,6 +13,7 @@
  * an Arabic title alongside a Latin part number, a withdrawn listing, and one
  * the grouping step never attached to a product.
  */
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 import { productFixture } from "./fixtures/product.mjs";
@@ -172,6 +173,29 @@ const LISTING = {
 
 const WITHDRAWN = { ...LISTING, id: "listing-gone", status: "archived", source_url: null };
 
+/** A real PNG to stand in for a shop's product photo: the app's own icon. */
+const PHOTO_PNG = readFileSync(new URL("../../public/icon-192.png", import.meta.url));
+
+/** Products whose photo is served by this stub, by what the card meets. */
+const PHOTO_PRODUCTS = Object.fromEntries(
+  [
+    ["p-photo", "photo.png"],
+    ["p-photo-missing", "missing.png"],
+    ["p-photo-garbage", "garbage.webp"],
+  ].map(([id, file]) => {
+    const image = `http://localhost:${PORT}/img/${file}`;
+    return [
+      id,
+      {
+        ...PRODUCT,
+        id,
+        image,
+        offers: PRODUCT.offers.map((offer) => ({ ...offer, images: [image] })),
+      },
+    ];
+  }),
+);
+
 function search(url) {
   const q = url.searchParams.get("q") ?? "";
   const domain = url.searchParams.get("domain");
@@ -253,6 +277,19 @@ const server = createServer((req, res) => {
   if (path === "/listings/listing-gone") return send(200, WITHDRAWN);
   if (path === "/listings/listing-orphan")
     return send(200, { ...LISTING, id: "listing-orphan", product_id: null });
+  // Product photos for the link-preview card: one that loads, one the shop
+  // has lost, and one that claims to be an image and is not.
+  if (path === "/img/photo.png") {
+    res.writeHead(200, { "content-type": "image/png" });
+    return res.end(PHOTO_PNG);
+  }
+  if (path === "/img/garbage.webp") {
+    res.writeHead(200, { "content-type": "image/webp" });
+    return res.end("not an image");
+  }
+  const photoProduct = PHOTO_PRODUCTS[path.replace(/^\/products\//, "")];
+  if (photoProduct) return send(200, photoProduct);
+
   const shop = shopRoute(path);
   if (shop) return send(...shop);
 

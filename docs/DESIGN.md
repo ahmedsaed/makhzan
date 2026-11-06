@@ -185,6 +185,35 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 
 Light and dark follow the device setting; the footer toggle overrides it.
 
+### Brand
+
+**The logo** ("organizer grid") is a 2×2 parts organizer: three outlined compartments
+and one filled burnt-orange compartment, top right. Many shops, one picked. On a 48×48
+grid: four 18×18 squares at (4,4), (26,4), (4,26), (26,26), 4px corners, the outlines
+3.5px in `ink` (`#15171C` light, `#ECECEA` dark), the top-right one filled with the
+`brand` token (`#C2410C` in both themes, named apart from `action` so the mark never
+moves with a button). The wordmark is "makhzan" in Archivo 800, letter-spacing −0.02em,
+beside the mark; the mark is 1.2em tall, Archivo's cap height plus x-height.
+`components/logo.tsx` draws it in the header and footer, the outline in `currentColor`.
+The headline is "Find parts and materials across Egypt's suppliers."
+
+**Icons.** `app/icon.svg` is the mark alone, its outline switching ink with
+`prefers-color-scheme`. The rasters are drawn by `apps/web/scripts/brand-icons.mjs`: a
+32px PNG and a 16/32/48 `favicon.ico` as a rounded tile on `ground`, so the dark outline
+reads on a dark tab bar; the 180px apple icon and the 192/512px manifest icons as full
+squares (the platform rounds them), plus a 512px maskable one inside the safe zone.
+`app/manifest.ts` names the app; there is no service worker.
+
+**Link previews** are 1200×630 cards from `next/og` (`lib/og.tsx`): the `ground`, the
+logo top left, an Archivo 800 headline, Archivo 700 for the key figure, Inter for the
+rest, the site's domain at the foot and a 6px `brand` bar along the bottom. The site's
+card has the headline and the live totals ("N products · N shops · rechecked weekly");
+a product's has its title, price range, "at N shops" or the shop's name, and its photo
+on the right in a white frame (none if the shop's photo fails, never no card); trades,
+categories and shops have their name and counts. Fonts are committed under
+`apps/web/assets/fonts` (OFL). Colours come from `lib/brand.ts`, which a test holds
+equal to the tokens.
+
 ## Rules
 
 Each is meant to be checked by a test.

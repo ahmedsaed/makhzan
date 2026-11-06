@@ -3,16 +3,27 @@ import type { Metadata } from "next";
 import { NotAnswering } from "@/components/results";
 import { Container, Empty } from "@/components/section";
 import { fetchCategories } from "@/lib/api";
-import { formatCount } from "@/lib/format";
+import { formatCount, plural } from "@/lib/format";
+import { pageMetadata } from "@/lib/metadata";
+import { routes } from "@/lib/routes";
 import { tradeDirectory } from "@/lib/trade-directory";
 
 import { TradeDirectory } from "./_components/trade-directory";
 
-export const metadata: Metadata = {
-  title: "All trades",
-  description:
-    "Every trade makhzan covers, largest first, with its categories and how much each holds.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const categories = await fetchCategories().catch(() => null);
+  const trades = categories ? tradeDirectory(categories) : [];
+  const products = trades.reduce((sum, trade) => sum + trade.count, 0);
+  const names = trades.slice(0, 4).map((trade) => trade.label);
+  return pageMetadata({
+    title: "All trades",
+    description:
+      trades.length > 0
+        ? `${plural(trades.length, "trade")} and ${plural(products, "product")} from Egypt's suppliers, largest first: ${names.join(", ")} and more, each with its categories and how much each holds.`
+        : "Every trade makhzan covers, largest first, with its categories and how much each holds.",
+    path: routes.trades(),
+  });
+}
 
 /** Every trade as a directory: largest first, each with its categories as links. */
 export default async function TradesPage() {

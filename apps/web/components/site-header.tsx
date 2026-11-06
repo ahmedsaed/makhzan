@@ -2,14 +2,15 @@ import { Suspense } from "react";
 
 import { HeaderSearch } from "@/components/header-search";
 import { Link } from "@/components/link";
+import { Logo } from "@/components/logo";
 import { SearchField } from "@/components/search-field";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 /**
- * Wordmark, search, and the two ways to browse.
+ * Logo, search, and the two ways to browse.
  *
- * Phones get two rows — wordmark and nav, then search full width — and from
+ * Phones get two rows — logo and nav, then search full width — and from
  * `md` it is one row. Search stays visible at every width: collapsing it behind
  * a magnifier to save 44px is the wrong trade on a site whose job is search.
  *
@@ -25,9 +26,10 @@ export function SiteHeader({ search = true }: { search?: boolean }) {
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2.5 px-4 py-2.5 md:flex-nowrap md:px-6">
         <Link
           href={routes.home()}
-          className="flex h-11 shrink-0 items-center font-display text-[22px] font-bold tracking-[-0.02em] text-ink"
+          aria-label="makhzan, home"
+          className="flex h-11 shrink-0 items-center"
         >
-          makhzan
+          <Logo className="text-[22px]" />
         </Link>
 
         {search && (
