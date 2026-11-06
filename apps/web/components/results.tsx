@@ -44,6 +44,7 @@ export function Results({
   names,
   locked = [],
   shopName,
+  hideShop,
   top,
   className,
 }: {
@@ -55,6 +56,8 @@ export function Results({
   names: Map<string, string>;
   locked?: Locked;
   shopName?: string;
+  /** One shop's own page: results leave its name out (see ResultRow). */
+  hideShop?: boolean;
   top?: React.ReactNode;
   className?: string;
 }) {
@@ -160,6 +163,7 @@ export function Results({
             <ResultList
               hits={result.hits}
               now={now}
+              hideShop={hideShop}
               className="-mx-4 mt-3 md:mx-0 lg:data-[view=list]:overflow-hidden lg:data-[view=list]:rounded-card lg:data-[view=list]:border-x"
             />
             <Pagination offset={query.offset} total={total} links={links} />

@@ -27,11 +27,16 @@ export type ResultProps = {
   now?: Date;
   /** Above the fold: load the photo eagerly. */
   priority?: boolean;
+  /** On a page already scoped to one shop (its own page), its name on every
+   *  row says nothing: a one-shop result shows freshness alone. A product
+   *  other shops sell too keeps its "N shops" badge, which is news there. */
+  hideShop?: boolean;
 };
 
 /** The product's shop when there is one, the badge when there are several. */
-function Shops({ hit }: { hit: SearchHit }) {
+function Shops({ hit, hideShop = false }: { hit: SearchHit; hideShop?: boolean }) {
   if (hit.supplier_count >= 2) return <ShopsBadge count={hit.supplier_count} />;
+  if (hideShop) return null;
   return <span className="min-w-0 truncate text-ink-2">{hit.supplier_name ?? "1 shop"}</span>;
 }
 
@@ -44,13 +49,15 @@ function displayTitle(hit: SearchHit): string {
  * row becomes columns — photo · title and category · shop and freshness · price
  * — with the price end-aligned, because the column is the comparison.
  */
-export function ResultRow({ hit, now, priority = false }: ResultProps) {
+export function ResultRow({ hit, now, priority = false, hideShop = false }: ResultProps) {
   const title = displayTitle(hit);
   const verified = parseVerified(hit.last_verified_at);
   // A stale price's warning is longer than a phone's line: it goes under the
   // shop rather than beside it, so no separator is left dangling at a wrap.
   // Otherwise "checked 12 days ago" never wraps and the shop name truncates.
   const stacked = verified !== null && freshnessTier(verified, now) === "warn";
+  // Nothing to put beside the freshness: no separator.
+  const shopless = hideShop && hit.supplier_count < 2;
   return (
     <li data-result="row" className="border-b border-line">
       {/* Grid areas rather than two copies of the markup: each fact exists
@@ -89,8 +96,8 @@ export function ResultRow({ hit, now, priority = false }: ResultProps) {
             stacked ? "flex-col items-start" : "items-center",
           )}
         >
-          <Shops hit={hit} />
-          {!stacked && (
+          <Shops hit={hit} hideShop={hideShop} />
+          {!stacked && !shopless && (
             <span aria-hidden="true" className="text-ink-3 md:hidden">
               ·
             </span>
@@ -107,7 +114,7 @@ export function ResultRow({ hit, now, priority = false }: ResultProps) {
 }
 
 /** Grid: photo on top, three-line title, then the same facts as the row. */
-export function ResultCard({ hit, now, priority = false }: ResultProps) {
+export function ResultCard({ hit, now, priority = false, hideShop = false }: ResultProps) {
   const title = displayTitle(hit);
   return (
     <li
@@ -132,9 +139,11 @@ export function ResultCard({ hit, now, priority = false }: ResultProps) {
             currency={hit.currency}
             className="text-[15px]"
           />
-          <span className="flex min-w-0 self-start">
-            <Shops hit={hit} />
-          </span>
+          {!(hideShop && hit.supplier_count < 2) && (
+            <span className="flex min-w-0 self-start">
+              <Shops hit={hit} />
+            </span>
+          )}
           <Freshness lastVerified={parseVerified(hit.last_verified_at)} now={now} />
         </div>
       </Link>
