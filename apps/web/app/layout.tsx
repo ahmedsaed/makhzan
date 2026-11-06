@@ -1,9 +1,10 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Archivo, IBM_Plex_Mono, Inter } from "next/font/google";
 
 import "./globals.css";
 import { SiteFooter } from "@/components/site-footer";
 import { ThemeProvider } from "@/components/theme-provider";
+import { darkPalette, palette, SITE_DESCRIPTION, SITE_NAME } from "@/lib/brand";
 import { siteUrl } from "@/lib/site";
 
 /**
@@ -54,13 +55,32 @@ export function generateMetadata(): Metadata {
     // origin, never the Host header of whoever asked.
     metadataBase: siteUrl(),
     title: {
-      default: "makhzan — find parts across Egypt's shops",
-      template: "%s · makhzan",
+      default: `${SITE_NAME} — find parts and materials across Egypt's suppliers`,
+      template: `%s · ${SITE_NAME}`,
     },
-    description:
-      "One search across Egyptian hardware and electronics shops. Every price shows when it was last checked; buying happens on the shop's own site.",
+    description: SITE_DESCRIPTION,
+    applicationName: SITE_NAME,
+    // The defaults for a page that sets none of its own; most do, through
+    // lib/metadata.ts, which repeats the site name and locale because a
+    // page's `openGraph` replaces this one whole.
+    openGraph: {
+      type: "website",
+      siteName: SITE_NAME,
+      locale: "en",
+      title: SITE_NAME,
+      description: SITE_DESCRIPTION,
+    },
+    twitter: { card: "summary_large_image", title: SITE_NAME, description: SITE_DESCRIPTION },
   };
 }
+
+/** A phone's browser bar takes the page's ground, in either theme. */
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: palette.ground },
+    { media: "(prefers-color-scheme: dark)", color: darkPalette.ground },
+  ],
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

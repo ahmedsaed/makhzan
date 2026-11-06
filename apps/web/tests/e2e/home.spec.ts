@@ -16,7 +16,7 @@ test.describe("on a phone", () => {
     await expect(
       page.getByRole("heading", {
         level: 1,
-        name: "Find parts and materials across Cairo's suppliers.",
+        name: "Find parts and materials across Egypt's suppliers.",
       }),
     ).toBeVisible();
     await expect(

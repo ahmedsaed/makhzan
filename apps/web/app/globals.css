@@ -39,6 +39,9 @@
   /* White in both themes: supplier photos are shot on white, and a dark frame
    * around a white photo reads as a hole in the page (rule S5). */
   --photo-frame: #ffffff;
+  /* The filled compartment of the logo's organizer grid. The same orange as
+   * `action` today, named apart so the mark never changes with a button. */
+  --brand: #c2410c;
 }
 
 .dark {
@@ -64,6 +67,7 @@
   --warn-ink: #f3e08a;
   --age-muted: #d9c46c;
   --photo-frame: #ffffff;
+  --brand: #c2410c;
 }
 
 /* shadcn/Base UI primitives speak these names. Mapping them onto the palette
@@ -115,6 +119,7 @@
   --color-warn-ink: var(--warn-ink);
   --color-age-muted: var(--age-muted);
   --color-photo-frame: var(--photo-frame);
+  --color-brand: var(--brand);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);

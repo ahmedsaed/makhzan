@@ -153,6 +153,8 @@ Nightly backup cron:
 
 Once, in this order, on the server from `~/Documents/Projects/makhzan`:
 
+0. **Back up the database:** `./makhzan backup`. The regroup in step 4 rewrites
+   every product row; this is the way back.
 1. **Set `SITE_URL`** in `.env.prod`: `SITE_URL=https://makhzan.merope.dev`.
    `deploy.sh` stops without it.
 2. **Merge the code and wait for `build.yml` to publish the images** before
@@ -172,10 +174,19 @@ Once, in this order, on the server from `~/Documents/Projects/makhzan`:
    ```
 
    Product ids follow group keys (`docs/decisions/0004-stable-product-ids.md`), so
-   the products the new rules split off get new ids, about 1,000, once; on the
-   local snapshot 21 shared products lose their old id. Never `worker.backfill`
-   here: it erases crosswalk categories.
-5. **Resume the crawl:** `./makhzan crawl on`. Categories, specs and the other
+   the products the new rules regroup get new ids: about 430 on the local
+   snapshot. Their old URLs keep working: the rebuild records where each one's
+   offers went (`product_redirects`, created by this release's migration) and the
+   product page answers an old id with a 308. That only holds if this release's
+   images are what runs the regroup, which is why it comes after step 3. Never
+   `worker.backfill` here: it erases crosswalk categories.
+5. **Check it:**
+   - `./makhzan status`: containers healthy, the search index in step with the
+     database ("drift" none), the regroup's product count.
+   - The site: home, a product, `/trades`, `/shops`, light and dark.
+   - Old URLs: `curl -sI https://makhzan.merope.dev/en/browse/electronics` answers
+     308 to `/trades/electronics`.
+6. **Resume the crawl:** `./makhzan crawl on`. Categories, specs and the other
    enrichment, and the removal of non-products, land as each source is
    re-crawled: one cycle per source, about a week. Two sources still block the
    server's address and will not refresh until their shops allowlist it.

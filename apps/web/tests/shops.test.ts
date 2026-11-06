@@ -127,7 +127,7 @@ describe("a shop's listing as a result", () => {
 
 describe("supplier requests", () => {
   it("offers remove first, then add and correct", () => {
-    expect(supplierRequests.map((r) => r.id)).toEqual(["remove", "add", "correct"]);
+    expect(supplierRequests.map((r) => r.id)).toEqual(["remove", "add", "correct", "schedule"]);
   });
 
   it("promises removal within 7 days", () => {

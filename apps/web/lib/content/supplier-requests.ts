@@ -10,7 +10,7 @@ import { CONTACT_EMAIL } from "@/lib/content/crawling";
  */
 
 export type SupplierRequest = {
-  id: "remove" | "add" | "correct";
+  id: "remove" | "add" | "correct" | "schedule";
   title: string;
   /** What happens, in one or two sentences. */
   summary: string;
@@ -87,6 +87,24 @@ export const supplierRequests: SupplierRequest[] = [
       "Opening hours:",
       "",
       "Wrong prices or categories (links to the products, and what is wrong):",
+    ].join("\n"),
+  },
+  {
+    id: "schedule",
+    title: "Change when or how fast we crawl",
+    summary:
+      "By default we read your site early in the morning, Egypt time, one page every 15 seconds or slower. Ask for another hour, a slower pace, or fewer pages a day.",
+    action: "Ask for a different schedule",
+    subject: "Change how makhzan crawls my shop",
+    body: [
+      "Please change how makhzan crawls my shop.",
+      "",
+      "Shop name:",
+      "Shop website:",
+      "",
+      "Preferred hours (Egypt time):",
+      "Slowest pace you would like (seconds between requests):",
+      "Most pages per day:",
     ].join("\n"),
   },
 ];
