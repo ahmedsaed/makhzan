@@ -1,41 +1,57 @@
-import { getDictionary, type Lang } from "@/lib/i18n";
+import { Search } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 
 /**
- * A plain GET form. No client state, no JS: submitting navigates to the search
- * route, which is a real URL that can be shared, bookmarked and indexed.
+ * A plain GET form. No client state, no JS: submitting navigates to /search,
+ * which is a real URL that can be shared, bookmarked and indexed.
+ *
+ * `compact` is the header's field; the default is the home page's big one,
+ * which also gets a visible submit button.
  */
 export function SearchField({
-  lang,
   defaultValue = "",
-  placeholder,
-  className,
+  placeholder = "Part number or name",
+  compact = false,
   autoFocus = false,
+  className,
 }: {
-  lang: Lang;
   defaultValue?: string;
   placeholder?: string;
-  className?: string;
+  compact?: boolean;
   autoFocus?: boolean;
+  className?: string;
 }) {
-  const t = getDictionary(lang);
   return (
-    <form action={`/${lang}/search`} method="get" role="search" className={cn("flex gap-2", className)}>
-      <input
-        type="search"
-        name="q"
-        dir="auto"
-        defaultValue={defaultValue}
-        autoFocus={autoFocus}
-        aria-label={t.searchAction}
-        placeholder={placeholder ?? t.searchPlaceholder}
-        className="h-9 min-w-0 flex-1 rounded-lg border border-rule bg-ground px-3 text-sm text-ink placeholder:text-ink-muted"
-      />
+    <form action="/search" method="get" role="search" className={cn("flex gap-2", className)}>
+      <label
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 rounded-control border border-line-strong bg-ground px-3 focus-within:border-ink-3",
+          compact ? "h-11" : "h-13",
+        )}
+      >
+        <Search aria-hidden="true" className="size-[18px] shrink-0 text-ink-2" />
+        <span className="sr-only">Search</span>
+        <input
+          type="search"
+          name="q"
+          // `auto`: an Arabic query (they still work) types right to left.
+          dir="auto"
+          defaultValue={defaultValue}
+          autoFocus={autoFocus}
+          placeholder={placeholder}
+          // 16px keeps iOS from zooming the page when the field takes focus.
+          className="h-full min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-ink-3"
+        />
+      </label>
       <button
         type="submit"
-        className="h-9 shrink-0 rounded-lg border border-accent bg-accent px-4 text-sm font-semibold whitespace-nowrap text-accent-ink"
+        className={cn(
+          "shrink-0 rounded-control bg-action px-5 font-semibold whitespace-nowrap text-action-ink",
+          compact ? "sr-only" : "h-13 text-base",
+        )}
       >
-        {t.searchAction}
+        Search
       </button>
     </form>
   );
