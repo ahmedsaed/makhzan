@@ -1,24 +1,60 @@
 "use client";
 
-import { Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { useSyncExternalStore } from "react";
+
+import { cn } from "@/lib/utils";
+
+const OPTIONS = [
+  { value: "system", label: "Device", Icon: Monitor },
+  { value: "light", label: "Light", Icon: Sun },
+  { value: "dark", label: "Dark", Icon: Moon },
+] as const;
+
+const noop = () => () => {};
 
 /**
- * Same shell as every other header control, so the row lines up. Swapping the
- * icon via the `dark` class rather than mounted state avoids a flash and keeps
- * this renderable on the server.
+ * Light and dark follow the device; this overrides it, and "Device" hands the
+ * choice back — a two-way toggle would strand anyone who touched it on a fixed
+ * theme forever.
+ *
+ * The chosen option is only marked after hydration: the server cannot know a
+ * stored preference, and marking "Device" there would flash the wrong one.
  */
-export function ThemeToggle({ label }: { label: string }) {
-  const { resolvedTheme, setTheme } = useTheme();
+export function ThemeToggle({ className }: { className?: string }) {
+  const { theme, setTheme } = useTheme();
+  const hydrated = useSyncExternalStore(
+    noop,
+    () => true,
+    () => false,
+  );
+
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-rule text-ink-muted hover:bg-chip hover:text-ink"
+    <div
+      role="group"
+      aria-label="Theme"
+      className={cn("flex overflow-hidden rounded-full border border-line-strong", className)}
     >
-      <Sun className="hidden size-4 dark:block" />
-      <Moon className="block size-4 dark:hidden" />
-    </button>
+      {OPTIONS.map(({ value, label, Icon }) => {
+        const active = hydrated && (theme ?? "system") === value;
+        return (
+          <button
+            key={value}
+            type="button"
+            aria-label={label}
+            aria-pressed={hydrated ? active : undefined}
+            title={label}
+            onClick={() => setTheme(value)}
+            className={cn(
+              "grid size-11 place-items-center sm:size-9",
+              active ? "bg-chip-on text-chip-on-ink" : "text-ink-2 hover:text-ink",
+            )}
+          >
+            <Icon aria-hidden="true" className="size-4" />
+          </button>
+        );
+      })}
+    </div>
   );
 }
