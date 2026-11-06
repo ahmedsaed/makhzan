@@ -208,8 +208,142 @@ test("an offer with no price stays visible and is not shown as free", async ({ p
   await expect(page.getByText(/EGP\s*0(\.00)?\b/)).toHaveCount(0);
 });
 
+test.describe("what the shop published (C4)", () => {
+  test("specs, datasheets and brand, each labelled with its source", async ({ page }) => {
+    await page.goto("/products/p-specs");
+    await expect(page.locator("[data-brand]")).toHaveText("Brand · UNI-T");
+
+    const specs = page.locator("[data-specs]");
+    await expect(specs.getByRole("heading", { name: "Specifications" })).toBeVisible();
+    await expect(specs).toContainText("From Nile Parts's listing");
+    await expect(specs.locator("dt")).toHaveText(["Model", "DC Voltage", "Display"]);
+    await expect(specs.locator("dd")).toHaveText(["UT61E", "220mV – 1000V", "22000 counts"]);
+    // Monospace only where the value is a part number (S3).
+    await expect(specs.locator("[data-identifier]")).toHaveText(["UT61E"]);
+
+    const sheets = page.locator("[data-datasheets]");
+    await expect(sheets.getByRole("heading", { name: "Datasheets" })).toBeVisible();
+    await expect(sheets).toContainText("From Nile Parts's listing");
+    const links = sheets.locator("[data-datasheet]");
+    await expect(links).toHaveText(["UT61E user manual", "ut61e-datasheet.pdf"]);
+    // Each opens the file on the shop's site, through the one way out (P4).
+    await expect(links.first()).toHaveAttribute(
+      "href",
+      "https://nile-parts.test/files/ut61e-manual.pdf?ref=makhzan",
+    );
+    await expect(links.last()).toHaveAttribute(
+      "href",
+      "https://nile-parts.test/files/ut61e-datasheet.pdf?ref=makhzan",
+    );
+    await expect(links.first()).toHaveAttribute("target", "_blank");
+    await expect(links.first().locator("svg")).toHaveCount(1);
+  });
+
+  test("a wide screen puts them in the left column, under the description", async ({ page }) => {
+    await page.goto("/products/p-specs");
+    const description = (await page.locator("[data-description]").boundingBox())!;
+    const specs = (await page.locator("[data-specs]").boundingBox())!;
+    const title = (await page.locator("h1").boundingBox())!;
+    expect(specs.y).toBeGreaterThan(description.y + description.height - 1);
+    expect(specs.x).toBeCloseTo(description.x, 0);
+    expect(specs.x + specs.width).toBeLessThan(title.x);
+  });
+
+  test("a phone shows them after the description", async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-specs");
+    const description = (await page.locator("[data-description]").boundingBox())!;
+    const specs = (await page.locator("[data-specs]").boundingBox())!;
+    const sheets = (await page.locator("[data-datasheets]").boundingBox())!;
+    expect(specs.y).toBeGreaterThan(description.y + description.height - 1);
+    expect(sheets.y).toBeGreaterThan(specs.y + specs.height - 1);
+  });
+
+  test("a product whose shop published none has no section, not an empty one", async ({ page }) => {
+    await page.goto("/products/p-single");
+    await expect(page.locator("[data-description]")).toBeVisible();
+    await expect(page.locator("[data-specs]")).toHaveCount(0);
+    await expect(page.locator("[data-datasheets]")).toHaveCount(0);
+    await expect(page.locator("[data-brand]")).toHaveCount(0);
+    await expect(page.locator("dl, table")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Specifications" })).toHaveCount(0);
+  });
+
+  test("several shops: only the lead offer's, named", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    const specs = page.locator("[data-specs]");
+    await expect(specs).toContainText("From Delta Bench's listing");
+    await expect(specs.locator("dt")).toHaveText(["Flash Memory", "GPIO Pins"]);
+    await expect(page.getByText("USB Chip")).toHaveCount(0);
+    await expect(page.locator("[data-datasheets]")).toHaveCount(0);
+  });
+});
+
+test.describe("full-size photos", () => {
+  // 1x1 PNG: enough for the browser to decode and fire `load`.
+  const PIXEL = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const MEDIA = "https://media.nile-parts.test/uploads";
+  const THUMB = (stem: string) => `${MEDIA}/cache/2025-01-10/product/image/${stem}-q-80-h-150.webp`;
+
+  /** The front photo's original is a .png (the .jpeg guess 404s); the back's
+   *  original is gone altogether. Returns every URL the browser asked for. */
+  async function serveMedia(page: import("@playwright/test").Page): Promise<string[]> {
+    const requested: string[] = [];
+    await page.route(`${MEDIA}/**`, (route) => {
+      const url = route.request().url();
+      requested.push(url);
+      const found = url.endsWith("-q-80-h-150.webp") || url.endsWith("/ut61e-front.png");
+      return found
+        ? route.fulfill({ status: 200, contentType: "image/png", body: PIXEL })
+        : route.fulfill({ status: 404, contentType: "text/plain", body: "not found" });
+    });
+    return requested;
+  }
+
+  test("the gallery swaps in the original, and keeps the thumbnail when there is none", async ({
+    page,
+  }) => {
+    const requested = await serveMedia(page);
+    await page.goto("/products/p-specs");
+    const photos = page.locator("[data-gallery] img");
+    await expect(photos.first()).toHaveAttribute(
+      "src",
+      `${MEDIA}/2025-01-10/product/image/ut61e-front.png`,
+    );
+    await expect(photos.nth(1)).toHaveAttribute("src", THUMB("ut61e-back"));
+    // .jpeg is tried first, then .png; a failed guess never shows as broken.
+    const front = requested.filter((url) => url.includes("/image/ut61e-front."));
+    expect(front).toEqual([
+      `${MEDIA}/2025-01-10/product/image/ut61e-front.jpeg`,
+      `${MEDIA}/2025-01-10/product/image/ut61e-front.png`,
+    ]);
+    await expect(page.locator("[data-gallery] [data-media]").first()).toHaveAttribute(
+      "data-media",
+      "photo",
+    );
+  });
+
+  test.describe("without JavaScript", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("the thumbnail is still there", async ({ page }) => {
+      await serveMedia(page);
+      await page.goto("/products/p-specs");
+      await expect(page.locator("[data-gallery] img")).toHaveCount(2);
+      await expect(page.locator("[data-gallery] img").first()).toHaveAttribute(
+        "src",
+        THUMB("ut61e-front"),
+      );
+    });
+  });
+});
+
 test("every link out of makhzan carries ref=makhzan (P4)", async ({ page }) => {
   for (const path of [
+    "/products/p-specs",
     "/products/p-single",
     "/products/p-multi",
     "/products/p-oos",

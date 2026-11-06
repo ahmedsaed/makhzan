@@ -102,6 +102,21 @@ export type Offer = {
   images: string[];
   last_verified_at: string;
   supplier: Supplier | null;
+  /** The brand the shop names, when it names one. */
+  brand?: string | null;
+} & ShopDetailsFields;
+
+/** A file a shop links from its listing: a datasheet, a manual. */
+export type ShopDocument = { url: string; label: string | null };
+
+/**
+ * What the shop published about its listing beyond title and price: its own
+ * spec rows and the files it links. Empty when it published none (most do not).
+ * Optional so the page keeps working against an API that predates them.
+ */
+type ShopDetailsFields = {
+  specs?: Record<string, string>;
+  documents?: ShopDocument[];
 };
 
 export type Product = ProductSummary & { offers: Offer[] };
@@ -127,7 +142,7 @@ export type Listing = {
   last_verified_at: string;
   supplier: Supplier | null;
   category: CategoryRef | null;
-};
+} & ShopDetailsFields;
 
 /** A search hit is the flat Meilisearch document, not a ProductSummary. */
 export type SearchHit = {

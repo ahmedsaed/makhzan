@@ -25,12 +25,15 @@ import {
 import { formatCount, formatPrice, formatPriceRange, plural } from "@/lib/format";
 import { freshnessTier, parseVerified } from "@/lib/freshness";
 import {
+  brandOf,
   categoryTrail,
   galleryImages,
   isInStock,
   jsonLdText,
+  leadOffer,
   primaryOffer,
   productJsonLd,
+  shopDetails,
   splitOffers,
   summarizeOffers,
   summaryText,
@@ -43,6 +46,7 @@ import { cn } from "@/lib/utils";
 import { Description } from "./description";
 import { Gallery } from "./gallery";
 import { Offers } from "./offers";
+import { ShopDetails } from "./shop-details";
 
 /**
  * One product: where a buyer decides, and leaves for the shop.
@@ -103,8 +107,11 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const title = displayTitle(product);
   const several = product.offers.length >= 2;
   const primary = primaryOffer(product.offers);
-  // The description shown is the primary offer's: the shop the button opens.
-  const described = primary ?? product.offers[0];
+  // The description, specs and datasheets shown are the primary offer's: the
+  // shop the button opens.
+  const described = leadOffer(product.offers) ?? product.offers[0];
+  const details = shopDetails(product);
+  const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
 
   // Everything but the product itself is garnish: a failure there must not
@@ -189,6 +196,11 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
                   </span>
                 </p>
               )}
+              {brand && (
+                <p data-brand className="text-[13px] text-ink-2 lg:text-sm">
+                  Brand · <span className="text-ink">{brand}</span>
+                </p>
+              )}
             </div>
           </div>
 
@@ -202,18 +214,21 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           )}
         </div>
 
-        {description && (
+        {(description || details) && (
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
-            <Description
-              heading={
-                !several
-                  ? "From the shop's description"
-                  : primary && isInStock(primary.stock_signal)
-                    ? "From the cheapest shop's description"
-                    : `From ${described.supplier?.name ?? "the shop"}'s description`
-              }
-              text={description}
-            />
+            {description && (
+              <Description
+                heading={
+                  !several
+                    ? "From the shop's description"
+                    : primary && isInStock(primary.stock_signal)
+                      ? "From the cheapest shop's description"
+                      : `From ${described.supplier?.name ?? "the shop"}'s description`
+                }
+                text={description}
+              />
+            )}
+            {details && <ShopDetails details={details} />}
           </div>
         )}
       </div>

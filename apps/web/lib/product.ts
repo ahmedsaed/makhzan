@@ -131,6 +131,76 @@ export function galleryImages(product: Product): string[] {
   return unique.slice(0, MAX_PHOTOS);
 }
 
+// --------------------------------------------------------------------------- //
+// What the shop published: brand, specs, datasheets
+// --------------------------------------------------------------------------- //
+
+/**
+ * The offer the page leads with: the one the primary button and the bottom
+ * bar open, or the first offer when none of them can be opened. Its shop's
+ * description, specs and datasheets are the ones shown.
+ */
+export function leadOffer(offers: Offer[]): Offer | null {
+  return primaryOffer(offers) ?? offers[0] ?? null;
+}
+
+/** The brand, when known: the product's own, failing that the lead shop's. */
+export function brandOf(product: Product): string | null {
+  return product.brand || leadOffer(product.offers)?.brand || null;
+}
+
+export type SpecRow = { name: string; value: string; identifier: boolean };
+export type DatasheetLink = { url: string; label: string };
+
+export type ShopDetails = {
+  offer: Offer;
+  /** "Shop A", for "From Shop A's listing". */
+  shopName: string;
+  specs: SpecRow[];
+  datasheets: DatasheetLink[];
+};
+
+/** Names a shop gives the row that holds a part number. */
+const PART_NUMBER_NAME =
+  /^(?:manufacturer\s+)?(?:part(?:\s*(?:number|no\.?|#))?|model(?:\s*(?:number|no\.?|#))?|mpn|p\/n)$/i;
+/** …and what a part number looks like: one token, letters and digits. */
+const PART_NUMBER_VALUE = /^(?=.*\d)(?=.*[a-z])[a-z0-9][a-z0-9\-_./+#]{1,39}$/i;
+
+/** True when a spec row is a part number, to be set in the monospace face (S3). */
+export function isPartNumberSpec(name: string, value: string): boolean {
+  return PART_NUMBER_NAME.test(name.trim()) && PART_NUMBER_VALUE.test(value.trim());
+}
+
+/** A datasheet's label: the shop's link text, else the file's name. */
+export function datasheetLabel(url: string, label: string | null | undefined): string {
+  if (label?.trim()) return label.trim();
+  try {
+    const file = new URL(url).pathname.split("/").filter(Boolean).pop();
+    if (file) return decodeURIComponent(file);
+  } catch {
+    // Not a URL we can read a name from.
+  }
+  return "Datasheet";
+}
+
+/**
+ * The specs and datasheets to show, from the lead offer only (rule C4): never
+ * merged across shops, so every row has one source the page can name. Null
+ * when that shop published neither, and the page shows no section at all.
+ */
+export function shopDetails(product: Product): ShopDetails | null {
+  const offer = leadOffer(product.offers);
+  if (!offer) return null;
+  const specs = Object.entries(offer.specs ?? {})
+    .filter(([name, value]) => name.trim() && typeof value === "string" && value.trim())
+    .map(([name, value]) => ({ name, value, identifier: isPartNumberSpec(name, value) }));
+  const datasheets = (offer.documents ?? [])
+    .filter((doc) => /^https?:\/\//i.test(doc.url))
+    .map((doc) => ({ url: doc.url, label: datasheetLabel(doc.url, doc.label) }));
+  if (specs.length === 0 && datasheets.length === 0) return null;
+  return { offer, shopName: offer.supplier?.name ?? "the shop", specs, datasheets };
+}
+
 /**
  * Trade › group › category, walked up the category's parents. Every crumb is a
  * link: on a product page none of them is the current page.
