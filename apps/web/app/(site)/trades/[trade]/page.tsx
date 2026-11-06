@@ -38,9 +38,11 @@ export default async function TradePage({
   searchParams: Promise<RawParams>;
 }) {
   const { trade } = await params;
-  const categories = await fetchCategories(trade);
+  // A failed fetch is not an unknown trade: the page says the catalogue is not
+  // answering instead of claiming the trade does not exist.
+  const categories = await fetchCategories(trade).catch(() => null);
   // An unknown trade has no categories — that is a 404, not an empty page.
-  if (categories.length === 0) notFound();
+  if (categories?.length === 0) notFound();
 
   return <TradeBrowse trade={trade} categories={categories} params={await searchParams} />;
 }
