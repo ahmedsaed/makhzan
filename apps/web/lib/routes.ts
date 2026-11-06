@@ -11,7 +11,6 @@
  * the same thing, and only URLs and copy use the new name.
  */
 
-
 /** Split `domain:slug` into its parts. Returns null for a bare slug, which is
  *  not addressable. */
 export function splitRef(ref: string): { domain: string; slug: string } | null {
