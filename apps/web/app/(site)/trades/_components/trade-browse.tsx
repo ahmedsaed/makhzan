@@ -2,7 +2,6 @@ import { ChevronLeft } from "lucide-react";
 
 import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
 import { Link } from "@/components/link";
-import { ObjectTile } from "@/components/object-tile";
 import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
 import { Container } from "@/components/section";
@@ -17,7 +16,10 @@ import {
   type RawParams,
   type ResultsQuery,
 } from "@/lib/results-query";
-import { totalOf, tradeLabel, tradeTree, type TradeNode } from "@/lib/trades";
+import { asPhrase, totalOf, tradeLabel, tradeTree, type TradeNode } from "@/lib/trades";
+import { cn } from "@/lib/utils";
+
+import { balancedColumns, BrowseTile } from "./browse-tile";
 
 export type { RawParams };
 
@@ -84,14 +86,26 @@ export async function TradeBrowse({
   const shelfTitle = tree.group
     ? `${categoryNameOf(tree.group)} · ${formatCount(tree.group.total)}`
     : `Biggest in ${label}`;
+  // From `lg` a group tile says what is inside it, as a trade does on /trades.
+  const inside = (group: TradeNode) =>
+    asPhrase(
+      categories
+        .filter((c) => c.parent === group.ref)
+        .map((c) => ({ name: categoryNameOf(c), total: totalOf(c.ref, categories) }))
+        .filter((c) => c.total > 0 && !/^other\b/i.test(c.name))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 3)
+        .map((c) => c.name),
+    ) || undefined;
   const tile = (node: TradeNode, size: "md" | "sm") => (
-    <ObjectTile
+    <BrowseTile
       key={node.ref}
       href={routes.category(node.ref)}
       label={categoryNameOf(node)}
       image={objectImage(node.ref)}
       icon={tradeIcon(trade)}
-      count={size === "sm" ? node.total : undefined}
+      count={node.total}
+      hint={size === "md" ? inside(node) : undefined}
       current={node.ref === (size === "md" ? tree.group?.ref : selected?.ref)}
       size={size}
     />
@@ -107,11 +121,16 @@ export async function TradeBrowse({
         crumbs={selected ? crumbs : undefined}
       >
         {tree.groups.length > 1 && (
-          // As many columns as fit at 76px, so a long group name ("Bearings &
-          // Transmission") wraps between words rather than inside one.
+          // On a phone as many columns as fit at 76px, so a long group name
+          // ("Bearings & Transmission") wraps between words rather than inside
+          // one. From `lg` the tiles lie on their side, in balanced rows.
           <nav
             aria-label="Groups"
-            className="grid grid-cols-[repeat(auto-fill,minmax(4.75rem,1fr))] gap-1.5 sm:grid-cols-6 lg:grid-cols-8"
+            style={columns(tree.groups.length, 4, 5)}
+            className={cn(
+              "grid grid-cols-[repeat(auto-fill,minmax(4.75rem,1fr))] gap-1.5 sm:grid-cols-6",
+              BALANCED,
+            )}
           >
             {tree.groups.map((group) => tile(group, "md"))}
           </nav>
@@ -126,7 +145,8 @@ export async function TradeBrowse({
             </h2>
             <nav
               aria-label="Categories"
-              className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10"
+              style={columns(shelf.length, 4, 6)}
+              className={cn("grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8", BALANCED)}
             >
               {shelf.map((node) => tile(node, "sm"))}
             </nav>
@@ -150,6 +170,17 @@ export async function TradeBrowse({
       </Container>
     </>
   );
+}
+
+/** From `lg`, a tile grid takes its column count from `--cols-lg` / `--cols-xl`. */
+const BALANCED =
+  "lg:grid-cols-[repeat(var(--cols-lg),minmax(0,1fr))] lg:gap-2 xl:grid-cols-[repeat(var(--cols-xl),minmax(0,1fr))]";
+
+function columns(count: number, lg: number, xl: number): React.CSSProperties {
+  return {
+    "--cols-lg": balancedColumns(count, lg),
+    "--cols-xl": balancedColumns(count, xl),
+  } as React.CSSProperties;
 }
 
 /**
@@ -208,21 +239,24 @@ function TradeHeader({
             All trades
           </Link>
         )}
-        <div className="flex items-baseline justify-between gap-3">
-          <h1 className="text-[26px] leading-tight">{heading}</h1>
-          {count !== undefined && (
-            <span data-catalogue-count className="shrink-0 text-[13px] text-ink-3 tabular">
-              {formatCount(count)} products
-            </span>
-          )}
+        {/* From `lg` the search sits beside the name rather than under it. */}
+        <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between lg:gap-6">
+          <div className="flex min-w-0 items-baseline justify-between gap-3 lg:justify-start">
+            <h1 className="text-[26px] leading-tight">{heading}</h1>
+            {count !== undefined && (
+              <span data-catalogue-count className="shrink-0 text-[13px] text-ink-3 tabular">
+                {formatCount(count)} products
+              </span>
+            )}
+          </div>
+          <SearchField
+            compact
+            label={`Search in ${label}`}
+            placeholder={`Search in ${label}`}
+            scope={{ domain: trade }}
+            className="md:max-w-xl lg:w-[26rem] lg:shrink-0"
+          />
         </div>
-        <SearchField
-          compact
-          label={`Search in ${label}`}
-          placeholder={`Search in ${label}`}
-          scope={{ domain: trade }}
-          className="md:max-w-xl"
-        />
         {children}
       </Container>
     </header>

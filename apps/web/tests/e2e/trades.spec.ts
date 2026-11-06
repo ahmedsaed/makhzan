@@ -13,14 +13,103 @@ test("all trades lists every trade by size", async ({ page }) => {
   await expect(page).toHaveTitle(/All trades/);
 });
 
+test("all trades is a directory across the whole width on a desktop", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/trades");
+  const directory = page.locator("ul:has(> [data-trade])");
+  expect((await directory.boundingBox())?.width).toBeGreaterThan(1000);
+
+  // The trade that holds most of the catalogue is mapped group by group.
+  const seals = page.locator("[data-trade=seals-bearings]");
+  await expect(seals).toHaveAttribute("data-major", "true");
+  await expect(seals.locator("[data-group]")).toHaveCount(2);
+  await expect(seals.getByRole("link", { name: /^Seals & Gaskets/ })).toHaveAttribute(
+    "href",
+    "/trades/seals-bearings/seals",
+  );
+  const oRings = seals.getByRole("link", { name: /^O-Rings/ });
+  await expect(oRings).toBeVisible();
+  await expect(oRings).toHaveText("O-Rings 400");
+  await expect(oRings).toHaveAttribute("href", "/trades/seals-bearings/o-rings");
+  // Biggest first, but the "Other" bucket last however big it is.
+  await expect(seals.locator("[data-group='seals-bearings:seals'] li")).toHaveText([
+    "O-Rings 400",
+    "Oil Seals 250",
+    "Gaskets 90",
+    "Other Seals 500",
+  ]);
+
+  // A smaller trade lists its categories as links too, and is not folded away.
+  const piping = page.locator("[data-trade=piping]");
+  await expect(piping).not.toHaveAttribute("data-major", "true");
+  await expect(piping.getByRole("link", { name: "Butterfly Valves 120" })).toHaveAttribute(
+    "href",
+    "/trades/piping/valves",
+  );
+  await expect(page.getByRole("button", { name: /^Categories in/ })).toHaveCount(0);
+});
+
+test("on a phone each trade is a row, its categories behind a chevron", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.goto("/trades");
+  const seals = page.locator("[data-trade=seals-bearings]");
+  await expect(seals.getByRole("link", { name: /Seals & Bearings/ })).toHaveAttribute(
+    "href",
+    "/trades/seals-bearings",
+  );
+  await expect(seals).toContainText("O-Rings, bearings, oil seals, gaskets");
+  const oRings = seals.getByRole("link", { name: "O-Rings 400" });
+  await expect(oRings).toBeHidden();
+
+  const toggle = seals.getByRole("button", { name: "Categories in Seals & Bearings" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect((await toggle.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(oRings).toBeVisible();
+  // Rule S4: a link in the list is a full finger's height.
+  expect((await oRings.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await oRings.click();
+  await expect(page).toHaveURL("/trades/seals-bearings/o-rings");
+});
+
+test("all trades does not scroll sideways at 320px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto("/trades");
+  await page.getByRole("button", { name: "Categories in Seals & Bearings" }).click();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
+test("a trade page fills a wide screen", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/trades/seals-bearings");
+  // The group tiles lie on their side across the page, not a strip of squares.
+  const groups = page.getByRole("navigation", { name: "Groups" });
+  expect((await groups.boundingBox())?.width).toBeGreaterThan(1000);
+  const tile = await groups.getByRole("link").first().boundingBox();
+  expect(tile!.width).toBeGreaterThan(tile!.height * 3);
+  // The search sits beside the name rather than under it.
+  const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
+  const search = await page
+    .getByRole("searchbox", { name: "Search in Seals & Bearings" })
+    .boundingBox();
+  expect(Math.abs(heading!.y - search!.y)).toBeLessThan(40);
+});
+
 test("a trade page shows its groups, its biggest categories and results", async ({ page }) => {
   await page.goto("/trades/seals-bearings");
   await expect(page).toHaveTitle(/Seals & Bearings/);
   await expect(page.getByRole("heading", { level: 1, name: "Seals & Bearings" })).toBeVisible();
 
-  // The empty Filtration group is not a tile: it would lead nowhere.
+  // The empty Filtration group is not a tile: it would lead nowhere. On a
+  // desktop a group tile also says how big it is and what is inside.
   const groups = page.getByRole("navigation", { name: "Groups" }).getByRole("link");
-  await expect(groups).toHaveText(["Seals & Gaskets", "Bearings & Transmission"]);
+  await expect(groups).toHaveText([/^Seals & Gaskets/, /^Bearings & Transmission/]);
+  await expect(groups.first()).toContainText("1,240");
+  await expect(groups.first()).toContainText("O-Rings, oil seals, gaskets");
   await expect(page.getByRole("navigation", { name: "Categories" }).getByRole("link")).toHaveCount(
     6,
   );
