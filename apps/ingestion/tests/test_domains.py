@@ -85,6 +85,44 @@ def test_electronics_profile_still_resolves_known_categories():
     assert electronics.resolve_category_slug(None, "assembled enclosure") != "leds"
 
 
+@pytest.mark.parametrize(
+    ("tags", "title", "expected"),
+    [
+        # A shop tag naming two leaves at once; the title decides.
+        (["3D Printer Filament"], "PLA Filament 1.75mm 1Kg Roll for 3D Printer", "filament"),
+        (["3D Printer Filament"], "Extrusion Nozzle for 3D Printer (0.4)", "printer-parts"),
+        (
+            ["3D Printer Filament"],
+            "CREALITY Ender-3 V2 3D Printer 220 x 220 x 250mm",
+            "printers-3d",
+        ),
+        # Something sold "for 3D Printer" is not a printer.
+        (None, "Anodized Aluminum Heated Bed Plate For 3D Printer", "printer-parts"),
+        (None, "ESUN PETG 3D Filament 1.75mm 1Kg Roll for 3D Printer", "filament"),
+        # "resin" is a filament word, but not in front of "printer".
+        (None, "ELEGOO Mars 5 Ultra 9K Resin 3D Printer", "printers-3d"),
+        (None, "Standard Resin V2.0 405nm 1Kg", "filament"),
+        (None, "Flashforge Adventurer 5M 3D Printer", "printers-3d"),
+    ],
+)
+def test_filament_and_printer_parts_win_over_a_printer_they_fit(tags, title, expected):
+    assert get_profile("electronics").resolve_category_slug(tags, title) == expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Steel V-Slot Gantry Plate", "Linear Shaft Chrome Plated 8mm", "Plastic Gear Set 61PCS"],
+)
+def test_short_filament_names_are_whole_words(title):
+    """As prefixes, "pla" and "abs" filed plates, plating and plastic as filament."""
+    assert get_profile("electronics").resolve_category_slug(None, title) != "filament"
+
+
+@pytest.mark.parametrize("title", ["PLA+ Filament 1.75mm", "eSUN ABS+ 1.75mm 1kg", "PLA 1kg"])
+def test_short_filament_names_still_match_the_material(title):
+    assert get_profile("electronics").resolve_category_slug(None, title) == "filament"
+
+
 def test_electronics_ranks_its_identifier_first():
     assert get_profile("electronics").search_attributes[0] == "part_number"
 

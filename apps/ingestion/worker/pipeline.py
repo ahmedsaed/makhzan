@@ -35,7 +35,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
-from worker.normalize import REVIEW_THRESHOLD
+from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import SourceAdapter, SupplierInfo
 
 
@@ -145,8 +145,13 @@ async def _ingest_item(
     cat_index: dict,
     raw,
     observed: Counter | None = None,
-) -> None:
-    """Normalize and upsert one item, or route it to review. Raises on bad items."""
+) -> str | None:
+    """Normalize and upsert one item, or route it to review. Raises on bad items.
+
+    Returns why the item was skipped as not a product, if it was. A skipped
+    entry is never upserted, so one already stored stops being verified and is
+    archived when the cycle completes — the same path as stock the shop dropped.
+    """
     default_domain = adapter.supplier.domain
 
     # Resolve the category first when the source is authoritative: the crosswalk
@@ -157,8 +162,12 @@ async def _ingest_item(
     # A mapping is a fact and inference is a guess, so try the crosswalk first
     # whatever kind of source this is. Resolving it before normalization also
     # means identifier extraction runs under the item's own domain.
+    source_categories = adapter.source_categories(raw)
     if observed is not None:
-        observed.update(adapter.source_categories(raw))
+        observed.update(source_categories)
+    skip = not_a_product(raw.title, source_categories)
+    if skip:
+        return skip
     mapped = adapter.category_for(raw)
     domain = mapped[0] if mapped else default_domain
     slug = mapped[1] if mapped else None
@@ -178,7 +187,7 @@ async def _ingest_item(
             )
         )
         run.items_for_review += 1
-        return
+        return None
 
     listing, created = await _upsert_listing(session, adapter, supplier_id, norm)
 
@@ -204,6 +213,7 @@ async def _ingest_item(
         run.items_created += 1
     else:
         run.items_updated += 1
+    return None
 
 
 async def _sweep_partition(
@@ -218,6 +228,7 @@ async def _sweep_partition(
     errors: list[str],
     observed: Counter | None = None,
     resumed: list[bool] | None = None,
+    not_products: Counter | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
 
@@ -258,7 +269,11 @@ async def _sweep_partition(
                 break
             run.items_seen += 1
             try:
-                await _ingest_item(session, run, adapter, supplier_id, cat_index, raw, observed)
+                skipped = await _ingest_item(
+                    session, run, adapter, supplier_id, cat_index, raw, observed
+                )
+                if skipped and not_products is not None:
+                    not_products[f"{raw.title} ({skipped})"] += 1
             except Exception as exc:  # noqa: BLE001 — one bad item must not kill the run
                 run.items_failed += 1
                 errors.append(str(exc))
@@ -433,6 +448,7 @@ async def _run(
         fetch_failed = False
         observed: Counter = Counter()
         resumed: list[bool] = []
+        not_products: Counter = Counter()
         for partition in partitions:
             failed = await _sweep_partition(
                 session,
@@ -445,6 +461,7 @@ async def _run(
                 errors=errors,
                 observed=observed,
                 resumed=resumed,
+                not_products=not_products,
             )
             fetch_failed = fetch_failed or failed
 
@@ -459,6 +476,9 @@ async def _run(
             stats["archived"] = archived
         if cycle:
             stats["cycle"] = cycle
+        if not_products:
+            # Named, so a wrongly skipped real product is visible in the run.
+            stats["not_products"] = dict(not_products.most_common(25))
         # "Never matched" only means "retired" when this run swept the whole
         # catalogue itself. Two ways it might not have: it resumed mid-partition
         # (so it never saw the earlier pages), or — for a paced source — it only

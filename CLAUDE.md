@@ -199,6 +199,12 @@ across every tag; never read a fixed position. The same ordering is why a generi
 bucket must never be mapped: `category_for` takes the first tag that matches, and
 "Accessories" sorts ahead of the "Sensors" beside it.
 
+When two *mapped* tags disagree, a crosswalk's top-level `prefer = [...]` ranks the
+ones that should win, ahead of the alphabet: shop 2's "Displays (LCD & 7-Seg &
+LED)" sorts before its "LEDs", and filed 33 plain 3 mm LEDs as displays until
+`prefer = ["LEDs"]`. A preference is global to that shop, so before adding one,
+list every listing that carries both tags and read what moves.
+
 **A tag name is a hint; check what is actually under it.** Shop 1's "3D Printer
 Filament" holds 94 listings of which 21 are filament — the rest are bearings,
 nozzles and a stepper driver. The Shopify shop's `product_type: "ic"` covers real ICs but also
