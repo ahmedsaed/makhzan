@@ -1,6 +1,5 @@
 import { ChevronRight, ExternalLink } from "lucide-react";
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 
 import { Breadcrumb } from "@/components/breadcrumb";
@@ -37,6 +36,7 @@ import {
   summaryText,
 } from "@/lib/product";
 import { routes } from "@/lib/routes";
+import { absoluteUrl } from "@/lib/site";
 import { tradeLabel } from "@/lib/trades";
 import { cn } from "@/lib/utils";
 
@@ -109,12 +109,11 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
   // Everything but the product itself is garnish: a failure there must not
   // take the page down with it.
-  const [similar, categories, listing, shop, url] = await Promise.all([
+  const [similar, categories, listing, shop] = await Promise.all([
     fetchSimilar(id, 8).catch(() => []),
     product.category ? fetchCategories().catch(() => []) : Promise.resolve([]),
     fetchListing(described.id).catch(() => null),
     soleShop ? fetchSupplier(soleShop).catch(() => null) : Promise.resolve(null),
-    pageUrl(routes.product(id)),
   ]);
   const description = listing?.description_en || listing?.description_ar || null;
   const images = galleryImages(product);
@@ -123,7 +122,9 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
     <Container className="pt-3 pb-8 lg:pt-4 lg:pb-12">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLdText(productJsonLd(product, url, title)) }}
+        dangerouslySetInnerHTML={{
+          __html: jsonLdText(productJsonLd(product, absoluteUrl(routes.product(id)), title)),
+        }}
       />
       {product.category && (
         <Breadcrumb
@@ -234,18 +235,6 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       {primary && <BottomBar offer={primary} now={now} />}
     </Container>
   );
-}
-
-/**
- * The page's own absolute URL, for structured data. From the request rather
- * than configuration: the same build serves every host it is deployed on.
- */
-async function pageUrl(path: string): Promise<string> {
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  if (!host) return path;
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}${path}`;
 }
 
 const PRIMARY =

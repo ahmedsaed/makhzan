@@ -4,6 +4,7 @@ import { Archivo, IBM_Plex_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { SiteFooter } from "@/components/site-footer";
 import { ThemeProvider } from "@/components/theme-provider";
+import { siteUrl } from "@/lib/site";
 
 /**
  * The document. English only, so `lang` is fixed: Arabic titles make up 0.1% of
@@ -45,14 +46,21 @@ const plexMono = IBM_Plex_Mono({
 // attributes ShopLink puts on every link out.
 const umamiWebsiteId = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
 
-export const metadata: Metadata = {
-  title: {
-    default: "makhzan — find parts across Egypt's shops",
-    template: "%s · makhzan",
-  },
-  description:
-    "One search across Egyptian hardware and electronics shops. Every price shows when it was last checked; buying happens on the shop's own site.",
-};
+/** A function, not a constant, so `SITE_URL` is read when a page renders
+ *  rather than when the build evaluates this module. */
+export function generateMetadata(): Metadata {
+  return {
+    // Every relative canonical resolves against this: the configured public
+    // origin, never the Host header of whoever asked.
+    metadataBase: siteUrl(),
+    title: {
+      default: "makhzan — find parts across Egypt's shops",
+      template: "%s · makhzan",
+    },
+    description:
+      "One search across Egyptian hardware and electronics shops. Every price shows when it was last checked; buying happens on the shop's own site.",
+  };
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
