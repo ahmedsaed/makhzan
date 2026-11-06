@@ -53,6 +53,7 @@ class WooCommerceAdapter(SourceAdapter):
         max_pages_per_run: int | None = None,
         max_partitions_per_run: int | None = None,
         categories: dict[str, tuple[str, str]] | None = None,
+        prefer: tuple[str, ...] | list[str] = (),
     ) -> None:
         self.source_id = source_id
         self.base_url = base_url.rstrip("/")
@@ -65,6 +66,8 @@ class WooCommerceAdapter(SourceAdapter):
         # Indexed by normalized name so a shop re-typing "Diodes - General
         # Purpose" with an en-dash does not silently uncategorize it.
         self._folded_categories = fold_crosswalk(self.categories)
+        #: Normalized tag name -> rank, for the tags that win a conflict.
+        self._preference = {normalize_category_name(name): i for i, name in enumerate(prefer)}
         if polite_delay is not None:
             self.polite_delay = polite_delay
         if max_pages_per_run is not None:
@@ -83,17 +86,31 @@ class WooCommerceAdapter(SourceAdapter):
         "Ceramic Capacitors", "Components"] ends on the vaguest of the three.
         Instead every tag is looked up and unmapped ones are ignored, which is
         what keeps generic buckets and package facets ("0805") out of the way.
+
+        When two mapped tags disagree, the crosswalk's `prefer` list decides, and
+        only then the alphabet. Alphabetical order alone filed one shop's plain
+        3 mm LEDs under Displays — "Displays ( LCD & 7-Seg & LED )" sorts before
+        "LEDs" — and its filament and stepper motors under "CNC & 3D Printer
+        Parts". Which of two tags is the more specific is a judgement about that
+        shop's taxonomy, so it is written down in the shop's crosswalk.
         """
         if not self._folded_categories:
             return None
-        for name in (raw.raw or {}).get("categories") or []:
+        best: tuple[int, tuple[str, str]] | None = None
+        for position, name in enumerate((raw.raw or {}).get("categories") or []):
             # Names arrive HTML-escaped ("Spare Parts &amp; Accessories") and with
             # whatever punctuation the CMS last rewrote them with; the crosswalk
             # is written in readable form and matched through the normalizer.
-            mapped = self._folded_categories.get(normalize_category_name(name))
-            if mapped:
-                return mapped
-        return None
+            key = normalize_category_name(name)
+            mapped = self._folded_categories.get(key)
+            if not mapped:
+                continue
+            # Preferred tags rank ahead of every unpreferred one, which keep the
+            # source's own order among themselves.
+            rank = self._preference.get(key, len(self._preference) + position)
+            if best is None or rank < best[0]:
+                best = (rank, mapped)
+        return best[1] if best else None
 
     def partitions(self) -> list[str]:
         # One partition per stock status: the default feed hides out-of-stock on

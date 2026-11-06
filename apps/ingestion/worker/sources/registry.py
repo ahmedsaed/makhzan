@@ -60,7 +60,7 @@ def build_adapter(source: Source) -> SourceAdapter:
     not accept is a TypeError here rather than a setting silently ignored. The
     one key resolved on the way is `crosswalk`, a file name, which becomes the
     `categories` table — and, for a source browsed by category, the
-    `partition_keys` to sweep.
+    `partition_keys` to sweep, or for a tag-cloud source its `prefer` order.
     """
     options = dict(source.config or {})
     crosswalk = options.pop("crosswalk", None)
@@ -69,6 +69,10 @@ def build_adapter(source: Source) -> SourceAdapter:
         options["categories"] = loaded.categories
         if loaded.partitions:
             options["partition_keys"] = loaded.partitions
+        if loaded.prefer:
+            # Only a source that reads several tags per listing takes this; any
+            # other adapter refuses the keyword, which is the right failure.
+            options["prefer"] = loaded.prefer
     if source.base_url is not None:
         options["base_url"] = source.base_url
     return adapter_class(source.adapter)(
