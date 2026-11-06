@@ -35,7 +35,10 @@ export default async function CategoryPage({
 }) {
   const { trade, category: slug } = await params;
   const ref = joinRef(trade, slug);
-  const categories = await fetchCategories(trade);
+  const categories = await fetchCategories(trade).catch(() => null);
+  // Without the taxonomy there is no telling whether the category exists, so
+  // the page degrades to the trade's "not answering" state rather than a 404.
+  if (!categories) return <TradeBrowse trade={trade} categories={null} params={{}} />;
   const category = categories.find((c) => c.ref === ref);
   if (!category) notFound();
 

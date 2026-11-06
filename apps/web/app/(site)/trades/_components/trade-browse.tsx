@@ -1,27 +1,25 @@
 import { ChevronLeft } from "lucide-react";
 
 import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
-import { Chip, ChipBar } from "@/components/chips";
 import { Link } from "@/components/link";
 import { ObjectTile } from "@/components/object-tile";
-import { ResultList, ViewToggle } from "@/components/result-list";
+import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
-import { Container, Empty } from "@/components/section";
-import { SortMenu } from "@/components/sort-menu";
+import { Container } from "@/components/section";
 import { tradeIcon } from "@/components/trade-icon";
-import { categoryNameOf, searchProducts, type Category } from "@/lib/api";
+import { categoryNameOf, type Category } from "@/lib/api";
 import { objectImage } from "@/lib/content/category-images";
 import { formatCount } from "@/lib/format";
-import { routes, withParams } from "@/lib/routes";
+import { routes } from "@/lib/routes";
+import {
+  fetchResults,
+  parseResultsQuery,
+  type RawParams,
+  type ResultsQuery,
+} from "@/lib/results-query";
 import { totalOf, tradeLabel, tradeTree, type TradeNode } from "@/lib/trades";
 
-const PAGE_SIZE = 24;
-
-export type RawParams = Record<string, string | string[] | undefined>;
-
-function one(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
+export type { RawParams };
 
 /**
  * A trade, or one of its categories: the same page, narrowed. The header names
@@ -29,9 +27,14 @@ function one(value: string | string[] | undefined): string | undefined {
  * group's categories smaller ones; and the results start straight away, so no
  * page here is a dead-end list of links.
  *
- * The URL is the only state, with the search page's parameters: `in_stock`
- * (on unless `false` — out of stock is hidden by default, rule C2),
- * `min_suppliers`, `sort` and `offset`.
+ * The results are the search page's (components/results.tsx), on the same URL
+ * contract (lib/results-query.ts), with the trade — and on a category page the
+ * category — fixed by the path. `?category=` may narrow further, but only to
+ * something inside the page's own category; anything else is ignored rather
+ * than allowed to show another trade's products under this one's name.
+ *
+ * `categories` is null when the taxonomy could not be fetched: the page then
+ * says so instead of failing.
  */
 export async function TradeBrowse({
   trade,
@@ -40,41 +43,31 @@ export async function TradeBrowse({
   params,
 }: {
   trade: string;
-  /** The trade's whole slice of the taxonomy. */
-  categories: Category[];
+  /** The trade's whole slice of the taxonomy, or null if it is unavailable. */
+  categories: Category[] | null;
   /** The category the page is narrowed to; null on the trade's own page. */
   selected?: Category | null;
   params: RawParams;
 }) {
   const label = tradeLabel(trade);
+  if (!categories) {
+    return (
+      <>
+        <TradeHeader trade={trade} heading={label} />
+        <Container className="py-3.5">
+          <NotAnswering title="The catalogue is not answering" />
+        </Container>
+      </>
+    );
+  }
+
   const tree = tradeTree(categories, selected?.ref ?? null);
   const pathname = selected ? routes.category(selected.ref) : routes.trade(trade);
-
-  // Search filters on one exact category, so a group — whose products are
-  // filed on its children — cannot narrow the results; it shows the trade's.
-  const isGroup = selected ? categories.some((c) => c.parent === selected.ref) : false;
-  const offsetRaw = Number.parseInt(one(params.offset) ?? "", 10);
-  const query = {
-    domain: trade,
-    category: selected && !isGroup ? selected.ref : undefined,
-    inStock: one(params.in_stock) !== "false",
-    minSuppliers: one(params.min_suppliers) ? 2 : undefined,
-    sort: one(params.sort) || undefined,
-    offset: Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0,
-  };
-
-  // The second query only counts what "In stock" is hiding, so the page can
-  // say how many (C2). Skipped when nothing is being hidden.
-  const [result, everything] = await Promise.all([
-    searchProducts({ ...query, limit: PAGE_SIZE }),
-    query.inStock ? searchProducts({ ...query, inStock: false, offset: 0, limit: 1 }) : null,
-  ]);
-  const total = result.total ?? 0;
-  const hidden =
-    everything?.total != null && result.total != null ? Math.max(0, everything.total - total) : 0;
-  const showAll = withParams(pathname, params, { in_stock: "false" });
+  const query = scopedQuery(params, trade, categories, selected);
+  const data = await fetchResults(query, { baseCategory: selected?.ref });
 
   const heading = selected ? categoryNameOf(selected) : label;
+  // The taxonomy's count, in and out of stock; the toolbar counts what shows.
   const count = selected
     ? totalOf(selected.ref, categories)
     : categories.reduce((sum, category) => sum + category.count, 0);
@@ -83,10 +76,7 @@ export async function TradeBrowse({
     { label, href: routes.trade(trade) },
   ];
   if (tree.group && tree.group.ref !== selected?.ref) {
-    crumbs.push({
-      label: categoryNameOf(tree.group),
-      href: routes.category(tree.group.ref),
-    });
+    crumbs.push({ label: categoryNameOf(tree.group), href: routes.category(tree.group.ref) });
   }
   if (selected) crumbs.push({ label: categoryNameOf(selected) });
 
@@ -106,47 +96,27 @@ export async function TradeBrowse({
       size={size}
     />
   );
+  const names = new Map(categories.map((c) => [c.ref, categoryNameOf(c)]));
 
   return (
     <>
-      <header className="border-b border-line bg-surface">
-        <Container className="flex flex-col gap-2.5 pt-1 pb-3.5">
-          {selected ? (
-            <Breadcrumb items={crumbs} className="flex min-h-10 items-center" />
-          ) : (
-            <Link
-              href={routes.trades()}
-              className="inline-flex h-10 items-center gap-1 self-start text-sm text-ink-2 hover:text-ink"
-            >
-              <ChevronLeft aria-hidden="true" className="size-4" />
-              All trades
-            </Link>
-          )}
-          <div className="flex items-baseline justify-between gap-3">
-            <h1 className="text-[26px] leading-tight">{heading}</h1>
-            <span className="shrink-0 text-[13px] text-ink-3 tabular">
-              {formatCount(count)} products
-            </span>
-          </div>
-          <SearchField
-            compact
-            label={`Search in ${label}`}
-            placeholder={`Search in ${label}`}
-            scope={{ domain: trade }}
-            className="md:max-w-xl"
-          />
-          {tree.groups.length > 1 && (
-            // As many columns as fit at 76px, so a long group name ("Bearings &
-            // Transmission") wraps between words rather than inside one.
-            <nav
-              aria-label="Groups"
-              className="grid grid-cols-[repeat(auto-fill,minmax(4.75rem,1fr))] gap-1.5 sm:grid-cols-6 lg:grid-cols-8"
-            >
-              {tree.groups.map((group) => tile(group, "md"))}
-            </nav>
-          )}
-        </Container>
-      </header>
+      <TradeHeader
+        trade={trade}
+        heading={heading}
+        count={count}
+        crumbs={selected ? crumbs : undefined}
+      >
+        {tree.groups.length > 1 && (
+          // As many columns as fit at 76px, so a long group name ("Bearings &
+          // Transmission") wraps between words rather than inside one.
+          <nav
+            aria-label="Groups"
+            className="grid grid-cols-[repeat(auto-fill,minmax(4.75rem,1fr))] gap-1.5 sm:grid-cols-6 lg:grid-cols-8"
+          >
+            {tree.groups.map((group) => tile(group, "md"))}
+          </nav>
+        )}
+      </TradeHeader>
 
       <Container className="py-3.5">
         {shelf.length > 0 && (
@@ -163,90 +133,98 @@ export async function TradeBrowse({
           </section>
         )}
 
-        {isGroup && (
-          <p className="mb-3 text-[13px] text-ink-2">
-            Showing everything in {label}. Pick a category above to narrow it.
-          </p>
-        )}
-
-        <ChipBar>
-          <Chip
-            href={withParams(pathname, params, {
-              in_stock: query.inStock ? "false" : null,
-            })}
-            active={query.inStock}
-          >
-            In stock
-          </Chip>
-          <Chip
-            href={withParams(pathname, params, {
-              min_suppliers: query.minSuppliers ? null : "2",
-            })}
-            active={Boolean(query.minSuppliers)}
-          >
-            2+ shops
-          </Chip>
-        </ChipBar>
-
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <p className="text-[13px] text-ink-2">
-            <strong className="text-ink tabular">{formatCount(total)}</strong> results
-          </p>
-          {hidden > 0 && (
-            <Link
-              href={showAll}
-              className="flex min-h-11 items-center text-[13px] text-link hover:underline sm:min-h-0"
-            >
-              {formatCount(hidden)} more out of stock
-            </Link>
-          )}
-          {/* Sort and view wrap together, so neither is stranded on a line. */}
-          <div className="ms-auto flex items-center gap-2">
-            <SortMenu pathname={pathname} params={params} current={query.sort ?? ""} />
-            <ViewToggle />
-          </div>
-        </div>
-
-        {result.hits.length === 0 ? (
-          <div className="mt-4">
-            <Empty
-              title={hidden > 0 ? "Nothing in stock here" : "Nothing here yet"}
-              hint={
-                hidden > 0
-                  ? "Everything here is out of stock right now."
-                  : "No products are filed here right now."
-              }
-            />
-          </div>
+        {data.result ? (
+          <Results
+            pathname={pathname}
+            raw={params}
+            query={query}
+            data={{ ...data, result: data.result }}
+            names={names}
+            locked={
+              selected && query.category === selected.ref ? ["domain", "category"] : ["domain"]
+            }
+          />
         ) : (
-          <ResultList hits={result.hits} now={new Date()} className="-mx-4 mt-3 md:mx-0" />
+          <NotAnswering />
         )}
-
-        <nav aria-label="Pages" className="mt-5 flex items-center justify-between gap-3 text-sm">
-          {query.offset > 0 ? (
-            <Link
-              href={withParams(pathname, params, {
-                offset: query.offset - PAGE_SIZE > 0 ? String(query.offset - PAGE_SIZE) : null,
-              })}
-              className="flex h-11 items-center rounded-control border border-line-strong px-4 hover:bg-surface"
-            >
-              Previous
-            </Link>
-          ) : (
-            <span />
-          )}
-          {query.offset + PAGE_SIZE < total && (
-            <Link
-              href={withParams(pathname, params, {
-                offset: String(query.offset + PAGE_SIZE),
-              })}
-              className="flex h-11 items-center rounded-control border border-line-strong px-4 hover:bg-surface"
-            >
-              Next
-            </Link>
-          )}
-        </nav>
       </Container>
     </>
+  );
+}
+
+/**
+ * The search page's query, with the trade fixed and the category held inside
+ * the page's own. A `?category=` from another trade, or from outside this
+ * category, is dropped; so are `domain` and `shop`, which the page decides.
+ */
+function scopedQuery(
+  params: RawParams,
+  trade: string,
+  categories: Category[],
+  selected: Category | null,
+): ResultsQuery {
+  const query = parseResultsQuery(params);
+  const parents = new Map(categories.map((c) => [c.ref, c.parent]));
+  const within = (ref: string, ancestor: string) => {
+    for (let at: string | null | undefined = ref; at; at = parents.get(at)) {
+      if (at === ancestor) return true;
+    }
+    return false;
+  };
+  const asked = query.category;
+  const category =
+    asked && parents.has(asked) && (!selected || within(asked, selected.ref))
+      ? asked
+      : selected?.ref;
+  return { ...query, domain: trade, shop: undefined, category };
+}
+
+/** Back link or breadcrumb, the name, its count, and "Search in {trade}". */
+function TradeHeader({
+  trade,
+  heading,
+  count,
+  crumbs,
+  children,
+}: {
+  trade: string;
+  heading: string;
+  count?: number;
+  crumbs?: Crumb[];
+  children?: React.ReactNode;
+}) {
+  const label = tradeLabel(trade);
+  return (
+    <header className="border-b border-line bg-surface">
+      <Container className="flex flex-col gap-2.5 pt-1 pb-3.5">
+        {crumbs ? (
+          <Breadcrumb items={crumbs} className="flex min-h-11 items-center" />
+        ) : (
+          <Link
+            href={routes.trades()}
+            className="inline-flex h-11 items-center gap-1 self-start text-sm text-ink-2 hover:text-ink"
+          >
+            <ChevronLeft aria-hidden="true" className="size-4" />
+            All trades
+          </Link>
+        )}
+        <div className="flex items-baseline justify-between gap-3">
+          <h1 className="text-[26px] leading-tight">{heading}</h1>
+          {count !== undefined && (
+            <span data-catalogue-count className="shrink-0 text-[13px] text-ink-3 tabular">
+              {formatCount(count)} products
+            </span>
+          )}
+        </div>
+        <SearchField
+          compact
+          label={`Search in ${label}`}
+          placeholder={`Search in ${label}`}
+          scope={{ domain: trade }}
+          className="md:max-w-xl"
+        />
+        {children}
+      </Container>
+    </header>
   );
 }

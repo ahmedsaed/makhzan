@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { NotAnswering } from "@/components/results";
 import { Container, Empty } from "@/components/section";
 import { TradeList } from "@/components/trade-list";
 import { fetchCategories } from "@/lib/api";
@@ -13,7 +14,16 @@ export const metadata: Metadata = {
 /** Every trade as the home page lists its top eight: largest first, each
  *  saying what is inside. */
 export default async function TradesPage() {
-  const trades = tradeSummaries(await fetchCategories());
+  const categories = await fetchCategories().catch(() => null);
+  if (!categories) {
+    return (
+      <Container className="max-w-3xl py-5">
+        <h1 className="mb-3 text-2xl">All trades</h1>
+        <NotAnswering title="The catalogue is not answering" />
+      </Container>
+    );
+  }
+  const trades = tradeSummaries(categories);
 
   return (
     <Container className="max-w-3xl py-5">
