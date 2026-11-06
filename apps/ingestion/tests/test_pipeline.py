@@ -13,6 +13,7 @@ from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus, ListingStatus, SourceType
 from makhzan_schemas.models import Listing, SourceCursor, Supplier
 from sqlalchemy import select
+from worker.normalize import not_a_product
 from worker.pipeline import run_source
 from worker.sources.base import Page, SourceAdapter, SupplierInfo
 
@@ -465,3 +466,117 @@ async def test_unmapped_category_stays_uncategorized():
     listing = await _marketplace_listing()
     assert listing.category_id is None, "must not infer a category for an unmapped source category"
     assert listing.domain == "tools"
+
+
+# --------------------------------------------------------------------------- #
+# Catalogue entries that are not products
+# --------------------------------------------------------------------------- #
+
+
+class ShopWithJunk(StubAdapter):
+    """A shop whose feed carries a placeholder, a delivery fee and a service
+    beside real stock, as real ones do."""
+
+    def __init__(self, titles):
+        super().__init__(pages={1: list(titles)})
+        self.titles = titles
+
+    def source_categories(self, raw):
+        return list((raw.raw or {}).get("categories") or [])
+
+    async def fetch_page(self, partition: str, page: int) -> Page:
+        return Page(
+            [
+                RawItem(
+                    source=SRC,
+                    external_id=key,
+                    title=title,
+                    price_text="10 EGP",
+                    raw={"categories": cats},
+                )
+                for key, (title, cats) in self.titles.items()
+            ],
+            has_more=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_entries_that_are_not_products_are_never_stored():
+    run = await run_source(
+        SRC,
+        ShopWithJunk(
+            {
+                "1": ("Arduino Uno R3", ["Boards"]),
+                "2": ("point1", []),
+                "3": ("Local Delivery", []),
+                "4": ("3D Printing Service", ["Services"]),
+                "5": ("Disc Brake Pad & Caliper Service Tool Kit", ["Tools"]),
+            }
+        ),
+    )
+    titles = {x.title_en for x in await _listings()}
+    assert titles == {"Arduino Uno R3", "Disc Brake Pad & Caliper Service Tool Kit"}
+    # Named on the run, so a real product skipped by mistake is visible.
+    assert set(run.stats["not_products"]) == {
+        "point1 (placeholder title)",
+        "Local Delivery (delivery fee)",
+        "3D Printing Service (filed as a service)",
+    }
+    assert run.items_seen == 5 and run.items_created == 2
+
+
+@pytest.mark.asyncio
+async def test_a_stored_non_product_is_archived_by_the_next_complete_cycle():
+    """No hand cleanup: one stored before the rule existed stops being verified,
+    and a completed cycle retires it like stock the shop dropped."""
+    async with SessionLocal() as s:
+        supplier = Supplier(slug=SRC, name="Test Shop", source_type=SourceType.SCRAPED)
+        s.add(supplier)
+        await s.flush()
+        s.add(
+            Listing(
+                supplier_id=supplier.id,
+                source=SRC,
+                source_type=SourceType.SCRAPED,
+                external_id="2",
+                title_en="Point",
+                currency="EGP",
+                images=[],
+                attributes={},
+                status=ListingStatus.ACTIVE,
+                confidence=1.0,
+            )
+        )
+        await s.commit()
+
+    run = await run_source(SRC, ShopWithJunk({"1": ("Arduino Uno R3", []), "2": ("Point", [])}))
+
+    assert run.stats.get("archived") == 1
+    statuses = {x.title_en: x.status for x in await _listings()}
+    assert statuses == {"Arduino Uno R3": ListingStatus.ACTIVE, "Point": ListingStatus.ARCHIVED}
+
+
+@pytest.mark.parametrize(
+    ("title", "categories"),
+    [
+        # Real products whose titles carry the same words.
+        ("Chesterton Lubri-Cup S Automatic Delivery System for Greases", []),
+        ("Manual Tire Inflation Service, 12 Bar", []),
+        ("O-Ring Service Kit NBR-70 (30 Sizes)", ['Kits "Packages"']),
+        ("Item Counter Module 4-Digit", []),
+        ("Test Hook Clips (2 pcs)", []),
+        ("Laser Pointer 5mW", []),
+    ],
+)
+def test_the_non_product_rules_are_narrow(title, categories):
+    """A false positive is a real product silently dropped, so the whole title
+    has to be the placeholder or the fee."""
+    assert not_a_product(title, categories) is None
+
+
+@pytest.mark.parametrize(
+    ("title", "categories"),
+    [("Item", ["Services"]), ("point1", []), ("Point", []), ("Shipping Fee", []), ("Test", [])],
+)
+def test_placeholders_and_fees_are_not_products(title, categories):
+    assert not_a_product(title, categories)
