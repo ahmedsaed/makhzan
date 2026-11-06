@@ -33,7 +33,7 @@ it:
   Being listed is meant to send them buyers, not to cost them anything.
 
 The same policy, for suppliers, is at
-[`/how-we-crawl`](https://makhzan.merope.dev/en/how-we-crawl).
+[`/how-we-crawl`](https://makhzan.merope.dev/how-we-crawl).
 
 ## What is, and is not, in this repository
 
