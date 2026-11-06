@@ -331,11 +331,21 @@ _NOISE = {
 # Mounting Bracket For HC-SR04" shares two of its five words with "Ultrasonic
 # Sensor HC-SR04", which clears the similarity threshold, and costs 15 EGP against
 # 40 — inside the price band. Nothing else tells a bracket from the sensor.
+#
+# Two of those words also describe the part itself. "PCB Mount", "Panel Mount",
+# "Surface Mount" and "DIN Rail Mount" say how a connector, switch or relay is
+# fitted, not that the listing is a mount for it, so they vetoed real merges; a
+# "servo mount" or "motor mount" is still an accessory. Likewise "ESP-01 with
+# adapter" is the module, sold with its adapter.
+_MOUNTING_STYLES = ("pcb", "panel", "surface", "rail", "chassis", "screw", "hole")
+_NOT_A_MOUNT = "".join(f"(?<!{style}{sep})" for style in _MOUNTING_STYLES for sep in " -")
 _FORM_MARKERS = (
     (
         "accessory",
-        r"\b(?:brackets?|holders?|mount|mounting|cases?|covers?|enclosure|housing|stand"
-        r"|adapter|expansion|heat\s?sinks?)\b",
+        r"\b(?:brackets?|holders?|mounting|cases?|covers?|enclosure|housing|stand"
+        r"|expansion|heat\s?sinks?)\b"
+        rf"|{_NOT_A_MOUNT}\bmounts?\b"
+        r"|(?<!with )(?<!with an )\badapters?\b",
     ),
     ("module", r"\b(?:modules?|boards?|shields?|kits?|breakout|devkit|development)\b"),
     (

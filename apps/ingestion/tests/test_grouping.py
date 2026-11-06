@@ -420,6 +420,46 @@ def test_a_bracket_does_not_merge_with_the_part_it_holds():
     assert _together(groups, bracket, another_bracket)
 
 
+@pytest.mark.parametrize(
+    ("titled", "plain"),
+    [
+        # Both pairs are from the local catalogue, and were kept apart by "mount".
+        ("D-SUB DB15 Female Right Angle PCB Mount", "Female DB15 Right Angle on PCB Solder Type"),
+        ("WAGO NV-F15 Panel Mount Wire Connector 1 In 5 Out", "WAGO F15 Wire Connector 1 In 5 Out"),
+        ("Toggle Switch E-TEN1322 Surface-Mount", "Toggle Switch E-TEN1322"),
+        ("ESP-01 ESP8266 WiFi with adapter", "ESP-01 ESP8266 WiFi"),
+    ],
+)
+def test_how_a_part_is_fitted_is_not_an_accessory(titled, plain):
+    """ "PCB Mount" says how a connector is fitted, not that it is a mount."""
+    mpn = {"DB15": "DB15", "F15": "F15", "TEN1322": "TEN1322", "ESP": "ESP8266"}
+    part = next(v for k, v in mpn.items() if k in titled)
+    groups = _group_listings([_listing(titled, 30, part), _listing(plain, 30, part)])
+    assert len(groups) == 1
+
+
+@pytest.mark.parametrize(
+    "accessory", ["SG90 Servo Mount Bracket", "Servo Motor Mount SG90", "SG90 Servo Adapter"]
+)
+def test_a_mount_for_a_part_is_still_an_accessory(accessory):
+    groups = _group_listings(
+        [_listing(accessory, 20, "SG90"), _listing("SG90 Micro Servo Motor", 30, "SG90")]
+    )
+    assert len(groups) == 2
+
+
+def test_grouping_does_not_depend_on_the_order_listings_arrive_in():
+    """External ids are unique only within a shop: two shops' "1" must still sort
+    the same way every run, or the seed (and so the key) of a group drifts."""
+    listings = [
+        _listing("Ultrasonic Sensor HC-SR04 ranging", 40, "HC-SR04", source="b", external_id="1"),
+        _listing("HC-SR04 Ultrasonic Sensor", 42, "HC-SR04", source="a", external_id="1"),
+        _listing("Ultrasonic Sensor HC-SR04 sonar", 41, "HC-SR04", source="c", external_id="1"),
+    ]
+    keys = {tuple(sorted(_group_listings(order))) for order in (listings, listings[::-1])}
+    assert len(keys) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Keys
 # --------------------------------------------------------------------------- #

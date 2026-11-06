@@ -164,6 +164,19 @@ def specs_from_html(html: str | None) -> dict[str, str]:
     return specs
 
 
+def merge_specs(first: dict[str, str], more: dict[str, str]) -> dict[str, str]:
+    """`first` as it is, then whatever of `more` it does not already state.
+
+    For a shop with structured attributes as well as a description: the
+    attributes win, and the description's "Name: value" lines only add names
+    they lack, under the same caps as `specs_from_html`.
+    """
+    merged = dict(first)
+    for key, value in more.items():
+        _add(merged, key, value)
+    return merged
+
+
 def documents_from_html(html: str | None, base_url: str) -> list[dict[str, str]]:
     """Links to PDFs (datasheets, manuals) in a description, as {label, url}."""
     if not html:
@@ -175,7 +188,8 @@ def documents_from_html(html: str | None, base_url: str) -> list[dict[str, str]]
         if not href.lower().split("?")[0].endswith(".pdf"):
             continue
         url = urljoin(base_url + "/", href)
-        if url in seen:
+        # A "mailto:…?subject=x.pdf" or a script link is not a document.
+        if url in seen or not url.startswith(("http://", "https://")):
             continue
         seen.add(url)
         label = _cell_text(a) or url.rsplit("/", 1)[-1].split("?")[0]
