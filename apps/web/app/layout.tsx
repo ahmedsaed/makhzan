@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, IBM_Plex_Mono, Inter } from "next/font/google";
+import localFont from "next/font/local";
 
 import "./globals.css";
 import { SiteFooter } from "@/components/site-footer";
@@ -17,26 +17,38 @@ import { siteUrl } from "@/lib/site";
  * `(site)` layout. The footer is the same everywhere.
  */
 
+/*
+ * The fonts are committed (app/fonts, Latin subsets, OFL), not fetched from
+ * Google Fonts at build time: a build that downloads them fails whenever that
+ * download does, and one such blip failed a release's image build. Same files,
+ * same weights; `next/font/local` still self-hosts them with a metric-matched
+ * fallback.
+ */
+
 // Headings and prices.
-const archivo = Archivo({
-  subsets: ["latin"],
-  weight: ["700", "800"],
+const archivo = localFont({
+  src: [
+    { path: "./fonts/archivo-700.woff2", weight: "700", style: "normal" },
+    { path: "./fonts/archivo-800.woff2", weight: "800", style: "normal" },
+  ],
   variable: "--font-archivo",
   display: "swap",
 });
 
 // Everything else that is text.
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const inter = localFont({
+  src: [
+    { path: "./fonts/inter-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/inter-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/inter-600.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-inter",
   display: "swap",
 });
 
 // Part numbers.
-const plexMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["500"],
+const plexMono = localFont({
+  src: [{ path: "./fonts/plex-mono-500.woff2", weight: "500", style: "normal" }],
   variable: "--font-plex-mono",
   display: "swap",
 });
