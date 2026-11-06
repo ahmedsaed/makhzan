@@ -57,7 +57,27 @@ export type Supplier = {
   website_url: string | null;
 };
 
-export type SupplierProfile = Omit<Supplier, "id"> & { listing_count: number };
+/** One shop as `/suppliers` lists it. Counts cover active listings only, and
+ *  `last_verified_at` is the newest check among them: a shop the crawler can no
+ *  longer reach keeps its listings but stops advancing it. */
+export type ShopSummary = {
+  slug: string;
+  name: string;
+  name_ar: string | null;
+  website_url: string | null;
+  listing_count: number;
+  in_stock_count: number;
+  last_verified_at: string | null;
+  /** Listings per trade, largest first. */
+  domains: { domain: string; count: number }[];
+};
+
+export type SupplierProfile = ShopSummary & {
+  area: string | null;
+  governorate: string | null;
+  /** Its largest categories, biggest first. */
+  top_categories: { ref: string; name_en: string; name_ar: string | null; count: number }[];
+};
 
 export type ProductSummary = {
   id: string;
@@ -253,15 +273,34 @@ export function fetchListing(id: string): Promise<Listing | null> {
   return getOrNull<Listing>(`/listings/${id}`);
 }
 
-export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
-  return getOrNull<SupplierProfile>(`/suppliers/${slug}`, { revalidate: TAXONOMY_TTL });
+/** Every shop, biggest first — including ones with no active listings, which
+ *  the page decides whether to show. */
+export function fetchSuppliers(): Promise<ShopSummary[]> {
+  return get<ShopSummary[]>("/suppliers", { revalidate: TAXONOMY_TTL });
 }
 
+export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
+  return getOrNull<SupplierProfile>(`/suppliers/${encodeURIComponent(slug)}`, {
+    revalidate: TAXONOMY_TTL,
+  });
+}
+
+/** A shop's listings, in stock first. */
 export function fetchSupplierListings(
   slug: string,
-  { limit = 24, offset = 0 }: { limit?: number; offset?: number } = {},
+  {
+    limit = 24,
+    offset = 0,
+    inStock = false,
+  }: { limit?: number; offset?: number; inStock?: boolean } = {},
 ): Promise<{ total: number; limit: number; offset: number; items: Listing[] } | null> {
-  return getOrNull(`/suppliers/${slug}/listings${query({ limit, offset })}`);
+  return getOrNull(
+    `/suppliers/${encodeURIComponent(slug)}/listings${query({
+      in_stock: inStock ? true : undefined,
+      limit,
+      offset: offset || undefined,
+    })}`,
+  );
 }
 
 // --------------------------------------------------------------------------- //

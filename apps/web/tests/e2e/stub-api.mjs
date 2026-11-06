@@ -15,6 +15,8 @@
  */
 import { createServer } from "node:http";
 
+import { shopRoute } from "./fixtures/shops.mjs";
+
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
 const CATEGORIES = [
@@ -228,9 +230,8 @@ const server = createServer((req, res) => {
   if (path === "/listings/listing-gone") return send(200, WITHDRAWN);
   if (path === "/listings/listing-orphan")
     return send(200, { ...LISTING, id: "listing-orphan", product_id: null });
-  if (path === "/suppliers/shop-a") return send(200, { ...SUPPLIER, listing_count: 120 });
-  if (path === "/suppliers/shop-a/listings")
-    return send(200, { total: 1, limit: 24, offset: 0, items: [LISTING] });
+  const shop = shopRoute(path);
+  if (shop) return send(...shop);
 
   return send(404, { detail: "not found" });
 });
