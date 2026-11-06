@@ -44,6 +44,11 @@ FILTERABLE_ATTRIBUTES = [
     # one thing no single supplier's own site can show — is a query rather than
     # a post-filter over a page of results.
     "supplier_count",
+    # Every shop with an offer on the product, so "search within this shop" is a
+    # filter over the same product index rather than a second, listing-level
+    # search with its own ranking. An array: a product sold by three shops
+    # matches a filter on any one of them.
+    "supplier_slugs",
 ]
 
 #: Facets returned with a search so a browse rail can show counts without a
@@ -102,8 +107,14 @@ def build_product_document(
     category_slug: str | None,
     category_name: str | None,
     category_domain: str | None = None,
+    supplier_slugs: list[str] | None = None,
 ) -> dict:
-    """Project a Product (with its aggregates) into a flat Meilisearch document."""
+    """Project a Product (with its aggregates) into a flat Meilisearch document.
+
+    `supplier_slugs` is not a Product column — it comes from the product's active
+    listings, so the caller passes it in. Sorted, so a rebuild of an unchanged
+    product produces an identical document.
+    """
     lv = product.last_verified_at
     return {
         "id": str(product.id),
@@ -117,6 +128,7 @@ def build_product_document(
         "category_name": category_name,
         "supplier_name": product.supplier_name,
         "supplier_count": product.supplier_count,
+        "supplier_slugs": sorted(set(supplier_slugs or [])),
         "offer_count": product.offer_count,
         "min_price": float(product.min_price) if product.min_price is not None else None,
         "max_price": float(product.max_price) if product.max_price is not None else None,

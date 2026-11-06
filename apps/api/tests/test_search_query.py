@@ -220,3 +220,33 @@ async def test_price_is_not_a_facet(meili):
     search_products("", facets=True)
 
     assert "min_price" not in opts_of(meili)["facets"]
+
+
+async def test_a_shop_filters_on_the_array_of_shops_selling_the_product(meili):
+    """Not supplier_name: that is one representative shop, and a product three
+    shops sell would vanish from the other two's search."""
+    search_products("", shop="shop-a")
+
+    assert filters_of(meili) == ['supplier_slugs = "shop-a"']
+
+
+async def test_a_shop_combines_with_other_filters_and_facets(meili):
+    """The shop page's search keeps its rail: facets count within the shop."""
+    search_products("resistor", shop="shop-a", in_stock=True, facets=True)
+
+    assert filters_of(meili) == ["in_stock = true", 'supplier_slugs = "shop-a"']
+    assert opts_of(meili)["facets"] == FACET_ATTRIBUTES
+
+
+async def test_no_shop_filter_by_default(meili):
+    search_products("resistor")
+
+    assert "filter" not in opts_of(meili)
+
+
+async def test_the_shop_attribute_is_filterable_in_the_contract(meili):
+    """A filter on an attribute the index does not list as filterable is an error
+    at query time; this keeps reader and writer agreeing on the name."""
+    from makhzan_schemas.search import FILTERABLE_ATTRIBUTES
+
+    assert "supplier_slugs" in FILTERABLE_ATTRIBUTES
