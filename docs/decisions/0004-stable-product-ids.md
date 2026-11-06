@@ -1,6 +1,6 @@
 # Product ids never change
 
-**Status:** proposed, needs a design pass · **Raised:** 2026-11-06 · **Blocks:** projects, price history, saved lists
+**Status:** proposed, needs a design pass; first step shipped (redirects) · **Raised:** 2026-11-06 · **Blocks:** projects, price history, saved lists
 
 ## The problem
 
@@ -19,6 +19,22 @@ So a product gets a new id, and its old row is deleted, whenever its key changes
 2. The listing whose title seeded the key goes away, and the next one gives other words.
 3. The grouping rules change (the August 2026 fix re-keyed nearly every shared product).
 4. All its offers go inactive (the product is deleted).
+
+## Shipped first: redirects (November 2026)
+
+Before ids become permanent, a replaced id at least stops being a dead link.
+`rebuild_products` records, for each product it deletes, the product most of its
+active offers moved to (`product_redirects`, old id → new id), and the product page
+answers an old id with a 308 to the new one (`GET /products/{id}/redirect`).
+
+- Always one hop: when a redirect's target is itself replaced, the redirect is
+  repointed in the same rebuild.
+- A product whose offers are all withdrawn has no successor; its redirects are
+  deleted with it (ON DELETE CASCADE) and the URL is a plain 404.
+- Ids replaced before this shipped are not recoverable: nothing recorded them.
+
+This makes links survive; it does not make ids stable. A product's id still
+changes when a second shop starts selling it.
 
 ## Direction
 

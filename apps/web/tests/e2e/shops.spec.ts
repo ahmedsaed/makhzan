@@ -159,12 +159,12 @@ test("an unknown shop is a 404", async ({ page }) => {
   expect(response?.status()).toBe(404);
 });
 
-test("for suppliers offers three requests, each an email to the crawler's address", async ({
+test("for suppliers offers four requests, each an email to the crawler's address", async ({
   page,
 }) => {
   await page.goto("/for-suppliers");
   const requests = page.locator("[data-request]");
-  await expect(requests).toHaveCount(3);
+  await expect(requests).toHaveCount(4);
   await expect(requests.first()).toHaveAttribute("data-request", "remove");
   await expect(requests.first()).toContainText("within 7 days");
 

@@ -1,4 +1,5 @@
 import { Link } from "@/components/link";
+import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { routes } from "@/lib/routes";
 
@@ -13,6 +14,13 @@ export function SiteFooter() {
   return (
     <footer className="mt-12 border-t border-line bg-surface">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-6 text-sm md:px-6">
+        <Link
+          href={routes.home()}
+          aria-label="makhzan, home"
+          className="flex h-11 shrink-0 items-center"
+        >
+          <Logo className="text-lg" />
+        </Link>
         <nav aria-label="About" className="flex flex-wrap items-center gap-x-5">
           <Link
             href={routes.forSuppliers()}

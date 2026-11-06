@@ -51,6 +51,7 @@ export const crawlingContent: CrawlingContent = {
       heading: "We go slowly on purpose",
       body: [
         "One request at a time per shop, with a pause of at least 15 seconds between them. A full pass over a supplier's catalogue is spread across about a week rather than run in one burst, so no shop sees a spike of traffic from us.",
+        "Each day's run starts early in the morning, Egypt time (03:00 UTC), when shops are quietest. A shop that prefers another hour, a slower pace or fewer pages a day can ask, and gets it.",
         "Our crawler identifies itself in every request and gives an address to write to, so anyone looking at their server logs can tell who we are.",
       ],
     },

@@ -27,15 +27,17 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
 from makhzan_schemas.domains import get_profile
 from makhzan_schemas.enums import ListingStatus, StockSignal
-from makhzan_schemas.models import Listing, Product
+from makhzan_schemas.models import Listing, Product, ProductRedirect
 from makhzan_schemas.values import value_tokens, values_conflict
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -311,6 +313,10 @@ async def rebuild_products(session: AsyncSession) -> dict:
         .all()
     )
 
+    # Each listing's product before this rebuild: where a replaced product's
+    # offers end up is where its URL should lead.
+    previous = {listing.id: listing.product_id for listing in listings}
+
     groups = _group_listings(listings)
 
     existing = {p.group_key: p for p in (await session.execute(select(Product))).scalars().all()}
@@ -357,7 +363,12 @@ async def rebuild_products(session: AsyncSession) -> dict:
     await session.flush()
 
     stale_ids = [p.id for key, p in existing.items() if key not in seen]
+    redirected = 0
     if stale_ids:
+        successors = _successors(set(stale_ids), listings, previous)
+        redirected = await _record_redirects(session, successors)
+        # Redirects whose target is going and has no successor go with it
+        # (ON DELETE CASCADE): a redirect must never lead to a 404.
         await session.execute(delete(Product).where(Product.id.in_(stale_ids)))
 
     await session.commit()
@@ -368,4 +379,49 @@ async def rebuild_products(session: AsyncSession) -> dict:
             1 for items in groups.values() if len({i.supplier_id for i in items}) > 1
         ),
         "removed": removed,
+        "redirected": redirected,
     }
+
+
+def _successors(
+    stale: set[uuid.UUID],
+    listings: Sequence[Listing],
+    previous: dict[uuid.UUID, uuid.UUID | None],
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Each replaced product → the product most of its active offers moved to.
+
+    Ties go to the earliest listing in rebuild order, so the answer does not
+    change between two identical rebuilds. A product none of whose offers is
+    still active has no successor, and is simply gone.
+    """
+    votes: dict[uuid.UUID, Counter[uuid.UUID]] = defaultdict(Counter)
+    first_seen: dict[uuid.UUID, dict[uuid.UUID, int]] = defaultdict(dict)
+    for position, listing in enumerate(listings):
+        old = previous.get(listing.id)
+        if old in stale and listing.product_id is not None:
+            votes[old][listing.product_id] += 1
+            first_seen[old].setdefault(listing.product_id, position)
+    return {
+        old: min(counter, key=lambda new: (-counter[new], first_seen[old][new]))
+        for old, counter in votes.items()
+    }
+
+
+async def _record_redirects(session: AsyncSession, successors: dict[uuid.UUID, uuid.UUID]) -> int:
+    """Store old → new for this rebuild, and keep every redirect one hop long."""
+    if not successors:
+        return 0
+    # Earlier redirects into a product being replaced now lead to its successor.
+    for old, new in successors.items():
+        await session.execute(
+            update(ProductRedirect).where(ProductRedirect.new_id == old).values(new_id=new)
+        )
+    stmt = pg_insert(ProductRedirect).values(
+        [{"old_id": old, "new_id": new} for old, new in successors.items()]
+    )
+    await session.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[ProductRedirect.old_id], set_={"new_id": stmt.excluded.new_id}
+        )
+    )
+    return len(successors)

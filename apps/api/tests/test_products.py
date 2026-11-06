@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from makhzan_schemas.models import ProductRedirect
 
 from factories import make_category, make_listing, make_product, make_supplier
 
@@ -323,3 +324,21 @@ async def test_a_product_with_no_neighbours_returns_an_empty_list(client, db):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+async def test_a_replaced_product_answers_where_it_went(client, db):
+    product = await make_product(db)
+    old_id = uuid.uuid4()
+    db.add(ProductRedirect(old_id=old_id, new_id=product.id))
+    await db.commit()
+
+    response = await client.get(f"/products/{old_id}/redirect")
+
+    assert response.status_code == 200
+    assert response.json() == {"id": str(product.id)}
+
+
+async def test_an_id_never_replaced_has_no_redirect(client):
+    response = await client.get(f"/products/{uuid.uuid4()}/redirect")
+
+    assert response.status_code == 404

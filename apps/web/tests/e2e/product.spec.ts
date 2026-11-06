@@ -447,3 +447,20 @@ test("the photo frame stays white in the dark theme (S5)", async ({ page }) => {
     "rgb(255, 255, 255)",
   );
 });
+
+test.describe("a product id a regroup replaced", () => {
+  test("redirects permanently to where its offers went", async ({ page }) => {
+    const response = await page.request.get("/products/p-replaced", { maxRedirects: 0 });
+    expect(response.status()).toBe(308);
+    expect(response.headers()["location"]).toMatch(/\/products\/p-multi$/);
+
+    await page.goto("/products/p-replaced");
+    await expect(page).toHaveURL(/\/products\/p-multi$/);
+    await expect(page.locator("h1")).toHaveText("ESP32 Development Board 30 pin");
+  });
+
+  test("an id with nowhere to go is still a 404", async ({ page }) => {
+    const response = await page.goto("/products/p-never-existed");
+    expect(response?.status()).toBe(404);
+  });
+});

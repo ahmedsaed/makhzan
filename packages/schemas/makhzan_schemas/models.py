@@ -243,6 +243,32 @@ class Product(TimestampMixin, Base):
     category: Mapped[Category | None] = relationship()
 
 
+class ProductRedirect(Base):
+    """Where a deleted product's URL now goes: the product its offers moved to.
+
+    A regroup replaces a product whenever its group key changes (a second shop
+    starts selling it, the grouping rules change), and its id goes with it. The
+    id is a URL people have shared and search engines have indexed, so
+    `rebuild_products` records the move here and the product page redirects.
+    A first step of docs/decisions/0004-stable-product-ids.md, not the whole of it.
+
+    Always one hop: when a redirect's target is itself replaced, the rebuild
+    repoints the redirect at the new target. A target deleted with nowhere to
+    go (every offer withdrawn) takes its redirects with it, so a redirect never
+    leads to a missing page.
+    """
+
+    __tablename__ = "product_redirects"
+
+    old_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    new_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class Source(TimestampMixin, Base):
     """One configured data source: which adapter to run, against what, how paced.
 
