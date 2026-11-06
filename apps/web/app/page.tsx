@@ -10,11 +10,23 @@ import {
 import { Container } from "@/components/section";
 import { SearchField } from "@/components/search-field";
 import { SiteHeader } from "@/components/site-header";
+import type { Metadata } from "next";
+
 import { fetchCategories, fetchStats, fetchSuppliers, searchProducts } from "@/lib/api";
+import { TAGLINE } from "@/lib/brand";
 import { formatCount } from "@/lib/format";
 import { tradeCards } from "@/lib/home";
+import { homeDescription, homeJsonLd, pageMetadata } from "@/lib/metadata";
+import { jsonLdText } from "@/lib/product";
 import { listedShops } from "@/lib/shops";
+import { absoluteUrl } from "@/lib/site";
 import { tradeSummaries } from "@/lib/trades";
+
+export async function generateMetadata(): Promise<Metadata> {
+  const stats = await fetchStats().catch(() => null);
+  // No title: the root layout's default is the home page's.
+  return pageMetadata({ description: homeDescription(stats), path: "/", ownCard: true });
+}
 
 /** Products in the "sold by several shops" strip: one row of six on desktop. */
 const SEVERAL_SHOPS = 6;
@@ -54,6 +66,10 @@ export default async function HomePage() {
 
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: jsonLdText(homeJsonLd(absoluteUrl("/"))) }}
+      />
       <SiteHeader search={false} />
       <main className="flex-1 pb-12">
         <Container className="flex flex-col gap-10 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-x-12 lg:gap-y-14">
@@ -63,7 +79,7 @@ export default async function HomePage() {
             className="flex flex-col gap-3 pt-6 sm:pt-12 lg:col-start-1 lg:row-start-1 lg:pb-2"
           >
             <h1 className="max-w-[24ch] text-[26px] leading-[1.15] font-extrabold sm:text-4xl lg:text-5xl lg:leading-[1.08]">
-              Find parts and materials across Cairo&apos;s suppliers.
+              {TAGLINE}
             </h1>
             <SearchField
               autoFocus

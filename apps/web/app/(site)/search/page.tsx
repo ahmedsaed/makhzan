@@ -5,6 +5,7 @@ import { NotAnswering, Results } from "@/components/results";
 import { Container } from "@/components/section";
 import { categoryNameOf, fetchCategories, fetchSupplier, type Category } from "@/lib/api";
 import { formatCount } from "@/lib/format";
+import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 import {
   fetchResults,
@@ -24,13 +25,10 @@ export async function generateMetadata({
   searchParams: Promise<RawParams>;
 }): Promise<Metadata> {
   const { q } = parseResultsQuery(await searchParams);
-  return {
-    // The root layout appends " · makhzan".
-    title: q || "Search",
-    // A filtered result set is not a page worth indexing on its own; the
-    // canonical browse surfaces are the trade and category pages.
-    robots: { index: false, follow: true },
-  };
+  // A filtered result set is not a page worth indexing on its own; the
+  // canonical browse surfaces are the trade and category pages. No canonical
+  // either: a query is not a page.
+  return pageMetadata({ title: q || "Search", noindex: true });
 }
 
 /**

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { fetchCategories } from "@/lib/api";
-import { formatCount } from "@/lib/format";
+import { pageMetadata, tradeDescription } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
-import { asPhrase, insideOf, tradeLabel } from "@/lib/trades";
+import { tradeLabel } from "@/lib/trades";
 
 import { TradeBrowse, type RawParams } from "../_components/trade-browse";
 
@@ -15,18 +15,12 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { trade } = await params;
   const categories = await fetchCategories(trade).catch(() => []);
-  const count = categories.reduce((sum, category) => sum + category.count, 0);
-  const inside = insideOf(trade, categories);
-  return {
+  return pageMetadata({
     title: tradeLabel(trade),
-    description:
-      categories.length > 0
-        ? `${formatCount(count)} products in ${tradeLabel(trade)} from Cairo's suppliers${
-            inside.length > 0 ? `: ${asPhrase(inside)}` : ""
-          }.`
-        : undefined,
-    alternates: { canonical: routes.trade(trade) },
-  };
+    description: tradeDescription(trade, categories),
+    path: routes.trade(trade),
+    ownCard: true,
+  });
 }
 
 /** One trade: its groups, its biggest categories, and its products. */
