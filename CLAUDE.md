@@ -203,7 +203,8 @@ When two *mapped* tags disagree, a crosswalk's top-level `prefer = [...]` ranks 
 ones that should win, ahead of the alphabet: shop 2's "Displays (LCD & 7-Seg &
 LED)" sorts before its "LEDs", and filed 33 plain 3 mm LEDs as displays until
 `prefer = ["LEDs"]`. A preference is global to that shop, so before adding one,
-list every listing that carries both tags and read what moves.
+list every listing that carries both tags and read what moves. An image older than
+`prefer` rejects the key outright, so publish the code before the crosswalk that uses it.
 
 **A tag name is a hint; check what is actually under it.** Shop 1's "3D Printer
 Filament" holds 94 listings of which 21 are filament — the rest are bearings,
@@ -314,6 +315,23 @@ over-merging publishes a price range that is false. The second is worse.
 There is deliberately **no list of "ambiguous" part families**. One used to exist
 and was unmaintainable by construction: SG90 and CR10 were never on it, and there
 was no reason to expect the next one to be. Corroboration applies to every group.
+
+**Title agreement admits; three things veto, checked against every member.**
+(1) *Same shop never merges*: a shop lists two SKUs because they differ, and its
+two listings in one product were always variants collapsed together (KSD301 at
+40 and 140 °C). (2) *Value tokens* (`makhzan_schemas.values`): titles stating
+different values of one unit — 30 vs 38 pin, 180° vs 360°, a 3-pack vs one — are
+different products. (3) *Form* (`DomainProfile.form_markers`): a bare chip, a
+module and an accessory are not one product, and an accessory conflicts even with
+a title silent on form. Form words must say what the listing *is*: "PCB Mount",
+"Panel Mount" and "with adapter" describe the part, and matching bare `mount`
+kept DB15 and WAGO connectors from merging across shops.
+
+**Non-products are skipped before they are stored** (`normalize.not_a_product`):
+placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
+under exactly "Services". Narrow on purpose — a false positive deletes real stock.
+It reads `source_categories`, so an adapter that does not implement it is never
+checked for services.
 
 Suppliers do publish SKUs, but they are **private catalogue codes, not MPNs**
 (one shop uses numeric ids, another descriptive ones). Across ~10k SKUs only 15
