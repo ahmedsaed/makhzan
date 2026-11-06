@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from makhzan_schemas.enums import (
     DEFAULT_CURRENCY,
@@ -130,7 +130,86 @@ class CategoryRead(BaseModel):
         return category_ref(self.domain, self.slug) or self.slug
 
 
-class ListingRead(BaseModel):
+class DocumentRead(BaseModel):
+    """A file the shop links from its listing — a datasheet or a manual."""
+
+    url: str
+    label: str | None = None
+
+
+# What a listing's `attributes` may show the public, and nothing else. The bag
+# also holds the shop's crossed-out "before" price (no discounts are shown: some
+# are standing markups) and internal keys (SKUs, platform ids), so it is never
+# passed through wholesale.
+_MAX_SPECS = 40
+_MAX_DOCUMENTS = 10
+_MAX_TEXT = 200
+
+
+def _short_text(value: object) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    text = str(value).strip()
+    return text if text and len(text) <= _MAX_TEXT else None
+
+
+def public_specs(attributes: object) -> dict[str, str]:
+    """The shop's own name → value spec rows, from a listing's attributes."""
+    specs = attributes.get("specs") if isinstance(attributes, dict) else None
+    if not isinstance(specs, dict):
+        return {}
+    out: dict[str, str] = {}
+    for raw_name, raw_value in specs.items():
+        name, value = _short_text(raw_name), _short_text(raw_value)
+        if name and value and len(out) < _MAX_SPECS:
+            out[name] = value
+    return out
+
+
+def public_documents(attributes: object) -> list[DocumentRead]:
+    """Datasheet links from a listing's attributes: bare URLs or {url, label}."""
+    docs = attributes.get("documents") if isinstance(attributes, dict) else None
+    if not isinstance(docs, list):
+        return []
+    out: list[DocumentRead] = []
+    seen: set[str] = set()
+    for doc in docs:
+        url, label = doc, None
+        if isinstance(doc, dict):
+            url, label = doc.get("url"), _short_text(doc.get("label"))
+        url = url.strip() if isinstance(url, str) else ""
+        # Only web links: anything else (javascript:, data:) is not a shop's file.
+        if not url.lower().startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        out.append(DocumentRead(url=url, label=label))
+        if len(out) >= _MAX_DOCUMENTS:
+            break
+    return out
+
+
+class _ShopDetails(BaseModel):
+    """Specs and datasheets the shop published, read from the listing's attributes.
+
+    Both fields validate from the ORM's `attributes` column and keep only the
+    whitelisted parts of it; they serialise under their own names.
+    """
+
+    specs: dict[str, str] = Field(default_factory=dict, validation_alias="attributes")
+    documents: list[DocumentRead] = Field(default_factory=list, validation_alias="attributes")
+
+    @field_validator("specs", mode="before")
+    @classmethod
+    def _specs(cls, value: object) -> dict[str, str]:
+        return public_specs(value)
+
+    @field_validator("documents", mode="before")
+    @classmethod
+    def _documents(cls, value: object) -> list[DocumentRead]:
+        return public_documents(value)
+
+
+class ListingRead(_ShopDetails):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -157,7 +236,7 @@ class ListingRead(BaseModel):
     category: CategoryRead | None = None
 
 
-class OfferRead(BaseModel):
+class OfferRead(_ShopDetails):
     """One supplier's offer of a product — a listing, on the product page."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -172,6 +251,7 @@ class OfferRead(BaseModel):
     images: list[str] = Field(default_factory=list)
     last_verified_at: datetime
     supplier: SupplierRead | None = None
+    brand: str | None = None
 
 
 class ProductSummary(BaseModel):

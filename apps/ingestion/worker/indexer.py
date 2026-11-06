@@ -8,15 +8,18 @@ indexes incrementally as it ingests.
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 
 import meilisearch
-from makhzan_schemas.models import Category, Product
+from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.models import Category, Listing, Product, Supplier
 from makhzan_schemas.search import (
     FILTERABLE_ATTRIBUTES,
     INDEX_NAME,
     SEARCHABLE_ATTRIBUTES,
     SORTABLE_ATTRIBUTES,
     build_product_document,
+    category_ref,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +74,23 @@ def delete_documents(client: meilisearch.Client, ids: list[str], *, wait: bool =
         client.wait_for_task(task.task_uid)
 
 
+def ancestry(category_id, tree: dict) -> list[str]:
+    """The refs of a category and every ancestor above it, leaf first.
+
+    `tree` maps a category id to its (ref, parent id). Stops at a cycle rather
+    than looping: a corrupt parent pointer must not hang a reindex.
+    """
+    refs: list[str] = []
+    seen: set = set()
+    current = category_id
+    while current is not None and current in tree and current not in seen:
+        seen.add(current)
+        ref, current = tree[current]
+        if ref:
+            refs.append(ref)
+    return refs
+
+
 async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
     """Rebuild the whole product index from Postgres (full replace).
 
@@ -85,12 +105,33 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
             select(Product, Category).outerjoin(Category, Category.id == Product.category_id)
         )
     ).all()
+    # The whole tree, so each document can carry its category's ancestors and a
+    # group page can filter on the group. A few hundred rows; one query.
+    tree = {
+        cat.id: (category_ref(cat.domain, cat.slug), cat.parent_id)
+        for cat in (await session.execute(select(Category))).scalars()
+    }
+    # Which shops sell each product. Active listings only, matching how the
+    # product's own aggregates are computed: an archived offer must not keep a
+    # product in a shop's search after the shop dropped it.
+    shops: dict = defaultdict(set)
+    for product_id, slug in (
+        await session.execute(
+            select(Listing.product_id, Supplier.slug)
+            .join(Supplier, Supplier.id == Listing.supplier_id)
+            .where(Listing.status == ListingStatus.ACTIVE, Listing.product_id.is_not(None))
+            .distinct()
+        )
+    ).all():
+        shops[product_id].add(slug)
     docs = [
         build_product_document(
             product,
             cat.slug if cat else None,
             cat.name_en if cat else None,
             cat.domain if cat else None,
+            list(shops.get(product.id, ())),
+            ancestry(cat.id, tree) if cat else [],
         )
         for product, cat in rows
     ]

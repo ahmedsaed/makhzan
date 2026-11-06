@@ -4,10 +4,12 @@ An extracted identifier is evidence, not proof. It comes from a title, so it als
 matches titles that merely reference the part — "bracket for SG90", "robot arm
 kit with 4x SG90" — and merging those puts a mounting bracket inside a servo.
 
-Two listings sharing an identifier are therefore only merged when something else
-agrees: their titles describe the same thing, or their prices sit in the same
-band. Either alone suffices, because suppliers word the same part very
-differently while a bracket and the servo it fits agree on neither.
+Two listings sharing an identifier are therefore only merged when their titles
+agree that they are the same thing, and nothing vetoes it: the same shop, a
+different value of the same unit, a different form, or an implausible price gap.
+
+The shops in these tests are fictional; the titles are real ones that were
+merged wrongly.
 """
 
 from __future__ import annotations
@@ -15,18 +17,27 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+import pytest
+
 from makhzan_schemas.enums import SourceType
 from makhzan_schemas.grouping import _group_listings
 from makhzan_schemas.models import Listing
+from makhzan_schemas.values import value_tokens, values_conflict
+
+#: One supplier id per fictional shop, so listings from the same `source` share it.
+_SUPPLIERS: dict[str, uuid.UUID] = {}
 
 
-def _listing(title, price, part_number, source="s1", domain="electronics"):
+def _listing(title, price, part_number, source=None, domain="electronics", external_id=None):
+    # Without a named shop, each listing is its own supplier: most tests here are
+    # about two shops' titles, not one shop's catalogue.
+    supplier_id = _SUPPLIERS.setdefault(source, uuid.uuid4()) if source else uuid.uuid4()
     return Listing(
         id=uuid.uuid4(),
-        supplier_id=uuid.uuid4(),
-        source=source,
+        supplier_id=supplier_id,
+        source=source or "s1",
         source_type=SourceType.SCRAPED,
-        external_id=str(uuid.uuid4()),
+        external_id=external_id or str(uuid.uuid4()),
         domain=domain,
         title_en=title,
         part_number=part_number,
@@ -191,3 +202,338 @@ def test_the_price_veto_measures_the_whole_cluster_not_its_first_member():
         ]
     )
     assert len(groups) == 2
+
+
+def _sizes(groups):
+    return sorted((len(v) for v in groups.values()), reverse=True)
+
+
+def _together(groups, *titles):
+    """Whether every one of these titles landed in the same product."""
+    homes = {key for key, items in groups.items() for item in items if item.title_en in set(titles)}
+    return len(homes) == 1
+
+
+# --------------------------------------------------------------------------- #
+# A shop's two SKUs are two products
+# --------------------------------------------------------------------------- #
+
+
+def test_two_listings_from_one_shop_never_merge():
+    """A shop lists two SKUs because they differ. Across the catalogue, 485
+    products held two or more listings from one shop — 23 KSD301 thermal switches
+    from 40 to 140 °C, thirteen trimpot values — and almost none were duplicates.
+    Even word-for-word duplicates stay apart: that under-merge is honest."""
+    groups = _group_listings(
+        [
+            _listing("WTH118 Potentiometer 1W", 25, "WTH118", source="volta"),
+            _listing("WTH118 Potentiometer 1W", 25, "WTH118", source="volta"),
+        ]
+    )
+    assert len(groups) == 2
+
+
+def test_another_shop_joins_the_variant_it_matches_not_the_first_one():
+    groups = _group_listings(
+        [
+            _listing("KSD301 Thermal Switch NC 140°C (10A, 250V)", 18, "KSD301", source="volta"),
+            _listing("KSD301 Thermal Switch NC 40°C (10A, 250V)", 18, "KSD301", source="volta"),
+            _listing("KSD301 Thermal Switch NC 40C 10A", 20, "KSD301", source="ohmic"),
+        ]
+    )
+    assert _sizes(groups) == [2, 1]
+    assert _together(
+        groups,
+        "KSD301 Thermal Switch NC 40°C (10A, 250V)",
+        "KSD301 Thermal Switch NC 40C 10A",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Values: a number next to a unit is what tells variants apart
+# --------------------------------------------------------------------------- #
+
+
+def test_thermal_switches_of_different_temperatures_do_not_merge():
+    groups = _group_listings(
+        [
+            _listing("KSD301 Thermal Switch NC 40°C (10A, 250V)", 18, "KSD301", source="volta"),
+            _listing("KSD301 Thermal Switch NC 120C (10A, 250V)", 18, "KSD301", source="ohmic"),
+        ]
+    )
+    assert len(groups) == 2
+
+
+def test_esp32_boards_with_30_and_38_pins_do_not_merge():
+    """The `ESP32` product held 30- and 38-pin boards from three shops. The pin
+    count was the only difference, and "30" and "38" were dropped as bare digits
+    before titles were compared."""
+    groups = _group_listings(
+        [
+            _listing("ESP32 Development Board 30-Pin with CP2102", 280, "ESP32", source="volta"),
+            _listing("ESP32S ESP-WROOM-32 38-Pin CP2102", 290, "ESP32", source="ohmic"),
+            _listing(
+                "ESP32 Development Board 30 pin (WIFI - Bluetooth)", 260, "ESP32", source="pcb"
+            ),
+        ]
+    )
+    assert _together(
+        groups,
+        "ESP32 Development Board 30-Pin with CP2102",
+        "ESP32 Development Board 30 pin (WIFI - Bluetooth)",
+    )
+    assert not _together(
+        groups, "ESP32S ESP-WROOM-32 38-Pin CP2102", "ESP32 Development Board 30-Pin with CP2102"
+    )
+
+
+def test_180_degree_and_continuous_servos_do_not_merge():
+    """MG996R 180° and 360° servos were one product across four shops.
+    "Continuous rotation" states 360° without a digit."""
+    groups = _group_listings(
+        [
+            _listing("MG996R Servo Motor 180° 11 kg.cm Metal Gears", 195, "MG996R", source="volta"),
+            _listing("MG996R Servo Motor 360° 11 kg.cm Metal Gears", 210, "MG996R", source="ohmic"),
+            _listing(
+                "MG996R Servo Motor Tower Pro Continues Rotation (Full Metal Gear)",
+                190,
+                "MG996R",
+                source="pcb",
+            ),
+            _listing(
+                "MG996R High Torque Servo Motor (180° Rotation) (Full Metal Gear)",
+                180,
+                "MG996R",
+                source="relay",
+            ),
+        ]
+    )
+    for items in groups.values():
+        stated = {value_tokens(i.title_en).get("angle") for i in items} - {None}
+        assert len(stated) <= 1, f"180° and 360° merged: {[i.title_en for i in items]}"
+
+
+def test_optocoupler_boards_of_different_channel_counts_do_not_merge():
+    groups = _group_listings(
+        [
+            _listing("PC817 Optocoupler Isolation Board 2 Channel", 40, "PC817", source="volta"),
+            _listing("PC817 - 4 Channel Optocoupler Isolation Board", 60, "PC817", source="ohmic"),
+            _listing("PC817 Optocoupler Isolation Module 2-Channel", 70, "PC817", source="pcb"),
+        ]
+    )
+    assert _sizes(groups) == [2, 1]
+    assert _together(
+        groups,
+        "PC817 Optocoupler Isolation Board 2 Channel",
+        "PC817 Optocoupler Isolation Module 2-Channel",
+    )
+
+
+def test_drives_of_different_power_do_not_merge_and_units_are_compared_by_value():
+    """0.75 to 11 kW drives were one product: the 3.65x spread stayed under the
+    price veto. Power is compared as a value, so 0.75 kW and 750 W agree."""
+    small = "Variable Speed Drive, ATV320, 0.75 KW, 380…500 V, 3 Phases"
+    split = _group_listings(
+        [
+            _listing(small, 26886, "ATV320", source="volta"),
+            _listing("Variable Speed Drive ATV320 - 11kW - 380...500V", 89034, "ATV320", "ohmic"),
+        ]
+    )
+    assert len(split) == 2
+    merged = _group_listings(
+        [
+            _listing(small, 26886, "ATV320", source="volta"),
+            _listing("ATV320 Variable Speed Drive 750W 3 Phases", 27500, "ATV320", "ohmic"),
+        ]
+    )
+    assert len(merged) == 1
+
+
+def test_a_multipack_does_not_merge_with_a_single_unit():
+    """Silence on quantity means one unit: "– 3Pcs" at 1,275 EGP sat beside
+    single drivers at about 425."""
+    groups = _group_listings(
+        [
+            _listing("TB6600 4A Stepper Motor Driver – 3Pcs", 1275, "TB6600", source="volta"),
+            _listing("TB6600 Stepper Motor Driver 4A", 425, "TB6600", source="ohmic"),
+        ]
+    )
+    assert len(groups) == 2
+
+
+def test_a_value_only_one_title_states_does_not_split():
+    """Silence is not a conflict — most shops do not repeat every rating."""
+    groups = _group_listings(
+        [
+            _listing("TP4056 Lithium Battery Charger Module 1A", 20, "TP4056", source="volta"),
+            _listing("TP4056 Lithium Battery Charger Module", 18, "TP4056", source="ohmic"),
+        ]
+    )
+    assert len(groups) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Form: a chip is not a module, and a bracket is not the sensor it holds
+# --------------------------------------------------------------------------- #
+
+
+def test_a_bare_chip_does_not_merge_with_its_module():
+    """A TP4056 SOP-8 sat inside a six-shop charger-module product: "ic",
+    "module" and "board" are all noise words, so the titles looked alike."""
+    groups = _group_listings(
+        [
+            _listing("SMD IC TP4056 Battery Management SOP-8", 12, "TP4056", source="volta"),
+            _listing("TP4056 Battery Charger Module With Protection", 22, "TP4056", "ohmic"),
+            _listing("TP4056 SMD Battery charger IC", 15, "TP4056", source="pcb"),
+        ]
+    )
+    assert _sizes(groups) == [2, 1]
+    assert _together(
+        groups, "SMD IC TP4056 Battery Management SOP-8", "TP4056 SMD Battery charger IC"
+    )
+
+
+def test_an_rtc_chip_does_not_merge_with_the_rtc_module():
+    groups = _group_listings(
+        [
+            _listing("DS1302 Real Time Clock (RTC) IC DIP-8", 15, "DS1302", source="volta"),
+            _listing("DS1302 RTC Real Time Clock Module", 40, "DS1302", source="ohmic"),
+        ]
+    )
+    assert len(groups) == 2
+
+
+def test_a_bracket_does_not_merge_with_the_part_it_holds():
+    """A title that says nothing about form is usually the part itself, so an
+    accessory conflicts even with silence. Half its words in common and 15
+    against 40 EGP cleared both the title and the price checks."""
+    bracket = "Ultrasonic Sensor Mounting Bracket For HC-SR04"
+    another_bracket = "Ultrasonic Sensor Bracket HC-SR04"
+    groups = _group_listings(
+        [
+            _listing(bracket, 15, "HC-SR04", source="volta"),
+            _listing("Ultrasonic Sensor HC-SR04", 40, "HC-SR04", source="ohmic"),
+            _listing(another_bracket, 11, "HC-SR04", source="pcb"),
+        ]
+    )
+    assert _sizes(groups) == [2, 1]
+    assert _together(groups, bracket, another_bracket)
+
+
+@pytest.mark.parametrize(
+    ("titled", "plain"),
+    [
+        # Both pairs are from the local catalogue, and were kept apart by "mount".
+        ("D-SUB DB15 Female Right Angle PCB Mount", "Female DB15 Right Angle on PCB Solder Type"),
+        ("WAGO NV-F15 Panel Mount Wire Connector 1 In 5 Out", "WAGO F15 Wire Connector 1 In 5 Out"),
+        ("Toggle Switch E-TEN1322 Surface-Mount", "Toggle Switch E-TEN1322"),
+        ("ESP-01 ESP8266 WiFi with adapter", "ESP-01 ESP8266 WiFi"),
+    ],
+)
+def test_how_a_part_is_fitted_is_not_an_accessory(titled, plain):
+    """ "PCB Mount" says how a connector is fitted, not that it is a mount."""
+    mpn = {"DB15": "DB15", "F15": "F15", "TEN1322": "TEN1322", "ESP": "ESP8266"}
+    part = next(v for k, v in mpn.items() if k in titled)
+    groups = _group_listings([_listing(titled, 30, part), _listing(plain, 30, part)])
+    assert len(groups) == 1
+
+
+@pytest.mark.parametrize(
+    "accessory", ["SG90 Servo Mount Bracket", "Servo Motor Mount SG90", "SG90 Servo Adapter"]
+)
+def test_a_mount_for_a_part_is_still_an_accessory(accessory):
+    groups = _group_listings(
+        [_listing(accessory, 20, "SG90"), _listing("SG90 Micro Servo Motor", 30, "SG90")]
+    )
+    assert len(groups) == 2
+
+
+def test_grouping_does_not_depend_on_the_order_listings_arrive_in():
+    """External ids are unique only within a shop: two shops' "1" must still sort
+    the same way every run, or the seed (and so the key) of a group drifts."""
+    listings = [
+        _listing("Ultrasonic Sensor HC-SR04 ranging", 40, "HC-SR04", source="b", external_id="1"),
+        _listing("HC-SR04 Ultrasonic Sensor", 42, "HC-SR04", source="a", external_id="1"),
+        _listing("Ultrasonic Sensor HC-SR04 sonar", 41, "HC-SR04", source="c", external_id="1"),
+    ]
+    keys = {tuple(sorted(_group_listings(order))) for order in (listings, listings[::-1])}
+    assert len(keys) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Keys
+# --------------------------------------------------------------------------- #
+
+
+def test_variants_with_colliding_signatures_get_keys_that_do_not_depend_on_siblings():
+    """Variants worded alike apart from the value share a token signature. The
+    collision is broken by the seed listing's own natural key, not by position,
+    so a sibling appearing or vanishing does not rename the others."""
+
+    def switch(celsius, external_id):
+        title = f"KSD301 Thermal Switch NC {celsius}°C"
+        return _listing(title, 18, "KSD301", source="volta", external_id=external_id)
+
+    first, forty, ninety = switch(70, "1"), switch(40, "2"), switch(90, "3")
+
+    def key_of(groups, listing):
+        return next(k for k, items in groups.items() if listing in items)
+
+    without = _group_listings([forty, ninety])
+    with_sibling = _group_listings([first, forty, ninety])
+    assert key_of(without, ninety) == key_of(with_sibling, ninety)
+    assert len(with_sibling) == 3
+
+
+# --------------------------------------------------------------------------- #
+# Value tokens themselves
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("title", "dimension", "values"),
+    [
+        ("ESP32 Development Board 38pin", "pin", {38}),
+        ("ESP32 Development Board 38-Pin", "pin", {38}),
+        ("Terminal Block 2P", "pin", {2}),
+        ("KSD301 Thermal Switch NC 100°C", "temperature", {100}),
+        ("KSD301 Thermostat (90C Normally Close)", "temperature", {90}),
+        ("Servo 360deg", "angle", {360}),
+        ("Servo 180 Degree", "angle", {180}),
+        ("Servo Continuous Rotation", "angle", {360}),
+        ("Relay Module 4CH", "channel", {4}),
+        ("Optocoupler Single Channel", "channel", {1}),
+        ("Drive 0.75kW", "watt", {750}),
+        ("Fan 12V", "volt", {12}),
+        ("Battery (2 Pcs)", "quantity", {2}),
+        ("Resistor pack of 10", "quantity", {10}),
+        ("Linear Rail 1000mm", "length", {1000}),
+    ],
+)
+def test_value_tokens_are_read_from_titles(title, dimension, values):
+    assert value_tokens(title)[dimension] == {Decimal(v) for v in values}
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # A number glued to letters before it is part of a part number.
+        "MG996R Servo",
+        "AMS1117 Regulator",
+        # A range is an operating envelope, not a variant.
+        "Stepper Driver 9-42V",
+        "Drive 380…500 V",
+        # A bare letter unit has to touch its number.
+        "Arduino 4 c",
+    ],
+)
+def test_what_is_not_a_value(title):
+    assert value_tokens(title) == {}
+
+
+def test_values_conflict_only_when_both_state_the_dimension():
+    assert values_conflict(value_tokens("Fan 12V"), value_tokens("Fan 24V"))
+    assert not values_conflict(value_tokens("Fan 12V"), value_tokens("Fan"))
+    assert not values_conflict(value_tokens("Module 3.3V 5V"), value_tokens("Module 5V"))
+    assert values_conflict(value_tokens("Driver 3Pcs"), value_tokens("Driver"))
+    assert not values_conflict(value_tokens("Battery (1 pc)"), value_tokens("Battery"))

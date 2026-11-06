@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { joinRef, routes, splitRef, switchLangPath } from "@/lib/routes";
+import { redirectTarget } from "@/lib/redirects";
+import { joinRef, routes, splitRef, withParams } from "@/lib/routes";
 
 describe("category refs", () => {
   it("splits domain:slug", () => {
@@ -25,44 +26,68 @@ describe("category refs", () => {
 });
 
 describe("routes", () => {
-  it("puts the language first on every URL", () => {
-    expect(routes.home("ar")).toBe("/ar");
-    expect(routes.product("en", "abc")).toBe("/en/products/abc");
-    expect(routes.supplier("ar", "shop-a")).toBe("/ar/suppliers/shop-a");
+  it("has no language in any URL", () => {
+    expect(routes.home()).toBe("/");
+    expect(routes.product("abc")).toBe("/products/abc");
+    expect(routes.shop("shop-a")).toBe("/shops/shop-a");
+    expect(routes.trade("electronics")).toBe("/trades/electronics");
   });
 
-  it("addresses a category by its two segments, never the bare slug", () => {
-    expect(routes.category("en", "electronics:resistors")).toBe("/en/browse/electronics/resistors");
-    // The same slug in another domain is a different URL — that is the point.
-    expect(routes.category("en", "tools:measurement")).not.toBe(
-      routes.category("en", "electronics:measurement"),
+  it("addresses a category through its trade, never by the bare slug", () => {
+    expect(routes.category("electronics:resistors")).toBe("/trades/electronics/resistors");
+    // The same slug in another trade is a different URL — that is the point.
+    expect(routes.category("tools:measurement")).not.toBe(
+      routes.category("electronics:measurement"),
     );
   });
 
   it("falls back to a search when handed a bare slug", () => {
-    // Honest: we cannot tell which domain was meant, so we do not invent one.
-    expect(routes.category("en", "measurement")).toBe("/en/search?category=measurement");
-  });
-
-  it("drops empty and false parameters instead of encoding them", () => {
-    expect(routes.search("en", { q: "", inStock: false, offset: 0 })).toBe("/en/search");
-    expect(routes.search("en", { q: "LM358", inStock: true })).toBe(
-      "/en/search?q=LM358&in_stock=true",
-    );
+    // Honest: we cannot tell which trade was meant, so we do not invent one.
+    expect(routes.category("measurement")).toBe("/search?category=measurement");
   });
 });
 
-describe("switching language", () => {
-  it("keeps the reader on the same page", () => {
-    expect(switchLangPath("/en/products/abc", "ar")).toBe("/ar/products/abc");
-    expect(switchLangPath("/ar/browse/tools/saws", "en")).toBe("/en/browse/tools/saws");
+describe("withParams", () => {
+  it("sets and removes parameters, keeping the rest", () => {
+    expect(withParams("/search", { q: "esp32" }, { in_stock: "true" })).toBe(
+      "/search?q=esp32&in_stock=true",
+    );
+    expect(withParams("/search", { q: "esp32", in_stock: "true" }, { in_stock: null })).toBe(
+      "/search?q=esp32",
+    );
   });
 
-  it("handles the bare language root", () => {
-    expect(switchLangPath("/en", "ar")).toBe("/ar");
+  it("drops the page, which means nothing once the result set changes", () => {
+    expect(withParams("/search", { q: "a", offset: "48" }, { sort: "price:asc" })).toBe(
+      "/search?q=a&sort=price%3Aasc",
+    );
   });
 
-  it("does not mangle a path that merely starts with those letters", () => {
-    expect(switchLangPath("/en/enclosures", "ar")).toBe("/ar/enclosures");
+  it("returns the bare path when nothing is left", () => {
+    expect(withParams("/search", new URLSearchParams("sort=x"), { sort: null })).toBe("/search");
+  });
+});
+
+describe("old URLs", () => {
+  it("lose their language prefix", () => {
+    expect(redirectTarget("/en")).toBe("/");
+    expect(redirectTarget("/ar")).toBe("/");
+    expect(redirectTarget("/en/products/abc")).toBe("/products/abc");
+    expect(redirectTarget("/ar/search")).toBe("/search");
+  });
+
+  it("map the old names onto the new, with or without a prefix, in one hop", () => {
+    expect(redirectTarget("/en/browse/tools")).toBe("/trades/tools");
+    expect(redirectTarget("/browse/tools/saws")).toBe("/trades/tools/saws");
+    expect(redirectTarget("/ar/suppliers/shop-a")).toBe("/shops/shop-a");
+    expect(redirectTarget("/suppliers/shop-a")).toBe("/shops/shop-a");
+  });
+
+  it("leave current URLs, and lookalikes, alone", () => {
+    expect(redirectTarget("/trades/tools")).toBeNull();
+    expect(redirectTarget("/search")).toBeNull();
+    // Starts with the letters, is not the prefix.
+    expect(redirectTarget("/enclosures")).toBeNull();
+    expect(redirectTarget("/browser")).toBeNull();
   });
 });

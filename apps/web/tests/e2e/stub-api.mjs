@@ -4,15 +4,21 @@
  * The pages fetch on the *server*, so a browser-level route interceptor cannot
  * see those requests — the stub has to be a real HTTP server the Next process
  * points at. That is a feature rather than a workaround: these tests are about
- * the frontend's behaviour (routing, direction, server rendering, working
- * without JavaScript), and the API has 123 tests of its own. Keeping them
- * separate means the suite needs no Postgres, no Meilisearch and no Python.
+ * the frontend's behaviour (routing, redirects, server rendering, working
+ * without JavaScript), and the API has tests of its own. Keeping them separate
+ * means the suite needs no Postgres, no Meilisearch and no Python.
  *
  * The payloads are shaped exactly like the real ones, including the awkward
  * parts the UI has to survive: a product with no photo, an offer with no price,
- * an Arabic title alongside a Latin part number, and a withdrawn listing.
+ * an Arabic title alongside a Latin part number, a withdrawn listing, and one
+ * the grouping step never attached to a product.
  */
 import { createServer } from "node:http";
+
+import { productFixture } from "./fixtures/product.mjs";
+import { searchFixture } from "./fixtures/search.mjs";
+import { shopName, shopRoute } from "./fixtures/shops.mjs";
+import { FAILING_TRADE, TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
 
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
@@ -175,6 +181,13 @@ function search(url) {
   if (q.toLowerCase().includes("nothing")) hits = [];
   if (domain === "tools") hits = [];
   if (minSuppliers > 1) hits = [HIT];
+  // Within one shop, a one-shop result is that shop's own.
+  const shop = url.searchParams.get("shop");
+  if (shop) {
+    hits = hits.map((hit) =>
+      hit.supplier_count === 1 ? { ...hit, supplier_name: shopName(shop) ?? shop } : hit,
+    );
+  }
 
   const body = {
     query: q,
@@ -207,8 +220,14 @@ const server = createServer((req, res) => {
   if (path === "/stats") return send(200, { products: 57207, suppliers: 8, categories: 249 });
   if (path === "/categories") {
     const domain = url.searchParams.get("domain");
-    return send(200, domain ? CATEGORIES.filter((c) => c.domain === domain) : CATEGORIES);
+    if (domain === FAILING_TRADE) return send(500, { detail: "database unreachable" });
+    const all = [...CATEGORIES, ...TRADE_CATEGORIES];
+    return send(200, domain ? all.filter((c) => c.domain === domain) : all);
   }
+  const fixture = path === "/search" && searchFixture(url);
+  if (fixture) return send(fixture.status, fixture.body);
+  const trade = path === "/search" && tradeSearch(url);
+  if (trade) return send(trade.status, trade.body);
   if (path === "/search") return send(200, search(url));
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
@@ -219,15 +238,26 @@ const server = createServer((req, res) => {
     ]);
   }
   if (path === "/products/prod-1") return send(200, PRODUCT);
+  // What the API says to an id that is not a UUID.
+  if (path === "/products/malformed-id") return send(422, { detail: "not a valid uuid" });
   if (path === "/listings/listing-1") return send(200, LISTING);
   // The offers are listings too, so opening one has somewhere to land.
   if (path === "/listings/off-1") return send(200, { ...LISTING, id: "off-1" });
   if (path === "/listings/off-2")
-    return send(200, { ...LISTING, id: "off-2", price: null, supplier: { ...SUPPLIER, id: "sup-2", slug: "shop-b", name: "Shop B" } });
+    return send(200, {
+      ...LISTING,
+      id: "off-2",
+      price: null,
+      supplier: { ...SUPPLIER, id: "sup-2", slug: "shop-b", name: "Shop B" },
+    });
   if (path === "/listings/listing-gone") return send(200, WITHDRAWN);
-  if (path === "/suppliers/shop-a") return send(200, { ...SUPPLIER, listing_count: 120 });
-  if (path === "/suppliers/shop-a/listings")
-    return send(200, { total: 1, limit: 24, offset: 0, items: [LISTING] });
+  if (path === "/listings/listing-orphan")
+    return send(200, { ...LISTING, id: "listing-orphan", product_id: null });
+  const shop = shopRoute(path);
+  if (shop) return send(...shop);
+
+  const product = productFixture(path);
+  if (product) return send(...product);
 
   return send(404, { detail: "not found" });
 });

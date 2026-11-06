@@ -1,0 +1,102 @@
+import { describe, expect, it } from "vitest";
+
+import type { Category } from "@/lib/api";
+import { asPhrase, insideOf, totalOf, tradeSummaries, tradeTree } from "@/lib/trades";
+
+const cat = (
+  domain: string,
+  slug: string,
+  name_en: string,
+  parent: string | null,
+  count: number,
+): Category => ({
+  ref: `${domain}:${slug}`,
+  domain,
+  slug,
+  name_en,
+  name_ar: null,
+  parent: parent ? `${domain}:${parent}` : null,
+  count,
+});
+
+const SEALS = [
+  cat("seals-bearings", "seals", "Seals & Gaskets", null, 0),
+  cat("seals-bearings", "o-rings", "O-Rings", "seals", 400),
+  cat("seals-bearings", "oil-seals", "Oil Seals", "seals", 250),
+  cat("seals-bearings", "seals-other", "Other Seals", "seals", 500),
+  cat("seals-bearings", "transmission", "Bearings & Transmission", null, 0),
+  cat("seals-bearings", "bearings", "Bearings", "transmission", 300),
+  cat("seals-bearings", "couplings", "Couplings", "transmission", 40),
+  cat("seals-bearings", "filtration", "Filtration", null, 0),
+  cat("seals-bearings", "air-filters", "Air Filters", "filtration", 0),
+];
+const FLAT = [cat("timber", "oak", "Oak", null, 90), cat("timber", "teak", "Teak", null, 30)];
+
+describe("what's inside a trade", () => {
+  it("is its biggest leaf categories, largest first", () => {
+    expect(insideOf("seals-bearings", SEALS, 3)).toEqual(["O-Rings", "Bearings", "Oil Seals"]);
+  });
+
+  it("never names an 'Other' bucket, however big", () => {
+    expect(insideOf("seals-bearings", SEALS)).not.toContain("Other Seals");
+  });
+
+  it("only looks inside the trade asked about", () => {
+    expect(insideOf("timber", [...SEALS, ...FLAT])).toEqual(["Oak", "Teak"]);
+  });
+
+  it("reads as one phrase without lowering acronyms or part names", () => {
+    expect(asPhrase(["Resistors", "Integrated Circuits", "PLCs", "O-Rings", "3D Printers"])).toBe(
+      "Resistors, integrated circuits, PLCs, O-Rings, 3D printers",
+    );
+  });
+});
+
+describe("trades are listed by size", () => {
+  it("orders trades largest first and drops empty ones", () => {
+    const trades = tradeSummaries([...FLAT, ...SEALS, cat("garden", "mowers", "Mowers", null, 0)]);
+    expect(trades.map((t) => [t.domain, t.count])).toEqual([
+      ["seals-bearings", 1490],
+      ["timber", 120],
+    ]);
+    expect(trades[0].inside[0]).toBe("O-Rings");
+  });
+});
+
+describe("a trade's tree", () => {
+  it("totals a group over its children", () => {
+    expect(totalOf("seals-bearings:seals", SEALS)).toBe(1150);
+    expect(totalOf("seals-bearings:bearings", SEALS)).toBe(300);
+  });
+
+  it("lists groups by size and leaves out empty ones", () => {
+    const { groups, group, children, top } = tradeTree(SEALS);
+    expect(groups.map((g) => g.slug)).toEqual(["seals", "transmission"]);
+    expect(group).toBeNull();
+    expect(children).toEqual([]);
+    // Nothing selected: the trade's biggest categories stand in.
+    expect(top.map((c) => c.slug)).toEqual([
+      "seals-other",
+      "o-rings",
+      "bearings",
+      "oil-seals",
+      "couplings",
+    ]);
+  });
+
+  it("selects a leaf's group and lists that group's categories", () => {
+    const { group, children } = tradeTree(SEALS, "seals-bearings:bearings");
+    expect(group?.slug).toBe("transmission");
+    expect(children.map((c) => c.slug)).toEqual(["bearings", "couplings"]);
+  });
+
+  it("selects a group by itself", () => {
+    expect(tradeTree(SEALS, "seals-bearings:seals").group?.slug).toBe("seals");
+  });
+
+  it("adds no biggest-categories row to a flat trade", () => {
+    const { groups, top } = tradeTree(FLAT);
+    expect(groups.map((g) => g.slug)).toEqual(["oak", "teak"]);
+    expect(top).toEqual([]);
+  });
+});

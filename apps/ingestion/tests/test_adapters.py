@@ -12,6 +12,7 @@ from worker.sources import odoo as odoo_mod
 from worker.sources import woocommerce as woo_mod
 from worker.sources.base import SupplierInfo
 from worker.http import BROWSER_HEADERS, CHROME_VERSION
+from worker.normalize import not_a_product
 from worker.sources.odoo import OdooAdapter
 from worker.sources.shopify import ShopifyAdapter
 from worker.sources.woocommerce import WooCommerceAdapter
@@ -164,6 +165,55 @@ def test_crosswalk_still_matches_after_the_shop_retypes_the_punctuation():
     assert adapter.category_for(raw) == ("electronics", "diodes")
 
 
+# A fictional shop whose display bucket also names LEDs, and whose printer-parts
+# bucket holds filament — the two shapes that misfiled real listings.
+TAG_CLOUD = {
+    "Displays (LCD & LED)": ("electronics", "displays"),
+    "LEDs": ("electronics", "leds"),
+    "CNC & Printer Parts": ("electronics", "printer-parts"),
+    "Filament": ("electronics", "filament"),
+    "Stepper Motors": ("electronics", "motors"),
+}
+
+
+def _tagged(*names, prefer=()):
+    adapter = WooCommerceAdapter(
+        "t", "https://example.test", SUPPLIER, categories=TAG_CLOUD, prefer=prefer
+    )
+    product = _product()
+    product["categories"] = [{"name": n} for n in names]
+    return adapter.category_for(adapter._to_raw(product, "in stock"))
+
+
+def test_without_a_preference_the_first_mapped_tag_wins():
+    """The Store API's alphabetical order: "Displays (LCD & LED)" sorts before
+    "LEDs", so a plain 3 mm LED is filed as a display."""
+    assert _tagged("Displays (LCD &amp; LED)", "LEDs") == ("electronics", "displays")
+
+
+def test_a_preferred_tag_beats_one_that_sorts_before_it():
+    assert _tagged("Displays (LCD &amp; LED)", "LEDs", prefer=["LEDs"]) == ("electronics", "leds")
+
+
+def test_preference_is_ranked_and_only_decides_between_mapped_tags():
+    prefer = ["Filament", "Stepper Motors"]
+    assert _tagged("CNC &amp; Printer Parts", "Filament", prefer=prefer)[1] == "filament"
+    assert _tagged("CNC &amp; Printer Parts", "Stepper Motors", prefer=prefer)[1] == "motors"
+    # Both preferred: the higher-ranked one wins, whatever the alphabet says.
+    assert _tagged("Filament", "Stepper Motors", prefer=["Stepper Motors", "Filament"])[1] == (
+        "motors"
+    )
+    # Unpreferred tags keep the source's order among themselves.
+    assert _tagged("CNC &amp; Printer Parts", "LEDs", prefer=prefer)[1] == "printer-parts"
+    # A preferred name the listing does not carry changes nothing.
+    assert _tagged("LEDs", prefer=prefer) == ("electronics", "leds")
+
+
+def test_preference_matches_through_the_normalizer():
+    """Written readably in the crosswalk, received escaped and re-punctuated."""
+    assert _tagged("Displays (LCD &amp; LED)", "LEDs", prefer=["leds"])[1] == "leds"
+
+
 # --------------------------------------------------------------------------- #
 # Shopify crosswalk
 # --------------------------------------------------------------------------- #
@@ -213,6 +263,21 @@ def test_shopify_unmapped_product_types_fall_through(product_type):
 def test_shopify_adapter_without_a_crosswalk_maps_nothing():
     adapter = _shopify()
     assert adapter.category_for(adapter._to_raw(_shopify_product())) is None
+
+
+@pytest.mark.parametrize(
+    ("product_type", "expected"), [("Sensor ", ["Sensor"]), ("", []), (None, [])]
+)
+def test_shopify_reports_its_product_type_as_the_source_category(product_type, expected):
+    """Without it, crosswalk drift saw nothing and a "Services" entry was kept."""
+    adapter = _shopify(SHOPIFY_CROSSWALK)
+    assert adapter.source_categories(adapter._to_raw(_shopify_product(product_type))) == expected
+
+
+def test_a_shopify_service_is_not_a_product():
+    adapter = _shopify()
+    raw = adapter._to_raw(_shopify_product("Services"))
+    assert not_a_product(raw.title, adapter.source_categories(raw)) == "filed as a service"
 
 
 # --------------------------------------------------------------------------- #
@@ -361,3 +426,10 @@ def test_we_stay_contactable():
     """Identifiable without tripping WAFs — a supplier who wants us to stop has
     somewhere to write."""
     assert "@" in BROWSER_HEADERS["From"]
+
+
+def test_the_contact_address_is_on_a_domain_that_receives_mail():
+    """It used to name a domain that does not exist, so every message a supplier
+    sent us bounced — contactable on paper only. Pinned so it is changed on
+    purpose, alongside the README and the probe script that repeat it."""
+    assert BROWSER_HEADERS["From"] == "crawler@merope.dev"

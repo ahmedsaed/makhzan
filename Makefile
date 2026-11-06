@@ -94,7 +94,7 @@ status:  ## Show crawler progress, recent runs, catalog health and index drift
 	cd apps/ingestion && $(RUN_ENV) poetry run python ../../scripts/status.py $(ARGS)
 
 reindex:  ## Rebuild products and the search index from the database
-	cd apps/ingestion && $(RUN_ENV) poetry run python ../../scripts/reindex.py
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup
 
 # Working against real data locally. db-pull is read-only against production;
 # db-load only ever touches localhost. Set DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH

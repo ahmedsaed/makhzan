@@ -116,6 +116,11 @@ class Crosswalk:
     #: its listings are never seen again and a completed cycle archives them.
     #: Empty for sources whose categories are read off the listing instead.
     partitions: tuple[str, ...] = ()
+    #: For a source that tags a listing with several categories at once: the
+    #: mapped names that win when a listing carries more than one, most preferred
+    #: first. A tag listed here beats any tag that is not; between unlisted tags
+    #: the source's own order decides. Every name must also be mapped.
+    prefer: tuple[str, ...] = ()
 
 
 def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
@@ -130,7 +135,7 @@ def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
     with path.open("rb") as f:
         data = tomllib.load(f)
 
-    unknown = set(data) - {"categories", "partitions"}
+    unknown = set(data) - {"categories", "partitions", "prefer"}
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
 
@@ -145,7 +150,22 @@ def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
     partitions = data.get("partitions", [])
     if not all(isinstance(p, str) for p in partitions):
         raise ValueError(f"{path}: partitions must be a list of strings")
-    return Crosswalk(name=name, categories=categories, partitions=tuple(partitions))
+
+    prefer = data.get("prefer", [])
+    if not isinstance(prefer, list) or not all(isinstance(p, str) for p in prefer):
+        raise ValueError(f"{path}: prefer must be a list of strings")
+    mapped = {normalize_category_name(n) for n in categories}
+    folded_prefer = [normalize_category_name(p) for p in prefer]
+    # A preference for a name that is not mapped can never fire — most likely a
+    # typo, or a mapping since removed — so it is refused rather than kept dead.
+    unmapped = [p for p, key in zip(prefer, folded_prefer) if key not in mapped]
+    if unmapped:
+        raise ValueError(f"{path}: prefer names categories that are not mapped: {unmapped}")
+    if len(set(folded_prefer)) != len(folded_prefer):
+        raise ValueError(f"{path}: prefer lists a category twice")
+    return Crosswalk(
+        name=name, categories=categories, partitions=tuple(partitions), prefer=tuple(prefer)
+    )
 
 
 def list_crosswalks(directory: Path | None = None) -> list[str]:

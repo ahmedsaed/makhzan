@@ -1,8 +1,8 @@
 /**
- * Long-form copy for the "how we collect this" page.
+ * Long-form copy for the /how-we-crawl page.
  *
- * Kept out of lib/i18n.ts on purpose: that dictionary is short interface labels,
- * and mixing paragraphs into it makes both harder to maintain.
+ * Kept out of the page component so the copy can be read and corrected as
+ * prose, without wading through markup.
  *
  * This page exists because publishing an aggregator invites the question, and
  * the honest answer here is a good one. It is also the page to point a supplier
@@ -10,8 +10,6 @@
  * aspirational. If any of it stops being true, change the crawler or change the
  * page.
  */
-
-import type { Lang } from "@/lib/i18n";
 
 export type CrawlingSection = { heading: string; body: string[] };
 
@@ -24,10 +22,15 @@ export type CrawlingContent = {
   contactEmail: string;
 };
 
-const CONTACT_EMAIL = "crawler@makhzan.eg";
+/**
+ * A mailbox that exists. The crawler and this page used to name an address on
+ * a domain with no mail records, so a shop that wrote in got a bounce — the
+ * worst possible answer to "who are you?".
+ */
+export const CONTACT_EMAIL = "crawler@merope.dev";
 
-const en: CrawlingContent = {
-  title: "How we collect this",
+export const crawlingContent: CrawlingContent = {
+  title: "How we crawl",
   lead: "makhzan is a directory. It shows what Egyptian suppliers publish and sends you to them to buy. Nothing is sold here, and no supplier pays to appear.",
   sections: [
     {
@@ -70,54 +73,3 @@ const en: CrawlingContent = {
   contactBody: "Questions, corrections, or a request to change how we crawl your site:",
   contactEmail: CONTACT_EMAIL,
 };
-
-const ar: CrawlingContent = {
-  title: "كيف نجمع هذه البيانات",
-  lead: "مخزن دليل للموردين. يعرض ما ينشره الموردون في مصر ثم يحيلك إليهم للشراء. لا نبيع شيئًا هنا، ولا يدفع أي مورد مقابل الظهور.",
-  sections: [
-    {
-      heading: "ماذا نقرأ",
-      body: [
-        "فقط صفحات الكتالوج العامة وواجهات المنتجات التي يتيحها المتجر لأي زائر — نفس البيانات التي ستراها لو تصفحت الموقع بنفسك.",
-        "لا ننشئ حسابات، ولا نسجّل الدخول، ولا نضع طلبات، ولا نقرأ أي شيء خلف تسجيل الدخول. ولا نجمع أي بيانات عن عملاء المورد.",
-      ],
-    },
-    {
-      heading: "نلتزم بما ينشره كل موقع",
-      body: [
-        "قبل أي طلب نقرأ ملف robots.txt الخاص بالموقع ونلتزم به. أي مسار يطلب المتجر عدم قراءته لا نقرأه.",
-        "وإذا حدّد الموقع مدة انتظار بين الطلبات (Crawl-delay) نعتبرها حدًا أدنى لا هدفًا: متجر يطلب ٢٠ ثانية يحصل على ٢٠ ثانية.",
-      ],
-    },
-    {
-      heading: "نتحرك ببطء عن قصد",
-      body: [
-        "طلب واحد في كل مرة لكل متجر، وبفاصل لا يقل عن ١٥ ثانية. ونوزّع المسح الكامل لكتالوج المورد على أسبوع تقريبًا بدلًا من تنفيذه دفعة واحدة، حتى لا يرى أي متجر ضغطًا مفاجئًا منّا.",
-        "ويعرّف الزاحف عن نفسه في كل طلب ويترك عنوانًا للتواصل، حتى يعرف من يطالع سجلات خادمه من نحن.",
-      ],
-    },
-    {
-      heading: "قد تكون الأسعار هنا قديمة",
-      body: [
-        "كل عرض يوضّح آخر مرة تحققنا فيها منه. نحن لا نتحكم في أسعار الموردين ولا نضمن أن السعر ما زال ساريًا — تأكّد دائمًا من موقع المورد قبل الشراء.",
-        "وإذا توقف مورد عن عرض منتج، يختفي من مخزن بعد أن يؤكد مسح كامل أنه لم يعد موجودًا.",
-      ],
-    },
-    {
-      heading: "إذا كنت موردًا",
-      body: [
-        "نفضّل أن نحصل على موافقتك بدلًا من العمل بدونها. إن أردت إزالة متجرك، أو عرضه بشكل مختلف، أو مسحه بوتيرة أبطأ، أو في ساعة معيّنة، راسلنا وسننفّذ ذلك.",
-        "وإن أردت أن تُدرج ولم تُدرج بعد، فهذا أسهل.",
-      ],
-    },
-  ],
-  contactHeading: "للتواصل",
-  contactBody: "لأي سؤال أو تصحيح أو طلب بتغيير طريقة مسح موقعك:",
-  contactEmail: CONTACT_EMAIL,
-};
-
-const CONTENT: Record<Lang, CrawlingContent> = { en, ar };
-
-export function getCrawlingContent(lang: Lang): CrawlingContent {
-  return CONTENT[lang];
-}

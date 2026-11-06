@@ -15,6 +15,7 @@ from decimal import Decimal, InvalidOperation
 from makhzan_schemas.contracts import NormalizedListing, RawItem
 from makhzan_schemas.enums import DEFAULT_CURRENCY, ReviewReason, StockSignal
 from makhzan_schemas.domains import get_profile
+from makhzan_schemas.domains.crosswalks import normalize_category_name
 
 # Arabic-Indic digits -> ASCII, so "٣٥٠" parses like "350".
 _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -39,6 +40,21 @@ def clean_text(text: str | None) -> str | None:
     if not text:
         return None
     cleaned = re.sub(r"\s+", " ", html.unescape(text)).strip()
+    return cleaned or None
+
+
+def clean_description(text: str | None) -> str | None:
+    """`clean_text`, line by line: a description keeps the line breaks it came with.
+
+    The product page shows descriptions with `white-space: pre-line`, so a list
+    or a spec table an adapter rendered one item per line stays readable instead
+    of becoming one paragraph. Blank lines are dropped; text without line breaks
+    comes out exactly as `clean_text` would make it.
+    """
+    if not text:
+        return None
+    lines = (clean_text(line) for line in text.splitlines())
+    cleaned = "\n".join(line for line in lines if line)
     return cleaned or None
 
 
@@ -68,6 +84,37 @@ def parse_stock(availability_text: str | None) -> StockSignal:
     if any(h in text for h in _IN_STOCK_HINTS):
         return StockSignal.IN_STOCK
     return StockSignal.UNKNOWN
+
+
+# Shop catalogues carry entries that are not stock: a placeholder a theme or an
+# app created ("Item", "point1"), a delivery fee a checkout app sells as a product,
+# a service. Published as products, they are the first thing a shop notices.
+_PLACEHOLDER_TITLE = re.compile(r"(?:items?|points?|products?|test|untitled|sample)\s*-?\s*\d*")
+_FEE_TITLE = re.compile(
+    r"(?:local |express |home |free |standard )?(?:delivery|shipping)"
+    r"(?: (?:fees?|charges?|costs?|services?))?"
+)
+#: A shop filing a listing under one of these says itself that it is not stock.
+_SERVICE_CATEGORIES = {"service", "services"}
+
+
+def not_a_product(title: str | None, categories: list[str] | None = None) -> str | None:
+    """Why a catalogue entry is not a product, or None if it is one.
+
+    Deliberately narrow — the whole title has to be the placeholder or the fee,
+    and the category has to be exactly "Services" — because a false positive is
+    a real product silently dropped. "Disc Brake Pad & Caliper Service Tool Kit"
+    and "Automatic Delivery System for Greases" are products; "Local Delivery"
+    and "3D Printing Service" filed under Services are not.
+    """
+    text = normalize_category_name(title)
+    if _PLACEHOLDER_TITLE.fullmatch(text):
+        return "placeholder title"
+    if _FEE_TITLE.fullmatch(text):
+        return "delivery fee"
+    if any(normalize_category_name(c) in _SERVICE_CATEGORIES for c in categories or []):
+        return "filed as a service"
+    return None
 
 
 def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing:
@@ -101,7 +148,7 @@ def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing
     if confidence < REVIEW_THRESHOLD and ReviewReason.LOW_CONFIDENCE not in reasons:
         reasons.append(ReviewReason.LOW_CONFIDENCE)
 
-    description = clean_text(raw.description)
+    description = clean_description(raw.description)
     desc_is_ar = bool(description and _has_arabic(description))
 
     return NormalizedListing(
