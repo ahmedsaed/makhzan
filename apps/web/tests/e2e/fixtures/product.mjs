@@ -1,7 +1,8 @@
 /**
  * Stub payloads for the product page (tests/e2e/product.spec.ts): one offer
- * with a stale price, several offers with out-of-stock ones to fold, and every
- * offer out of stock. Shops are fictional; check dates are relative to when
+ * with a stale price, several offers with out-of-stock ones to fold, every
+ * offer out of stock, and one whose shop published specs and datasheets.
+ * Shops are fictional; check dates are relative to when
  * the stub starts, so the freshness tiers hold whatever day the suite runs.
  */
 
@@ -30,8 +31,17 @@ const VOLT = shop("volt-corner", "Volt Corner");
 const NILE = shop("nile-parts", "Nile Parts");
 const DELTA = shop("delta-bench", "Delta Bench");
 
-function offer(id, supplier, title, price, stock, age, images = []) {
+/** Where the cached-thumbnail photos live; the spec intercepts this host. */
+const MEDIA = "https://media.nile-parts.test";
+
+/** `details`: what the shop published (brand, specs, documents). The API sends
+ *  `specs` and `documents` on every offer, empty when there are none. */
+function offer(id, supplier, title, price, stock, age, images = [], details = {}) {
   return {
+    brand: null,
+    specs: {},
+    documents: [],
+    ...details,
     id,
     title_en: title,
     title_ar: null,
@@ -82,13 +92,50 @@ const PRODUCTS = {
   ),
   "p-multi": product("p-multi", "ESP32 Development Board 30 pin", [
     // Deliberately not in price order: the page sorts.
-    offer("o-m3", NILE, "ESP32 Development Board 30-Pin with CP2102", 280, "in_stock", 20),
-    offer("o-m1", DELTA, "ESP32 Development Board 30 pin (WIFI - Bluetooth)", 260, "in_stock", 17),
+    // Two shops publish specs; the page shows only the lead offer's (o-m1).
+    offer("o-m3", NILE, "ESP32 Development Board 30-Pin with CP2102", 280, "in_stock", 20, [], {
+      specs: { "USB Chip": "CP2102" },
+    }),
+    offer(
+      "o-m1",
+      DELTA,
+      "ESP32 Development Board 30 pin (WIFI - Bluetooth)",
+      260,
+      "in_stock",
+      17,
+      [],
+      { specs: { "Flash Memory": "4 MB", "GPIO Pins": "30" } },
+    ),
     offer("o-oos1", VOLT, "ESP32 DevKit 30 pin, old stock", 240, "out_of_stock", 9),
     offer("o-m5", NILE, "ESP32 Development Board 38-Pin – Micro USB", 295, "in_stock", 28),
     offer("o-m2", NILE, "ESP32 Development Board 30-Pin with CP2102 Type-C", 270, "in_stock", 29),
     offer("o-oos2", DELTA, "ESP32 38 pin board", 300, "out_of_stock", 60),
     offer("o-m4", DELTA, "ESP32S ESP-WROOM-32 38-Pin CP2102", 290, "in_stock", 16),
+  ]),
+  // What the shop published (rule C4): brand, spec rows and datasheets, and
+  // photos that are cached 150px thumbnails with a full-size original beside
+  // them (tests/e2e/product.spec.ts serves those through page.route).
+  "p-specs": product("p-specs", "UT61E Digital Multimeter True RMS", [
+    offer(
+      "o-spec",
+      NILE,
+      "UT61E Digital Multimeter True RMS",
+      2450,
+      "in_stock",
+      3,
+      [
+        `${MEDIA}/uploads/cache/2025-01-10/product/image/ut61e-front-q-80-h-150.webp`,
+        `${MEDIA}/uploads/cache/2025-01-10/product/image/ut61e-back-q-80-h-150.webp`,
+      ],
+      {
+        brand: "UNI-T",
+        specs: { Model: "UT61E", "DC Voltage": "220mV – 1000V", Display: "22000 counts" },
+        documents: [
+          { url: "https://nile-parts.test/files/ut61e-manual.pdf", label: "UT61E user manual" },
+          { url: "https://nile-parts.test/files/ut61e-datasheet.pdf", label: null },
+        ],
+      },
+    ),
   ]),
   "p-oos": product("p-oos", "LM2596 Buck Converter Module", [
     offer("o-x1", VOLT, "LM2596 DC-DC Buck Module", 45, "out_of_stock", 30),
@@ -103,6 +150,11 @@ const DESCRIPTION =
   "Runs on one CR2032 cell, with automatic power-off after five minutes idle. " +
   "Packed in a hard plastic case with a spare battery. Hardened stainless steel jaws " +
   "for outside, inside, depth and step measurements. This sentence is the end of it.";
+
+const DESCRIPTIONS = {
+  "o-single": DESCRIPTION,
+  "o-spec": "True RMS multimeter with a 22000-count display and a USB data link.",
+};
 
 const SUPPLIERS = {
   "volt-corner": VOLT,
@@ -130,10 +182,9 @@ export function productFixture(path) {
         {
           ...found,
           product_id: item.id,
-          description_en: found.id === "o-single" ? DESCRIPTION : null,
+          description_en: DESCRIPTIONS[found.id] ?? null,
           description_ar: null,
           part_number: item.part_number,
-          brand: null,
           unit: null,
           status: "active",
           category: CATEGORY,

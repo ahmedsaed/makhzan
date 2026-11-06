@@ -1,5 +1,6 @@
-import { PhotoFrame } from "@/components/photo-frame";
 import { cn } from "@/lib/utils";
+
+import { FullSizePhoto } from "./full-size-photo";
 
 /**
  * The product's photos as a swipeable strip: CSS scroll snapping, no
@@ -7,7 +8,9 @@ import { cn } from "@/lib/utils";
  * whichever one is on screen without anything having to track it.
  *
  * Photos come from every shop's listing (21% of listings have several), all
- * contained in the white frame (rule S5).
+ * contained in the white frame (rule S5), and at full size where a shop only
+ * hands out cached thumbnails (FullSizePhoto); the page is the one place a
+ * photo is big enough for that to matter.
  */
 export function Gallery({
   images,
@@ -23,7 +26,7 @@ export function Gallery({
 }) {
   if (images.length <= 1) {
     return (
-      <PhotoFrame
+      <FullSizePhoto
         src={images[0] ?? null}
         alt={alt}
         priority={priority}
@@ -40,7 +43,7 @@ export function Gallery({
     >
       {images.map((src, index) => (
         <div key={src} className="relative w-full shrink-0 snap-center">
-          <PhotoFrame
+          <FullSizePhoto
             src={src}
             alt={index === 0 ? alt : `${alt}, photo ${index + 1}`}
             priority={priority && index === 0}

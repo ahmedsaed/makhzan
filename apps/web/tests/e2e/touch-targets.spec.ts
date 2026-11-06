@@ -89,6 +89,9 @@ test("the product page's controls", async ({ page }) => {
     "first breadcrumb": crumbs.first(),
     "sold by card": page.locator("[data-sold-by]"),
   });
+
+  await page.goto("/products/p-specs");
+  await expectTappable(page, { "datasheet link": page.locator("[data-datasheet]").first() });
 });
 
 test("nothing scrolls sideways at 320px on the trade pages", async ({ page }) => {
