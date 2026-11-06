@@ -1,0 +1,85 @@
+# Local development stack for makhzan.
+# Copy .env.example to .env first, then: docker compose up
+#
+# Services:
+#   db         - PostgreSQL (shared by api + ingestion)
+#   search     - Meilisearch (Arabic-aware search index)
+#   redis      - Arq queue backend for the ingestion worker
+#   api        - FastAPI backend
+#   ingestion  - Arq worker (scrapers / normalization)
+#   web        - Next.js frontend + supplier portal (added once scaffolded)
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  search:
+    image: getmeili/meilisearch:v1.9
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: development
+    ports:
+      - "7700:7700"
+    volumes:
+      - ./meili_data:/meili_data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: dev
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/workspace/apps/api
+      - ./packages/schemas:/workspace/packages/schemas
+    depends_on:
+      db:
+        condition: service_healthy
+      search:
+        condition: service_started
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: apps/ingestion/Dockerfile
+      target: dev
+    env_file: .env
+    volumes:
+      - ./apps/ingestion:/workspace/apps/ingestion
+      - ./packages/schemas:/workspace/packages/schemas
+      - ./config:/workspace/config
+    depends_on:
+      db:
+        condition: service_healthy
+      search:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  # web:
+  #   build: ./apps/web
+  #   env_file: .env
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - api

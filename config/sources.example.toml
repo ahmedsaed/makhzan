@@ -1,0 +1,40 @@
+# Format of sources.toml, the file the `sources` table is seeded from.
+#
+#   MAKHZAN_SOURCES=path/to/sources.toml make sources
+#
+# One [[source]] per crawled shop. Recognised keys:
+#
+#   id         Stable source id. Stored on every listing, run and cursor, so
+#              renaming one orphans its history — treat it as permanent.
+#   adapter    A built-in type (woocommerce, shopify, odoo, fixture) or an
+#              import path, "package.module:Class", for an adapter kept in
+#              another package.
+#   base_url   The shop's origin. Omit only for sources with no host.
+#   enabled    Defaults to true. A disabled source is still built, so it can be
+#              run by hand, but the daily refresh skips it.
+#   supplier   The shop: slug and name, plus optionally website_url, name_ar,
+#              area, governorate and domain (the fallback vertical for listings
+#              the crosswalk does not place; defaults to electronics).
+#   crosswalk  Name of a file in MAKHZAN_CROSSWALKS (default config/crosswalks),
+#              without .toml. Its [categories] map the shop's own categories to
+#              ours; its partitions, if any, are the categories to sweep.
+#
+# Anything else is passed to the adapter's constructor, so an unknown key is an
+# error at sync time rather than a setting silently ignored. The common ones:
+# polite_delay (seconds between requests to this host), max_pages_per_run and
+# max_partitions_per_run (how much of a cycle one daily run sweeps). Odoo also
+# takes sweep_whole_shop; Shopify takes currency.
+
+[[source]]
+id = "fixture"
+adapter = "fixture"
+enabled = false
+supplier = { slug = "fixture", name = "Fixture (test source)" }
+
+# [[source]]
+# id = "example-shop"
+# adapter = "woocommerce"
+# base_url = "https://shop.example"
+# crosswalk = "example-shop"
+# max_pages_per_run = 3
+# supplier = { slug = "example-shop", name = "Example Shop", website_url = "https://shop.example" }

@@ -1,0 +1,19 @@
+# Root build context (api + ingestion images build from repo root).
+.git
+pgdata
+meili_data
+seed
+backups
+.playwright-mcp
+**/node_modules
+**/.next
+**/.venv
+**/venv
+**/__pycache__
+**/.ruff_cache
+**/.pytest_cache
+*.pyc
+.env
+.env.*
+!.env.example
+!.env.prod.example

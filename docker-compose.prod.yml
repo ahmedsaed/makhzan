@@ -1,0 +1,165 @@
+# Production stack for makhzan (Docker Compose).
+#
+#   cp .env.prod.example .env.prod   # then edit secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# Images are pulled from a registry (built + pushed by CI). Each service also
+# has a `build:` block so you can build on the server instead:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod build
+#
+# TLS / reverse proxy is handled externally (managed by you). Only the web app
+# is published (WEB_PORT) for your proxy to front; the API is internal and the
+# web service proxies /api to it (Next.js rewrites). db / search / redis are
+# internal-only. Data lives in named volumes (docker volume ls).
+
+x-restart: &restart
+  restart: unless-stopped
+
+# The supplier configuration (sources.toml, crosswalks/, bespoke adapters) is not
+# in this repository or its images: it is a private checkout beside this one,
+# mounted read-only into the two services that read it. deploy.sh pulls it.
+# create_host_path is off so a missing checkout fails the deploy instead of
+# Docker creating an empty directory and the sync finding no sources file.
+x-private-config: &private-config
+  volumes:
+    - type: bind
+      source: ${MAKHZAN_CONFIG_DIR:-../makhzan-config}
+      target: /workspace/private
+      read_only: true
+      bind:
+        create_host_path: false
+  environment:
+    MAKHZAN_SOURCES: /workspace/private/sources.toml
+    MAKHZAN_CROSSWALKS: /workspace/private/crosswalks
+    PYTHONPATH: /workspace/private
+
+services:
+  db:
+    image: postgres:16
+    <<: *restart
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  search:
+    image: getmeili/meilisearch:v1.9
+    <<: *restart
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: production
+    volumes:
+      - meili_data:/meili_data
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+
+  # One-shot: apply Alembic migrations and seed the sources table from
+  # sources.toml, then exit. api/ingestion wait for success. The sync is part of
+  # every deploy because the worker reads the table, not the file: without it a
+  # source added to the file would never run, and a fresh database would crawl
+  # nothing at all.
+  migrate:
+    image: ${IMAGE_PREFIX}-ingestion:${IMAGE_TAG}
+    build:
+      context: .
+      dockerfile: apps/ingestion/Dockerfile
+      target: prod
+    <<: *private-config
+    env_file: .env.prod
+    command:
+      - sh
+      - -c
+      - >-
+        cd /workspace/packages/schemas && alembic upgrade head &&
+        cd /workspace/apps/ingestion && python -m worker.sources.sync
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ${IMAGE_PREFIX}-api:${IMAGE_TAG}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: prod
+    <<: *restart
+    env_file: .env.prod
+    # Not published — the web service proxies /api to it over the internal
+    # network (see web.API_INTERNAL_URL). Expose a port here only if you need to
+    # reach the API directly from outside.
+    depends_on:
+      db:
+        condition: service_healthy
+      search:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health').status==200 else sys.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ingestion:
+    image: ${IMAGE_PREFIX}-ingestion:${IMAGE_TAG}
+    build:
+      context: .
+      dockerfile: apps/ingestion/Dockerfile
+      target: prod
+    <<: [*restart, *private-config]
+    env_file: .env.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      search:
+        condition: service_started
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: ${IMAGE_PREFIX}-web:${IMAGE_TAG}
+    build:
+      context: apps/web
+      dockerfile: Dockerfile
+      args:
+        # Where the browser reaches the API (baked in at build). "/api" if your
+        # proxy maps it on the web origin; else an absolute URL. See .env.prod.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+    <<: *restart
+    # Next.js rewrites /api/* to the API over the internal network.
+    environment:
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    # Next's data cache (the `revalidate` results in lib/api.ts) lives under
+    # .next/cache. Without a volume it is part of the container, so every deploy
+    # starts cold and the first visitor pays for the whole taxonomy again —
+    # /categories groups over every product row. Photos are not in here: they
+    # load straight from the supplier (docs/decisions/0003).
+    volumes:
+      - web_cache:/app/.next/cache
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  db_data:
+  meili_data:
+  redis_data:
+  web_cache:

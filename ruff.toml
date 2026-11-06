@@ -1,0 +1,9 @@
+# Root ruff config.
+#
+# Exists for the directories that are not a Python project of their own —
+# scripts/ chiefly. Without it ruff finds no config for those files and falls
+# back to its 88-column default, so the same file passed `make lint` (invoked
+# from apps/ingestion, which has line-length 100) and failed CI (invoked from
+# the repo root). Each app and package still has its own [tool.ruff] and those
+# take precedence for their own files.
+line-length = 100

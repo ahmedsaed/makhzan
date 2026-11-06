@@ -1,0 +1,158 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* next-themes writes .dark on <html>. */
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Design language 04 — see docs/DESIGN.md.
+ *
+ * Souk's build (geometric display, 2px edges, 7px radius) on Ledger's palette
+ * (warm paper, oxblood, muted green). Every colour is defined here in the bare
+ * :root and redefined in .dark; nothing is declared only inside .dark, or the
+ * un-themed first paint renders one theme's text on the other theme's ground.
+ * ------------------------------------------------------------------------- */
+:root {
+  --ground: #fcfbf7;
+  --surface: #ffffff;
+  --ink: #1a1a17;
+  --ink-muted: #6e6c63;
+  --rule: #e5e3da;
+  --accent: #7a2e2e;
+  --accent-ink: #ffffff;
+  --ok: #3f6b46;
+  --ok-bg: #edf2ed;
+  --chip: #f2f0e8;
+  --radius: 7px;
+}
+
+.dark {
+  --ground: #121210;
+  --surface: #1a1a17;
+  --ink: #ece9e0;
+  --ink-muted: #98958a;
+  --rule: #2a2a25;
+  /* Deliberately not Ledger's #C97A70 — against this geometry it read washed. */
+  --accent: #ce7263;
+  --accent-ink: #17110f;
+  --ok: #86b08c;
+  --ok-bg: #1c2620;
+  --chip: #232320;
+}
+
+/* shadcn/Base UI primitives speak these names. Mapping them onto the palette
+ * above means the primitives inherit the design language instead of carrying a
+ * second, competing one. */
+:root,
+.dark {
+  --background: var(--ground);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-ink);
+  --secondary: var(--chip);
+  --secondary-foreground: var(--ink);
+  --muted: var(--chip);
+  --muted-foreground: var(--ink-muted);
+  --accent-color: var(--chip);
+  --accent-foreground: var(--ink);
+  --destructive: var(--accent);
+  --border: var(--rule);
+  --input: var(--rule);
+  --ring: var(--accent);
+}
+
+@theme inline {
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-tajawal), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-rule: var(--rule);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-chip: var(--chip);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: var(--radius);
+  --radius-xl: 10px;
+}
+
+@layer base {
+  * {
+    border-color: var(--rule);
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Display face carries the titles; tight tracking is part of the language. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  /* Digits that get compared must line up: prices, counts, part numbers. */
+  .tabular,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Part numbers stay LTR inside Arabic text, or ESP32-WROOM-32 reorders
+   * around its hyphens. See docs/DESIGN.md. */
+  [data-identifier] {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

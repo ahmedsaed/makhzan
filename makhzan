@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Everyday production actions in one place.
+#
+#   ./makhzan status         # containers, health, crawl flag, crawler progress
+#   ./makhzan deploy         # update, pull images, migrate, restart (deploy.sh)
+#   ./makhzan crawl off|on   # pause / resume the daily crawl, surviving deploys
+#   ./makhzan logs [service] # follow logs (default: ingestion)
+#   ./makhzan stop|start [service]   # whole stack, or one service
+#   ./makhzan backup|migrate
+#
+# Run it on the server, or from a laptop: without a .env.prod here it re-runs
+# itself on DEPLOY_HOST over SSH, using the same .env.local variables as
+# db-pull.sh. Either way the commands act on the server's stack.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+usage() {
+  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+[ $# -gt 0 ] || usage 1
+case "$1" in -h|--help|help) usage ;; esac
+
+# --- Not on the server: forward over SSH --------------------------------------
+if [ ! -f .env.prod ]; then
+  if [ -f .env.local ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env.local
+    set +a
+  fi
+  : "${DEPLOY_HOST:?no .env.prod here, so this is not the server; set DEPLOY_HOST (e.g. in .env.local) to run it there}"
+  DEPLOY_USER="${DEPLOY_USER:-ahmed}"
+  DEPLOY_PATH="${DEPLOY_PATH:-~/Documents/Projects/makhzan}"
+  # -t so `logs` can be interrupted and colours survive. The path is left
+  # unquoted on purpose so the remote shell expands a leading ~.
+  exec ssh -t "${DEPLOY_USER}@${DEPLOY_HOST}" "cd ${DEPLOY_PATH} && ./makhzan $(printf '%q ' "$@")"
+fi
+
+# --- On the server ------------------------------------------------------------
+COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env.prod)
+
+# What the running worker actually believes, which is not necessarily what
+# .env.prod says: the worker reads it only when its container is (re)created.
+crawl_effective() {
+  "${COMPOSE[@]}" exec -T ingestion python -c \
+    "import worker.main as m; print('on' if m.CRAWL_ENABLED else 'off')" 2>/dev/null \
+    || echo "unknown (worker not running, or its image predates CRAWL_ENABLED)"
+}
+
+crawl_configured() {
+  local v
+  v="$(sed -n 's/^CRAWL_ENABLED=//p' .env.prod | tail -1)"
+  echo "${v:-true (unset)}"
+}
+
+cmd_status() {
+  echo "==> Checkout: $(git log -1 --format='%h %s (%cr)')"
+  echo
+  echo "==> Containers"
+  "${COMPOSE[@]}" ps
+  echo
+
+  set -a; . ./.env.prod; set +a
+  local port="${WEB_PORT:-3000}"
+  if curl -fsS --max-time 5 "http://localhost:${port}/api/health" >/dev/null 2>&1; then
+    echo "==> Health: /api/health answers"
+  else
+    echo "==> Health: /api/health on localhost:${port} is NOT answering"
+  fi
+  echo
+  echo "==> Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"
+  echo
+
+  # status.py is not baked into the image; stream it in from the checkout. The
+  # container already has the schema package and .env.prod's connection details.
+  "${COMPOSE[@]}" exec -T ingestion python - "$@" < scripts/status.py
+}
+
+cmd_crawl() {
+  local value
+  case "${1:-}" in
+    on) value=true ;;
+    off) value=false ;;
+    "") echo "Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"; return ;;
+    *) echo "usage: makhzan crawl [on|off]" >&2; exit 1 ;;
+  esac
+
+  if grep -q '^CRAWL_ENABLED=' .env.prod; then
+    sed -i "s/^CRAWL_ENABLED=.*/CRAWL_ENABLED=${value}/" .env.prod
+  else
+    printf '\nCRAWL_ENABLED=%s\n' "$value" >> .env.prod
+  fi
+
+  # The worker reads its environment at creation, so restarting is not enough.
+  # A run in progress is cut short; progress is saved per page, so it resumes.
+  echo "==> CRAWL_ENABLED=${value}; recreating the ingestion worker"
+  "${COMPOSE[@]}" up -d --force-recreate --no-deps ingestion
+  echo "==> Worker now says: $(crawl_effective)"
+}
+
+cmd="$1"; shift
+case "$cmd" in
+  status) cmd_status "$@" ;;
+  deploy) exec ./scripts/deploy.sh "$@" ;;
+  crawl) cmd_crawl "$@" ;;
+  logs) "${COMPOSE[@]}" logs -f --tail 200 "${@:-ingestion}" ;;
+  stop) "${COMPOSE[@]}" stop "$@" ;;
+  start) "${COMPOSE[@]}" up -d "$@" ;;
+  backup) exec ./scripts/backup-db.sh ;;
+  migrate) exec ./scripts/migrate.sh ;;
+  *) echo "unknown command: $cmd" >&2; usage 1 ;;
+esac

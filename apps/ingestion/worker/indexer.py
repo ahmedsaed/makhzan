@@ -1,0 +1,98 @@
+"""Search indexer (writer side).
+
+Pushes Listings into Meilisearch. The index is a rebuildable projection of the
+`listings` table — `reindex_all` can recreate it from scratch, and the pipeline
+indexes incrementally as it ingests.
+"""
+
+from __future__ import annotations
+
+import os
+
+import meilisearch
+from makhzan_schemas.models import Category, Product
+from makhzan_schemas.search import (
+    FILTERABLE_ATTRIBUTES,
+    INDEX_NAME,
+    SEARCHABLE_ATTRIBUTES,
+    SORTABLE_ATTRIBUTES,
+    build_product_document,
+)
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def get_client() -> meilisearch.Client:
+    return meilisearch.Client(
+        os.getenv("MEILI_URL", "http://localhost:7700"),
+        os.getenv("MEILI_MASTER_KEY") or None,
+    )
+
+
+def ensure_index(client: meilisearch.Client) -> None:
+    """Create the index (if absent) and apply its attribute configuration."""
+    try:
+        task = client.create_index(INDEX_NAME, {"primaryKey": "id"})
+        client.wait_for_task(task.task_uid)
+    except meilisearch.errors.MeilisearchApiError:
+        pass  # already exists
+    index = client.index(INDEX_NAME)
+    task = index.update_settings(
+        {
+            "searchableAttributes": SEARCHABLE_ATTRIBUTES,
+            "filterableAttributes": FILTERABLE_ATTRIBUTES,
+            "sortableAttributes": SORTABLE_ATTRIBUTES,
+            # Default cap is 1000; raise it so result counts stay accurate at volume.
+            "pagination": {"maxTotalHits": 50000},
+        }
+    )
+    client.wait_for_task(task.task_uid)
+
+
+def index_documents(
+    client: meilisearch.Client, docs: list[dict], *, wait: bool = False, batch_size: int = 1000
+) -> None:
+    """Add documents to the index, in batches to keep request payloads sane at volume."""
+    if not docs:
+        return
+    index = client.index(INDEX_NAME)
+    for start in range(0, len(docs), batch_size):
+        task = index.add_documents(docs[start : start + batch_size])
+        if wait:
+            client.wait_for_task(task.task_uid)
+
+
+def delete_documents(client: meilisearch.Client, ids: list[str], *, wait: bool = False) -> None:
+    """Remove documents from the index (e.g. listings archived because a supplier dropped them)."""
+    if not ids:
+        return
+    task = client.index(INDEX_NAME).delete_documents(ids)
+    if wait:
+        client.wait_for_task(task.task_uid)
+
+
+async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
+    """Rebuild the whole product index from Postgres (full replace).
+
+    Clears first so products deleted by regrouping don't linger as stale docs
+    (which would 404 when clicked).
+    """
+    ensure_index(client)
+    clear = client.index(INDEX_NAME).delete_all_documents()
+    client.wait_for_task(clear.task_uid)
+    rows = (
+        await session.execute(
+            select(Product, Category).outerjoin(Category, Category.id == Product.category_id)
+        )
+    ).all()
+    docs = [
+        build_product_document(
+            product,
+            cat.slug if cat else None,
+            cat.name_en if cat else None,
+            cat.domain if cat else None,
+        )
+        for product, cat in rows
+    ]
+    index_documents(client, docs, wait=True)
+    return len(docs)
