@@ -17,17 +17,19 @@ export function SearchField({
   placeholder = "Part number or name",
   compact = false,
   autoFocus = false,
-  scope,
   label = "Search",
+  scope,
   className,
 }: {
   defaultValue?: string;
   placeholder?: string;
   compact?: boolean;
   autoFocus?: boolean;
-  scope?: Record<string, string>;
-  /** The field's accessible name. */
+  /** The field's accessible name: "Search in Tools" for a scoped field. */
   label?: string;
+  /** Parameters submitted with the query, e.g. `{ domain: "tools" }` for
+   *  "Search in Tools". Hidden inputs, so scoping needs no JavaScript either. */
+  scope?: Record<string, string>;
   className?: string;
 }) {
   return (
