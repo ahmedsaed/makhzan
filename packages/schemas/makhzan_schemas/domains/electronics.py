@@ -69,7 +69,11 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
 # --- Resolver rules: (leaf_slug, [keywords]) — ORDER = priority, specific first #
 # Keywords match at a left word boundary (so "led" doesn't fire inside
 # "assembled") against normalized (decoded, lowercased) text. Trailing text is
-# free, so "resistor" matches "resistors".
+# free, so "resistor" matches "resistors" — unless the keyword ends in "\b",
+# which makes it a whole word: "pla\b" is PLA, not "plate" or "plastic".
+#
+# A leaf may appear twice when part of its vocabulary must outrank another leaf
+# and part must not (see 3D printers below).
 CATEGORY_RULES: list[tuple[str, list[str]]] = [
     ("resistors", ["resistor"]),
     ("potentiometers", ["potentiometer", "trimmer", "rheostat"]),
@@ -159,8 +163,16 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     ("fans-cooling", ["fan", "cooling", "heatsink", "heat sink", "thermal"]),
     ("motors", ["motor"]),
     ("servos", ["servo", "actuator", "stepper", "solenoid"]),
-    ("printers-3d", ["3d printer", "resin printer", "fdm printer", "sla printer", "printer combo"]),
-    ("filament", ["filament", "resin", "pla", "abs", "petg", "tpu"]),
+    # Only the phrases that cannot describe anything but a printer go ahead of
+    # filament, which has to beat "resin" in "Resin 3D Printer".
+    (
+        "printers-3d",
+        ["resin printer", "resin 3d printer", "fdm printer", "sla printer", "printer combo"],
+    ),
+    # Ahead of plain "3d printer": reels are sold "for 3D Printer", and the tag
+    # "3D Printer Filament" filed 61 listings as printers. The short names are
+    # whole words — as prefixes, "pla" filed plates and plastic gears as filament.
+    ("filament", ["filament", "resin", r"pla\b", r"abs\b", "petg", "tpu"]),
     ("soldering", ["solder", "flux", "desolder"]),
     (
         "hand-tools",
@@ -179,8 +191,20 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     ),
     (
         "printer-parts",
-        ["3d printer part", "printer part", "cnc", "nozzle", "hotend", "extruder", "heat bed"],
+        [
+            "3d printer part",
+            "printer part",
+            "for 3d printer",
+            "cnc",
+            "nozzle",
+            "hotend",
+            "extruder",
+            "heat bed",
+        ],
     ),
+    # Last of the printing leaves: "Extrusion Nozzle for 3D Printer" and "PLA
+    # Filament Roll for 3D Printer" name a printer only as what they fit.
+    ("printers-3d", ["3d printer"]),
     (
         "mechanical",
         [
@@ -236,7 +260,20 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     ("accessories", ["accessor", "mobile", "computer"]),
 ]
 
-_GENERIC = {"components", "component", "devices", "electronics", "products", "all products", "new"}
+_GENERIC = {
+    "components",
+    "component",
+    "devices",
+    "electronics",
+    "products",
+    "all products",
+    "new",
+    # Names two leaves at once, so it cannot say which a listing is. One shop's
+    # tag of this name holds filament reels, printers, nozzles and bearings
+    # alike; read as a category it filed all 94 under one leaf. The title can
+    # tell them apart.
+    "3d printer filament",
+}
 
 # Generic descriptors that don't distinguish products — dropped from title signatures.
 _NOISE = {
