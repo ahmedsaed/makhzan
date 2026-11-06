@@ -580,3 +580,34 @@ def test_the_non_product_rules_are_narrow(title, categories):
 )
 def test_placeholders_and_fees_are_not_products(title, categories):
     assert not_a_product(title, categories)
+
+
+async def test_a_worker_closes_runs_a_previous_worker_left_running():
+    """Stopped mid-run, a worker leaves its run RUNNING; the next one closes it."""
+    from makhzan_schemas.db import SessionLocal
+    from makhzan_schemas.enums import IngestionStatus, SourceType
+    from makhzan_schemas.models import IngestionRun
+    from sqlalchemy import select
+
+    from worker.main import close_interrupted_runs
+
+    async with SessionLocal() as session:
+        session.add_all(
+            [
+                IngestionRun(source="cut-off", source_type=SourceType.SCRAPED),
+                IngestionRun(
+                    source="done",
+                    source_type=SourceType.SCRAPED,
+                    status=IngestionStatus.SUCCESS,
+                ),
+            ]
+        )
+        await session.commit()
+        assert await close_interrupted_runs(session) == 1
+
+    async with SessionLocal() as session:
+        runs = {r.source: r for r in (await session.execute(select(IngestionRun))).scalars()}
+    assert runs["cut-off"].status == IngestionStatus.FAILED
+    assert runs["cut-off"].finished_at is not None
+    assert runs["cut-off"].error.startswith("interrupted")
+    assert runs["done"].status == IngestionStatus.SUCCESS
