@@ -1,10 +1,10 @@
 import { Link } from "@/components/link";
-
-import { labelFor } from "@/components/browse-menu";
 import type { Category, Facets } from "@/lib/api";
 import { categoryNameOf } from "@/lib/api";
-import { getDictionary, localeOf, type Lang } from "@/lib/i18n";
+import { formatCount } from "@/lib/format";
 import { routes, type SearchQuery } from "@/lib/routes";
+import { tradeLabel } from "@/lib/trades";
+import { cn } from "@/lib/utils";
 
 /**
  * Facets as links, not checkboxes.
@@ -14,18 +14,14 @@ import { routes, type SearchQuery } from "@/lib/routes";
  * from the engine over the whole matching set, not the page on screen.
  */
 export function FacetRail({
-  lang,
   query,
   facets,
   categories,
 }: {
-  lang: Lang;
   query: SearchQuery;
   facets: Facets | undefined;
   categories: Category[];
 }) {
-  const t = getDictionary(lang);
-  const locale = localeOf(lang);
   const byRef = new Map(categories.map((category) => [category.ref, category]));
 
   const domains = Object.entries(facets?.domain ?? {}).sort((a, b) => b[1] - a[1]);
@@ -39,16 +35,16 @@ export function FacetRail({
   return (
     <div className="flex flex-col gap-5 text-sm">
       {domains.length > 0 && (
-        <FacetGroup title={t.facetTrade}>
+        <FacetGroup title="Trade">
           {domains.map(([domain, count]) => (
             <FacetLink
               key={domain}
-              href={routes.search(lang, {
+              href={routes.search({
                 ...base,
                 domain: query.domain === domain ? undefined : domain,
               })}
-              label={labelFor(domain, lang)}
-              count={count.toLocaleString(locale)}
+              label={tradeLabel(domain)}
+              count={formatCount(count)}
               active={query.domain === domain}
             />
           ))}
@@ -56,32 +52,24 @@ export function FacetRail({
       )}
 
       {refs.length > 0 && (
-        <FacetGroup title={t.facetCategory}>
+        <FacetGroup title="Category">
           {refs.map(([ref, count]) => {
             const category = byRef.get(ref);
             return (
               <FacetLink
                 key={ref}
-                href={routes.search(lang, {
+                href={routes.search({
                   ...base,
                   category: query.category === ref ? undefined : ref,
                 })}
-                label={category ? categoryNameOf(category, lang) : ref}
-                count={count.toLocaleString(locale)}
+                label={category ? categoryNameOf(category) : ref}
+                count={formatCount(count)}
                 active={query.category === ref}
               />
             );
           })}
         </FacetGroup>
       )}
-
-      <FacetGroup title={t.facetAvailability}>
-        <FacetLink
-          href={routes.search(lang, { ...base, inStock: query.inStock ? undefined : true })}
-          label={t.inStockOnly}
-          active={Boolean(query.inStock)}
-        />
-      </FacetGroup>
     </div>
   );
 }
@@ -89,7 +77,7 @@ export function FacetRail({
 function FacetGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <h3 className="mb-1.5 font-display text-[11px] tracking-widest text-ink-muted uppercase">
+      <h3 className="mb-1.5 font-sans text-xs font-semibold tracking-[0.06em] text-ink-2 uppercase">
         {title}
       </h3>
       <ul>{children}</ul>
@@ -113,19 +101,13 @@ function FacetLink({
       <Link
         href={href}
         aria-current={active ? "true" : undefined}
-        className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 ${
-          active ? "font-semibold text-ink" : "text-ink-muted hover:bg-chip hover:text-ink"
-        }`}
-      >
-        <span className="truncate">
-          {active && <span className="me-1 text-accent">▸</span>}
-          {label}
-        </span>
-        {count && (
-          <span data-numeric className="text-xs">
-            {count}
-          </span>
+        className={cn(
+          "flex min-h-11 items-center justify-between gap-2 rounded-md px-2 lg:min-h-9",
+          active ? "font-semibold text-ink" : "text-ink-2 hover:bg-ground hover:text-ink",
         )}
+      >
+        <span className="truncate">{label}</span>
+        {count && <span className="tabular text-xs text-ink-3">{count}</span>}
       </Link>
     </li>
   );

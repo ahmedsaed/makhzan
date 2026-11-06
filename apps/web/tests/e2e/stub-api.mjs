@@ -4,13 +4,14 @@
  * The pages fetch on the *server*, so a browser-level route interceptor cannot
  * see those requests — the stub has to be a real HTTP server the Next process
  * points at. That is a feature rather than a workaround: these tests are about
- * the frontend's behaviour (routing, direction, server rendering, working
- * without JavaScript), and the API has 123 tests of its own. Keeping them
- * separate means the suite needs no Postgres, no Meilisearch and no Python.
+ * the frontend's behaviour (routing, redirects, server rendering, working
+ * without JavaScript), and the API has tests of its own. Keeping them separate
+ * means the suite needs no Postgres, no Meilisearch and no Python.
  *
  * The payloads are shaped exactly like the real ones, including the awkward
  * parts the UI has to survive: a product with no photo, an offer with no price,
- * an Arabic title alongside a Latin part number, and a withdrawn listing.
+ * an Arabic title alongside a Latin part number, a withdrawn listing, and one
+ * the grouping step never attached to a product.
  */
 import { createServer } from "node:http";
 
@@ -225,6 +226,8 @@ const server = createServer((req, res) => {
   if (path === "/listings/off-2")
     return send(200, { ...LISTING, id: "off-2", price: null, supplier: { ...SUPPLIER, id: "sup-2", slug: "shop-b", name: "Shop B" } });
   if (path === "/listings/listing-gone") return send(200, WITHDRAWN);
+  if (path === "/listings/listing-orphan")
+    return send(200, { ...LISTING, id: "listing-orphan", product_id: null });
   if (path === "/suppliers/shop-a") return send(200, { ...SUPPLIER, listing_count: 120 });
   if (path === "/suppliers/shop-a/listings")
     return send(200, { total: 1, limit: 24, offset: 0, items: [LISTING] });

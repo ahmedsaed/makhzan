@@ -3,15 +3,13 @@
  *
  * Every call here runs on the server during render. The previous app fetched
  * from `useEffect` in client components, which meant the HTML shipped empty —
- * fatal for a discovery product whose value is being found for "LM358 القاهرة".
+ * fatal for a discovery product whose value is being found by search engines.
  *
  * Caching is deliberate rather than uniform. The catalogue moves at the pace of
  * the ingestion cycle (about a week), so taxonomy and supplier profiles are
  * cached for minutes; search is not cached at all, because a filtered query is
  * unique to one visitor and caching it wastes memory to no benefit.
  */
-
-import type { Lang } from "@/lib/i18n";
 
 /**
  * Server-to-server where possible: a server component calling the public URL
@@ -270,20 +268,50 @@ export function fetchSupplierListings(
 // Display helpers that depend on the shape above
 // --------------------------------------------------------------------------- //
 
-/** Titles are supplier prose, so a language may simply be missing. Fall back
- *  rather than render an empty heading. */
-export function titleOf(
-  item: { title_en: string | null; title_ar: string | null },
-  lang: Lang,
-): string {
-  const preferred = lang === "ar" ? item.title_ar : item.title_en;
-  return preferred || item.title_en || item.title_ar || "";
+/**
+ * The interface is English only, but titles are supplier prose and a few are
+ * Arabic only (0.1%). Fall back rather than render an empty heading — and never
+ * translate: a listing is evidence about what is on a shop's shelf.
+ */
+export function titleOf(item: { title_en: string | null; title_ar: string | null }): string {
+  return item.title_en || item.title_ar || "";
 }
 
-export function categoryNameOf(category: CategoryRef, lang: Lang): string {
-  return (lang === "ar" ? category.name_ar : category.name_en) || category.name_en;
+export function categoryNameOf(category: CategoryRef): string {
+  return category.name_en;
 }
 
-export function supplierNameOf(supplier: Supplier, lang: Lang): string {
-  return (lang === "ar" ? supplier.name_ar : supplier.name) || supplier.name;
+/**
+ * A ProductSummary (similar products, rails) in the shape of a search hit, so
+ * every list of products renders through ResultRow / ResultCard and carries the
+ * same facts (rule C1).
+ *
+ * A summary does not name its shop; pass `supplierName` when the caller knows it.
+ */
+export function hitFromSummary(
+  product: ProductSummary,
+  supplierName: string | null = null,
+): SearchHit {
+  const verified = product.last_verified_at ? Date.parse(product.last_verified_at) : NaN;
+  return {
+    id: product.id,
+    domain: product.category?.domain ?? "",
+    part_number: product.part_number,
+    title_en: product.title_en,
+    title_ar: product.title_ar,
+    brand: product.brand,
+    category_slug: product.category?.slug ?? null,
+    category_ref: product.category?.ref ?? null,
+    category_name: product.category?.name_en ?? null,
+    supplier_name: supplierName,
+    supplier_count: product.supplier_count,
+    offer_count: product.offer_count,
+    min_price: product.min_price,
+    max_price: product.max_price,
+    currency: product.currency,
+    in_stock: product.in_stock,
+    image: product.image,
+    // The index stores epoch seconds; match it.
+    last_verified_at: Number.isNaN(verified) ? null : Math.floor(verified / 1000),
+  };
 }
