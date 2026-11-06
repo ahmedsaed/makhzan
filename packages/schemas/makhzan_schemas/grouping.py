@@ -201,7 +201,9 @@ def _subcluster(
     threshold = profile.cluster_threshold
     max_ratio = profile.merge_price_ratio
     # Deterministic order so cluster assignment (and keys) are stable across runs.
-    ordered = sorted(items, key=lambda listing: listing.external_id or str(listing.id))
+    # External ids are only unique within a source, so two shops' "1234" would
+    # otherwise fall back to whatever order the query happened to return.
+    ordered = sorted(items, key=_natural_order)
 
     clusters: list[_Cluster] = []
     for listing in ordered:
@@ -250,6 +252,10 @@ def _subcluster(
     return result
 
 
+def _natural_order(listing: Listing) -> tuple[str, str]:
+    return (listing.source, listing.external_id or str(listing.id))
+
+
 def _representative(items: list[Listing]) -> Listing:
     """Pick the best listing to represent the product: has image + title, in stock, cheapest."""
 
@@ -296,6 +302,9 @@ async def rebuild_products(session: AsyncSession) -> dict:
                 select(Listing)
                 .where(Listing.status == ListingStatus.ACTIVE)
                 .options(selectinload(Listing.supplier))
+                # Group order follows query order (the first listing names a
+                # group's domain); a fixed order keeps a rebuild reproducible.
+                .order_by(Listing.source, Listing.external_id, Listing.id)
             )
         )
         .scalars()
