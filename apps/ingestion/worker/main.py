@@ -10,11 +10,15 @@ mean re-runs update in place. Run the worker:  arq worker.main.WorkerSettings
 
 import asyncio
 import os
+from datetime import datetime, timezone
 
 from arq import cron
 from arq.connections import RedisSettings
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.enums import IngestionStatus
 from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.models import IngestionRun
+from sqlalchemy import update
 
 from worker.indexer import get_client, reindex_all
 from worker.pipeline import run_partition as _run_partition
@@ -45,6 +49,32 @@ MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "8"))
 
 async def startup(ctx: dict) -> None:
     await load_adapters()
+    async with SessionLocal() as session:
+        await close_interrupted_runs(session)
+
+
+async def close_interrupted_runs(session) -> int:
+    """Mark runs a previous worker left RUNNING as failed: it was stopped mid-run.
+
+    A run's row is closed by the run itself, so a worker stopped mid-run (a
+    deploy, a pause, a crash) leaves it RUNNING forever, and `make status` then
+    reports a sweep as active for days when nothing is running. Nothing is
+    running when a worker starts, so every RUNNING row is one of those. The
+    work it did is kept: progress is durable per page, and the next run resumes
+    from the cursor.
+    """
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        update(IngestionRun)
+        .where(IngestionRun.status == IngestionStatus.RUNNING)
+        .values(
+            status=IngestionStatus.FAILED,
+            finished_at=now,
+            error="interrupted: the worker stopped during this run; the next run resumes it",
+        )
+    )
+    await session.commit()
+    return result.rowcount or 0
 
 
 def _summarize(source_id: str, run) -> dict:
