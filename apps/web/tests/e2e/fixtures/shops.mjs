@@ -93,7 +93,8 @@ export function shopRoute(path) {
   const match = path.match(/^\/suppliers\/([^/]+)(\/listings)?$/);
   const shop = match && shops.find((s) => s.slug === match[1]);
   if (!match) return null;
-  if (!shop) return [404, { detail: "supplier not found" }];
+  // Not one of ours: let the other fixtures answer; the stub 404s if none does.
+  if (!shop) return null;
 
   if (match[2]) {
     const { slug, name, name_ar, website_url } = shop;

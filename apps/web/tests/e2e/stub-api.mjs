@@ -239,8 +239,8 @@ const server = createServer((req, res) => {
   const shop = shopRoute(path);
   if (shop) return send(...shop);
 
-  const fixture = productFixture(path);
-  if (fixture) return send(...fixture);
+  const product = productFixture(path);
+  if (product) return send(...product);
 
   return send(404, { detail: "not found" });
 });
