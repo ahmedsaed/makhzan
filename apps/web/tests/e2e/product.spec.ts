@@ -178,7 +178,21 @@ test("the head names the product and describes it to search engines", async ({ p
     highPrice: 300,
     offerCount: 7,
   });
-  expect(data.offers.offers[0].url).toMatch(/\/products\/p-multi$/);
+  // Absolute, on the configured SITE_URL (playwright.config.ts), never on the
+  // host the request happened to name.
+  expect(data.offers.offers[0].url).toBe("https://makhzan.test/products/p-multi");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://makhzan.test/products/p-multi",
+  );
+});
+
+test("a static page's canonical is on SITE_URL too", async ({ page }) => {
+  await page.goto("/how-we-crawl");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://makhzan.test/how-we-crawl",
+  );
 });
 
 test("the breadcrumb walks trade › group › category, all links", async ({ page }) => {
@@ -230,6 +244,13 @@ test("a missing product is a real 404, with search and a way home", async ({ pag
     "href",
     "/",
   );
+});
+
+test("a malformed id is a 404 too, not an error page", async ({ page }) => {
+  // The API answers 422 for an id that is not a UUID.
+  const response = await page.goto("/products/malformed-id");
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
 });
 
 test("a product with no photo shows the fallback in a white frame", async ({ page }) => {

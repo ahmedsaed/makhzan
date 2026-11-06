@@ -56,10 +56,81 @@ test("a trade page shows its groups, its biggest categories and results", async 
     "true",
   );
   await expect(page.locator("[data-result=row]")).toHaveCount(2);
+  // The header counts the catalogue; the toolbar says what is showing.
+  await expect(page.locator("[data-catalogue-count]")).toHaveText("1,580 products");
+  await expect(page.locator("[data-count]")).toHaveText("2 in stock · 2 more out of stock");
   await page.getByRole("link", { name: "2 more out of stock" }).click();
-  await expect(page).toHaveURL(/in_stock=false/);
+  await expect(page).toHaveURL(/in_stock=all/);
   await expect(page.locator("[data-result=row]")).toHaveCount(4);
+  await expect(page.locator("[data-count]")).toHaveText("4 results");
   await expect(page.getByRole("link", { name: "In stock" })).not.toHaveAttribute("aria-current");
+});
+
+test("an old in_stock=false link still shows everything", async ({ page }) => {
+  await page.goto("/trades/seals-bearings?in_stock=false");
+  await expect(page.locator("[data-result=row]")).toHaveCount(4);
+});
+
+test("a group page narrows to the products filed under its categories", async ({ page }) => {
+  await page.goto("/trades/seals-bearings/seals?in_stock=all");
+  await expect(page.locator("[data-result=row]")).toHaveCount(2);
+  await expect(page.locator("[data-result=row]")).toContainText([/O-Ring/, /Oil Seal/]);
+  await expect(page.getByText(/Showing everything in/)).toHaveCount(0);
+
+  await page.goto("/trades/seals-bearings/transmission?in_stock=all");
+  await expect(page.locator("[data-result=row]")).toHaveCount(2);
+  await expect(page.locator("[data-result=row]").first()).toContainText("Ball Bearing");
+});
+
+test("the trade's filters list its own categories, and narrow in place", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/trades/seals-bearings?in_stock=all");
+  const rail = page.getByRole("complementary", { name: "Filters" });
+  await expect(rail.getByRole("radio")).toHaveCount(4);
+  await expect(rail).toContainText("Bearings");
+  await expect(rail).not.toContainText("Integrated Circuits");
+
+  await rail.getByRole("radio", { name: /O-Rings/ }).check();
+  await expect(page).toHaveURL(/\/trades\/seals-bearings\?.*category=seals-bearings%3Ao-rings/);
+  await expect(page.locator("[data-result=row]")).toHaveCount(1);
+  await page.getByRole("link", { name: "O-Rings ✕" }).click();
+  await expect(page.locator("[data-result=row]")).toHaveCount(4);
+});
+
+test("a category from another trade is ignored, not shown under this one", async ({ page }) => {
+  await page.goto("/trades/seals-bearings?category=electronics:ics");
+  await expect(page.locator("[data-result=row]")).toHaveCount(2);
+});
+
+test("bad parameters degrade instead of failing", async ({ page }) => {
+  let response = await page.goto("/trades/seals-bearings?sort=title:asc&offset=-3&min_price=x");
+  expect(response?.status()).toBe(200);
+  await expect(page.locator("[data-result=row]")).toHaveCount(2);
+
+  // The API caps min_suppliers at 50; the page clamps rather than errors.
+  response = await page.goto("/trades/seals-bearings?min_suppliers=500");
+  expect(response?.status()).toBe(200);
+  await expect(page.getByText("Nothing matched")).toBeVisible();
+  await expect(page.locator("[data-state=not-answering]")).toHaveCount(0);
+  await page.getByRole("link", { name: "Remove “2+ shops”" }).click();
+  await expect(page.locator("[data-result=row]")).toHaveCount(2);
+});
+
+test("an API failure is a message on the page, not an error page", async ({ page }) => {
+  // The stub fails every search in Gaskets.
+  const response = await page.goto("/trades/seals-bearings/gaskets");
+  expect(response?.status()).toBe(200);
+  await expect(page.getByRole("heading", { level: 1, name: "Gaskets" })).toBeVisible();
+  await expect(page.getByText("Search is not answering")).toBeVisible();
+});
+
+test("a taxonomy failure degrades too, rather than claiming a 404", async ({ page }) => {
+  // The stub fails /categories for this trade.
+  for (const path of ["/trades/catfail", "/trades/catfail/anything"]) {
+    const response = await page.goto(path);
+    expect(response?.status(), path).toBe(200);
+    await expect(page.getByText("The catalogue is not answering")).toBeVisible();
+  }
 });
 
 test("search in a trade stays in the trade", async ({ page }) => {
@@ -70,6 +141,13 @@ test("search in a trade stays in the trade", async ({ page }) => {
   await field.fill("bearing");
   await field.press("Enter");
   await expect(page).toHaveURL(/\/search\?domain=seals-bearings&q=bearing/);
+});
+
+test("searching a trade for nothing says everything in it", async ({ page }) => {
+  await page.goto("/search?domain=seals-bearings&q=");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "Everything in Seals & Bearings",
+  );
 });
 
 test("a category narrows the trade page", async ({ page }) => {
@@ -94,7 +172,7 @@ test("a category narrows the trade page", async ({ page }) => {
     "Trades›Seals & Bearings›Bearings & Transmission›Bearings",
   );
   // Both bearings are out of stock: nothing shows, and the page says why.
-  await expect(page.getByText("Nothing in stock here")).toBeVisible();
+  await expect(page.getByText("Nothing in stock", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: "2 more out of stock" }).click();
   await expect(page.locator("[data-result=row]")).toHaveCount(2);
   await expect(page.locator("[data-result=row]").first()).toContainText("6204-2RS");

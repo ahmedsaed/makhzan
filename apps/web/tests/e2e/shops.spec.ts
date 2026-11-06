@@ -70,6 +70,24 @@ test("searching a shop submits to /search scoped to it, without JavaScript", asy
   await context.close();
 });
 
+test("the header search keeps a shop's scope, and can drop it", async ({ page }) => {
+  await page.goto("/search?q=relay&shop=shop-a");
+  const header = page.getByRole("banner");
+  const field = header.getByRole("searchbox");
+  await expect(header.getByRole("checkbox", { name: "This shop only" })).toBeChecked();
+  await field.fill("lm358");
+  await field.press("Enter");
+  await expect(page).toHaveURL(/\/search\?shop=shop-a&q=lm358$|\/search\?q=lm358&shop=shop-a$/);
+
+  // On the shop's own page too; unticked, it searches every shop.
+  await page.goto("/shops/shop-a");
+  await header.getByRole("checkbox", { name: "This shop only" }).uncheck();
+  await header.getByRole("searchbox").fill("relay");
+  await header.getByRole("searchbox").press("Enter");
+  await expect(page).toHaveURL(/\/search\?q=relay$/);
+  await expect(header.getByRole("checkbox")).toHaveCount(0);
+});
+
 test("a stale shop says so in plain language (F3)", async ({ page }) => {
   await page.goto("/shops/stale-shop");
   await expect(page.locator('[data-tier="warn"]')).toContainText("80 days ago");
