@@ -142,9 +142,12 @@ services:
         # proxy maps it on the web origin; else an absolute URL. See .env.prod.
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
     <<: *restart
-    # Next.js rewrites /api/* to the API over the internal network.
+    # Next.js rewrites /api/* to the API over the internal network. SITE_URL is
+    # the public origin for canonical links and structured data; read at
+    # runtime, so it is set here rather than baked into the image.
     environment:
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
+      SITE_URL: ${SITE_URL:-}
     ports:
       - "${WEB_PORT:-3000}:3000"
     # Next's data cache (the `revalidate` results in lib/api.ts) lives under
