@@ -1,14 +1,20 @@
-"""Backfill category_id for existing listings and rebuild the search index.
+"""DESTRUCTIVE: re-infer every listing's category and part number from its title.
 
-Re-runnable maintenance task: seeds the taxonomy, assigns each listing a category
-via the resolver, then reindexes so category facets/filters appear in search.
+!!! Not for regrouping or reindexing: that is `python -m worker.regroup`. !!!
 
-Run:  poetry run python -m worker.backfill
+This overwrites `category_id` on every listing with a keyword guess from the
+title, which erases every category a crosswalk set: a source browsed by
+category loses all of them, and a tag-cloud shop's mapped tags give way to
+inference. Only a re-crawl of each source puts them back. It also re-extracts
+part numbers. It dates from before crosswalks, when inference was all there was.
+
+Run:  python -m worker.backfill --i-understand-this-erases-crosswalk-categories
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.grouping import rebuild_products
@@ -57,5 +63,14 @@ async def main() -> None:
         print(f"reindexed {count} documents")
 
 
+CONFIRM = "--i-understand-this-erases-crosswalk-categories"
+
 if __name__ == "__main__":
+    if CONFIRM not in sys.argv[1:]:
+        sys.exit(
+            "worker.backfill re-infers EVERY listing's category from its title and erases\n"
+            "the categories crosswalks set; only re-crawling each source restores them.\n"
+            "To regroup products and rebuild the search index: python -m worker.regroup\n"
+            f"To run backfill anyway, pass {CONFIRM}"
+        )
     asyncio.run(main())

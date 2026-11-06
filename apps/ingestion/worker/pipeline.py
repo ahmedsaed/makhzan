@@ -511,7 +511,7 @@ async def run_source(
     """Run every partition of one adapter. `limit` caps items (dev/testing).
 
     Writes listings only; the product search index is rebuilt separately via
-    grouping.rebuild_products + indexer.reindex_all (backfill / cron).
+    grouping.rebuild_products + indexer.reindex_all (worker.regroup / cron).
     """
     return await _run(source_id, adapter, adapter.partitions(), limit=limit)
 
