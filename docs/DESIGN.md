@@ -49,7 +49,7 @@ Measured on 60.9k active listings (November 2026).
 ## Pages
 
 ```
-/                               Home: search, trades (top 8), link to all trades
+/                               Home: search and examples, trades, sold by several shops, the shops, how it works
 ├── /search?q=…                 Results (list or grid), top categories, filters
 │   └── /products/{id}          Product: one shop, or several (offers list)
 │       └── shop's own page ↗   the only exit
@@ -77,9 +77,15 @@ How we crawl, theme toggle, Made by Merope), 404 and error pages.
 ## Layout, page by page (direction D)
 
 **Home.** A headline, one large search field, a line of totals (products, shops,
-"rechecked about weekly"). Then trades as rows: an object photo, the trade, its count,
-and its top categories in words ("O-rings, bearings, oil seals"). The top 8, then
-"All 16 trades".
+"rechecked about weekly"; figures for products, shops, trades and categories on desktop)
+and a row of example searches, each checked to return results. Then the trades: on
+phones as rows (an object photo, the trade, its count, its top categories in words),
+the top 8 then "All 16 trades"; from `md` as cards, four across on desktop, whose
+biggest categories are links, with the remaining trades named underneath. Then "Sold
+by several shops" (a row of products with 2+ shops and their price ranges), the shops
+(products, in stock, last checked), "How makhzan works" in three steps (beside the
+search on desktop, lower down on phones) and a note for shop owners. Every block spans
+the page container on desktop; each section is left out when its fetch fails.
 
 **Results (search, trade, category, shop search).**
 - A chip bar with the two everyday filters, **In stock** (on by default) and
