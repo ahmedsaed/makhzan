@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
+import { pageMetadata, shopDescription } from "@/lib/metadata";
 import { routes, withParams } from "@/lib/routes";
 import {
   fetchResults,
@@ -50,11 +51,12 @@ export async function generateMetadata({
   const { shop } = await params;
   const supplier = await fetchSupplier(shop);
   return supplier
-    ? {
+    ? pageMetadata({
         title: supplier.name,
-        description: `${formatCount(supplier.listing_count)} products from ${supplier.name}, with prices and when each was last checked.`,
-        alternates: { canonical: routes.shop(supplier.slug) },
-      }
+        description: shopDescription(supplier),
+        path: routes.shop(supplier.slug),
+        ownCard: true,
+      })
     : {};
 }
 

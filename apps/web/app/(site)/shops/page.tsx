@@ -4,18 +4,28 @@ import { Freshness } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { Container } from "@/components/section";
 import { fetchSuppliers, type ShopSummary } from "@/lib/api";
-import { formatCount } from "@/lib/format";
+import { formatCount, plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
+import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 import { isStale, listedShops, tradeShares, tradesInWords } from "@/lib/shops";
 
 import { TradeBar } from "./_components/trade-bar";
 
-export const metadata: Metadata = {
-  title: "Shops",
-  description:
-    "Every shop makhzan lists, with how many products it has, how many are in stock, and when they were last checked.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const shops = await fetchSuppliers()
+    .then(listedShops)
+    .catch(() => []);
+  const products = shops.reduce((sum, shop) => sum + shop.listing_count, 0);
+  return pageMetadata({
+    title: "Shops",
+    description:
+      shops.length > 0
+        ? `${plural(shops.length, "Egyptian shop")} and the ${formatCount(products)} products they list, with how many are in stock and when each shop was last checked.`
+        : "Every shop makhzan lists, with how many products it has, how many are in stock, and when they were last checked.",
+    path: routes.shops(),
+  });
+}
 
 /**
  * Every shop with products, in stock and last checked. Freshness is a column

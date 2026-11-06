@@ -9,15 +9,16 @@ import {
   supplierRequests,
   type SupplierRequest,
 } from "@/lib/content/supplier-requests";
+import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "For suppliers",
   description:
     "Remove your shop from makhzan, add it, or correct its details. Removal takes at most 7 days, no questions asked.",
-  alternates: { canonical: "/for-suppliers" },
-};
+  path: routes.forSuppliers(),
+});
 
 /**
  * Written for shop owners, who will be emailed and asked whether makhzan may

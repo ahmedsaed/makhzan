@@ -23,8 +23,9 @@ import {
   type Offer,
   type Product,
 } from "@/lib/api";
-import { formatCount, formatPrice, formatPriceRange, plural } from "@/lib/format";
+import { formatCount, formatPrice } from "@/lib/format";
 import { freshnessTier, parseVerified } from "@/lib/freshness";
+import { pageMetadata, productDescription } from "@/lib/metadata";
 import {
   brandOf,
   categoryTrail,
@@ -96,17 +97,13 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const product = await loadProduct(id);
-  const title = displayTitle(product);
-  const summary = summarizeOffers(product.offers);
-  const price = formatPriceRange(summary.min, summary.max, product.currency);
-  const sole = product.offers.length === 1 ? product.offers[0].supplier : null;
-  const where = sole ? `at ${sole.name}` : `at ${plural(summary.shopCount, "shop")}`;
-  return {
+  return pageMetadata({
     // The root layout's template appends " · makhzan".
-    title,
-    description: `${title}: ${price} ${where}. Every price shows when it was last checked; buy on the shop's own page.`,
-    alternates: { canonical: routes.product(id) },
-  };
+    title: displayTitle(product),
+    description: productDescription(product),
+    path: routes.product(id),
+    ownCard: true,
+  });
 }
 
 export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {

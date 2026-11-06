@@ -5,6 +5,13 @@ const nextConfig: NextConfig = {
   // image — see apps/web/Dockerfile.
   output: "standalone",
 
+  // The link-preview cards read their fonts from disk (lib/og.tsx), by a path
+  // the bundler cannot follow; without this the standalone image ships
+  // without them and every card falls back to the renderer's own face.
+  outputFileTracingIncludes: {
+    "/**": ["./assets/fonts/*.ttf"],
+  },
+
   // Proxy /api/* to the backend over the internal network so the API is never
   // exposed publicly and browser calls stay same-origin (no CORS). The browser
   // hits the relative "/api"; the Next server forwards to API_INTERNAL_URL.
