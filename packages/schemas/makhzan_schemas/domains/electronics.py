@@ -284,6 +284,30 @@ _NOISE = {
 }
 
 
+# A bare chip and the module built around it share a part number and, once
+# "module", "board" and "ic" are stripped as noise, most of their words: a TP4056
+# SOP-8 sat inside a six-shop charger-module product, and DS1302/DS1307 RTC ICs at
+# 15 EGP inside their 50 EGP modules. Module wins when a title says both ("module
+# with TP4056 IC" is a module); a package name alone ("4-DIP", "SOP-8") says chip.
+#
+# Accessories come first and are strict (see `accessory_forms`): "Ultrasonic Sensor
+# Mounting Bracket For HC-SR04" shares two of its five words with "Ultrasonic
+# Sensor HC-SR04", which clears the similarity threshold, and costs 15 EGP against
+# 40 — inside the price band. Nothing else tells a bracket from the sensor.
+_FORM_MARKERS = (
+    (
+        "accessory",
+        r"\b(?:brackets?|holders?|mount|mounting|cases?|covers?|enclosure|housing|stand"
+        r"|adapter|expansion|heat\s?sinks?)\b",
+    ),
+    ("module", r"\b(?:modules?|boards?|shields?|kits?|breakout|devkit|development)\b"),
+    (
+        "chip",
+        r"\b(?:ics?|chips?|smd|p?dip|soic|sop|[st]?ssop|msop|[lt]?qfp|qfn|sot-?\d+|to-?\d+)\b",
+    ),
+)
+
+
 ELECTRONICS = register_profile(
     DomainProfile(
         slug="electronics",
@@ -295,6 +319,8 @@ ELECTRONICS = register_profile(
         extract_identifier=extract_part_number,
         noise_tokens=frozenset(_NOISE),
         cluster_threshold=0.34,
+        form_markers=_FORM_MARKERS,
+        accessory_forms=frozenset({"accessory"}),
         # Electronics search is part-number driven, so the identifier ranks first.
         search_attributes=("part_number", "title_en", "title_ar", "brand"),
         identifier_label_en="Part number",
