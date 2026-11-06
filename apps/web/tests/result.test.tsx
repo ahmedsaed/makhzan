@@ -1,0 +1,104 @@
+import "@testing-library/jest-dom/vitest";
+import { render, within } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import { ResultCard, ResultRow } from "@/components/result";
+import { ShopLink } from "@/components/shop-link";
+import type { SearchHit } from "@/lib/api";
+
+const NOW = new Date("2026-11-06T12:00:00Z");
+
+const hit: SearchHit = {
+  id: "prod-1",
+  domain: "electronics",
+  part_number: "ESP32-WROOM-32",
+  title_en: "ESP32 Development Board 30 pin (WIFI - Bluetooth)",
+  title_ar: null,
+  brand: null,
+  category_slug: "dev-boards",
+  category_ref: "electronics:dev-boards",
+  category_name: "Dev boards",
+  supplier_name: "Shop A",
+  supplier_count: 3,
+  offer_count: 4,
+  min_price: 260,
+  max_price: 400,
+  currency: "EGP",
+  in_stock: true,
+  image: null,
+  // 13 days before NOW.
+  last_verified_at: NOW.getTime() / 1000 - 13 * 86_400,
+};
+
+function renderIn(Component: typeof ResultRow, value: SearchHit) {
+  return render(
+    <ul>
+      <Component hit={value} now={NOW} />
+    </ul>,
+  );
+}
+
+describe.each([
+  ["row", ResultRow],
+  ["card", ResultCard],
+] as const)("a result %s", (_, Component) => {
+  it("shows title, price range, shops and freshness (rule C1)", () => {
+    const { container } = renderIn(Component, hit);
+    const item = within(container);
+    expect(item.getByText(hit.title_en!)).toBeInTheDocument();
+    expect(item.getByText("EGP 260 – 400")).toBeInTheDocument();
+    expect(item.getByText("3 shops")).toBeInTheDocument();
+    expect(item.getByText("checked 13 days ago")).toBeInTheDocument();
+  });
+
+  it("names the shop when there is only one", () => {
+    const { container } = renderIn(Component, { ...hit, supplier_count: 1, max_price: 260 });
+    const item = within(container);
+    expect(item.getByText("Shop A")).toBeInTheDocument();
+    expect(item.getByText("EGP 260")).toBeInTheDocument();
+    expect(item.queryByText(/shops$/)).not.toBeInTheDocument();
+  });
+
+  it("says 'Price on request' rather than a number when unpriced", () => {
+    const { container } = renderIn(Component, { ...hit, min_price: null, max_price: null });
+    expect(within(container).getByText("Price on request")).toBeInTheDocument();
+  });
+
+  it("links to the product page and nowhere else (rule P1)", () => {
+    const { container } = renderIn(Component, hit);
+    const links = container.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute("href", "/products/prod-1");
+  });
+});
+
+describe("row and card agree", () => {
+  it("carry exactly the same text (rule C1)", () => {
+    // Whitespace aside, switching views must not add or drop a fact.
+    const text = (node: HTMLElement) =>
+      [...node.querySelectorAll("span")]
+        .filter((span) => span.children.length === 0)
+        .map((span) => span.textContent?.trim())
+        .filter((value) => value && value !== "·" && value !== hit.category_name)
+        .sort();
+    const row = renderIn(ResultRow, hit).container;
+    const card = renderIn(ResultCard, hit).container;
+    expect(text(card)).toEqual(text(row));
+  });
+});
+
+describe("ShopLink (rule P4)", () => {
+  it("tags, opens in a new tab and records the click", () => {
+    const { getByRole } = render(
+      <ShopLink href="https://shop-a.test/p/esp32?id=3" shop="shop-a">
+        View
+      </ShopLink>,
+    );
+    const link = getByRole("link", { name: "View" });
+    expect(link).toHaveAttribute("href", "https://shop-a.test/p/esp32?id=3&ref=makhzan");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener");
+    expect(link).toHaveAttribute("data-umami-event", "shop-click");
+    expect(link).toHaveAttribute("data-umami-event-shop", "shop-a");
+  });
+});
