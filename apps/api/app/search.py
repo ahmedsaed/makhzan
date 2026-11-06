@@ -39,6 +39,7 @@ def search_products(
     min_price: float | None = None,
     max_price: float | None = None,
     min_suppliers: int | None = None,
+    shop: str | None = None,
     sort: str | None = None,
     limit: int = 24,
     offset: int = 0,
@@ -70,6 +71,11 @@ def search_products(
         # supplier's own site cannot show it. Filtered in the index rather than
         # over a page of results, so paging stays correct.
         filters.append(f"supplier_count >= {min_suppliers}")
+    if shop:
+        # Search within one shop. supplier_slugs is an array, and `=` on an array
+        # matches when any element equals — so a product several shops sell is
+        # found from each of their pages, with its cross-shop aggregates intact.
+        filters.append(f'supplier_slugs = "{shop}"')
 
     opts: dict = {"limit": limit, "offset": offset}
     # part_number ranks first index-wide, which is what you want for "LM358" and

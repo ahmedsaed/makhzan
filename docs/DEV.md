@@ -156,9 +156,13 @@ make test-api            # or: cd apps/api && poetry run pytest
 
 Endpoints:
 - `GET /health`
-- `GET /search?q=ESP32&category=resistors&in_stock=true&min_price=&max_price=&supplier=&sort=price:asc&limit=&offset=`
+- `GET /search?q=ESP32&category=electronics:resistors&in_stock=true&min_price=&max_price=&shop=&sort=price:asc&limit=&offset=`
+  (`shop` is a supplier slug: only products with an offer from that shop)
 - `GET /listings/{id}` (includes nested supplier + category + description)
 - `GET /categories` (taxonomy with per-category listing counts)
+- `GET /suppliers` (every shop: active/in-stock counts, last checked, domains)
+- `GET /suppliers/{slug}` (the same, plus location and top categories)
+- `GET /suppliers/{slug}/listings?in_stock=&limit=&offset=` (in stock first, then freshest)
 - `GET /docs` (OpenAPI UI)
 
 Web routes: `/` (search, category bar, load-more) and `/listings/[id]` (detail).
