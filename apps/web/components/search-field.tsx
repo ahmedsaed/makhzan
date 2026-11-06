@@ -8,22 +8,34 @@ import { cn } from "@/lib/utils";
  *
  * `compact` is the header's field; the default is the home page's big one,
  * which also gets a visible submit button.
+ *
+ * `scope` adds fixed parameters to the query, so one field can search inside
+ * one shop (`{ shop: "shop-a" }`) and still be a plain GET form.
  */
 export function SearchField({
   defaultValue = "",
   placeholder = "Part number or name",
   compact = false,
   autoFocus = false,
+  scope,
+  label = "Search",
   className,
 }: {
   defaultValue?: string;
   placeholder?: string;
   compact?: boolean;
   autoFocus?: boolean;
+  scope?: Record<string, string>;
+  /** The field's accessible name. */
+  label?: string;
   className?: string;
 }) {
   return (
     <form action="/search" method="get" role="search" className={cn("flex gap-2", className)}>
+      {scope &&
+        Object.entries(scope).map(([name, value]) => (
+          <input key={name} type="hidden" name={name} value={value} />
+        ))}
       <label
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 rounded-control border border-line-strong bg-ground px-3 focus-within:border-ink-3",
@@ -31,7 +43,7 @@ export function SearchField({
         )}
       >
         <Search aria-hidden="true" className="size-[18px] shrink-0 text-ink-2" />
-        <span className="sr-only">Search</span>
+        <span className="sr-only">{label}</span>
         <input
           type="search"
           name="q"

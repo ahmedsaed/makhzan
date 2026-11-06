@@ -1,32 +1,36 @@
+import { ArrowUpRight, Clock } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { Freshness } from "@/components/freshness";
 import { Link } from "@/components/link";
-import { PhotoFrame } from "@/components/photo-frame";
-import { PriceRange } from "@/components/price";
-import { Container, Empty } from "@/components/section";
+import { ResultList } from "@/components/result-list";
+import { SearchField } from "@/components/search-field";
+import { Container, SectionHeading } from "@/components/section";
 import { ShopLink } from "@/components/shop-link";
-import { StockBadge } from "@/components/stock-badge";
-import {
-  categoryNameOf,
-  fetchSupplier,
-  fetchSupplierListings,
-  titleOf,
-  type Listing,
-} from "@/lib/api";
+import { fetchSupplier, fetchSupplierListings, type SupplierProfile } from "@/lib/api";
 import { formatCount } from "@/lib/format";
-import { parseVerified } from "@/lib/freshness";
+import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
 import { routes } from "@/lib/routes";
+import {
+  formatDay,
+  hitFromListing,
+  hostOf,
+  isStale,
+  shopSearchUrl,
+  tradeShares,
+} from "@/lib/shops";
+import { cn } from "@/lib/utils";
 
-const PAGE_SIZE = 24;
+/** How many in-stock products the page shows before handing off to search. */
+const PREVIEW_SIZE = 6;
 
 /**
  * One shop and what makhzan has seen of it.
  *
- * Carried over from the previous design so the route works; the direction-D
- * shop page (stat tiles, the stale-data note, what it carries) is built on top
- * of this.
+ * This page is the pitch to the shop as much as it is a page for buyers: the
+ * owner is emailed a link to it (docs/PRODUCT.md). So it says plainly when
+ * its data is old and why (F3), links out to the shop's own site, and tells the
+ * owner how to add or correct their details.
  */
 export async function generateMetadata({
   params,
@@ -35,136 +39,215 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { shop } = await params;
   const supplier = await fetchSupplier(shop);
-  return supplier ? { title: supplier.name } : {};
+  return supplier
+    ? {
+        title: supplier.name,
+        description: `${formatCount(supplier.listing_count)} products from ${supplier.name}, with prices and when each was last checked.`,
+      }
+    : {};
 }
 
-export default async function ShopPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ shop: string }>;
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+export default async function ShopPage({ params }: { params: Promise<{ shop: string }> }) {
   const { shop } = await params;
-  const raw = await searchParams;
-  const offsetRaw = Number.parseInt(
-    (Array.isArray(raw.offset) ? raw.offset[0] : raw.offset) ?? "",
-    10,
-  );
-  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
-
-  const supplier = await fetchSupplier(shop);
+  const [supplier, listings] = await Promise.all([
+    fetchSupplier(shop),
+    fetchSupplierListings(shop, { inStock: true, limit: PREVIEW_SIZE }),
+  ]);
   if (!supplier) notFound();
-  const page = await fetchSupplierListings(shop, { limit: PAGE_SIZE, offset });
-  const items = page?.items ?? [];
-  const total = page?.total ?? 0;
-  const here = routes.shop(shop);
+
   const now = new Date();
+  const verified = parseVerified(supplier.last_verified_at);
+  const stale = isStale(supplier.last_verified_at, now);
+  const hits = (listings?.items ?? []).flatMap((listing) => hitFromListing(listing) ?? []);
+  const location = [supplier.area, supplier.governorate].filter(Boolean).join(", ");
 
   return (
-    <Container className="py-6">
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
-        <aside className="self-start rounded-card border border-line bg-surface p-4">
-          <h1 className="text-xl leading-tight">{supplier.name}</h1>
-          <dl className="mt-4 flex flex-col gap-1.5 text-sm">
-            {supplier.area && <Fact label="Area" value={supplier.area} />}
-            {supplier.governorate && <Fact label="Governorate" value={supplier.governorate} />}
-            <Fact label="Products" value={formatCount(supplier.listing_count)} />
+    <>
+      <section className="border-b border-line bg-surface">
+        <Container className="flex max-w-5xl flex-col gap-3 py-5">
+          <div>
+            <h1 className="text-2xl leading-tight sm:text-3xl">{supplier.name}</h1>
+            {location && <p className="mt-1 text-sm text-ink-2">{location}</p>}
+          </div>
+
+          <dl className="grid grid-cols-3 gap-2 sm:max-w-xl">
+            <Stat label="Products" value={formatCount(supplier.listing_count)} />
+            <Stat label="In stock" value={formatCount(supplier.in_stock_count)} />
+            <Stat
+              label="Last checked"
+              value={verified ? agoText(daysSince(verified, now)) : "Not yet"}
+              tier={verified ? freshnessTier(verified, now) : "quiet"}
+            />
           </dl>
+
+          {stale && verified && (
+            <p
+              role="note"
+              data-stale-note
+              className="flex gap-2.5 rounded-control border border-warn-line bg-warn p-3 text-sm leading-snug text-warn-ink sm:max-w-xl"
+            >
+              <Clock aria-hidden="true" className="mt-px size-[18px] shrink-0" />
+              <span>
+                We can&apos;t reach this shop&apos;s site at the moment. Its prices and stock are as
+                of {formatDay(verified, now)} and may have changed.
+              </span>
+            </p>
+          )}
+
           {supplier.website_url && (
             <ShopLink
               href={supplier.website_url}
               shop={supplier.slug}
-              className="mt-4 flex h-11 items-center justify-center rounded-control bg-action px-4 font-semibold text-action-ink"
+              className="flex h-11 items-center justify-center gap-2 rounded-control border-[1.5px] border-link px-4 font-semibold text-link hover:bg-ground sm:max-w-xl"
             >
-              Visit the shop&apos;s site
+              Visit {hostOf(supplier.website_url)}
+              <ArrowUpRight aria-hidden="true" className="size-4" />
             </ShopLink>
           )}
-        </aside>
+        </Container>
+      </section>
 
-        <div className="min-w-0">
-          {items.length === 0 ? (
-            <Empty title="Nothing listed" />
-          ) : (
-            <ul className="-mx-4 border-t border-line bg-surface md:mx-0">
-              {items.map((listing) => (
-                <ShopListingRow key={listing.id} listing={listing} now={now} />
-              ))}
-            </ul>
-          )}
+      <Container className="grid max-w-5xl gap-8 py-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="flex min-w-0 flex-col gap-6">
+          <SearchField
+            compact
+            scope={{ shop: supplier.slug }}
+            label={`Search ${supplier.name}`}
+            placeholder={`Search ${supplier.name}`}
+          />
 
-          <nav aria-label="Pages" className="mt-5 flex items-center justify-between gap-3 text-sm">
-            {offset > 0 ? (
-              <Link
-                href={offset - PAGE_SIZE > 0 ? `${here}?offset=${offset - PAGE_SIZE}` : here}
-                className="flex h-11 items-center rounded-control border border-line-strong px-4 hover:bg-surface"
-              >
-                Previous
-              </Link>
-            ) : (
-              <span />
-            )}
-            {offset + PAGE_SIZE < total && (
-              <Link
-                href={`${here}?offset=${offset + PAGE_SIZE}`}
-                className="flex h-11 items-center rounded-control border border-line-strong px-4 hover:bg-surface"
-              >
-                Next
-              </Link>
-            )}
-          </nav>
+          {supplier.domains.length > 0 && <Carries supplier={supplier} />}
         </div>
-      </div>
-    </Container>
-  );
-}
 
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-3">
-      <dt className="text-ink-2">{label}</dt>
-      <dd className="tabular text-ink">{value}</dd>
-    </div>
+        <aside>
+          {supplier.top_categories.length > 0 && (
+            <section>
+              <SectionHeading>Biggest categories here</SectionHeading>
+              <ul className="overflow-hidden rounded-card border border-line bg-surface">
+                {supplier.top_categories.map((category) => (
+                  <li key={category.ref} className="border-b border-line last:border-b-0">
+                    <Link
+                      href={shopSearchUrl(supplier.slug, { category: category.ref })}
+                      className="flex min-h-11 items-center gap-3 px-3 py-2 text-[15px] text-ink hover:bg-ground"
+                    >
+                      <span className="flex-1">{category.name_en}</span>
+                      <span className="tabular text-sm text-ink-3">
+                        {formatCount(category.count)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </aside>
+      </Container>
+
+      <Container className="max-w-5xl pb-4">
+        <section>
+          <SectionHeading>In stock here</SectionHeading>
+          {hits.length > 0 ? (
+            <ResultList hits={hits} now={now} className="-mx-4 md:mx-0" />
+          ) : (
+            <p className="text-sm text-ink-2">Nothing from this shop is marked in stock.</p>
+          )}
+          {supplier.listing_count > 0 && (
+            <Link
+              href={shopSearchUrl(supplier.slug)}
+              className="mt-3 inline-flex h-11 items-center text-sm font-semibold text-link hover:underline"
+            >
+              All {formatCount(supplier.listing_count)} products from {supplier.name}
+            </Link>
+          )}
+        </section>
+
+        <p className="mt-6 text-sm leading-relaxed text-ink-2">
+          {location
+            ? "Phone and opening hours aren't listed yet."
+            : "Address and phone aren't listed yet."}{" "}
+          <Link href={routes.forSuppliers()} className="font-semibold text-link hover:underline">
+            Own this shop? Add your details.
+          </Link>
+        </p>
+      </Container>
+    </>
   );
 }
 
 /**
- * A listing opens its product, never the shop directly (rule P1). One the
- * grouping step left without a product has nowhere to open, so it is shown
- * but not linked.
+ * One figure in the row of three. The last-checked tile takes the freshness
+ * colours (F2), so a stale shop is visible before a word of the note is read.
  */
-function ShopListingRow({ listing, now }: { listing: Listing; now: Date }) {
-  const title = titleOf(listing) || listing.part_number || "";
-  const body = (
-    <>
-      <PhotoFrame src={listing.images[0] ?? null} alt={title} size={72} />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="line-clamp-2 text-[15px] leading-snug font-medium text-ink">{title}</span>
-        <PriceRange min={listing.price} currency={listing.currency} className="text-base" />
-        <span className="flex flex-wrap items-center gap-x-1.5 text-[13px] text-ink-2">
-          <StockBadge signal={listing.stock_signal} />
-          {listing.category && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>{categoryNameOf(listing.category)}</span>
-            </>
-          )}
-          <span aria-hidden="true">·</span>
-          <Freshness lastVerified={parseVerified(listing.last_verified_at)} now={now} />
-        </span>
-      </div>
-    </>
-  );
+function Stat({
+  label,
+  value,
+  tier = "quiet",
+}: {
+  label: string;
+  value: string;
+  tier?: "quiet" | "muted" | "warn";
+}) {
   return (
-    <li className="border-b border-line">
-      {listing.product_id ? (
-        <Link href={routes.product(listing.product_id)} className="flex gap-3 px-4 py-3 hover:bg-ground">
-          {body}
-        </Link>
-      ) : (
-        <div className="flex gap-3 px-4 py-3">{body}</div>
+    <div
+      data-tier={tier}
+      className={cn(
+        "rounded-control border p-2.5",
+        tier === "warn" ? "border-warn-line bg-warn text-warn-ink" : "border-transparent bg-ground",
       )}
-    </li>
+    >
+      <dt className={cn("text-xs", tier === "warn" ? "text-warn-ink" : "text-ink-2")}>{label}</dt>
+      <dd
+        className={cn(
+          "figure mt-0.5 text-[17px] leading-tight",
+          tier === "warn" ? "text-warn-ink" : tier === "muted" ? "text-age-muted" : "text-ink",
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+/** Bar segments, largest first. Opacity steps of the one accent rather than new
+ *  colours: the palette has none to spare, and order already says which is which. */
+const SEGMENT = ["bg-action", "bg-action/55", "bg-action/30", "bg-ink-3/40"];
+
+/**
+ * What the shop carries: a bar by trade, and the same numbers in words. The
+ * bar is decoration; the words are what a screen reader gets.
+ */
+function Carries({ supplier }: { supplier: SupplierProfile }) {
+  const shares = tradeShares(supplier.domains);
+  return (
+    <section>
+      <SectionHeading>What they carry</SectionHeading>
+      <div aria-hidden="true" className="flex h-2 overflow-hidden rounded-full bg-line">
+        {shares.map((share, index) => (
+          <span
+            key={share.domain ?? "other"}
+            className={SEGMENT[Math.min(index, SEGMENT.length - 1)]}
+            style={{ width: `${share.percent}%` }}
+          />
+        ))}
+      </div>
+      <p className="mt-2 text-[13px] text-ink-2">
+        {shares.map((share, index) => (
+          <span key={share.domain ?? "other"}>
+            {index > 0 && " · "}
+            {share.domain ? (
+              <Link
+                href={shopSearchUrl(supplier.slug, { domain: share.domain })}
+                className="hover:text-ink hover:underline"
+              >
+                {share.label}
+              </Link>
+            ) : (
+              share.label
+            )}
+          </span>
+        ))}
+      </p>
+    </section>
   );
 }
 
