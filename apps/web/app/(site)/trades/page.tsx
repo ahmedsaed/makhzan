@@ -2,34 +2,46 @@ import type { Metadata } from "next";
 
 import { NotAnswering } from "@/components/results";
 import { Container, Empty } from "@/components/section";
-import { TradeList } from "@/components/trade-list";
 import { fetchCategories } from "@/lib/api";
-import { tradeSummaries } from "@/lib/trades";
+import { formatCount } from "@/lib/format";
+import { tradeDirectory } from "@/lib/trade-directory";
+
+import { TradeDirectory } from "./_components/trade-directory";
 
 export const metadata: Metadata = {
   title: "All trades",
-  description: "Every trade makhzan covers, largest first, with what is inside each.",
+  description:
+    "Every trade makhzan covers, largest first, with its categories and how much each holds.",
 };
 
-/** Every trade as the home page lists its top eight: largest first, each
- *  saying what is inside. */
+/** Every trade as a directory: largest first, each with its categories as links. */
 export default async function TradesPage() {
   const categories = await fetchCategories().catch(() => null);
   if (!categories) {
     return (
-      <Container className="max-w-3xl py-5">
+      <Container className="py-5">
         <h1 className="mb-3 text-2xl">All trades</h1>
         <NotAnswering title="The catalogue is not answering" />
       </Container>
     );
   }
-  const trades = tradeSummaries(categories);
+  const trades = tradeDirectory(categories);
+  const products = trades.reduce((sum, trade) => sum + trade.count, 0);
+  const listed = trades.reduce((sum, trade) => sum + trade.categoryCount, 0);
 
   return (
-    <Container className="max-w-3xl py-5">
-      <h1 className="mb-3 text-2xl">All {trades.length} trades</h1>
+    <Container className="py-5 md:py-6">
+      <div className="mb-3 flex flex-col gap-0.5 md:mb-4 md:flex-row md:items-baseline md:gap-3">
+        <h1 className="text-2xl">All {trades.length} trades</h1>
+        {trades.length > 0 && (
+          <p data-directory-total className="text-[13px] text-ink-3 tabular">
+            {formatCount(products)} products in {formatCount(listed)} categories, largest trade
+            first
+          </p>
+        )}
+      </div>
       {trades.length > 0 ? (
-        <TradeList trades={trades} />
+        <TradeDirectory trades={trades} />
       ) : (
         <Empty title="No trades yet" hint="The catalogue is empty right now." />
       )}

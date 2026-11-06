@@ -53,7 +53,7 @@ Measured on 60.9k active listings (November 2026).
 ├── /search?q=…                 Results (list or grid), top categories, filters
 │   └── /products/{id}          Product: one shop, or several (offers list)
 │       └── shop's own page ↗   the only exit
-├── /trades                     All 16 trades, each saying what's inside
+├── /trades                     All 16 trades as a directory: each with its categories as links
 │   └── /trades/{trade}         Group tiles, category tiles, results underneath
 │       └── /trades/{trade}/{category}   the same page, narrowed
 ├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
@@ -116,7 +116,18 @@ the page container on desktop; each section is left out when its fetch fails.
 
 **Trade and category.** Header (name, count, "Search in {trade}"); groups as object
 tiles; the selected group's categories as smaller object tiles; then results with the
-chip bar. No page is a dead-end list of links.
+chip bar. No page is a dead-end list of links. From `lg` the search sits beside the
+name and the tiles lie on their side (a small frame, the name, its count and, for a
+group, its top three categories) in balanced rows across the full width: a row of
+large squares holding the same stand-in icon said nothing and left half the screen
+empty. Phones keep the square tiles. All trades (`/trades`) is a directory, full width, largest trade first. A trade
+with 10% or more of all products (three today) is a full-width block listing every
+group with up to six of its categories, as links with counts, in columns. The rest
+share a grid of cards (2, 3, then 4 across), each listing its biggest categories:
+4, 6 or 10 links depending on size, so a bigger trade gets more links. Cards for
+trades with 1,000 or more products span two cells on wide screens. "Other …"
+buckets are listed last. On a phone it is the home page's list of rows, with each
+trade's links folded under a chevron.
 
 **All shops and a shop.** Each shop with products, in stock and last checked: rows in
 one card on phones; from `md` a grid of cards (2 across, 4 from `xl`), each adding a bar
