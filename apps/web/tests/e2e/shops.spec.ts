@@ -213,6 +213,6 @@ test("the 404 page helps onward", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
   await expect(page.getByRole("main").getByRole("searchbox")).toBeVisible();
   const browse = page.getByRole("navigation", { name: "Browse" });
-  await expect(browse.getByRole("link", { name: "All trades" })).toHaveAttribute("href", "/trades");
+  await expect(browse.getByRole("link", { name: "All departments" })).toHaveAttribute("href", "/departments");
   await expect(browse.getByRole("link", { name: "All shops" })).toHaveAttribute("href", "/shops");
 });

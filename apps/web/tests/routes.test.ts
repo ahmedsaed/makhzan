@@ -38,19 +38,19 @@ describe("routes", () => {
     expect(routes.home()).toBe("/");
     expect(routes.product("abc")).toBe("/products/abc");
     expect(routes.shop("shop-a")).toBe("/shops/shop-a");
-    expect(routes.trade("electronics")).toBe("/trades/electronics");
+    expect(routes.department("electronics")).toBe("/departments/electronics");
   });
 
-  it("addresses a category through its trade, never by the bare slug", () => {
-    expect(routes.category("electronics:resistors")).toBe("/trades/electronics/resistors");
-    // The same slug in another trade is a different URL — that is the point.
+  it("addresses a category through its department, never by the bare slug", () => {
+    expect(routes.category("electronics:resistors")).toBe("/departments/electronics/resistors");
+    // The same slug in another department is a different URL — that is the point.
     expect(routes.category("tools:measurement")).not.toBe(
       routes.category("electronics:measurement"),
     );
   });
 
   it("falls back to a search when handed a bare slug", () => {
-    // Honest: we cannot tell which trade was meant, so we do not invent one.
+    // Honest: we cannot tell which department was meant, so we do not invent one.
     expect(routes.category("measurement")).toBe("/search?category=measurement");
   });
 });
@@ -85,18 +85,31 @@ describe("old URLs", () => {
   });
 
   it("map the old names onto the new, with or without a prefix, in one hop", () => {
-    expect(redirectTarget("/en/browse/tools")).toBe("/trades/tools");
-    expect(redirectTarget("/browse/tools/saws")).toBe("/trades/tools/saws");
+    expect(redirectTarget("/en/browse/tools")).toBe("/departments/tools");
+    expect(redirectTarget("/browse/tools/saws")).toBe("/departments/tools/saws");
+    expect(redirectTarget("/browse")).toBe("/departments");
     expect(redirectTarget("/ar/suppliers/shop-a")).toBe("/shops/shop-a");
     expect(redirectTarget("/suppliers/shop-a")).toBe("/shops/shop-a");
   });
 
+  it("send trades to departments, never through /trades on the way", () => {
+    expect(redirectTarget("/trades")).toBe("/departments");
+    expect(redirectTarget("/trades/tools")).toBe("/departments/tools");
+    expect(redirectTarget("/trades/tools/saws")).toBe("/departments/tools/saws");
+    expect(redirectTarget("/en/trades/tools")).toBe("/departments/tools");
+    // One pass: the target of an old URL is never itself redirected.
+    for (const old of ["/en/browse/tools", "/browse/tools/saws", "/ar/trades", "/trades/x/y"]) {
+      expect(redirectTarget(redirectTarget(old)!)).toBeNull();
+    }
+  });
+
   it("leave current URLs, and lookalikes, alone", () => {
-    expect(redirectTarget("/trades/tools")).toBeNull();
+    expect(redirectTarget("/departments/tools")).toBeNull();
     expect(redirectTarget("/search")).toBeNull();
     // Starts with the letters, is not the prefix.
     expect(redirectTarget("/enclosures")).toBeNull();
     expect(redirectTarget("/browser")).toBeNull();
+    expect(redirectTarget("/tradesman")).toBeNull();
   });
 });
 

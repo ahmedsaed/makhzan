@@ -10,7 +10,7 @@ consumer site: server-rendered, English only, light and dark.
 
 - `app/page.tsx` — home (renders its own header, without the search field)
 - `app/(site)/…` — every other page, under the full header: `search`,
-  `products/[id]`, `trades`, `trades/[trade]`, `trades/[trade]/[category]`,
+  `products/[id]`, `departments`, `departments/[department]`, `departments/[department]/[category]`,
   `shops`, `shops/[shop]`, `how-we-crawl`, `for-suppliers`
 - `app/listings/[id]` — redirects an old listing URL to its product
 - `proxy.ts` — 308s from the previous site's URLs (`lib/redirects.ts`)

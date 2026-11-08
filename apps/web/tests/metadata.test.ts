@@ -12,8 +12,8 @@ import {
   shopCardLines,
   shopDescription,
   totalsLine,
-  tradeCardLines,
-  tradeDescription,
+  departmentCardLines,
+  departmentDescription,
 } from "@/lib/metadata";
 import { clampText } from "@/lib/og";
 import { sitemapEntries } from "@/lib/sitemap";
@@ -116,26 +116,26 @@ describe("productDescription", () => {
   });
 });
 
-describe("trade and category descriptions", () => {
-  it("counts a trade's products and names its biggest categories, not 'Other'", () => {
-    expect(tradeDescription("seals-bearings", SEALS)).toBe(
+describe("department and category descriptions", () => {
+  it("counts a department's products and names its biggest categories, not 'Other'", () => {
+    expect(departmentDescription("seals-bearings", SEALS)).toBe(
       "1,980 products in Seals & Bearings from Egypt's suppliers: O-Rings, bearings, oil seals. 4 categories, compared across shops.",
     );
   });
 
-  it("has nothing to say about an empty or unknown trade", () => {
-    expect(tradeDescription("timber", SEALS)).toBeUndefined();
+  it("has nothing to say about an empty or unknown department", () => {
+    expect(departmentDescription("timber", SEALS)).toBeUndefined();
   });
 
-  it("gives a trade card its count, its size in categories, and three names", () => {
-    expect(tradeCardLines("seals-bearings", SEALS)).toEqual({
+  it("gives a department card its count, its size in categories, and three names", () => {
+    expect(departmentCardLines("seals-bearings", SEALS)).toEqual({
       title: "Seals & Bearings",
       detail: "1,980 products · 4 categories",
       inside: ["O-Rings", "Bearings", "Oil Seals"],
     });
   });
 
-  it("describes a category with its subtree's total, in its trade", () => {
+  it("describes a category with its subtree's total, in its department", () => {
     expect(categoryDescription(SEALS[0], 1300)).toMatch(
       /^1,300 products in Seals \(Seals & Bearings\) from Egypt's suppliers/,
     );
@@ -171,7 +171,7 @@ describe("shop descriptions", () => {
     });
   });
 
-  it("falls back to its trades when it has no categories", () => {
+  it("falls back to its departments when it has no categories", () => {
     expect(shopCardLines({ ...shop, top_categories: [] }).carries).toBe("Electronics");
   });
 });
@@ -195,14 +195,14 @@ describe("pageMetadata", () => {
     const meta = pageMetadata({
       title: "Tools",
       description: "Hand tools.",
-      path: "/trades/tools",
+      path: "/departments/tools",
     });
     expect(meta.title).toBe("Tools");
-    expect(meta.alternates?.canonical).toBe("/trades/tools");
+    expect(meta.alternates?.canonical).toBe("/departments/tools");
     expect(meta.openGraph).toMatchObject({
       title: "Tools · makhzan",
       description: "Hand tools.",
-      url: "/trades/tools",
+      url: "/departments/tools",
       siteName: "makhzan",
       locale: "en",
     });
@@ -274,15 +274,15 @@ describe("sitemapEntries", () => {
     ]).map((entry) => entry.url.replace("https://makhzan.example", ""));
     expect(urls).toEqual([
       "/",
-      "/trades",
-      "/trades/seals-bearings",
-      "/trades/tools",
-      "/trades/seals-bearings/seals",
-      "/trades/seals-bearings/o-rings",
-      "/trades/seals-bearings/oil-seals",
-      "/trades/seals-bearings/bearings",
-      "/trades/seals-bearings/other",
-      "/trades/tools/calipers",
+      "/departments",
+      "/departments/seals-bearings",
+      "/departments/tools",
+      "/departments/seals-bearings/seals",
+      "/departments/seals-bearings/o-rings",
+      "/departments/seals-bearings/oil-seals",
+      "/departments/seals-bearings/bearings",
+      "/departments/seals-bearings/other",
+      "/departments/tools/calipers",
       "/shops",
       "/shops/shop-a",
       "/how-we-crawl",
@@ -304,8 +304,8 @@ describe("breadcrumbJsonLd", () => {
   it("lists the trail in order, links absolute, the page itself last and unlinked", () => {
     const data = breadcrumbJsonLd(
       [
-        { label: "Electronics", href: "/trades/electronics" },
-        { label: "Resistors", href: "/trades/electronics/resistors" },
+        { label: "Electronics", href: "/departments/electronics" },
+        { label: "Resistors", href: "/departments/electronics/resistors" },
       ],
       "1k Resistor",
     );
@@ -315,17 +315,17 @@ describe("breadcrumbJsonLd", () => {
       [2, "Resistors"],
       [3, "1k Resistor"],
     ]);
-    expect(data.itemListElement[0].item).toMatch(/^https?:\/\/.+\/trades\/electronics$/);
+    expect(data.itemListElement[0].item).toMatch(/^https?:\/\/.+\/departments\/electronics$/);
     expect(data.itemListElement[2]).not.toHaveProperty("item");
   });
 });
 
 describe("pagedPath", () => {
   it("keeps a positive offset and drops everything else", () => {
-    expect(pagedPath("/trades/x", { offset: "24", sort: "price_asc" })).toBe("/trades/x?offset=24");
-    expect(pagedPath("/trades/x", { sort: "price_asc", in_stock: "all" })).toBe("/trades/x");
-    expect(pagedPath("/trades/x", { offset: "0" })).toBe("/trades/x");
-    expect(pagedPath("/trades/x", { offset: "abc" })).toBe("/trades/x");
-    expect(pagedPath("/trades/x", { offset: ["48", "72"] })).toBe("/trades/x?offset=48");
+    expect(pagedPath("/departments/x", { offset: "24", sort: "price_asc" })).toBe("/departments/x?offset=24");
+    expect(pagedPath("/departments/x", { sort: "price_asc", in_stock: "all" })).toBe("/departments/x");
+    expect(pagedPath("/departments/x", { offset: "0" })).toBe("/departments/x");
+    expect(pagedPath("/departments/x", { offset: "abc" })).toBe("/departments/x");
+    expect(pagedPath("/departments/x", { offset: ["48", "72"] })).toBe("/departments/x?offset=48");
   });
 });

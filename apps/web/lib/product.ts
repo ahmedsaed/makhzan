@@ -9,7 +9,7 @@ import type { Category, CategoryRef, Offer, Product, StockSignal } from "@/lib/a
 import { plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { routes } from "@/lib/routes";
-import { tradeLabel } from "@/lib/trades";
+import { departmentLabel } from "@/lib/departments";
 
 /** Low stock is still stock: the shop says it can sell one today. */
 export function isInStock(signal: StockSignal): boolean {
@@ -254,7 +254,7 @@ export function detailSources(
 }
 
 /**
- * Trade › group › category, walked up the category's parents. Every crumb is a
+ * Department › group › category, walked up the category's parents. Every crumb is a
  * link: on a product page none of them is the current page.
  */
 export function categoryTrail(category: CategoryRef, categories: Category[]): Crumb[] {
@@ -269,7 +269,7 @@ export function categoryTrail(category: CategoryRef, categories: Category[]): Cr
     current = parent ? byRef.get(parent) : undefined;
   }
   return [
-    { label: tradeLabel(category.domain), href: routes.trade(category.domain) },
+    { label: departmentLabel(category.domain), href: routes.department(category.domain) },
     ...chain.map((item) => ({
       label: item.name_en,
       href: routes.category(item.ref),

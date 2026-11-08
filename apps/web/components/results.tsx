@@ -18,17 +18,17 @@ import {
   type ResultsData,
   type ResultsQuery,
 } from "@/lib/results-query";
-import { tradeLabel } from "@/lib/trades";
+import { departmentLabel } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 
 type Links = ReturnType<typeof resultsLinks>;
 
-/** Parameters a page fixes itself (a trade page's trade), which the visitor
+/** Parameters a page fixes itself (a department page's department), which the visitor
  *  therefore cannot remove from the results. */
 export type Locked = ("domain" | "category" | "shop")[];
 
 /**
- * The results half of every results page — search, trade, category, a shop's
+ * The results half of every results page — search, department, category, a shop's
  * search: the chip bar, the "Category, price" sheet (a rail on desktop), the
  * toolbar, the results or why there are none, and paging. One component, so
  * the pages cannot drift apart in wording or layout.
@@ -97,7 +97,7 @@ export function Results({
   // the result count is never unexplained.
   const active: { label: string; href: string }[] = [];
   if (query.domain && removable("domain")) {
-    active.push({ label: tradeLabel(query.domain), href: links.clear("domain") });
+    active.push({ label: departmentLabel(query.domain), href: links.clear("domain") });
   }
   if (picked) {
     active.push({ label: names.get(picked) ?? picked, href: links.clear("category") });
@@ -340,7 +340,7 @@ function NoResults({
     removals.push({ label: "Any category", href: links.clear("category") });
   }
   if (query.domain && removable("domain")) {
-    removals.push({ label: "Every trade", href: links.clear("domain") });
+    removals.push({ label: "Every department", href: links.clear("domain") });
   }
   if (query.minPrice !== undefined || query.maxPrice !== undefined) {
     removals.push({ label: "Any price", href: links.clear("min_price", "max_price") });

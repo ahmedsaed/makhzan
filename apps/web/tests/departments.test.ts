@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Category } from "@/lib/api";
-import { asPhrase, insideOf, totalOf, tradeSummaries, tradeTree } from "@/lib/trades";
+import { asPhrase, insideOf, totalOf, departmentSummaries, departmentTree } from "@/lib/departments";
 
 const cat = (
   domain: string,
@@ -32,7 +32,7 @@ const SEALS = [
 ];
 const FLAT = [cat("timber", "oak", "Oak", null, 90), cat("timber", "teak", "Teak", null, 30)];
 
-describe("what's inside a trade", () => {
+describe("what's inside a department", () => {
   it("is its biggest leaf categories, largest first", () => {
     expect(insideOf("seals-bearings", SEALS, 3)).toEqual(["O-Rings", "Bearings", "Oil Seals"]);
   });
@@ -41,7 +41,7 @@ describe("what's inside a trade", () => {
     expect(insideOf("seals-bearings", SEALS)).not.toContain("Other Seals");
   });
 
-  it("only looks inside the trade asked about", () => {
+  it("only looks inside the department asked about", () => {
     expect(insideOf("timber", [...SEALS, ...FLAT])).toEqual(["Oak", "Teak"]);
   });
 
@@ -58,29 +58,29 @@ describe("what's inside a trade", () => {
   });
 });
 
-describe("trades are listed by size", () => {
-  it("orders trades largest first and drops empty ones", () => {
-    const trades = tradeSummaries([...FLAT, ...SEALS, cat("garden", "mowers", "Mowers", null, 0)]);
-    expect(trades.map((t) => [t.domain, t.count])).toEqual([
+describe("departments are listed by size", () => {
+  it("orders departments largest first and drops empty ones", () => {
+    const departments = departmentSummaries([...FLAT, ...SEALS, cat("garden", "mowers", "Mowers", null, 0)]);
+    expect(departments.map((t) => [t.domain, t.count])).toEqual([
       ["seals-bearings", 1490],
       ["timber", 120],
     ]);
-    expect(trades[0].inside[0]).toBe("O-Rings");
+    expect(departments[0].inside[0]).toBe("O-Rings");
   });
 });
 
-describe("a trade's tree", () => {
+describe("a department's tree", () => {
   it("totals a group over its children", () => {
     expect(totalOf("seals-bearings:seals", SEALS)).toBe(1150);
     expect(totalOf("seals-bearings:bearings", SEALS)).toBe(300);
   });
 
   it("lists groups by size and leaves out empty ones", () => {
-    const { groups, group, children, top } = tradeTree(SEALS);
+    const { groups, group, children, top } = departmentTree(SEALS);
     expect(groups.map((g) => g.slug)).toEqual(["seals", "transmission"]);
     expect(group).toBeNull();
     expect(children).toEqual([]);
-    // Nothing selected: the trade's biggest categories stand in.
+    // Nothing selected: the department's biggest categories stand in.
     expect(top.map((c) => c.slug)).toEqual([
       "seals-other",
       "o-rings",
@@ -91,17 +91,17 @@ describe("a trade's tree", () => {
   });
 
   it("selects a leaf's group and lists that group's categories", () => {
-    const { group, children } = tradeTree(SEALS, "seals-bearings:bearings");
+    const { group, children } = departmentTree(SEALS, "seals-bearings:bearings");
     expect(group?.slug).toBe("transmission");
     expect(children.map((c) => c.slug)).toEqual(["bearings", "couplings"]);
   });
 
   it("selects a group by itself", () => {
-    expect(tradeTree(SEALS, "seals-bearings:seals").group?.slug).toBe("seals");
+    expect(departmentTree(SEALS, "seals-bearings:seals").group?.slug).toBe("seals");
   });
 
-  it("adds no biggest-categories row to a flat trade", () => {
-    const { groups, top } = tradeTree(FLAT);
+  it("adds no biggest-categories row to a flat department", () => {
+    const { groups, top } = departmentTree(FLAT);
     expect(groups.map((g) => g.slug)).toEqual(["oak", "teak"]);
     expect(top).toEqual([]);
   });

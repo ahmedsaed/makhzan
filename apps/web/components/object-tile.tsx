@@ -6,14 +6,14 @@ import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * A trade, group or category shown as one iconic object: a photo, its name,
+ * A department, group or category shown as one iconic object: a photo, its name,
  * and how many products it holds. McMaster-Carr's device — a photo of a thing
  * is recognised faster than its name is read, and a category name alone
  * ("Fasteners") rarely says what is inside.
  *
  * The frame leads and the name sits under it, so a row of five still fits a
  * phone. `hint` is the line that says what is inside ("O-rings, bearings, oil
- * seals"). `current` marks the selected group or category on a trade page.
+ * seals"). `current` marks the selected group or category on a department page.
  */
 export function ObjectTile({
   href,
@@ -35,7 +35,7 @@ export function ObjectTile({
   count?: number;
   hint?: string;
   current?: boolean;
-  /** `md` for groups and trades, `sm` for the denser category tiles. */
+  /** `md` for groups and departments, `sm` for the denser category tiles. */
   size?: "md" | "sm";
   className?: string;
 }) {

@@ -8,9 +8,9 @@ import { formatCount, plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
-import { isStale, listedShops, tradeShares, tradesInWords } from "@/lib/shops";
+import { isStale, listedShops, departmentShares, departmentsInWords } from "@/lib/shops";
 
-import { TradeBar } from "./_components/trade-bar";
+import { DepartmentBar } from "./_components/department-bar";
 
 export async function generateMetadata(): Promise<Metadata> {
   const shops = await fetchSuppliers()
@@ -55,8 +55,8 @@ export default async function ShopsPage() {
 }
 
 /**
- * Phones: name, trades, then counts and freshness underneath. From `md` each
- * shop is a card: name and trades, a bar of what it carries, its two counts as
+ * Phones: name, departments, then counts and freshness underneath. From `md` each
+ * shop is a card: name and departments, a bar of what it carries, its two counts as
  * figures, and the check date at the foot, level across a row of cards.
  */
 function ShopRow({ shop, now }: { shop: ShopSummary; now: Date }) {
@@ -76,11 +76,11 @@ function ShopRow({ shop, now }: { shop: ShopSummary; now: Date }) {
             {shop.name}
           </span>
           {shop.domains.length > 0 && (
-            <span className="text-[13px] text-ink-2">{tradesInWords(shop.domains)}</span>
+            <span className="text-[13px] text-ink-2">{departmentsInWords(shop.domains)}</span>
           )}
         </span>
         {shop.domains.length > 0 && (
-          <TradeBar shares={tradeShares(shop.domains)} className="hidden md:flex" />
+          <DepartmentBar shares={departmentShares(shop.domains)} className="hidden md:flex" />
         )}
         <span className="flex flex-wrap gap-x-1.5 text-sm text-ink-2 md:grid md:grid-cols-2 md:gap-3 md:text-[13px]">
           <span className="tabular">

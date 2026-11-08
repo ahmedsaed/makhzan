@@ -3,7 +3,7 @@ import {
   ForShops,
   HomeShops,
   HomeStats,
-  HomeTrades,
+  HomeDepartments,
   HowItWorks,
   SeveralShops,
 } from "@/components/home-sections";
@@ -15,12 +15,12 @@ import type { Metadata } from "next";
 import { fetchCategories, fetchStats, fetchSuppliers, searchProducts } from "@/lib/api";
 import { TAGLINE } from "@/lib/brand";
 import { formatCount } from "@/lib/format";
-import { tradeCards } from "@/lib/home";
+import { departmentCards } from "@/lib/home";
 import { homeDescription, homeJsonLd, pageMetadata } from "@/lib/metadata";
 import { jsonLdText } from "@/lib/product";
 import { listedShops } from "@/lib/shops";
 import { absoluteUrl } from "@/lib/site";
-import { tradeSummaries } from "@/lib/trades";
+import { departmentSummaries } from "@/lib/departments";
 
 export async function generateMetadata(): Promise<Metadata> {
   const stats = await fetchStats().catch(() => null);
@@ -35,12 +35,12 @@ const SEVERAL_SHOPS = 6;
  * Two jobs: take a query from someone who knows what they want, and show a
  * first-time visitor what makhzan is and what is in it without their having to
  * search. A headline, one large search with example queries, the totals; then
- * the trades and their biggest categories, products several shops sell, the
+ * the departments and their biggest categories, products several shops sell, the
  * shops themselves, how it works, and a word for shop owners.
  *
  * Desktop uses the full container: the hero sits beside "How makhzan works",
  * and every section below spans the width. Phones read top to bottom, with the
- * explainer moved below the browsing sections so the trades stay near the top.
+ * explainer moved below the browsing sections so the departments stay near the top.
  *
  * Every section fails soft. Each fetch is caught on its own, and a section
  * whose data did not arrive is left out; with nothing at all the page is still
@@ -59,8 +59,8 @@ export default async function HomePage() {
       limit: SEVERAL_SHOPS,
     }).catch(() => null),
   ]);
-  const rows = tradeSummaries(categories);
-  const cards = tradeCards(categories);
+  const rows = departmentSummaries(categories);
+  const cards = departmentCards(categories);
   const listed = shops ? listedShops(shops) : [];
   const now = new Date();
 
@@ -92,7 +92,7 @@ export default async function HomePage() {
                 rechecked about weekly.
               </p>
             )}
-            <HomeStats stats={stats} trades={cards.length} className="mt-2 hidden lg:grid" />
+            <HomeStats stats={stats} departments={cards.length} className="mt-2 hidden lg:grid" />
             <ExampleSearches className="mt-2" />
           </section>
 
@@ -100,7 +100,7 @@ export default async function HomePage() {
 
           {cards.length > 0 && (
             <div className="lg:col-span-2">
-              <HomeTrades cards={cards} rows={rows} />
+              <HomeDepartments cards={cards} rows={rows} />
             </div>
           )}
 

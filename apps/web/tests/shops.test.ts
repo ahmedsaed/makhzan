@@ -9,8 +9,8 @@ import {
   isStale,
   listedShops,
   shopSearchUrl,
-  tradeShares,
-  tradesInWords,
+  departmentShares,
+  departmentsInWords,
 } from "@/lib/shops";
 
 const NOW = new Date("2026-11-06T12:00:00Z");
@@ -45,22 +45,22 @@ describe("shop text", () => {
     expect(formatDay(new Date("2025-08-23T10:00:00Z"), NOW)).toBe("23 Aug 2025");
   });
 
-  it("names the top trades in words", () => {
+  it("names the top departments in words", () => {
     const d = (domain: string) => ({ domain, count: 1 });
-    expect(tradesInWords([])).toBe("");
-    expect(tradesInWords([d("electronics")])).toBe("Electronics");
-    expect(tradesInWords([d("electronics"), d("seals-bearings")])).toBe(
+    expect(departmentsInWords([])).toBe("");
+    expect(departmentsInWords([d("electronics")])).toBe("Electronics");
+    expect(departmentsInWords([d("electronics"), d("seals-bearings")])).toBe(
       "Electronics and Seals & Bearings",
     );
-    expect(tradesInWords([d("a"), d("b"), d("c"), d("d"), d("e")])).toBe(
-      "A, B, C and 2 more trades",
+    expect(departmentsInWords([d("a"), d("b"), d("c"), d("d"), d("e")])).toBe(
+      "A, B, C and 2 more departments",
     );
   });
 });
 
-describe("the trade bar", () => {
+describe("the department bar", () => {
   it("shares add up, the tail folded into one segment", () => {
-    const shares = tradeShares([
+    const shares = departmentShares([
       { domain: "electronics", count: 70 },
       { domain: "tools", count: 10 },
       { domain: "chemicals", count: 10 },
@@ -68,22 +68,22 @@ describe("the trade bar", () => {
       { domain: "safety", count: 5 },
     ]);
     expect(shares.map((s) => s.domain)).toEqual(["electronics", "tools", "chemicals", null]);
-    expect(shares[3]).toMatchObject({ count: 10, label: "2 other trades 10" });
+    expect(shares[3]).toMatchObject({ count: 10, label: "2 other departments 10" });
     expect(shares.reduce((sum, s) => sum + s.percent, 0)).toBeCloseTo(100);
   });
 
-  it("does not fold a single trade into 'others'", () => {
+  it("does not fold a single department into 'others'", () => {
     const four = ["a", "b", "c", "d"].map((domain) => ({ domain, count: 1 }));
-    expect(tradeShares(four).map((s) => s.domain)).toEqual(["a", "b", "c", "d"]);
+    expect(departmentShares(four).map((s) => s.domain)).toEqual(["a", "b", "c", "d"]);
   });
 
   it("draws nothing for an empty shop", () => {
-    expect(tradeShares([])).toEqual([]);
+    expect(departmentShares([])).toEqual([]);
   });
 });
 
 describe("searching a shop", () => {
-  it("scopes /search to the shop, and optionally a category or trade", () => {
+  it("scopes /search to the shop, and optionally a category or department", () => {
     expect(shopSearchUrl("shop-a")).toBe("/search?shop=shop-a");
     expect(shopSearchUrl("shop-a", { category: "tools:measurement" })).toBe(
       "/search?shop=shop-a&category=tools%3Ameasurement",

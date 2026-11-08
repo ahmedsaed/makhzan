@@ -8,7 +8,7 @@ supplier to buy. It is a **directory, not a store**: no cart, no payment, no
 delivery.
 
 Live at **[makhzan.merope.dev](https://makhzan.merope.dev)**: about 58,000
-products from 8 suppliers, across 16 trades (electronics, tools, piping,
+products from 8 suppliers, across 16 departments (electronics, tools, piping,
 welding, seals and bearings, timber, and more).
 
 ## How makhzan crawls
@@ -51,7 +51,7 @@ path from your own package.
 ## Architecture
 
 ```
-apps/web          Next.js frontend: search, trades, product and shop pages; dark mode
+apps/web          Next.js frontend: search, departments, product and shop pages; dark mode
 apps/api          FastAPI, read-only, over Postgres and Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalise -> upsert -> group -> index
 packages/schemas  SQLAlchemy models, migrations, taxonomies, grouping, search contract
@@ -67,9 +67,9 @@ Some of what makes it work:
   tail unreachable.
 - **Nothing is archived on partial evidence.** A listing is retired only after a
   complete sweep of its shop failed to see it, never because one run fell short.
-- **Domains, not one taxonomy.** Each trade has its own category tree and rules
+- **Domains, not one taxonomy.** Each department has its own category tree and rules
   (`packages/schemas/makhzan_schemas/domains/`). A listing's domain comes from
-  its category, so one marketplace can span many trades.
+  its category, so one marketplace can span many departments.
 - **Mapping beats guessing.** A shop's own categories are mapped through a
   crosswalk where one exists; keyword inference from titles is the fallback, not
   the default.

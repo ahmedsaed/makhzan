@@ -5,7 +5,7 @@ import { Link } from "@/components/link";
 import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
 import { Container } from "@/components/section";
-import { tradeIcon } from "@/components/trade-icon";
+import { departmentIcon } from "@/components/department-icon";
 import { categoryNameOf, type Category } from "@/lib/api";
 import { objectImage } from "@/lib/content/category-images";
 import { formatCount } from "@/lib/format";
@@ -18,7 +18,7 @@ import {
   type RawParams,
   type ResultsQuery,
 } from "@/lib/results-query";
-import { asPhrase, totalOf, tradeLabel, tradeTree, type TradeNode } from "@/lib/trades";
+import { asPhrase, totalOf, departmentLabel, departmentTree, type DepartmentNode } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 
 import { balancedColumns, BrowseTile } from "./browse-tile";
@@ -26,38 +26,38 @@ import { balancedColumns, BrowseTile } from "./browse-tile";
 export type { RawParams };
 
 /**
- * A trade, or one of its categories: the same page, narrowed. The header names
- * it and offers "Search in {trade}"; the groups are object tiles, the selected
+ * A department, or one of its categories: the same page, narrowed. The header names
+ * it and offers "Search in {department}"; the groups are object tiles, the selected
  * group's categories smaller ones; and the results start straight away, so no
  * page here is a dead-end list of links.
  *
  * The results are the search page's (components/results.tsx), on the same URL
- * contract (lib/results-query.ts), with the trade — and on a category page the
+ * contract (lib/results-query.ts), with the department — and on a category page the
  * category — fixed by the path. `?category=` may narrow further, but only to
  * something inside the page's own category; anything else is ignored rather
- * than allowed to show another trade's products under this one's name.
+ * than allowed to show another department's products under this one's name.
  *
  * `categories` is null when the taxonomy could not be fetched: the page then
  * says so instead of failing.
  */
-export async function TradeBrowse({
-  trade,
+export async function DepartmentBrowse({
+  department,
   categories,
   selected = null,
   params,
 }: {
-  trade: string;
-  /** The trade's whole slice of the taxonomy, or null if it is unavailable. */
+  department: string;
+  /** The department's whole slice of the taxonomy, or null if it is unavailable. */
   categories: Category[] | null;
-  /** The category the page is narrowed to; null on the trade's own page. */
+  /** The category the page is narrowed to; null on the department's own page. */
   selected?: Category | null;
   params: RawParams;
 }) {
-  const label = tradeLabel(trade);
+  const label = departmentLabel(department);
   if (!categories) {
     return (
       <>
-        <TradeHeader trade={trade} heading={label} />
+        <DepartmentHeader department={department} heading={label} />
         <Container className="py-3.5">
           <NotAnswering title="The catalogue is not answering" />
         </Container>
@@ -65,9 +65,9 @@ export async function TradeBrowse({
     );
   }
 
-  const tree = tradeTree(categories, selected?.ref ?? null);
-  const pathname = selected ? routes.category(selected.ref) : routes.trade(trade);
-  const query = scopedQuery(params, trade, categories, selected);
+  const tree = departmentTree(categories, selected?.ref ?? null);
+  const pathname = selected ? routes.category(selected.ref) : routes.department(department);
+  const query = scopedQuery(params, department, categories, selected);
   const data = await fetchResults(query, { baseCategory: selected?.ref });
 
   const heading = selected ? categoryNameOf(selected) : label;
@@ -76,8 +76,8 @@ export async function TradeBrowse({
     ? totalOf(selected.ref, categories)
     : categories.reduce((sum, category) => sum + category.count, 0);
   const crumbs: Crumb[] = [
-    { label: "Trades", href: routes.trades() },
-    { label, href: routes.trade(trade) },
+    { label: "Departments", href: routes.departments() },
+    { label, href: routes.department(department) },
   ];
   if (tree.group && tree.group.ref !== selected?.ref) {
     crumbs.push({ label: categoryNameOf(tree.group), href: routes.category(tree.group.ref) });
@@ -88,8 +88,8 @@ export async function TradeBrowse({
   const shelfTitle = tree.group
     ? `${categoryNameOf(tree.group)} · ${formatCount(tree.group.total)}`
     : `Biggest in ${label}`;
-  // From `lg` a group tile says what is inside it, as a trade does on /trades.
-  const inside = (group: TradeNode) =>
+  // From `lg` a group tile says what is inside it, as a department does on /departments.
+  const inside = (group: DepartmentNode) =>
     asPhrase(
       categories
         .filter((c) => c.parent === group.ref)
@@ -99,13 +99,13 @@ export async function TradeBrowse({
         .slice(0, 3)
         .map((c) => c.name),
     ) || undefined;
-  const tile = (node: TradeNode, size: "md" | "sm") => (
+  const tile = (node: DepartmentNode, size: "md" | "sm") => (
     <BrowseTile
       key={node.ref}
       href={routes.category(node.ref)}
       label={categoryNameOf(node)}
       image={objectImage(node.ref)}
-      icon={tradeIcon(trade)}
+      icon={departmentIcon(department)}
       count={node.total}
       hint={size === "md" ? inside(node) : undefined}
       current={node.ref === (size === "md" ? tree.group?.ref : selected?.ref)}
@@ -116,13 +116,13 @@ export async function TradeBrowse({
 
   return (
     <>
-      {/* Trades › trade › group › category, for search results. */}
+      {/* Departments › department › group › category, for search results. */}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLdText(breadcrumbJsonLd(crumbs)) }}
       />
-      <TradeHeader
-        trade={trade}
+      <DepartmentHeader
+        department={department}
         heading={heading}
         count={count}
         crumbs={selected ? crumbs : undefined}
@@ -142,7 +142,7 @@ export async function TradeBrowse({
             {tree.groups.map((group) => tile(group, "md"))}
           </nav>
         )}
-      </TradeHeader>
+      </DepartmentHeader>
 
       <Container className="py-3.5">
         {shelf.length > 0 && (
@@ -191,13 +191,13 @@ function columns(count: number, lg: number, xl: number): React.CSSProperties {
 }
 
 /**
- * The search page's query, with the trade fixed and the category held inside
- * the page's own. A `?category=` from another trade, or from outside this
+ * The search page's query, with the department fixed and the category held inside
+ * the page's own. A `?category=` from another department, or from outside this
  * category, is dropped; so are `domain` and `shop`, which the page decides.
  */
 function scopedQuery(
   params: RawParams,
-  trade: string,
+  department: string,
   categories: Category[],
   selected: Category | null,
 ): ResultsQuery {
@@ -214,24 +214,24 @@ function scopedQuery(
     asked && parents.has(asked) && (!selected || within(asked, selected.ref))
       ? asked
       : selected?.ref;
-  return { ...query, domain: trade, shop: undefined, category };
+  return { ...query, domain: department, shop: undefined, category };
 }
 
-/** Back link or breadcrumb, the name, its count, and "Search in {trade}". */
-function TradeHeader({
-  trade,
+/** Back link or breadcrumb, the name, its count, and "Search in {department}". */
+function DepartmentHeader({
+  department,
   heading,
   count,
   crumbs,
   children,
 }: {
-  trade: string;
+  department: string;
   heading: string;
   count?: number;
   crumbs?: Crumb[];
   children?: React.ReactNode;
 }) {
-  const label = tradeLabel(trade);
+  const label = departmentLabel(department);
   return (
     <header className="border-b border-line bg-surface">
       <Container className="flex flex-col gap-2.5 pt-1 pb-3.5">
@@ -239,11 +239,11 @@ function TradeHeader({
           <Breadcrumb items={crumbs} className="flex min-h-11 items-center" />
         ) : (
           <Link
-            href={routes.trades()}
+            href={routes.departments()}
             className="inline-flex h-11 items-center gap-1 self-start text-sm text-ink-2 hover:text-ink"
           >
             <ChevronLeft aria-hidden="true" className="size-4" />
-            All trades
+            All departments
           </Link>
         )}
         {/* From `lg` the search sits beside the name rather than under it. */}
@@ -260,7 +260,7 @@ function TradeHeader({
             compact
             label={`Search in ${label}`}
             placeholder={`Search in ${label}`}
-            scope={{ domain: trade }}
+            scope={{ domain: department }}
             className="md:max-w-xl lg:w-[26rem] lg:shrink-0"
           />
         </div>
