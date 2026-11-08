@@ -6,8 +6,6 @@ import {
   galleryImages,
   jsonLdText,
   orderOffers,
-  pricePosition,
-  pricePositionText,
   primaryOffer,
   productJsonLd,
   shopsFact,
@@ -290,53 +288,5 @@ describe("makhzan's facts", () => {
         offer("d", 9, "low_stock", { shop: "three" }),
       ]),
     ).toEqual({ shops: 3, listings: 4, inStockAt: 2 });
-  });
-
-  it("places a price among the others in its category, never overstating", () => {
-    // 101 priced, this one included: 30 dearer, 70 cheaper.
-    expect(pricePosition({ priced: 101, atOrBelow: 71, below: 70 })).toEqual({
-      kind: "pricier",
-      percent: 70,
-      others: 100,
-    });
-    // 20 of 30 others dearer is 66.7%: said as 66, not 67.
-    expect(pricePosition({ priced: 31, atOrBelow: 11, below: 10 })).toEqual({
-      kind: "cheaper",
-      percent: 66,
-      others: 30,
-    });
-  });
-
-  it("says cheapest and priciest outright", () => {
-    expect(pricePosition({ priced: 50, atOrBelow: 1, below: 0 })).toEqual({
-      kind: "cheapest",
-      others: 49,
-    });
-    expect(pricePosition({ priced: 50, atOrBelow: 50, below: 49 })).toEqual({
-      kind: "priciest",
-      others: 49,
-    });
-  });
-
-  it("says nothing it cannot back", () => {
-    // Too few peers for a share to mean anything.
-    expect(pricePosition({ priced: 8, atOrBelow: 1, below: 0 })).toBeNull();
-    // Most of the category shares the price: neither side is a majority.
-    expect(pricePosition({ priced: 100, atOrBelow: 70, below: 40 })).toBeNull();
-    // The index does not count the product itself: it disagrees with the page.
-    expect(pricePosition({ priced: 100, atOrBelow: 0, below: 0 })).toBeNull();
-    expect(pricePosition({ priced: 100, atOrBelow: 40, below: 40 })).toBeNull();
-  });
-
-  it("reads as a sentence ending on the category", () => {
-    expect(pricePositionText({ kind: "cheaper", percent: 70, others: 929 })).toBe(
-      "Cheaper than 70% of the 929 other products in",
-    );
-    expect(pricePositionText({ kind: "pricier", percent: 51, others: 1200 })).toBe(
-      "Pricier than 51% of the 1,200 other products in",
-    );
-    expect(pricePositionText({ kind: "cheapest", others: 41 })).toBe(
-      "The cheapest of the 42 products in",
-    );
   });
 });

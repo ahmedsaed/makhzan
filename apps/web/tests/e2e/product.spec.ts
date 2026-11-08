@@ -79,30 +79,26 @@ test.describe("one offer", () => {
     const hrefs = await page
       .locator("[data-result] a")
       .evaluateAll((links) => links.map((a) => a.getAttribute("href")));
-    expect(hrefs).toEqual(["/products/p-oos", "/products/p-similar-2"]);
+    expect(hrefs).toEqual([
+      "/products/p-oos",
+      "/products/p-similar-2",
+      "/products/p-similar-3",
+      "/products/p-similar-4",
+    ]);
   });
 });
 
 test.describe("makhzan's own facts, under the title", () => {
-  // The stub's Integrated Circuits hold 43 priced products, 10 to 2,450
-  // (tests/e2e/fixtures/product.mjs, IC_PRICES).
-  test("one shop: who sells it and when, its place in the category, similar ones", async ({
-    page,
-  }) => {
+  test("one shop: who sells it and when, and the similar products", async ({ page }) => {
     await page.goto("/products/p-single");
     const facts = page.locator("[data-facts]");
     await expect(facts.locator("[data-fact]")).toHaveText([
       "Sold by 1 shop · checked 74 days ago",
-      "Pricier than 97% of the 42 other products in Integrated Circuits",
-      "2 similar products, from EGP 40",
+      "4 similar products, from EGP 35",
     ]);
     // The age keeps its F2 colour here too.
     await expect(facts.locator("[data-freshness]")).toHaveAttribute("data-freshness", "warn");
-    await expect(facts.getByRole("link", { name: "Integrated Circuits" })).toHaveAttribute(
-      "href",
-      "/trades/electronics/ics",
-    );
-    await facts.getByRole("link", { name: "2 similar products" }).click();
+    await facts.getByRole("link", { name: "4 similar products" }).click();
     await expect(page).toHaveURL(/#similar$/);
     await expect(page.getByRole("heading", { name: "Similar products" })).toBeInViewport();
   });
@@ -112,21 +108,9 @@ test.describe("makhzan's own facts, under the title", () => {
     await expect(page.locator("[data-fact=shops]")).toHaveText(
       "Sold by 3 shops · 7 listings · in stock at 2 · EGP 260 – 295",
     );
-    await expect(page.locator("[data-fact=category]")).toHaveText(
-      "Pricier than 57% of the 42 other products in Integrated Circuits",
-    );
-
     await page.goto("/products/p-oos");
     await expect(page.locator("[data-fact=shops]")).toHaveText(
       "Sold by 3 shops · none in stock · EGP 40 – 50",
-    );
-    await expect(page.locator("[data-fact=category]")).toHaveText(
-      "Cheaper than 92% of the 42 other products in Integrated Circuits",
-    );
-
-    await page.goto("/products/p-specs");
-    await expect(page.locator("[data-fact=category]")).toHaveText(
-      "The priciest of the 43 products in Integrated Circuits",
     );
   });
 
@@ -151,7 +135,7 @@ test.describe("what comes first", () => {
     }
   }
 
-  test("a phone, one shop: photo, title, facts, price, similar, then the shop's text", async ({
+  test("a phone, one shop: photo, title, facts, price, the shop's text, similar", async ({
     page,
   }) => {
     await page.setViewportSize(PHONE);
@@ -161,8 +145,8 @@ test.describe("what comes first", () => {
       "h1",
       "[data-facts]",
       "[data-buy] [data-price]",
-      "[data-similar]",
       "[data-description]",
+      "[data-similar]",
     ]);
   });
 
@@ -181,32 +165,176 @@ test.describe("what comes first", () => {
     ]);
   });
 
-  test("a wide screen, one shop: similar sits in the wide column, above the text", async ({
-    page,
-  }) => {
-    await page.goto("/products/p-single");
-    const photo = (await page.locator("[data-gallery]").boundingBox())!;
-    const similar = (await page.locator("[data-similar]").boundingBox())!;
-    const description = (await page.locator("[data-description]").boundingBox())!;
+  for (const viewport of [PHONE, { width: 1440, height: 900 }]) {
+    test(`similar products come last on every kind of page (${viewport.width}px)`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      for (const path of ["/products/p-single", "/products/p-multi", "/products/p-specs"]) {
+        await page.goto(path);
+        const similar = (await page.locator("[data-similar]").boundingBox())!;
+        // Everything else in the product's layout ends above it.
+        const others = await page
+          .locator("[data-buy], [data-details], [data-description], [data-gallery], h1")
+          .evaluateAll((nodes) => nodes.map((n) => n.getBoundingClientRect().bottom + scrollY));
+        for (const bottom of others) expect(bottom, path).toBeLessThanOrEqual(similar.y + 1);
+        // And it spans the page, not one column.
+        expect(similar.width, path).toBeGreaterThan(viewport.width * 0.8);
+      }
+    });
+  }
+
+  test("a wide screen, a shop that wrote nothing: price beside the title", async ({ page }) => {
+    await page.goto("/products/p-bare");
+    const photo = (await page.locator("[data-media]").first().boundingBox())!;
     const buy = (await page.locator("[data-buy]").boundingBox())!;
-    expect(similar.x).toBeGreaterThan(photo.x + photo.width);
-    expect(description.y).toBeGreaterThan(similar.y + similar.height - 1);
-    // The price stays under the photo, not pushed down by the strip.
-    expect(buy.x).toBeCloseTo(photo.x, 0);
-    expect(buy.y).toBeLessThan(similar.y + similar.height);
+    expect(buy.x).toBeGreaterThan(photo.x + photo.width);
+  });
+});
+
+test.describe("photo arrows", () => {
+  const scrollOf = (page: import("@playwright/test").Page, selector: string) =>
+    page.locator(selector).evaluate((node) => node.scrollLeft);
+
+  test("the gallery's move one photo and are disabled at the ends", async ({ page }) => {
+    await page.goto("/products/p-single");
+    const previous = page.getByRole("button", { name: "Previous photo" });
+    const next = page.getByRole("button", { name: "Next photo" });
+    await expect(previous).toBeDisabled();
+    await expect(next).toBeEnabled();
+    await next.click();
+    await expect.poll(() => scrollOf(page, "[data-gallery]")).toBeGreaterThan(100);
+    await expect(next).toBeDisabled();
+    await expect(previous).toBeEnabled();
+    await previous.click();
+    await expect.poll(() => scrollOf(page, "[data-gallery]")).toBe(0);
+    await expect(previous).toBeDisabled();
+  });
+
+  test("one photo has none", async ({ page }) => {
+    await page.goto("/products/p-bare");
+    await expect(page.locator("a[data-photo]")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /photo$/ })).toHaveCount(0);
+  });
+
+  test("a phone's row of similar products has them too", async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-single");
+    const row = "[data-similar] [data-carousel-track]";
+    const previous = page.getByRole("button", { name: "Previous products" });
+    const next = page.getByRole("button", { name: "Next products" });
+    await expect(previous).toBeDisabled();
+    await next.click();
+    await expect.poll(() => scrollOf(page, row)).toBeGreaterThan(50);
+    await expect(previous).toBeEnabled();
+  });
+
+  test("a wide screen's grid of similar products has none", async ({ page }) => {
+    await page.goto("/products/p-single");
+    await expect(page.getByRole("button", { name: /products$/ })).toHaveCount(0);
+  });
+});
+
+test.describe("the photo viewer", () => {
+  /** Serves Volt Corner's photos (p-single, p-bare): any image will do. */
+  async function servePhotos(page: import("@playwright/test").Page) {
+    const PNG = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await page.route("https://volt-corner.test/img/**", (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: PNG }),
+    );
+  }
+
+  test("opens on the photo, moves with arrows and keys, closes with Esc", async ({ page }) => {
+    await servePhotos(page);
+    await page.goto("/products/p-single");
+    const viewer = page.locator("dialog[data-viewer]");
+    await expect(viewer).toBeHidden();
+    await page.locator('[data-gallery] a[data-photo="0"]').click();
+    await expect(viewer).toBeVisible();
+    const count = viewer.locator("[data-viewer-count]");
+    await expect(count).toHaveText("1 / 2");
+    // Focus moved into the dialog.
+    await expect(viewer.getByRole("button", { name: "Close" })).toBeFocused();
+    // The photo keeps its white frame (S5).
+    await expect(viewer.locator("[data-media]").first()).toHaveCSS(
+      "background-color",
+      "rgb(255, 255, 255)",
+    );
+
+    await page.keyboard.press("ArrowRight");
+    await expect(count).toHaveText("2 / 2");
+    await expect(viewer.getByRole("button", { name: "Next photo" })).toBeDisabled();
+    await viewer.getByRole("button", { name: "Previous photo" }).click();
+    await expect(count).toHaveText("1 / 2");
+    await expect(viewer.getByRole("button", { name: "Previous photo" })).toBeDisabled();
+    await viewer.getByRole("button", { name: "Next photo" }).click();
+    await expect(count).toHaveText("2 / 2");
+
+    await page.keyboard.press("Escape");
+    await expect(viewer).toBeHidden();
+    // Focus returns to the photo last shown.
+    await expect(page.locator('[data-gallery] a[data-photo="1"]')).toBeFocused();
+  });
+
+  test("swiping the viewer moves the count; the close button closes it", async ({ page }) => {
+    await servePhotos(page);
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-single");
+    await page.locator('[data-gallery] a[data-photo="1"]').click({ force: true });
+    const viewer = page.locator("dialog[data-viewer]");
+    const count = viewer.locator("[data-viewer-count]");
+    // It opens on the photo tapped.
+    await expect(count).toHaveText("2 / 2");
+    // A swipe is a scroll of the strip, as far as the page can tell.
+    await viewer
+      .locator("[data-viewer-slide]")
+      .first()
+      .evaluate((slide) => slide.parentElement!.scrollTo({ left: 0 }));
+    await expect(count).toHaveText("1 / 2");
+    await viewer.getByRole("button", { name: "Close" }).click();
+    await expect(viewer).toBeHidden();
+    await expect(page.locator('[data-gallery] a[data-photo="0"]')).toBeFocused();
+  });
+
+  test("one photo opens too, with no arrows", async ({ page }) => {
+    await servePhotos(page);
+    await page.goto("/products/p-bare");
+    await page.locator("a[data-photo]").click();
+    const viewer = page.locator("dialog[data-viewer]");
+    await expect(viewer.locator("[data-viewer-count]")).toHaveText("1 / 1");
+    await expect(viewer.getByRole("button", { name: /photo$/ })).toHaveCount(0);
+  });
+
+  test.describe("without JavaScript", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("each photo is a plain link to the image", async ({ page }) => {
+      await page.goto("/products/p-single");
+      await expect(page.locator("a[data-photo]")).toHaveCount(2);
+      await expect(page.locator('a[data-photo="0"]')).toHaveAttribute(
+        "href",
+        "https://volt-corner.test/img/caliper-1.jpg?ref=makhzan",
+      );
+      await expect(page.getByRole("button", { name: /photo$/ })).toHaveCount(0);
+    });
   });
 });
 
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false, viewport: PHONE });
 
-  test("the description's Read more opens", async ({ page }) => {
+  test("the description shows in full, with no Read more", async ({ page }) => {
     await page.goto("/products/p-single");
+    await expect(page.getByText("This sentence is the end of it.", { exact: false })).toBeVisible();
+    await expect(page.getByText("Read more")).toHaveCount(0);
     const text = page.locator("[data-description] p");
-    const clamped = (await text.boundingBox())!.height;
-    await page.getByText("Read more").click();
-    await expect(page.getByText("Show less")).toBeVisible();
-    expect((await text.boundingBox())!.height).toBeGreaterThan(clamped);
+    // Not clamped: the box is as tall as its text.
+    expect(
+      await text.evaluate((node) => node.scrollHeight - node.clientHeight),
+    ).toBeLessThanOrEqual(1);
   });
 
   test("the out-of-stock offers unfold", async ({ page }) => {

@@ -24,7 +24,7 @@ Measured on 60.9k active listings (November 2026).
 | 41% of listings are out of stock | Out of stock is **hidden by default**, and the count of hidden items is always shown. |
 | A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). |
 | Arabic titles 0.1%, Arabic descriptions 3% | **English only.** Arabic search queries keep working; the Arabic interface is gone. |
-| Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions are clamped. |
+| Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions are shown in full, after makhzan's own facts and the way to the shop. |
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
@@ -104,21 +104,24 @@ the page container on desktop; each section is left out when its fetch fails.
 **Product.**
 - Breadcrumb (trade › group › category), photo (contained, white frame), title, part
   number when known.
-- **makhzan's facts first, the shops' text after.** The title, description and specs
-  are copied from the shops, and on 98.6% of pages from one shop; what makhzan adds is
-  what no shop's page has, so it leads (unique value first: it is what makes the page
-  worth more than the shop's own, to a buyer and to a search engine). Under the title,
-  a short list, each line only when its data is there, never empty: "Sold by 1 shop ·
-  checked 3 days ago" (several: "Sold by 3 shops · in stock at 2 · EGP 260 – 295");
-  where the price sits in its category ("Cheaper than 70% of the 929 other products in
-  Relays", or the cheapest or priciest; from search-index counts, and left out under
-  10 peers or when most share the price, because a category's min–max range is set by
-  its oddest members); and "8 similar products", linking down to them.
+- **makhzan's facts first.** The title, description and specs are copied from the
+  shops (on 98.6% of pages from one shop), so what makhzan adds leads, under the title:
+  unique value first, for a buyer and for a search engine. Each line only when its data
+  is there, never empty: "Sold by 1 shop · checked 3 days ago" (several shops: "Sold by
+  3 shops · in stock at 2 · EGP 260 – 295"), and "8 similar products, from EGP 40",
+  linking down to them.
+- Photos: a swipeable strip (scroll snap, works without JavaScript) with previous and
+  next arrows (44px, disabled at the ends, absent with one photo). Each photo is a link
+  to the image; with JavaScript it opens a full-screen viewer instead: a native modal
+  dialog on the `scrim` colour, the photo in its white frame as large as the screen
+  allows (the full-size original where there is one, fetched only when shown),
+  swipe, arrows, Left/Right and Esc, an "n / N" counter, and focus back on the photo
+  when it closes.
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
-  shop page, then similar products (a swipeable row; in the wide column on desktop),
-  then the shop's description, clamped to three lines on a phone and four on desktop
-  with **Read more**. A fixed bottom bar on phones: price, "checked …" and
-  **View at {shop}**.
+  shop page, the description (in full: no clamp, no Read more). A fixed bottom bar on
+  phones: price, "checked …" and **View at {shop}**.
+- Similar products are always last, on every product page: a swipeable row with arrows
+  on a phone, a grid from `sm`.
 - What the shops wrote: description, specifications (name/value rows) and datasheets
   (PDF links), each labelled with its source ("From Shop A's listing"). With several
   shops, a **Details** section with a "From:" tab per shop that wrote anything, richest
@@ -128,8 +131,7 @@ the page container on desktop; each section is left out when its fetch fails.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
-  under "Show N out of stock offers". The bottom bar points to the cheapest. Similar
-  products stay at the end here: the offers are already the comparison no shop has.
+  under "Show N out of stock offers". The bottom bar points to the cheapest.
 
 **Trade and category.** Header (name, count, "Search in {trade}"); groups as object
 tiles; the selected group's categories as smaller object tiles; then results with the
@@ -163,9 +165,8 @@ Then "Own this shop? Add your details."
 list rows become columns (photo · title and category · shops and freshness · price).
 Product pages go two columns: a narrow one (about 26rem) with the photo and, under it,
 the way to the shop (price box, or the summary and the offers as two-line cards); and a
-wide one with the title, makhzan's facts and what the shops wrote, which is the long
-part (on a one-shop page, similar products sit in it above the shop's text). A product
-with nothing for the wide column below its title keeps its price or offers there instead. Every page is
+wide one with the title and what the shops wrote, which is the long part. A product no
+shop wrote anything about keeps its offers in the wide column instead. Every page is
 checked at 1280, 1440 and 1920px as well as on a phone: no content in a narrow strip
 beside empty space.
 
@@ -190,6 +191,7 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 | `warn` / `warn-line` / `warn-ink` | `#FEF9C3` / `#E5D36A` / `#574500` | `#2A2710` / `#57501C` / `#F3E08A` |
 | `age-muted` (15–45 days) | `#6E5A00` | `#D9C46C` |
 | `photo-frame` | `#FFFFFF` | `#FFFFFF` |
+| `scrim` (behind the photo viewer) | `#0B0C0E` | `#0B0C0E` |
 
 | | |
 |---|---|

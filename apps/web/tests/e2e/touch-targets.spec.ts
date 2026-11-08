@@ -88,9 +88,18 @@ test("the product page's controls", async ({ page }) => {
     "bottom bar button": page.locator("[data-bottom-bar]").getByRole("link", { name: /View at/ }),
     "first breadcrumb": crumbs.first(),
     "sold by card": page.locator("[data-sold-by]"),
-    "category fact": page.locator("[data-fact=category] a"),
     "similar fact": page.locator("[data-fact=similar] a"),
+    "next photo": page.getByRole("button", { name: "Next photo" }),
+    "next similar products": page.getByRole("button", { name: "Next products" }),
   });
+
+  await page.locator('a[data-photo="0"]').click();
+  const viewer = page.locator("dialog[data-viewer]");
+  await expectTappable(page, {
+    "viewer close": viewer.getByRole("button", { name: "Close" }),
+    "viewer next": viewer.getByRole("button", { name: "Next photo" }),
+  });
+  await page.keyboard.press("Escape");
 
   await page.goto("/products/p-specs");
   await expectTappable(page, { "datasheet link": page.locator("[data-datasheet]").first() });
