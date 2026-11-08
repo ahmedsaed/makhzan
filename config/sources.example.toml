@@ -6,7 +6,7 @@
 #
 #   id         Stable source id. Stored on every listing, run and cursor, so
 #              renaming one orphans its history — treat it as permanent.
-#   adapter    A built-in type (woocommerce, shopify, odoo, fixture) or an
+#   adapter    A built-in type (woocommerce, shopify, odoo, wix, fixture) or an
 #              import path, "package.module:Class", for an adapter kept in
 #              another package.
 #   base_url   The shop's origin. Omit only for sources with no host.
@@ -23,7 +23,9 @@
 # error at sync time rather than a setting silently ignored. The common ones:
 # polite_delay (seconds between requests to this host), max_pages_per_run and
 # max_partitions_per_run (how much of a cycle one daily run sweeps). Odoo also
-# takes sweep_whole_shop; Shopify takes currency.
+# takes sweep_whole_shop; Shopify takes currency. Wix takes galleries and
+# tag_galleries (gallery paths; the second are merchandising pages that carry no
+# category), sitemap and brand (applied when a product names none).
 
 [[source]]
 id = "fixture"

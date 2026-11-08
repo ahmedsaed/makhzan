@@ -58,7 +58,12 @@ queue, and whether the search index has drifted from the database.
 
 A source is split into **partitions** — independently pageable slices. WooCommerce
 partitions by stock status; the marketplace and the Odoo shop partition by category (which is
-also how their listings get categorized); a Shopify feed is one partition.
+also how their listings get categorized); a Shopify feed is one partition. A Wix
+Stores shop partitions by its configured gallery pages, read from the JSON each
+page embeds (`?page=N` is cumulative — page 2 repeats page 1 — and
+`comparePrice` is the *sale* price), merchandising galleries such as "New
+Arrival" carrying no category, then a products-sitemap pass that creates nothing
+but reports, in `stats.source_report`, any product no gallery showed.
 Adapters implement `partitions()` and `fetch_page(partition, page) -> Page`.
 
 **Suppliers are data, not code.** The worker builds its adapters from the
@@ -79,7 +84,7 @@ renaming one orphans all three.
 
 These notes name suppliers by role, not by name: **the marketplace** (a
 bespoke, multi-vertical catalogue, the largest source), **the Odoo shop**, **the
-Shopify shop**, and WooCommerce **shops 1–5**. The key is in the private
+Shopify shop**, **the Wix shop**, and WooCommerce **shops 1–5**. The key is in the private
 configuration's README.
 
 **Browsing by category can orphan stock.** A shop's category pages need not cover
