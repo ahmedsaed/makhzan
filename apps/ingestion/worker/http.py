@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -63,6 +66,63 @@ POLITE_DELAY = 15.0
 
 _RETRYABLE = {429, 503}
 
+#: The longest `Retry-After` the crawler waits out in place. A host asking for
+#: more is not retried in this run: the request fails, the partition's cursor
+#: stays where it is, and the next run picks it up. Waiting less than asked is
+#: never an option — a survey that sent six more requests 12 s after a 429 with
+#: `Retry-After: 60` is exactly what this exists to prevent.
+RETRY_AFTER_CAP = 600.0
+
+#: Per host, the monotonic time before which nothing may be sent to it. Set from
+#: a `Retry-After`, and checked before *every* request, so the wait also binds
+#: the next partition and the next adapter call — not only the retry loop that
+#: received it.
+_NOT_BEFORE: dict[str, float] = {}
+
+
+class HostBackingOff(Exception):
+    """Raised instead of sending a request the host asked us to hold back."""
+
+    def __init__(self, host: str, seconds: float) -> None:
+        super().__init__(f"{host} asked us to wait {seconds:.0f}s more (Retry-After)")
+        self.host = host
+        self.seconds = seconds
+
+
+def retry_after_seconds(value: str | None, now: datetime | None = None) -> float | None:
+    """A `Retry-After` header in seconds: delta-seconds or an HTTP-date.
+
+    None when absent or unreadable; never negative (a date in the past means
+    "now").
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.isascii() and value.isdigit():  # delta-seconds is digits only (RFC 9110 §10.2.3)
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
+
+
+def _host(url: httpx.URL) -> str:
+    return f"{url.scheme}://{url.netloc.decode()}"
+
+
+async def _wait_for_host(host: str) -> None:
+    """Hold until the host's Retry-After has passed, or refuse if that is too far off."""
+    remaining = _NOT_BEFORE.get(host, 0.0) - time.monotonic()
+    if remaining <= 0:
+        _NOT_BEFORE.pop(host, None)
+        return
+    if remaining > RETRY_AFTER_CAP:
+        raise HostBackingOff(host, remaining)
+    await asyncio.sleep(remaining)
+
 
 def make_client(**kwargs) -> httpx.AsyncClient:
     return httpx.AsyncClient(
@@ -87,26 +147,34 @@ async def _request(
     Not every source answers on GET: one marketplace returns its product listings only
     to a POST against the same URL. The retry and pacing behaviour is identical
     either way, so the method is a parameter rather than a second code path.
+
+    On 429/503 a `Retry-After` is a floor: the retry waits at least that long
+    (and at least the backoff), and a host asking for longer than
+    `RETRY_AFTER_CAP` is not retried at all in this run.
     """
     # Imported here rather than at module scope: robots.py needs this module's
     # headers, so a top-level import would be circular.
     from worker.robots import ROBOTS, DisallowedByRobots
 
-    if not await ROBOTS.allowed(url, BROWSER_HEADERS["User-Agent"]):
-        raise DisallowedByRobots(url)
+    # robots.txt is checked against the URL actually sent, query string included:
+    # rules such as `Disallow: /collections/*sort_by*` live in the query.
+    target = httpx.URL(url).copy_merge_params(params) if params else httpx.URL(url)
+    if not await ROBOTS.allowed(str(target), BROWSER_HEADERS["User-Agent"]):
+        raise DisallowedByRobots(str(target))
+    host = _host(target)
 
     resp = None
     for attempt in range(retries + 1):
+        await _wait_for_host(host)
         resp = await client.request(method, url, params=params, **kwargs)
-        if resp.status_code in _RETRYABLE and attempt < retries:
-            retry_after = resp.headers.get("Retry-After", "")
-            delay = (
-                float(retry_after)
-                if retry_after.isdigit()
-                else base_delay * (2**attempt) + random.uniform(0, 0.5)
-            )
-            await asyncio.sleep(delay)
-            continue
+        if resp.status_code in _RETRYABLE:
+            asked = retry_after_seconds(resp.headers.get("Retry-After"))
+            if asked is not None:
+                _NOT_BEFORE[host] = time.monotonic() + asked
+            if attempt < retries and (asked is None or asked <= RETRY_AFTER_CAP):
+                backoff = base_delay * (2**attempt) + random.uniform(0, 0.5)
+                await asyncio.sleep(max(backoff, asked or 0.0))
+                continue
         resp.raise_for_status()
         return resp
     resp.raise_for_status()  # exhausted retries — surface the last error
