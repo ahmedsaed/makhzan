@@ -294,6 +294,36 @@ export function fetchSimilar(id: string, limit = 8): Promise<ProductSummary[]> {
   return get<ProductSummary[]>(`/products/${encodeURIComponent(id)}/similar${query({ limit })}`);
 }
 
+/**
+ * Where a price sits in its category, as three counts from the search index:
+ * the category's priced products, those at or below the price, and those
+ * strictly below it. Three `limit=1` queries that read only the hit total;
+ * the index has no price statistics to ask for instead (the API passes on
+ * facet counts, not facet stats). Cached like the taxonomy: a category's
+ * spread moves at the pace of a sweep, not a visitor.
+ *
+ * Null when the index cannot say (no totals).
+ */
+export async function fetchPriceCounts(
+  category: string,
+  price: number,
+): Promise<{ priced: number; atOrBelow: number; below: number } | null> {
+  const total = async (bounds: { min_price?: number; max_price?: number }) => {
+    const res = await get<SearchResponse>(`/search${query({ category, limit: 1, ...bounds })}`, {
+      revalidate: TAXONOMY_TTL,
+    });
+    return res.total;
+  };
+  // Prices carry at most two decimals, so a hair under the price is "below".
+  const [priced, atOrBelow, below] = await Promise.all([
+    total({ min_price: 0 }),
+    total({ max_price: price }),
+    price > 0 ? total({ max_price: Math.max(0, price - 0.001) }) : Promise.resolve(0),
+  ]);
+  if (priced === null || atOrBelow === null || below === null) return null;
+  return { priced, atOrBelow, below };
+}
+
 export function fetchListing(id: string): Promise<Listing | null> {
   return getOrNull<Listing>(`/listings/${encodeURIComponent(id)}`);
 }

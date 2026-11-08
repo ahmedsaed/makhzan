@@ -6,7 +6,7 @@
  */
 import type { Crumb } from "@/components/breadcrumb";
 import type { Category, CategoryRef, Offer, Product, StockSignal } from "@/lib/api";
-import { plural } from "@/lib/format";
+import { formatCount, plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { routes } from "@/lib/routes";
 import { tradeLabel } from "@/lib/trades";
@@ -360,4 +360,69 @@ function clampText(text: string, max: number): string {
  *  `</script>` cannot close the tag it is in. */
 export function jsonLdText(data: unknown): string {
   return JSON.stringify(data).replace(/</g, "\\u003c");
+}
+
+// --------------------------------------------------------------------------- //
+// makhzan's own facts: what no single shop's page can say.
+
+/** How many shops sell it, as how many listings, and how many have it in stock. */
+export function shopsFact(offers: Offer[]): { shops: number; listings: number; inStockAt: number } {
+  return {
+    shops: shopsIn(offers),
+    listings: offers.length,
+    inStockAt: shopsIn(offers.filter((offer) => isInStock(offer.stock_signal))),
+  };
+}
+
+/**
+ * How many priced products of one category sit at or below a price, and
+ * strictly below it: counts the search index answers cheaply
+ * (`/search?category=…&max_price=…&limit=1`). The product itself is among them.
+ */
+export type PriceCounts = { priced: number; atOrBelow: number; below: number };
+
+/**
+ * Where a price sits in its category: the cheapest, the priciest, or cheaper
+ * or pricier than a share of the others. A share rather than the category's
+ * price range, because a range is set by its two most unusual members:
+ * transistors run from EGP 0.25 (an insulating pad) to 10,000 (a thyristor
+ * module), which says nothing about a 40-pound transistor.
+ */
+export type PricePosition =
+  | { kind: "cheapest" | "priciest"; others: number }
+  | { kind: "cheaper" | "pricier"; percent: number; others: number };
+
+/** With fewer peers than this a share is noise, not a fact worth a line. */
+export const MIN_PRICE_PEERS = 10;
+
+export function pricePosition({ priced, atOrBelow, below }: PriceCounts): PricePosition | null {
+  // The product counts itself at its own price. If it does not, the index and
+  // the page disagree, and nothing derived from the counts can be trusted.
+  if (atOrBelow < 1 || below >= atOrBelow || atOrBelow > priced) return null;
+  const others = priced - 1;
+  if (others < MIN_PRICE_PEERS) return null;
+  const dearer = priced - atOrBelow;
+  if (dearer === others) return { kind: "cheapest", others };
+  if (below === others) return { kind: "priciest", others };
+  // Rounded down, so the claim is never bigger than the truth.
+  const cheaper = Math.floor((100 * dearer) / others);
+  const pricier = Math.floor((100 * below) / others);
+  if (cheaper >= 50) return { kind: "cheaper", percent: cheaper, others };
+  if (pricier >= 50) return { kind: "pricier", percent: pricier, others };
+  // Most of the category shares this price: there is no side to report.
+  return null;
+}
+
+/** The words before the category's name: "Cheaper than 70% of the 929 other products in". */
+export function pricePositionText(position: PricePosition): string {
+  switch (position.kind) {
+    case "cheapest":
+      return `The cheapest of the ${formatCount(position.others + 1)} products in`;
+    case "priciest":
+      return `The priciest of the ${formatCount(position.others + 1)} products in`;
+    case "cheaper":
+      return `Cheaper than ${position.percent}% of the ${plural(position.others, "other product")} in`;
+    case "pricier":
+      return `Pricier than ${position.percent}% of the ${plural(position.others, "other product")} in`;
+  }
 }

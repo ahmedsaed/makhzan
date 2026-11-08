@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
-import { productFixture } from "./fixtures/product.mjs";
+import { priceCountFixture, productFixture } from "./fixtures/product.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopName, shopRoute } from "./fixtures/shops.mjs";
 import { FAILING_TRADE, TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
@@ -282,6 +282,8 @@ const server = createServer((req, res) => {
     const all = [...CATEGORIES, ...TRADE_CATEGORIES];
     return send(200, domain ? all.filter((c) => c.domain === domain) : all);
   }
+  const counts = path === "/search" && priceCountFixture(url);
+  if (counts) return send(...counts);
   const fixture = path === "/search" && searchFixture(url);
   if (fixture) return send(fixture.status, fixture.body);
   const trade = path === "/search" && tradeSearch(url);
