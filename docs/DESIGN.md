@@ -202,6 +202,7 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 | `age-muted` (15–45 days) | `#6E5A00` | `#D9C46C` |
 | `photo-frame` | `#FFFFFF` | `#FFFFFF` |
 | `scrim` (behind the photo viewer) | `#0B0C0E` | `#0B0C0E` |
+| `pattern` (background icons) | `#E2E1D9` | `#24262B` |
 
 | | |
 |---|---|
@@ -214,6 +215,19 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 | Touch targets | 44px minimum on phones |
 
 Light and dark follow the device setting; the footer toggle overrides it.
+
+**Background pattern.** The top of every page carries a scatter of line icons of
+the things makhzan lists (resistor, chip, LED, wire, wrench, caliper, bearing,
+O-ring, gear, valve, pipe elbow, plank, plug, breaker, bolt, spring, solder and
+more), at seeded random positions, sizes and rotations, in the `pattern` token. It
+fades to nothing by about 1.3 screen heights and scrolls away with the page; it is
+never fixed and never animated. The tiles are masks drawn by
+`apps/web/scripts/pattern-tile.mjs` (a fixed seed, so they are the same on every
+build): a 1180×740 tile from `sm` up, a sparser 430×620 one on phones. It is
+decoration: `aria-hidden`, no pointer events, behind all content, and hidden under
+`prefers-reduced-transparency`. Header, cards, controls and photo frames are opaque
+and cover it, and `ink` and `ink-2` keep 4.5:1 against the stroke colour itself
+(S2).
 
 ### Brand
 
