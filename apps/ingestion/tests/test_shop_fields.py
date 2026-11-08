@@ -319,6 +319,27 @@ async def test_a_collection_robots_disallows_is_never_requested(shop):
     assert page.items, "the disallowed collection is skipped; the sweep goes on"
 
 
+async def test_collection_requests_are_logged_with_their_gaps(shop, monkeypatch):
+    """`stats.pacing` sees the collection lists too: one count with the page,
+    and the pause before each shows up as a measured gap."""
+    clock = [0.0]
+
+    async def advancing_sleep(seconds):
+        shop.pauses.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(shopify_mod.asyncio, "sleep", advancing_sleep)
+    adapter = _adapter(collections=True, polite_delay=15.0, skip_collections=["new-products"])
+    with http_mod.logging_requests(http_mod.RequestLog(clock=lambda: clock[0])) as log:
+        await adapter.fetch_page("", 1)
+
+    pacing = log.pacing()
+    assert pacing["requests"] == len(shop.sent) == 4
+    assert pacing["requests"] == 1 + sum(adapter.extra_requests().values())
+    assert (pacing["min_gap_s"], pacing["median_gap_s"], pacing["max_gap_s"]) == (15, 15, 15)
+    assert pacing["gaps"] == {"15": 3}
+
+
 def test_collections_refuse_a_feed_spread_over_runs():
     """Memberships last one run. Read again for every page of a one-page-a-day
     sweep, they would cost a sweep's worth of requests each day."""
