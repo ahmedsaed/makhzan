@@ -12,8 +12,8 @@ import {
   shopCardLines,
   shopDescription,
   totalsLine,
-  tradeCardLines,
-  tradeDescription,
+  departmentCardLines,
+  departmentDescription,
 } from "@/lib/metadata";
 import { clampText } from "@/lib/og";
 import { sitemapEntries } from "@/lib/sitemap";
@@ -116,26 +116,26 @@ describe("productDescription", () => {
   });
 });
 
-describe("trade and category descriptions", () => {
-  it("counts a trade's products and names its biggest categories, not 'Other'", () => {
-    expect(tradeDescription("seals-bearings", SEALS)).toBe(
+describe("department and category descriptions", () => {
+  it("counts a department's products and names its biggest categories, not 'Other'", () => {
+    expect(departmentDescription("seals-bearings", SEALS)).toBe(
       "1,980 products in Seals & Bearings from Egypt's suppliers: O-Rings, bearings, oil seals. 4 categories, compared across shops.",
     );
   });
 
-  it("has nothing to say about an empty or unknown trade", () => {
-    expect(tradeDescription("timber", SEALS)).toBeUndefined();
+  it("has nothing to say about an empty or unknown department", () => {
+    expect(departmentDescription("timber", SEALS)).toBeUndefined();
   });
 
-  it("gives a trade card its count, its size in categories, and three names", () => {
-    expect(tradeCardLines("seals-bearings", SEALS)).toEqual({
+  it("gives a department card its count, its size in categories, and three names", () => {
+    expect(departmentCardLines("seals-bearings", SEALS)).toEqual({
       title: "Seals & Bearings",
       detail: "1,980 products · 4 categories",
       inside: ["O-Rings", "Bearings", "Oil Seals"],
     });
   });
 
-  it("describes a category with its subtree's total, in its trade", () => {
+  it("describes a category with its subtree's total, in its department", () => {
     expect(categoryDescription(SEALS[0], 1300)).toMatch(
       /^1,300 products in Seals \(Seals & Bearings\) from Egypt's suppliers/,
     );
@@ -171,7 +171,7 @@ describe("shop descriptions", () => {
     });
   });
 
-  it("falls back to its trades when it has no categories", () => {
+  it("falls back to its departments when it has no categories", () => {
     expect(shopCardLines({ ...shop, top_categories: [] }).carries).toBe("Electronics");
   });
 });

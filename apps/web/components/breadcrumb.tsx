@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 export type Crumb = { label: string; href?: string };
 
 /**
- * Trade › group › category. The last crumb is the current page and is not a
+ * Department › group › category. The last crumb is the current page and is not a
  * link; any crumb without an href is plain text too.
  *
  * `trail` is for a page that sits *under* the last crumb rather than being it

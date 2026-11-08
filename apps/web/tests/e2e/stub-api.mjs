@@ -19,7 +19,7 @@ import { createServer } from "node:http";
 import { productFixture } from "./fixtures/product.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopName, shopRoute } from "./fixtures/shops.mjs";
-import { FAILING_TRADE, TRADE_CATEGORIES, tradeSearch } from "./fixtures/trades.mjs";
+import { FAILING_DEPARTMENT, DEPARTMENT_CATEGORIES, departmentSearch } from "./fixtures/departments.mjs";
 
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
@@ -278,14 +278,14 @@ const server = createServer((req, res) => {
   if (path === "/stats") return send(200, { products: 57207, suppliers: 8, categories: 249 });
   if (path === "/categories") {
     const domain = url.searchParams.get("domain");
-    if (domain === FAILING_TRADE) return send(500, { detail: "database unreachable" });
-    const all = [...CATEGORIES, ...TRADE_CATEGORIES];
+    if (domain === FAILING_DEPARTMENT) return send(500, { detail: "database unreachable" });
+    const all = [...CATEGORIES, ...DEPARTMENT_CATEGORIES];
     return send(200, domain ? all.filter((c) => c.domain === domain) : all);
   }
   const fixture = path === "/search" && searchFixture(url);
   if (fixture) return send(fixture.status, fixture.body);
-  const trade = path === "/search" && tradeSearch(url);
-  if (trade) return send(trade.status, trade.body);
+  const department = path === "/search" && departmentSearch(url);
+  if (department) return send(department.status, department.body);
   if (path === "/search") return send(200, search(url));
   if (path === "/sitemap/products") return send(200, sitemapProducts(url));
   if (path === "/products/prod-1/similar") {

@@ -43,7 +43,7 @@ import {
 } from "@/lib/product";
 import { productIdFrom, routes } from "@/lib/routes";
 import { absoluteUrl } from "@/lib/site";
-import { tradeLabel } from "@/lib/trades";
+import { departmentLabel } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 
 import { Carousel } from "./carousel";
@@ -174,7 +174,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       ? categoryTrail(product.category, categories)
       : [
           {
-            label: tradeLabel(product.category.domain),
+            label: departmentLabel(product.category.domain),
             href: routes.department(product.category.domain),
           },
           { label: product.category.name_en, href: routes.category(product.category.ref) },

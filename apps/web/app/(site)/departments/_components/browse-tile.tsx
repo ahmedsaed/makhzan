@@ -6,7 +6,7 @@ import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * A group or category on a trade page. On a phone it is the object tile
+ * A group or category on a department page. On a phone it is the object tile
  * (components/object-tile.tsx): a square frame with the name under it, five
  * to a row. From `lg` the same link turns on its side — a small frame, the
  * name, its count and what is inside — because a row of eight big squares

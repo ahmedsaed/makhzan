@@ -61,7 +61,7 @@ test("the search page's controls", async ({ page }) => {
   });
 });
 
-test("a trade page's controls", async ({ page }) => {
+test("a department page's controls", async ({ page }) => {
   await page.goto("/departments/seals-bearings");
   await expectTappable(page, {
     "back to all departments": page.getByRole("link", { name: "All departments", exact: true }),
@@ -109,7 +109,7 @@ test("the product page's controls", async ({ page }) => {
   await expectTappable(page, { "datasheet link": page.locator("[data-datasheet]").first() });
 });
 
-test("nothing scrolls sideways at 320px on the trade pages", async ({ page }) => {
+test("nothing scrolls sideways at 320px on the department pages", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   for (const path of ["/departments/seals-bearings", "/departments/seals-bearings/oil-seals"]) {
     await page.goto(path);

@@ -137,9 +137,9 @@ describe("resultsLinks", () => {
     expect(links.page(0)).toBe("/search?q=relay");
   });
 
-  it("works on any results path, so trade and category pages share it", () => {
-    const trade = { q: "relay" };
-    expect(resultsLinks("/departments/tools", trade, parseResultsQuery(trade)).twoShops).toBe(
+  it("works on any results path, so department and category pages share it", () => {
+    const department = { q: "relay" };
+    expect(resultsLinks("/departments/tools", department, parseResultsQuery(department)).twoShops).toBe(
       "/departments/tools?q=relay&min_suppliers=2",
     );
   });
@@ -153,7 +153,7 @@ describe("category facets", () => {
     "electronics:empty": 0,
   };
 
-  it("groups under trades, both largest first, and skips empty ones", () => {
+  it("groups under departments, both largest first, and skips empty ones", () => {
     expect(groupCategoryFacet(facet)).toEqual([
       {
         domain: "electronics",

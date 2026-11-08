@@ -8,9 +8,9 @@
  * departments, and a link built from it silently mixes them.
  *
  * "Department" is the reader's word for what the backend calls a domain; the two
- * are the same thing, and only URLs and copy use the new name. (Until November
- * 2026 the reader's word was "trade"; internal names such as lib/trades.ts and
- * `tradeLabel` still use it.)
+ * are the same thing; the web app uses "department" throughout, and keeps
+ * `domain` only where it reads the API's field. (It said "trades" until
+ * November 2026; lib/redirects.ts sends those URLs here.)
  */
 
 /** Split `domain:slug` into its parts. Returns null for a bare slug, which is

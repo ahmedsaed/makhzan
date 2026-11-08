@@ -4,7 +4,7 @@ import { absoluteUrl } from "@/lib/site";
 
 /**
  * Everything may be crawled except search, which is infinite query space:
- * every query and filter is another URL with nothing a trade or category page
+ * every query and filter is another URL with nothing a department or category page
  * does not already list. Search pages also say `noindex` themselves, for any
  * crawler that arrives there anyway. `/api/` is the JSON the browser fetches,
  * not a page.

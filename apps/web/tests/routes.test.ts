@@ -41,16 +41,16 @@ describe("routes", () => {
     expect(routes.department("electronics")).toBe("/departments/electronics");
   });
 
-  it("addresses a category through its trade, never by the bare slug", () => {
+  it("addresses a category through its department, never by the bare slug", () => {
     expect(routes.category("electronics:resistors")).toBe("/departments/electronics/resistors");
-    // The same slug in another trade is a different URL — that is the point.
+    // The same slug in another department is a different URL — that is the point.
     expect(routes.category("tools:measurement")).not.toBe(
       routes.category("electronics:measurement"),
     );
   });
 
   it("falls back to a search when handed a bare slug", () => {
-    // Honest: we cannot tell which trade was meant, so we do not invent one.
+    // Honest: we cannot tell which department was meant, so we do not invent one.
     expect(routes.category("measurement")).toBe("/search?category=measurement");
   });
 });

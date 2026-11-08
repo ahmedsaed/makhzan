@@ -501,7 +501,7 @@ test("a static page's canonical is on SITE_URL too", async ({ page }) => {
   );
 });
 
-test("the breadcrumb walks trade › group › category, all links", async ({ page }) => {
+test("the breadcrumb walks department › group › category, all links", async ({ page }) => {
   await page.goto("/products/p-single");
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link");
   await expect(crumbs).toHaveText(["Electronics", "Components", "Integrated Circuits"]);

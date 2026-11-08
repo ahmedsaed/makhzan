@@ -3,15 +3,15 @@ import { ArrowRight } from "lucide-react";
 import { Freshness } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { ResultCard } from "@/components/result";
-import { TradeIcon } from "@/components/trade-icon";
-import { TradeList } from "@/components/trade-list";
+import { DepartmentIcon } from "@/components/department-icon";
+import { DepartmentList } from "@/components/department-list";
 import type { SearchHit, ShopSummary } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
-import { EXAMPLE_SEARCHES, exampleHref, type TradeCard } from "@/lib/home";
+import { EXAMPLE_SEARCHES, exampleHref, type DepartmentCard } from "@/lib/home";
 import { routes } from "@/lib/routes";
-import { isStale, tradesInWords } from "@/lib/shops";
-import type { TradeSummary } from "@/lib/trades";
+import { isStale, departmentsInWords } from "@/lib/shops";
+import type { DepartmentSummary } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 
 /**
@@ -64,7 +64,7 @@ export function ExampleSearches({ className }: { className?: string }) {
     <div className={cn("flex flex-col gap-2", className)}>
       <p className="text-[13px] font-medium text-ink-3">Try a search</p>
       {/* One scrolling row on phones, where wrapped chips would push the
-          trades a screen down; wrapped from `sm`. */}
+          departments a screen down; wrapped from `sm`. */}
       <ul
         aria-label="Example searches"
         className="-mx-4 flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0"
@@ -140,32 +140,32 @@ export function HowItWorks({ className }: { className?: string }) {
 
 // --------------------------------------------------------------------------- //
 
-/** Trades shown in full on the home page; the rest are named underneath. */
-const HOME_TRADES = 8;
+/** Departments shown in full on the home page; the rest are named underneath. */
+const HOME_DEPARTMENTS = 8;
 
 /**
- * Phones keep the compact trade rows (one column, names of what is inside);
- * from `md` each trade is a card whose biggest categories are links, four
+ * Phones keep the compact department rows (one column, names of what is inside);
+ * from `md` each department is a card whose biggest categories are links, four
  * across on a desktop, so the catalogue's shape fills the page.
  */
-export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSummary[] }) {
-  const shown = cards.slice(0, HOME_TRADES);
-  const rest = cards.slice(HOME_TRADES);
+export function HomeDepartments({ cards, rows }: { cards: DepartmentCard[]; rows: DepartmentSummary[] }) {
+  const shown = cards.slice(0, HOME_DEPARTMENTS);
+  const rest = cards.slice(HOME_DEPARTMENTS);
   return (
-    <section aria-labelledby="trades-heading" data-home-section="trades">
+    <section aria-labelledby="departments-heading" data-home-section="departments">
       <SectionHead
-        id="trades-heading"
+        id="departments-heading"
         title="Browse by department"
         more={{ href: routes.departments(), label: `All ${cards.length} departments` }}
       />
 
-      <TradeList trades={rows.slice(0, HOME_TRADES)} className="md:hidden" />
+      <DepartmentList departments={rows.slice(0, HOME_DEPARTMENTS)} className="md:hidden" />
 
       <ul className="hidden gap-3 md:grid md:grid-cols-2 lg:grid-cols-4">
         {shown.map((card) => (
           <li
             key={card.domain}
-            data-home-trade={card.domain}
+            data-home-department={card.domain}
             className="flex flex-col rounded-card border border-line bg-surface"
           >
             <Link
@@ -173,7 +173,7 @@ export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSum
               className="flex items-center gap-3 rounded-t-card border-b border-line px-4 py-3 text-ink hover:bg-ground"
             >
               <span className="grid size-10 shrink-0 place-items-center rounded-md border border-line bg-photo-frame">
-                <TradeIcon domain={card.domain} className="size-5 text-ink-3" />
+                <DepartmentIcon domain={card.domain} className="size-5 text-ink-3" />
               </span>
               <span className="flex min-w-0 flex-col">
                 <span className="text-base leading-snug font-semibold">{card.label}</span>
@@ -293,7 +293,7 @@ export function HomeShops({ shops, now }: { shops: ShopSummary[]; now: Date }) {
               <span className="text-base font-semibold text-ink">{shop.name}</span>
               {shop.domains.length > 0 && (
                 <span className="hidden text-[13px] text-ink-2 sm:block">
-                  {tradesInWords(shop.domains, 2)}
+                  {departmentsInWords(shop.domains, 2)}
                 </span>
               )}
               <span className="mt-auto pt-1 text-sm text-ink-2 tabular">
@@ -349,22 +349,22 @@ export function ForShops({ className }: { className?: string }) {
 // --------------------------------------------------------------------------- //
 
 /**
- * The totals as figures, for the desktop hero: products, shops, trades and
+ * The totals as figures, for the desktop hero: products, shops, departments and
  * categories, every one counted by the API. Phones keep the one-line version.
  */
 export function HomeStats({
   stats,
-  trades,
+  departments,
   className,
 }: {
   stats: { products: number; suppliers: number; categories: number } | null;
-  trades: number;
+  departments: number;
   className?: string;
 }) {
   const figures = [
     stats && { label: "products", value: stats.products },
     stats && { label: "shops", value: stats.suppliers },
-    trades > 0 && { label: "departments", value: trades },
+    departments > 0 && { label: "departments", value: departments },
     stats && { label: "categories", value: stats.categories },
   ].filter((figure): figure is { label: string; value: number } => Boolean(figure));
   if (figures.length === 0) return null;

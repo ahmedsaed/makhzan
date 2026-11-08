@@ -14,7 +14,7 @@ import {
  * at /sitemap.xml (app/sitemap-index.xml/route.ts, by a rewrite), which is what
  * robots.txt names.
  *
- * 0 is every browsable page: home, the trades and each trade and category, the
+ * 0 is every browsable page: home, the departments and each department and category, the
  * shops and each shop, and the two pages for suppliers. 1..N are the products,
  * 50,000 to a file, read from the API's keyset listing by id, each with the
  * date its visible content last changed (not its last recheck: Google ignores

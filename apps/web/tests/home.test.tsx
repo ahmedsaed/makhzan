@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Category, SearchResponse, ShopSummary, Stats } from "@/lib/api";
-import { EXAMPLE_SEARCHES, exampleHref, tradeCards } from "@/lib/home";
+import { EXAMPLE_SEARCHES, exampleHref, departmentCards } from "@/lib/home";
 
 const cat = (
   domain: string,
@@ -31,9 +31,9 @@ const CATEGORIES = [
   cat("garden", "nothing", "Nothing Yet", null, 0),
 ];
 
-describe("tradeCards", () => {
-  it("lists trades largest first with their biggest leaf categories as links", () => {
-    const cards = tradeCards(CATEGORIES);
+describe("departmentCards", () => {
+  it("lists departments largest first with their biggest leaf categories as links", () => {
+    const cards = departmentCards(CATEGORIES);
     expect(cards.map((card) => card.domain)).toEqual(["seals-bearings", "tools"]);
     // Leaves only, biggest first; "Other" and empty categories are left out.
     expect(cards[0].categories.map((c) => c.ref)).toEqual([
@@ -44,8 +44,8 @@ describe("tradeCards", () => {
     expect(cards[0]).toMatchObject({ label: "Seals & Bearings", count: 1450 });
   });
 
-  it("caps the categories per trade", () => {
-    expect(tradeCards(CATEGORIES, 1)[0].categories).toHaveLength(1);
+  it("caps the categories per department", () => {
+    expect(departmentCards(CATEGORIES, 1)[0].categories).toHaveLength(1);
   });
 });
 
@@ -139,7 +139,7 @@ describe("home page", () => {
     expect(document.querySelectorAll("[data-home-shop]")).toHaveLength(1);
   });
 
-  it("links a trade's categories through the trade", async () => {
+  it("links a department's categories through the department", async () => {
     await renderHome();
     const link = screen.getAllByRole("link", { name: /^O-Rings/ })[0];
     expect(link).toHaveAttribute("href", "/departments/seals-bearings/o-rings");
@@ -151,7 +151,7 @@ describe("home page", () => {
     api.fetchSuppliers.mockRejectedValue(new Error("down"));
     api.searchProducts.mockRejectedValue(new Error("down"));
     await renderHome();
-    expect(section("trades")).toBeNull();
+    expect(section("departments")).toBeNull();
     expect(section("several-shops")).toBeNull();
     expect(section("shops")).toBeNull();
     expect(screen.getByRole("searchbox")).toBeInTheDocument();
@@ -164,6 +164,6 @@ describe("home page", () => {
     api.searchProducts.mockResolvedValue({ ...SEVERAL, total: 0, hits: [] });
     await renderHome();
     expect(section("several-shops")).toBeNull();
-    expect(section("trades")).not.toBeNull();
+    expect(section("departments")).not.toBeNull();
   });
 });

@@ -116,7 +116,7 @@ test("empty results say so instead of showing an empty list", async ({ page }) =
   await expect(page.getByText("Nothing matched")).toBeVisible();
 });
 
-test("a category is addressed through its trade, never a bare slug", async ({ page }) => {
+test("a category is addressed through its department, never a bare slug", async ({ page }) => {
   await page.goto("/departments/electronics");
   await page
     .getByRole("navigation", { name: "Categories" })
@@ -125,8 +125,8 @@ test("a category is addressed through its trade, never a bare slug", async ({ pa
   await expect(page).toHaveURL("/departments/electronics/ics");
 });
 
-test("an unknown trade is a 404, not an empty page", async ({ page }) => {
-  const response = await page.goto("/departments/not-a-trade");
+test("an unknown department is a 404, not an empty page", async ({ page }) => {
+  const response = await page.goto("/departments/not-a-department");
   expect(response?.status()).toBe(404);
 });
 

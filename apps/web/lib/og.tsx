@@ -138,7 +138,7 @@ async function asPng(body: Buffer, type: string): Promise<Photo | null> {
 // --------------------------------------------------------------------------- //
 
 export type CardProps = {
-  /** The headline: the tagline, a product's title, a trade or shop name. */
+  /** The headline: the tagline, a product's title, a department or shop name. */
   title: string;
   /** Lines under the headline. The first is set large, as the key fact. */
   lead?: string | null;

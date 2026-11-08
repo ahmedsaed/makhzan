@@ -167,7 +167,7 @@ test("an API failure is a plain message, not a crash", async ({ page }) => {
   await expect(page.getByText("Search is not answering")).toBeVisible();
 });
 
-test("an empty query prompts and offers trades", async ({ page }) => {
+test("an empty query prompts and offers departments", async ({ page }) => {
   await page.goto("/search");
   await expect(page.getByRole("heading", { level: 1, name: "Search the catalogue" })).toBeVisible();
   await expect(page.getByRole("link", { name: /Electronics/ })).toHaveAttribute(
