@@ -213,25 +213,31 @@ describe("breadcrumb trail", () => {
 describe("structured data", () => {
   const URL = "https://makhzan.test/products/p1";
 
-  it("is one Offer for one priced offer, pointing at this page", () => {
-    const data = productJsonLd(product([offer("a", 850)]), URL, "Caliper");
+  // makhzan compares other shops' offers; it sells nothing. An Offer would make
+  // Google read the page as a merchant listing and ask for shipping, returns
+  // and a GTIN (Search Console did, November 2026).
+  it("is an AggregateOffer even for one shop, never an Offer", () => {
+    const data = productJsonLd(product([offer("a", 850)]), URL, "Caliper", "A caliper.");
     expect(data).toMatchObject({
       "@context": "https://schema.org",
       "@type": "Product",
       name: "Caliper",
       url: URL,
+      description: "A caliper.",
       offers: {
-        "@type": "Offer",
-        price: 850,
+        "@type": "AggregateOffer",
         priceCurrency: "EGP",
+        lowPrice: 850,
+        highPrice: 850,
+        offerCount: 1,
         availability: "https://schema.org/InStock",
         url: URL,
-        seller: { "@type": "Organization", name: "SHOP-A" },
       },
     });
+    expect(JSON.stringify(data)).not.toMatch(/"@type":"Offer"|seller|shippingDetails/);
   });
 
-  it("is an AggregateOffer over several, leaving out offers without a price", () => {
+  it("spans several shops, leaving out offers without a price", () => {
     const data = productJsonLd(
       product([offer("a", 300, "out_of_stock"), offer("b", 260), offer("c", null)]),
       URL,
@@ -243,12 +249,23 @@ describe("structured data", () => {
       lowPrice: 260,
       highPrice: 300,
       offerCount: 2,
+      availability: "https://schema.org/InStock",
     });
-    const listed = (data.offers as { offers: { availability: string }[] }).offers;
-    expect(listed.map((o) => o.availability)).toEqual([
-      "https://schema.org/InStock",
-      "https://schema.org/OutOfStock",
-    ]);
+    expect(data.offers).not.toHaveProperty("offers");
+  });
+
+  it("is out of stock only when every priced offer is", () => {
+    const data = productJsonLd(product([offer("a", 300, "out_of_stock")]), URL, "Board");
+    expect(data.offers).toMatchObject({ availability: "https://schema.org/OutOfStock" });
+  });
+
+  it("clamps a long description at a word, and leaves out an empty one", () => {
+    const long = productJsonLd(product([offer("a", 1)]), URL, "x", "word ".repeat(200));
+    expect((long.description as string).length).toBeLessThanOrEqual(500);
+    expect(long.description).toMatch(/word…$/);
+    expect(productJsonLd(product([offer("a", 1)]), URL, "x", "  ")).not.toHaveProperty(
+      "description",
+    );
   });
 
   it("states no offer at all rather than a price of zero", () => {

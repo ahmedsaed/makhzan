@@ -288,56 +288,72 @@ const AVAILABILITY: Partial<Record<StockSignal, string>> = {
   made_to_order: "https://schema.org/MadeToOrder",
 };
 
-/**
- * schema.org Product for search engines: one Offer, or an AggregateOffer over
- * several. Every offer's `url` is this page, not the shop's: the page is what
- * we vouch for, and it carries the freshness warning a shop's page does not.
- *
- * Offers without a price are left out — an Offer must state one, and inventing
- * zero would advertise the part as free.
- */
-export function productJsonLd(product: Product, url: string, title: string) {
-  const priced = orderOffers(product.offers).filter((offer) => offer.price !== null);
-  const offer = (item: Offer) => ({
-    "@type": "Offer",
-    price: item.price,
-    priceCurrency: item.currency,
-    ...(AVAILABILITY[item.stock_signal] && {
-      availability: AVAILABILITY[item.stock_signal],
-    }),
-    url,
-    ...(item.supplier && {
-      seller: { "@type": "Organization", name: item.supplier.name },
-    }),
-  });
+/** Longest description we put in structured data; the page has the rest. */
+const JSON_LD_DESCRIPTION = 500;
 
+/**
+ * schema.org Product for search engines, marked up as what the page is: a
+ * comparison of other shops' offers, not a shop selling the product.
+ *
+ * Always an AggregateOffer (low and high price, how many offers, whether any
+ * is in stock), never an Offer, even for one shop. Google reads a page with an
+ * Offer as a merchant selling the product there (a "merchant listing") and
+ * then asks for what only a seller has: shipping, a return policy, a GTIN.
+ * An AggregateOffer is what Google documents for product snippets on pages
+ * that compare offers, and it states nothing about selling. The offers
+ * themselves are on the page and link to the shops.
+ *
+ * Identifiers only when we have them: the part number as `mpn`, the brand
+ * when a shop states it. Never a guessed GTIN. Offers without a price are
+ * left out: inventing zero would advertise the part as free.
+ */
+export function productJsonLd(
+  product: Product,
+  url: string,
+  title: string,
+  description?: string | null,
+) {
+  const priced = orderOffers(product.offers).filter((offer) => offer.price !== null);
   let offers: object | undefined;
-  if (priced.length === 1) {
-    offers = offer(priced[0]);
-  } else if (priced.length > 1) {
+  if (priced.length > 0) {
     const prices = priced.map((item) => item.price as number);
+    const availability = priced.some((item) => isInStock(item.stock_signal))
+      ? "https://schema.org/InStock"
+      : AVAILABILITY[priced[0].stock_signal];
     offers = {
       "@type": "AggregateOffer",
       priceCurrency: product.currency,
       lowPrice: Math.min(...prices),
       highPrice: Math.max(...prices),
       offerCount: priced.length,
-      offers: priced.map(offer),
+      ...(availability && { availability }),
+      url,
     };
   }
 
+  const text = description?.replace(/\s+/g, " ").trim();
   const images = galleryImages(product);
+  const brand = brandOf(product);
   return {
     "@context": "https://schema.org",
     "@type": "Product",
     name: title,
     url,
+    ...(text && { description: clampText(text, JSON_LD_DESCRIPTION) }),
     ...(images.length > 0 && { image: images }),
     ...(product.part_number && { mpn: product.part_number }),
-    ...(product.brand && { brand: { "@type": "Brand", name: product.brand } }),
+    ...(brand && { brand: { "@type": "Brand", name: brand } }),
     ...(product.category && { category: product.category.name_en }),
     ...(offers && { offers }),
   };
+}
+
+/** `text` cut at a word boundary to at most `max` characters, with an ellipsis. */
+function clampText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 /** JSON for a `<script>` tag: `<` escaped, so a title containing

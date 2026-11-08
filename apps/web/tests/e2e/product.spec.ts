@@ -180,7 +180,10 @@ test("the head names the product and describes it to search engines", async ({ p
   });
   // Absolute, on the configured SITE_URL (playwright.config.ts), never on the
   // host the request happened to name.
-  expect(data.offers.offers[0].url).toBe("https://makhzan.test/products/p-multi");
+  expect(data.offers.url).toBe("https://makhzan.test/products/p-multi");
+  // A comparison, not a shop: no Offer, so Google does not ask for shipping.
+  expect(JSON.stringify(data)).not.toContain('"@type":"Offer"');
+  expect(data.description).toBeTruthy();
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
     "href",
     "https://makhzan.test/products/p-multi",
