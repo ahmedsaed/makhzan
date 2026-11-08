@@ -91,7 +91,7 @@ test("the product page's controls", async ({ page }) => {
     "similar fact": page.locator("[data-fact=similar] a"),
     "next photo": page.getByRole("button", { name: "Next photo" }),
     "next similar products": page.getByRole("button", { name: "Next products" }),
-    "read more": page.getByRole("button", { name: "Read more" }),
+    "read more": page.locator("summary", { hasText: "Read more" }),
   });
 
   await page.locator('a[data-photo="0"]').click();

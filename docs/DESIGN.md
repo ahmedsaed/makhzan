@@ -24,7 +24,7 @@ Measured on 60.9k active listings (November 2026).
 | 41% of listings are out of stock | Out of stock is **hidden by default**, and the count of hidden items is always shown. |
 | A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). |
 | Arabic titles 0.1%, Arabic descriptions 3% | **English only.** Arabic search queries keep working; the Arabic interface is gone. |
-| Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions come after makhzan's own facts and the way to the shop, capped at three quarters of the screen behind Read more. |
+| Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions come after makhzan's own facts and the way to the shop, clamped to 25 lines behind Read more. |
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
@@ -132,11 +132,12 @@ the page container on desktop; each section is left out when its fetch fails.
   `ink-2`. The tabs are a radio group (one tab stop, arrow keys between shops) and work
   without JavaScript. With one shop there is no strip. A shop that wrote nothing gets
   no tab; absent data means no section, never an empty one.
-- The description is capped at three quarters of the screen's height (at least 16rem;
-  about 28 lines on a laptop), faded at the cut, with **Read more** and **Show less**:
-  the cap fills most of any screen without forcing a long scroll. The button appears
-  only when the text actually overflows the cap, measured in the browser; a short
-  description shows in full. Without JavaScript nothing is capped.
+- The description is clamped to 25 lines (CSS `line-clamp`), faded at the cut, with
+  **Read more** and **Show less** in a `<details>`, so it works without JavaScript.
+  Whether a text is long is decided on the server, by estimated lines (paragraphs
+  wrapped at about 48 characters on a phone, 105 in the wide column), so the page is
+  drawn once in its final shape: nothing is measured or moves after load. A short
+  description shows in full with no button.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
