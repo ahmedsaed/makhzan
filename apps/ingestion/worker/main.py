@@ -46,6 +46,15 @@ CRAWL_ENABLED = os.getenv("CRAWL_ENABLED", "true").strip().lower() not in {
 #: DB pool ceiling (pool_size + max_overflow), since each run holds one session.
 MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "8"))
 
+#: How long the daily refresh may run before arq cancels it. arq's own default
+#: is 300 s, and the refresh was being killed at that mark every day: a source
+#: of many small categories needs longer than five minutes at a polite pace, so
+#: its run was cut off mid-sweep, and the product rebuild and reindex at the end
+#: of the job never ran. Pages are durable, so nothing was lost, but search went
+#: stale. Hours, not minutes: the slowest source decides, and a cycle's first
+#: run adds its once-a-cycle requests.
+JOB_TIMEOUT = int(os.getenv("REFRESH_TIMEOUT_SECONDS", str(6 * 3600)))
+
 
 async def startup(ctx: dict) -> None:
     await load_adapters()
@@ -146,6 +155,8 @@ async def refresh_all(ctx: dict) -> list[dict]:
 
 class WorkerSettings:
     functions = [run_source, run_partition]
-    cron_jobs = [cron(refresh_all, hour=REFRESH_HOUR, minute=0)]
+    cron_jobs = [cron(refresh_all, hour=REFRESH_HOUR, minute=0, timeout=JOB_TIMEOUT)]
+    # Also for run_source / run_partition jobs enqueued by hand.
+    job_timeout = JOB_TIMEOUT
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://localhost:6379"))

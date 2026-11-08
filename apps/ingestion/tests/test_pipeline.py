@@ -642,3 +642,16 @@ async def test_a_worker_closes_runs_a_previous_worker_left_running():
     assert runs["cut-off"].finished_at is not None
     assert runs["cut-off"].error.startswith("interrupted")
     assert runs["done"].status == IngestionStatus.SUCCESS
+
+
+def test_the_daily_refresh_is_not_cut_off_at_arqs_five_minute_default():
+    """arq cancels a job after 300 s unless told otherwise. The daily refresh
+    crawls every source at a polite pace and then rebuilds products and the
+    search index; at 300 s it was killed mid-sweep every day and the rebuild
+    never ran. It must be allowed hours."""
+    from worker.main import JOB_TIMEOUT, WorkerSettings
+
+    assert JOB_TIMEOUT >= 3600
+    assert WorkerSettings.job_timeout == JOB_TIMEOUT
+    (job,) = WorkerSettings.cron_jobs
+    assert job.timeout_s == JOB_TIMEOUT
