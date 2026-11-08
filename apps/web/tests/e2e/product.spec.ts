@@ -79,20 +79,314 @@ test.describe("one offer", () => {
     const hrefs = await page
       .locator("[data-result] a")
       .evaluateAll((links) => links.map((a) => a.getAttribute("href")));
-    expect(hrefs).toEqual(["/products/p-oos", "/products/p-similar-2"]);
+    expect(hrefs).toEqual([
+      "/products/p-oos",
+      "/products/p-similar-2",
+      "/products/p-similar-3",
+      "/products/p-similar-4",
+    ]);
   });
+});
+
+test.describe("makhzan's own facts, under the title", () => {
+  test("one shop: who sells it and when, and the similar products", async ({ page }) => {
+    await page.goto("/products/p-single");
+    const facts = page.locator("[data-facts]");
+    await expect(facts.locator("[data-fact]")).toHaveText([
+      "Sold by 1 shop · checked 74 days ago",
+      "4 similar products, from EGP 35",
+    ]);
+    // The age keeps its F2 colour here too.
+    await expect(facts.locator("[data-freshness]")).toHaveAttribute("data-freshness", "warn");
+    await facts.getByRole("link", { name: "4 similar products" }).click();
+    await expect(page).toHaveURL(/#similar$/);
+    await expect(page.getByRole("heading", { name: "Similar products" })).toBeInViewport();
+  });
+
+  test("several shops: how many, where in stock, the range", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    await expect(page.locator("[data-fact=shops]")).toHaveText(
+      "Sold by 3 shops · 7 listings · in stock at 2 · EGP 260 – 295",
+    );
+    await page.goto("/products/p-oos");
+    await expect(page.locator("[data-fact=shops]")).toHaveText(
+      "Sold by 3 shops · none in stock · EGP 40 – 50",
+    );
+  });
+
+  test("a fact with nothing behind it is left out, never shown empty", async ({ page }) => {
+    await page.goto("/products/p-bare");
+    const facts = page.locator("[data-fact]");
+    await expect(facts).toHaveCount(1);
+    await expect(facts).toHaveText("Sold by 1 shop · checked 2 days ago");
+    await expect(page.locator("[data-similar]")).toHaveCount(0);
+  });
+});
+
+test.describe("what comes first", () => {
+  /** Top edges, in the order given: each must start below the one before. */
+  async function expectOrder(page: import("@playwright/test").Page, selectors: string[]) {
+    const tops: number[] = [];
+    for (const selector of selectors) {
+      tops.push((await page.locator(selector).first().boundingBox())!.y);
+    }
+    for (let i = 1; i < tops.length; i++) {
+      expect(tops[i], `${selectors[i]} below ${selectors[i - 1]}`).toBeGreaterThan(tops[i - 1]);
+    }
+  }
+
+  test("a phone, one shop: photo, title, facts, price, the shop's text, similar", async ({
+    page,
+  }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-single");
+    await expectOrder(page, [
+      "[data-gallery]",
+      "h1",
+      "[data-facts]",
+      "[data-buy] [data-price]",
+      "[data-description]",
+      "[data-similar]",
+    ]);
+  });
+
+  test("a phone, several shops: the offers, then the shops' text, similar last", async ({
+    page,
+  }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-multi");
+    await expectOrder(page, [
+      "h1",
+      "[data-facts]",
+      "[data-summary]",
+      "[data-offer]",
+      "[data-details]",
+      "[data-similar]",
+    ]);
+  });
+
+  for (const viewport of [PHONE, { width: 1440, height: 900 }]) {
+    test(`similar products come last on every kind of page (${viewport.width}px)`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      for (const path of ["/products/p-single", "/products/p-multi", "/products/p-specs"]) {
+        await page.goto(path);
+        const similar = (await page.locator("[data-similar]").boundingBox())!;
+        // Everything else in the product's layout ends above it.
+        const others = await page
+          .locator("[data-buy], [data-details], [data-description], [data-gallery], h1")
+          .evaluateAll((nodes) => nodes.map((n) => n.getBoundingClientRect().bottom + scrollY));
+        for (const bottom of others) expect(bottom, path).toBeLessThanOrEqual(similar.y + 1);
+        // And it spans the page, not one column.
+        expect(similar.width, path).toBeGreaterThan(viewport.width * 0.8);
+      }
+    });
+  }
+
+  test("a wide screen, a shop that wrote nothing: price beside the title", async ({ page }) => {
+    await page.goto("/products/p-bare");
+    const photo = (await page.locator("[data-media]").first().boundingBox())!;
+    const buy = (await page.locator("[data-buy]").boundingBox())!;
+    expect(buy.x).toBeGreaterThan(photo.x + photo.width);
+  });
+});
+
+test.describe("photo arrows", () => {
+  const scrollOf = (page: import("@playwright/test").Page, selector: string) =>
+    page.locator(selector).evaluate((node) => node.scrollLeft);
+
+  test("the gallery's move one photo and are disabled at the ends", async ({ page }) => {
+    await page.goto("/products/p-single");
+    const previous = page.getByRole("button", { name: "Previous photo" });
+    const next = page.getByRole("button", { name: "Next photo" });
+    await expect(previous).toBeDisabled();
+    await expect(next).toBeEnabled();
+    await next.click();
+    await expect.poll(() => scrollOf(page, "[data-gallery]")).toBeGreaterThan(100);
+    await expect(next).toBeDisabled();
+    await expect(previous).toBeEnabled();
+    await previous.click();
+    await expect.poll(() => scrollOf(page, "[data-gallery]")).toBe(0);
+    await expect(previous).toBeDisabled();
+  });
+
+  test("one photo has none", async ({ page }) => {
+    await page.goto("/products/p-bare");
+    await expect(page.locator("a[data-photo]")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /photo$/ })).toHaveCount(0);
+  });
+
+  test("a phone's row of similar products has them too", async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-single");
+    const row = "[data-similar] [data-carousel-track]";
+    const previous = page.getByRole("button", { name: "Previous products" });
+    const next = page.getByRole("button", { name: "Next products" });
+    await expect(previous).toBeDisabled();
+    await next.click();
+    await expect.poll(() => scrollOf(page, row)).toBeGreaterThan(50);
+    await expect(previous).toBeEnabled();
+  });
+
+  test("a wide screen's grid of similar products has none", async ({ page }) => {
+    await page.goto("/products/p-single");
+    await expect(page.getByRole("button", { name: /products$/ })).toHaveCount(0);
+  });
+});
+
+test.describe("the photo viewer", () => {
+  /** Serves Volt Corner's photos (p-single, p-bare): any image will do. */
+  async function servePhotos(page: import("@playwright/test").Page) {
+    const PNG = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await page.route("https://volt-corner.test/img/**", (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: PNG }),
+    );
+  }
+
+  test("opens on the photo, moves with arrows and keys, closes with Esc", async ({ page }) => {
+    await servePhotos(page);
+    await page.goto("/products/p-single");
+    const viewer = page.locator("dialog[data-viewer]");
+    await expect(viewer).toBeHidden();
+    await page.locator('[data-gallery] a[data-photo="0"]').click();
+    await expect(viewer).toBeVisible();
+    const count = viewer.locator("[data-viewer-count]");
+    await expect(count).toHaveText("1 / 2");
+    // Focus moved into the dialog.
+    await expect(viewer.getByRole("button", { name: "Close" })).toBeFocused();
+    // The photo keeps its white frame (S5).
+    await expect(viewer.locator("[data-media]").first()).toHaveCSS(
+      "background-color",
+      "rgb(255, 255, 255)",
+    );
+
+    await page.keyboard.press("ArrowRight");
+    await expect(count).toHaveText("2 / 2");
+    await expect(viewer.getByRole("button", { name: "Next photo" })).toBeDisabled();
+    await viewer.getByRole("button", { name: "Previous photo" }).click();
+    await expect(count).toHaveText("1 / 2");
+    await expect(viewer.getByRole("button", { name: "Previous photo" })).toBeDisabled();
+    await viewer.getByRole("button", { name: "Next photo" }).click();
+    await expect(count).toHaveText("2 / 2");
+
+    await page.keyboard.press("Escape");
+    await expect(viewer).toBeHidden();
+    // Focus returns to the photo last shown.
+    await expect(page.locator('[data-gallery] a[data-photo="1"]')).toBeFocused();
+  });
+
+  test("swiping the viewer moves the count; the close button closes it", async ({ page }) => {
+    await servePhotos(page);
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-single");
+    await page.locator('[data-gallery] a[data-photo="1"]').click({ force: true });
+    const viewer = page.locator("dialog[data-viewer]");
+    const count = viewer.locator("[data-viewer-count]");
+    // It opens on the photo tapped.
+    await expect(count).toHaveText("2 / 2");
+    // A swipe is a scroll of the strip, as far as the page can tell.
+    await viewer
+      .locator("[data-viewer-slide]")
+      .first()
+      .evaluate((slide) => slide.parentElement!.scrollTo({ left: 0 }));
+    await expect(count).toHaveText("1 / 2");
+    await viewer.getByRole("button", { name: "Close" }).click();
+    await expect(viewer).toBeHidden();
+    await expect(page.locator('[data-gallery] a[data-photo="0"]')).toBeFocused();
+  });
+
+  test("one photo opens too, with no arrows", async ({ page }) => {
+    await servePhotos(page);
+    await page.goto("/products/p-bare");
+    await page.locator("a[data-photo]").click();
+    const viewer = page.locator("dialog[data-viewer]");
+    await expect(viewer.locator("[data-viewer-count]")).toHaveText("1 / 1");
+    await expect(viewer.getByRole("button", { name: /photo$/ })).toHaveCount(0);
+  });
+
+  test.describe("without JavaScript", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("each photo is a plain link to the image", async ({ page }) => {
+      await page.goto("/products/p-single");
+      await expect(page.locator("a[data-photo]")).toHaveCount(2);
+      await expect(page.locator('a[data-photo="0"]')).toHaveAttribute(
+        "href",
+        "https://volt-corner.test/img/caliper-1.jpg?ref=makhzan",
+      );
+      await expect(page.getByRole("button", { name: /photo$/ })).toHaveCount(0);
+    });
+  });
+});
+
+/** The description's text: how tall it is drawn, and how tall it would be in full. */
+const descriptionHeights = (page: import("@playwright/test").Page) =>
+  page.locator("[data-description] p").evaluate((node) => ({
+    shown: node.clientHeight,
+    full: node.scrollHeight,
+    line: parseFloat(getComputedStyle(node).lineHeight),
+  }));
+
+for (const viewport of [PHONE, { width: 1440, height: 900 }]) {
+  test.describe(`a long description at ${viewport.width}px`, () => {
+    // p-single's description runs well past 25 lines in either column.
+    test.use({ viewport });
+
+    test("is clamped to 25 lines with a fade and Read more, and opens", async ({ page }) => {
+      await page.goto("/products/p-single");
+      const clamped = await descriptionHeights(page);
+      expect(Math.round(clamped.shown / clamped.line)).toBe(25);
+      expect(clamped.full).toBeGreaterThan(clamped.shown);
+      await expect(page.locator("[data-description-fade]")).toBeVisible();
+
+      await page.getByText("Read more").click();
+      await expect(page.getByText("Show less")).toBeVisible();
+      const open = await descriptionHeights(page);
+      expect(open.shown).toBeGreaterThanOrEqual(open.full - 1);
+      await expect(page.locator("[data-description-fade]")).toBeHidden();
+
+      await page.getByText("Show less").click();
+      expect((await descriptionHeights(page)).shown).toBe(clamped.shown);
+    });
+
+    test("is drawn clamped from the first paint, and never moves", async ({ page }) => {
+      // The HTML alone, before any script has run, already holds the clamp.
+      await page.goto("/products/p-single", { waitUntil: "commit" });
+      await page.waitForSelector("[data-description] p");
+      const first = await descriptionHeights(page);
+      await page.waitForLoadState("networkidle");
+      await page.waitForTimeout(300);
+      expect(await descriptionHeights(page)).toEqual(first);
+      expect(Math.round(first.shown / first.line)).toBe(25);
+    });
+  });
+}
+
+test("a short description shows in full, with no Read more", async ({ page }) => {
+  await page.goto("/products/p-specs");
+  await expect(page.locator("[data-description]")).toContainText("USB data link.");
+  await expect(page.getByText("Read more")).toHaveCount(0);
+  await expect(page.locator("[data-description-fade]")).toHaveCount(0);
+  const box = await descriptionHeights(page);
+  expect(box.full - box.shown).toBeLessThanOrEqual(1);
 });
 
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false, viewport: PHONE });
 
-  test("the description's Read more opens", async ({ page }) => {
+  test("the description's Read more still opens", async ({ page }) => {
     await page.goto("/products/p-single");
-    const text = page.locator("[data-description] p");
-    const clamped = (await text.boundingBox())!.height;
+    const clamped = await descriptionHeights(page);
+    expect(Math.round(clamped.shown / clamped.line)).toBe(25);
     await page.getByText("Read more").click();
     await expect(page.getByText("Show less")).toBeVisible();
-    expect((await text.boundingBox())!.height).toBeGreaterThan(clamped);
+    const open = await descriptionHeights(page);
+    expect(open.shown).toBeGreaterThan(clamped.shown);
+    expect(open.shown).toBeGreaterThanOrEqual(open.full - 1);
   });
 
   test("the out-of-stock offers unfold", async ({ page }) => {
@@ -225,9 +519,17 @@ test.describe("what the shop published (C4)", () => {
     await page.goto("/products/p-specs");
     await expect(page.locator("[data-brand]")).toHaveText("Brand · UNI-T");
 
+    // One shop: the heading and whose listing it is, and no tab strip.
+    const details = page.locator("[data-details]");
+    await expect(details.getByRole("heading", { name: "What the shops say" })).toBeVisible();
+    await expect(details.locator("[data-details-source]")).toHaveText([
+      "From Nile Parts's listing",
+    ]);
+    await expect(details.locator("[data-details-tab]")).toHaveCount(0);
+    await expect(details.getByRole("radiogroup")).toHaveCount(0);
+
     const specs = page.locator("[data-specs]");
     await expect(specs.getByRole("heading", { name: "Specifications" })).toBeVisible();
-    await expect(specs).toContainText("From Nile Parts's listing");
     await expect(specs.locator("dt")).toHaveText(["Model", "DC Voltage", "Display"]);
     await expect(specs.locator("dd")).toHaveText(["UT61E", "220mV – 1000V", "22000 counts"]);
     // Monospace only where the value is a part number (S3).
@@ -235,7 +537,6 @@ test.describe("what the shop published (C4)", () => {
 
     const sheets = page.locator("[data-datasheets]");
     await expect(sheets.getByRole("heading", { name: "Datasheets" })).toBeVisible();
-    await expect(sheets).toContainText("From Nile Parts's listing");
     const links = sheets.locator("[data-datasheet]");
     await expect(links).toHaveText(["UT61E user manual", "ut61e-datasheet.pdf"]);
     // Each opens the file on the shop's site, through the one way out (P4).
@@ -289,18 +590,63 @@ test.describe("what the shop published (C4)", () => {
 
   test("several shops: a tab per shop that wrote something, richest first", async ({ page }) => {
     await page.goto("/products/p-multi");
+    await expect(page.getByRole("heading", { name: "What the shops say" })).toBeVisible();
     const tabs = page.locator("[data-details-tab]");
     await expect(tabs).toHaveText(["Delta Bench", "Nile Parts"]);
+    const source = page.locator("[data-details-source]:visible");
     const specs = page.locator("[data-specs]:visible");
     await expect(specs).toHaveCount(1);
-    await expect(specs).toContainText("From Delta Bench's listing");
+    await expect(source).toHaveText("From Delta Bench's listing");
     await expect(specs.locator("dt")).toHaveText(["Flash Memory", "GPIO Pins"]);
     await expect(page.getByText("USB Chip")).toBeHidden();
 
     await tabs.filter({ hasText: "Nile Parts" }).click();
-    await expect(specs).toContainText("From Nile Parts's listing");
+    await expect(source).toHaveText("From Nile Parts's listing");
     await expect(specs.locator("dt")).toHaveText(["USB Chip"]);
     await expect(page.locator("[data-datasheets]")).toHaveCount(0);
+  });
+
+  test("the selected tab is underlined in the action colour, the rest in ink-2", async ({
+    page,
+  }) => {
+    await page.goto("/products/p-multi");
+    const tabs = page.locator("[data-details-tab]");
+    const ACTION = "rgb(194, 65, 12)";
+    await expect(tabs.first()).toHaveCSS("border-bottom-color", ACTION);
+    await expect(tabs.first()).toHaveCSS("border-bottom-width", "2px");
+    await expect(tabs.last()).not.toHaveCSS("border-bottom-color", ACTION);
+    const [first, last] = await tabs.evaluateAll((nodes) =>
+      nodes.map((n) => getComputedStyle(n).color),
+    );
+    expect(first).not.toBe(last);
+  });
+
+  test("arrow keys move between shops: one radio group, one tab stop", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    const group = page.getByRole("radiogroup", { name: "What the shops say" });
+    await expect(group.getByRole("radio")).toHaveCount(2);
+    await group.getByRole("radio", { name: "Delta Bench" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(group.getByRole("radio", { name: "Nile Parts" })).toBeChecked();
+    await expect(page.locator("[data-specs]:visible dt")).toHaveText(["USB Chip"]);
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.locator("[data-specs]:visible dt")).toHaveText(["Flash Memory", "GPIO Pins"]);
+  });
+
+  test("the tabs stay on one row at 320px, scrolling rather than wrapping", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto("/products/p-multi");
+    const tops = await page
+      .locator("[data-details-tab]")
+      .evaluateAll((nodes) => nodes.map((n) => Math.round(n.getBoundingClientRect().top)));
+    expect(new Set(tops).size).toBe(1);
+    const strip = page.getByRole("radiogroup");
+    expect(await strip.evaluate((n) => getComputedStyle(n).flexWrap)).toBe("nowrap");
+    expect((await page.locator("[data-details-tab]").first().boundingBox())!.height).toBe(44);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 
   test.describe("without JavaScript", () => {

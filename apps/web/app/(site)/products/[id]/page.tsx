@@ -46,7 +46,9 @@ import { absoluteUrl } from "@/lib/site";
 import { tradeLabel } from "@/lib/trades";
 import { cn } from "@/lib/utils";
 
+import { Carousel } from "./carousel";
 import { Details } from "./details";
+import { Facts } from "./facts";
 import { Gallery } from "./gallery";
 import { Offers } from "./offers";
 
@@ -56,6 +58,11 @@ import { Offers } from "./offers";
  * Two forms. 98.6% of products have one offer, and the page is designed for
  * that: price, stock, who sells it, their description. With two or more offers
  * the comparison appears (rule P2): a summary, then every offer in one list.
+ *
+ * Under the title, makhzan's own facts (Facts): how many shops sell it, when
+ * it was checked, and how many similar products are at the end. The rest of
+ * the text is copied from the shops; these lines are what no shop's page has,
+ * so they come first.
  *
  * On a phone a fixed bar keeps the price, its age and the way out on screen.
  * On a wide screen the page goes two columns — photo and description left;
@@ -266,6 +273,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               )}
             </div>
           </div>
+          <Facts offers={product.offers} currency={product.currency} now={now} similar={similar} />
         </div>
 
         <div
@@ -289,22 +297,34 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
         {split && (
           <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-2">
-            <Details sources={sources} single={!several} />
+            <Details sources={sources} />
           </div>
         )}
       </div>
 
       {similar.length > 0 && (
-        <section aria-labelledby="similar-heading" className="mt-8">
+        <section
+          id="similar"
+          data-similar
+          aria-labelledby="similar-heading"
+          className="mt-8 scroll-mt-20"
+        >
           <h2 id="similar-heading" className="mb-2.5 text-[15px] lg:text-lg">
             Similar products
           </h2>
-          {/* A swipeable row on a phone, a grid from `sm`. */}
-          <ul className="-mx-4 flex snap-x gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-            {similar.map((item) => (
-              <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
-            ))}
-          </ul>
+          {/* A swipeable row on a phone, with arrows; a grid from `sm`. */}
+          <Carousel previous="Previous products" next="Next products" buttonClassName="sm:hidden">
+            <ul
+              data-carousel-track
+              // The scroll padding matches the side padding, so the first card
+              // snaps where it starts and the strip opens at its start.
+              className="-mx-4 flex snap-x scroll-px-4 gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8"
+            >
+              {similar.map((item) => (
+                <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
+              ))}
+            </ul>
+          </Carousel>
         </section>
       )}
 
