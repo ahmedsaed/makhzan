@@ -154,11 +154,16 @@ async def sweep_progress(session, source_filter: str | None) -> None:
                 state = f"{YELLOW}running{RESET}"
                 cycle += f", run active since {_age(active[source])}"
             else:
-                # An open cycle with nothing running is stalled, not progressing:
-                # partitions that failed are waiting for the next sweep to retry
-                # them, and archiving cannot fire until they finish.
-                state = f"{RED}stalled{RESET}"
-                cycle += f", no run active (last finished {_age(finished.get(source))})"
+                # The daily run sweeps a slice, so between runs an open cycle with
+                # nothing running is the normal state. It is stalled only when no
+                # run has finished for longer than a day and a half: the cron, a
+                # crash or a blocking host is keeping the cycle from moving.
+                last = finished.get(source)
+                recent = last is not None and datetime.now(timezone.utc) - last < timedelta(
+                    hours=36
+                )
+                state = f"{GREEN}between runs{RESET}" if recent else f"{RED}stalled{RESET}"
+                cycle += f", no run active (last finished {_age(last)})"
         else:
             # Cursors reset when a cycle completes, so "no cycle open" with rows
             # present means the last sweep finished — not that nothing ran.
