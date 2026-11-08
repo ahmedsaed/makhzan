@@ -9,6 +9,7 @@ the code that measures and the code that reports.
 
     {
       "requests": 412,            # requests actually sent to the shop, retries included
+      "robots": 2,                # of which robots.txt fetches
       "min_gap_s": 15.0,          # between consecutive requests to one host
       "median_gap_s": 15.2,
       "max_gap_s": 61.4,
@@ -68,8 +69,14 @@ def summarize_gaps(requests: int, gaps: list[float]) -> dict:
     }
 
 
-def pacing_stats(times_by_host: Mapping[str, list[float]]) -> dict:
-    """A run's `stats.pacing` from when each request went out, by host (monotonic seconds)."""
+def pacing_stats(
+    times_by_host: Mapping[str, list[float]], robots: Mapping[str, int] | None = None
+) -> dict:
+    """A run's `stats.pacing` from when each request went out, by host (monotonic seconds).
+
+    `robots` counts the robots.txt fetches among them, by host. They are
+    requests the shop sees, so they are in `requests` and in the gaps.
+    """
     by_host: dict[str, dict] = {}
     every_gap: list[float] = []
     for host, times in sorted(times_by_host.items()):
@@ -79,7 +86,11 @@ def pacing_stats(times_by_host: Mapping[str, list[float]]) -> dict:
         by_host[host] = summarize_gaps(len(ordered), gaps)
         by_host[host].pop("gaps", None)  # the run's histogram covers every host
     total = sum(entry["requests"] for entry in by_host.values())
-    return {**summarize_gaps(total, every_gap), "by_host": by_host}
+    summary = summarize_gaps(total, every_gap)
+    fetched_robots = sum((robots or {}).values())
+    if fetched_robots:
+        summary["robots"] = fetched_robots
+    return {**summary, "by_host": by_host}
 
 
 def merge_gaps(pacings: Iterable[Mapping]) -> tuple[float | None, int | None]:

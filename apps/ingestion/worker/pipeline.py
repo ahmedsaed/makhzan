@@ -42,7 +42,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
-from worker.http import CycleFetcher, RequestLog, logging_requests
+from worker.http import CycleFetcher, RequestLog, logging_requests, set_host_pace
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
 
@@ -626,6 +626,9 @@ async def _logged_run(
     log: RequestLog,
 ) -> IngestionRun:
     errors: list[str] = []
+    # The least gap between any two requests to this host, retries and
+    # robots.txt included (worker.http.take_turn); Crawl-Delay is a floor on it.
+    set_host_pace(adapter.base_url, adapter.polite_delay)
 
     async with SessionLocal() as session:
         run = IngestionRun(source=source_id, source_type=adapter.source_type)
@@ -696,6 +699,7 @@ async def _logged_run(
         requests: Counter = Counter({"pages": tally["pages"]})
         requests.update(cycle_requests)
         requests.update(adapter.extra_requests())
+        requests.update({"robots": sum(log.robots.values())})
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}
         # What the shop's server saw: requests sent (a retry is one more) and the

@@ -68,6 +68,16 @@ async def _clean_tables(_schema):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _fresh_host_gate(monkeypatch):
+    """The per-host pace gate is process-wide state: no test inherits another's."""
+    from worker import http as http_mod
+
+    monkeypatch.setattr(http_mod, "_HOST_PACE", {})
+    monkeypatch.setattr(http_mod, "_LAST_SENT", {})
+    monkeypatch.setattr(http_mod, "_TURN_LOCKS", {})
+
+
 @pytest.fixture
 def session_factory():
     return SessionLocal
