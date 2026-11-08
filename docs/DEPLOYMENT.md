@@ -191,6 +191,26 @@ Once, in this order, on the server from `~/Documents/Projects/makhzan`:
    re-crawled: one cycle per source, about a week. Two sources still block the
    server's address and will not refresh until their shops allowlist it.
 
+### Shop data release (November 2026)
+
+New adapter settings live in the private configuration (`feat/woo-enrichment`:
+price breaks, hidden out-of-stock items, description sections, compatibility). An
+image older than this release rejects them, and the `migrate` service's sources sync
+fails, which keeps **api and ingestion from starting at all**, not just the shops
+concerned. So, strictly in this order:
+
+1. Merge the code; wait for `build.yml` to publish the images.
+2. Only then merge and push the private configuration's `feat/woo-enrichment`.
+3. `make deploy`. Two migrations run on their own: `suppliers.contact` and
+   `sources.cycle_data`, then `listings.last_seen_at` (backfilled from
+   `last_verified_at`, so the cycle in flight archives nothing it should not).
+4. `./makhzan status`. The first run of each source's next cycle makes its
+   once-a-cycle requests (variations, category tree, shop contact; price breaks
+   where enabled): a few to ~50 per shop.
+
+If a deploy pulls a configuration the running image cannot read, restart on what
+is there with `SKIP_PULL=1 ./scripts/deploy.sh` and finish the order above.
+
 One command on the server, from `~/Documents/Projects/makhzan`:
 
 ```bash
