@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 
 import "./globals.css";
+import { BackgroundPattern } from "@/components/background-pattern";
 import { SiteFooter } from "@/components/site-footer";
 import { ThemeProvider } from "@/components/theme-provider";
 import { darkPalette, palette, SITE_DESCRIPTION, SITE_NAME } from "@/lib/brand";
@@ -103,7 +104,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
       className={`${archivo.variable} ${inter.variable} ${plexMono.variable}`}
     >
-      <body className="flex min-h-svh flex-col">
+      {/* `relative isolate`: the background pattern is positioned against the
+       * page and stacks behind everything in it. */}
+      <body className="relative isolate flex min-h-svh flex-col">
+        <BackgroundPattern />
         <ThemeProvider>
           {children}
           <SiteFooter />

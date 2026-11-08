@@ -57,6 +57,9 @@ const PAIRS: [string, string][] = [
   ["warn-ink", "warn"],
   ["age-muted", "surface"],
   ["chip-on-ink", "chip-on"],
+  // Text over the background pattern, should a stroke pass behind a glyph.
+  ["ink", "pattern"],
+  ["ink-2", "pattern"],
 ];
 
 describe("S1 · the palette is complete in both themes", () => {
