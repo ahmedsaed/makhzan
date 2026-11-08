@@ -22,6 +22,7 @@ Covered:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -34,7 +35,7 @@ from sqlalchemy import select
 from worker import http as http_mod
 from worker.contact import contact_from_html
 from worker.http import CycleFetcher
-from worker.pipeline import run_source
+from worker.pipeline import CYCLE_DATA_MAX_AGE, run_source
 from worker.robots import ROBOTS
 from worker.sources import woocommerce as woo_mod
 from worker.sources.base import SupplierInfo
@@ -127,7 +128,7 @@ def shop(monkeypatch):
 
 def test_contact_for_price_is_price_on_request_never_zero():
     """Unpurchasable at "0": the shop sells it but will not price it online."""
-    product = _by_id("shop_c_products.json", 31094)
+    product = _by_id("shop_c_products.json", 7101)
     assert product["is_purchasable"] is False and product["prices"]["price"] == "0"
 
     raw = _woo()._to_raw(product, "in stock")
@@ -139,7 +140,7 @@ def test_contact_for_price_is_price_on_request_never_zero():
 
 
 def test_a_priced_product_is_not_on_request():
-    raw = _woo()._to_raw(_by_id("shop_c_products.json", 33501), "in stock")
+    raw = _woo()._to_raw(_by_id("shop_c_products.json", 7103), "in stock")
     assert "price_on_request" not in raw.raw
     assert raw.price_text is not None
 
@@ -153,7 +154,7 @@ def test_minimum_order_and_multiple_are_kept_beside_the_per_piece_price():
 
 
 def test_quantity_rules_of_one_are_not_written():
-    product = _by_id("shop_c_products.json", 33501)
+    product = _by_id("shop_c_products.json", 7103)
     product["add_to_cart"].update(minimum=1, multiple_of=1)
     raw = _woo()._to_raw(product, "in stock")
     assert "min_quantity" not in raw.raw and "multiple_of" not in raw.raw
@@ -193,12 +194,12 @@ def test_boilerplate_sections_are_stripped_before_reading():
 
 
 def test_what_a_part_fits_comes_from_its_compatibility_option():
-    raw = _woo()._to_raw(_by_id("shop_c_products.json", 31298), "in stock")
+    raw = _woo()._to_raw(_by_id("shop_c_products.json", 7102), "in stock")
     assert raw.raw["compatible_with"] == ["X1 Series/P1 Series/A1", "A1 mini"]
 
 
 def test_what_a_part_fits_comes_from_its_title_only_when_asked():
-    product = _by_id("shop_c_products.json", 31094)
+    product = _by_id("shop_c_products.json", 7101)
     assert "compatible_with" not in _woo()._to_raw(product, "in stock").raw
     raw = _woo(compatibility_from_titles=True)._to_raw(product, "in stock")
     assert raw.raw["compatible_with"] == ["Neptune 4 Plus / 4 Max"]
@@ -214,7 +215,7 @@ def test_what_a_part_fits_comes_from_its_title_only_when_asked():
     ],
 )
 def test_a_for_phrase_that_names_no_machine_is_not_a_fit(title):
-    product = _by_id("shop_c_products.json", 31094)
+    product = _by_id("shop_c_products.json", 7101)
     product["name"] = title
     raw = _woo(compatibility_from_titles=True)._to_raw(product, "in stock")
     assert "compatible_with" not in raw.raw
@@ -222,7 +223,7 @@ def test_a_for_phrase_that_names_no_machine_is_not_a_fit(title):
 
 def test_a_purchase_limit_is_a_stock_count_only_where_counts_are_public():
     """The shop's page says "In Stock"; the 4 is only its purchase limit."""
-    product = _by_id("shop_c_products.json", 33501)
+    product = _by_id("shop_c_products.json", 7103)
     assert product["add_to_cart"]["maximum"] == 4
 
     assert "stock_quantity" not in _woo()._to_raw(product, "in stock").raw
@@ -232,7 +233,7 @@ def test_a_purchase_limit_is_a_stock_count_only_where_counts_are_public():
 
 @pytest.mark.parametrize("maximum,sold_individually", [(9999, False), (1, True)])
 def test_no_limit_or_one_per_order_is_not_a_count(maximum, sold_individually):
-    product = _by_id("shop_c_products.json", 33501)
+    product = _by_id("shop_c_products.json", 7103)
     product["add_to_cart"]["maximum"] = maximum
     product["sold_individually"] = sold_individually
     raw = _woo(stock_from_purchase_limit=True)._to_raw(product, "in stock")
@@ -258,7 +259,7 @@ async def test_variants_are_attached_to_their_parent(shop, monkeypatch):
     assert fetcher.requests["variations"] == 2
     assert all(p == {"type": "variation", "per_page": "4", "page": str(n)}
                for n, (_, p) in enumerate(shop.requests, 1))  # fmt: skip
-    raw = adapter._to_raw(_by_id("shop_c_products.json", 31298), "in stock")
+    raw = adapter._to_raw(_by_id("shop_c_products.json", 7102), "in stock")
     variants = raw.raw["variants"]
     assert len(variants) == len(rows) == raw.raw["variant_count"]
     first = variants[0]
@@ -281,7 +282,7 @@ async def test_the_shops_breadcrumb_comes_from_its_category_tree(shop):
     adapter.use_cycle_data(
         {"categories": await adapter.fetch_cycle_part(CycleFetcher(_no_pause), "categories")}
     )
-    raw = adapter._to_raw(_by_id("shop_c_products.json", 31094), "in stock")
+    raw = adapter._to_raw(_by_id("shop_c_products.json", 7101), "in stock")
     # The deepest of its categories, root first, unescaped.
     assert raw.raw["shop_category_path"] == ["ELEGOO", "Spare Parts & Accessories"]
 
@@ -291,14 +292,12 @@ async def test_quantity_breaks_come_from_the_wordpress_route(shop):
     adapter = _woo(price_breaks=True)
     data = await adapter.fetch_cycle_part(CycleFetcher(_no_pause), "price_breaks")
     # Only products with rules are kept.
-    assert set(data) == {"18721", "18770"}
+    assert set(data) == {"7311", "7312"}
     assert "tiered_pricing_fixed_rules" in shop.requests[0][1]["_fields"]
     adapter.use_cycle_data({"price_breaks": data})
 
-    product = _by_id("shop_c_products.json", 33501)
-    product.update(
-        id=18770, prices={**product["prices"], "price": "8500", "currency_minor_unit": 2}
-    )
+    product = _by_id("shop_c_products.json", 7103)
+    product.update(id=7312, prices={**product["prices"], "price": "8500", "currency_minor_unit": 2})
     raw = adapter._to_raw(product, "in stock")
     assert raw.raw["price_breaks"] == [
         {"min_quantity": 20, "price": 80.0},
@@ -312,7 +311,7 @@ async def test_quantity_breaks_come_from_the_wordpress_route(shop):
 def test_a_percentage_break_is_priced_from_the_listing():
     adapter = _woo(price_breaks=True)
     adapter.use_cycle_data({"price_breaks": {"5": {"type": "percentage", "rules": {"10": 10}}}})
-    product = _by_id("shop_c_products.json", 33501)
+    product = _by_id("shop_c_products.json", 7103)
     product.update(id=5, prices={**product["prices"], "price": "200", "currency_minor_unit": 0})
     assert adapter._to_raw(product, "in stock").raw["price_breaks"] == [
         {"min_quantity": 10, "price": 180.0}
@@ -322,10 +321,10 @@ def test_a_percentage_break_is_priced_from_the_listing():
 def test_reference_data_is_ignored_when_its_switch_is_off():
     adapter = _woo(variations=False, category_tree=False)
     adapter.use_cycle_data(
-        {"variations": {"31298": [{"title": "x", "price": 1.0, "in_stock": True}]},
-         "categories": {"1096": ["ELEGOO", 0]}}
+        {"variations": {"7102": [{"title": "x", "price": 1.0, "in_stock": True}]},
+         "categories": {"901": ["ELEGOO", 0]}}
     )  # fmt: skip
-    raw = adapter._to_raw(_by_id("shop_c_products.json", 31298), "in stock")
+    raw = adapter._to_raw(_by_id("shop_c_products.json", 7102), "in stock")
     assert "variants" not in raw.raw and "shop_category_path" not in raw.raw
 
 
@@ -485,7 +484,7 @@ async def test_reference_data_is_fetched_once_a_cycle_and_counted(shop):
     assert shop.count("/wp-json/wc/store/v1/products/categories") == 1
 
     # The variable product carries its variants, and the shop its contact details.
-    listing = await _listing("31298")
+    listing = await _listing("7102")
     assert len(listing.attributes["variants"]) == 6
     assert listing.attributes["shop_category_path"] == ["3D Printing", "Spare Parts & Accessories"]
     async with SessionLocal() as session:
@@ -493,6 +492,9 @@ async def test_reference_data_is_fetched_once_a_cycle_and_counted(shop):
         assert supplier.contact["governorate"] == "Cairo"
         source = (await session.execute(select(Source))).scalar_one()
         assert set(source.cycle_data) == {"categories", "variations", "contact"}
+    # Variants are as old as the snapshot they came from, not the listing's price.
+    stamp = source.cycle_data["variations"]["fetched_at"]
+    assert listing.attributes["variants_checked_at"] == stamp
 
     # A new cycle fetches it afresh.
     third = await run_source(adapter.source_id, _woo(max_partitions_per_run=2))
@@ -507,7 +509,7 @@ async def test_a_failed_part_is_reported_and_the_sweep_goes_on(shop):
 
     assert any("cycle data categories" in e for e in run.stats["errors"])
     assert run.items_seen == 3
-    assert "shop_category_path" not in (await _listing("31094")).attributes
+    assert "shop_category_path" not in (await _listing("7101")).attributes
 
 
 async def test_a_limited_run_stores_no_reference_data(shop):
@@ -522,6 +524,37 @@ async def test_a_limited_run_stores_no_reference_data(shop):
         assert (await session.execute(select(Supplier))).scalar_one().contact is None
 
 
+async def test_a_limited_run_fetches_no_reference_data_but_reads_what_is_stored(shop):
+    """`make ingest LIMIT=10` costs the shop its pages, not a cycle's reference data."""
+    _store_api(shop, {"instock": _load("shop_c_products.json")})
+    adapter = _woo()
+    await _seed_source(adapter)
+
+    run = await run_source(adapter.source_id, adapter, limit=3)
+
+    assert run.stats["requests"] == {"pages": 1}
+    assert shop.count("/wp-json/wc/store/v1/products/categories") == 0
+    assert shop.count("/") == 0
+    assert not any(p.get("type") == "variation" for _, p in shop.requests)
+    assert "variants" not in (await _listing("7102")).attributes
+
+    # With a snapshot on the source's row, the limited run uses it.
+    stamp = _ago(3)
+    variant = {"title": "A1 mini", "price": 12.5, "in_stock": True}
+    async with SessionLocal() as session:
+        source = (await session.execute(select(Source))).scalar_one()
+        source.cycle_data = {"variations": {"fetched_at": stamp, "data": {"7102": [variant]}}}
+        await session.commit()
+    before = len(shop.requests)
+
+    await run_source(adapter.source_id, _woo(), limit=3)
+
+    assert len(shop.requests) - before == 1, "its one page, nothing else"
+    listing = await _listing("7102")
+    assert listing.attributes["variants"] == [variant]
+    assert listing.attributes["variants_checked_at"] == stamp
+
+
 async def test_a_hidden_out_of_stock_product_is_kept_not_archived(shop):
     """A1: the Store API leaves out-of-stock products out entirely.
 
@@ -529,9 +562,9 @@ async def test_a_hidden_out_of_stock_product_is_kept_not_archived(shop):
     neither; the WordPress route still lists one, marked out of stock. That one
     stays listed, out of stock. The other has gone from both, and is archived.
     """
-    products = [_by_id("shop_c_products.json", 33501), _by_id("shop_c_products.json", 31298)]
+    products = [_by_id("shop_c_products.json", 7103), _by_id("shop_c_products.json", 7102)]
     wp_rows = _load("shop_c_wp_products.json")
-    gone = {"id": 33501, "class_list": ["post-33501", "product", "outofstock"]}
+    gone = {"id": 7103, "class_list": ["post-7103", "product", "outofstock"]}
     options = dict(hides_out_of_stock=True, variations=False, category_tree=False, contact=False)
 
     _store_api(shop, {"instock": products})
@@ -539,19 +572,19 @@ async def test_a_hidden_out_of_stock_product_is_kept_not_archived(shop):
     first = await run_source("shop-c", _woo(**options))
     assert UNLISTED_OUT_OF_STOCK in _woo(**options).partitions()
     assert first.stats.get("cycle")
-    assert (await _listing("33501")).stock_signal == StockSignal.IN_STOCK
+    assert (await _listing("7103")).stock_signal == StockSignal.IN_STOCK
 
     _store_api(shop, {"instock": []})
     shop.serve("/wp-json/wp/v2/product", _paged([gone, *wp_rows]))
     second = await run_source("shop-c", _woo(**options))
 
-    kept = await _listing("33501")
+    kept = await _listing("7103")
     assert kept.status == ListingStatus.ACTIVE
     assert kept.stock_signal == StockSignal.OUT_OF_STOCK
     assert kept.title_en, "what was stored stays: the WordPress route carries no details"
-    assert (await _listing("31298")).status == ListingStatus.ARCHIVED
+    assert (await _listing("7102")).status == ListingStatus.ARCHIVED
     assert second.stats["archived"] == 1
-    # The fixture's own out-of-stock product (32647) was never stored: not created.
+    # The fixture's own out-of-stock product (7104) was never stored: not created.
     assert second.stats["out_of_stock_unlisted"] == {"kept": 1, "unknown": 1}
     assert shop.requests[-1][1]["_fields"] == "id,class_list"
 
@@ -559,17 +592,17 @@ async def test_a_hidden_out_of_stock_product_is_kept_not_archived(shop):
 async def test_without_the_setting_a_hidden_product_is_archived(shop):
     """The behaviour A1 fixes, pinned so the setting is seen to be what changes it."""
     options = dict(variations=False, category_tree=False, contact=False)
-    _store_api(shop, {"instock": [_by_id("shop_c_products.json", 33501)]})
+    _store_api(shop, {"instock": [_by_id("shop_c_products.json", 7103)]})
     await run_source("shop-c", _woo(**options))
     _store_api(shop, {"instock": []})
     await run_source("shop-c", _woo(**options))
 
-    assert (await _listing("33501")).status == ListingStatus.ARCHIVED
+    assert (await _listing("7103")).status == ListingStatus.ARCHIVED
 
 
 async def test_the_unlisted_pass_restores_a_listing_an_earlier_cycle_archived(shop):
     options = dict(hides_out_of_stock=True, variations=False, category_tree=False, contact=False)
-    _store_api(shop, {"instock": [_by_id("shop_c_products.json", 33501)]})
+    _store_api(shop, {"instock": [_by_id("shop_c_products.json", 7103)]})
     shop.serve("/wp-json/wp/v2/product", _paged([]))
     await run_source("shop-c", _woo(**options))
     async with SessionLocal() as session:
@@ -578,12 +611,158 @@ async def test_the_unlisted_pass_restores_a_listing_an_earlier_cycle_archived(sh
         await session.commit()
 
     _store_api(shop, {"instock": []})
-    shop.serve("/wp-json/wp/v2/product", _paged([{"id": 33501, "class_list": ["outofstock"]}]))
+    shop.serve("/wp-json/wp/v2/product", _paged([{"id": 7103, "class_list": ["outofstock"]}]))
     await run_source("shop-c", _woo(**options))
 
-    listing = await _listing("33501")
+    listing = await _listing("7103")
     assert listing.status == ListingStatus.ACTIVE
     assert listing.stock_signal == StockSignal.OUT_OF_STOCK
+
+
+async def _cycle_data() -> dict:
+    async with SessionLocal() as session:
+        return (await session.execute(select(Source))).scalar_one().cycle_data
+
+
+async def _set_cycle_data(part: str, **entry) -> None:
+    async with SessionLocal() as session:
+        source = (await session.execute(select(Source))).scalar_one()
+        source.cycle_data = {**source.cycle_data, part: {**source.cycle_data[part], **entry}}
+        await session.commit()
+
+
+def _ago(days: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+async def test_reference_data_is_refreshed_at_a_new_cycle_or_past_its_cap(shop):
+    """A cycle can run for weeks: mid-cycle, only the safety cap refetches."""
+    _store_api(shop, {"instock": _load("shop_c_products.json")})
+    options = dict(max_partitions_per_run=1, category_tree=False, contact=False)
+    adapter = _woo(**options)
+    await _seed_source(adapter)
+
+    first = await run_source(adapter.source_id, adapter)
+    assert first.stats["requests"]["variations"] == 1
+
+    # Older than a slow shop's cycle, still inside the cap: mid-cycle, not refetched.
+    assert CYCLE_DATA_MAX_AGE > timedelta(days=30)
+    await _set_cycle_data("variations", fetched_at=_ago(30))
+    second = await run_source(adapter.source_id, _woo(**options))
+    assert "variations" not in second.stats["requests"]
+
+    # Past the cap: refetched, even mid-cycle.
+    await _set_cycle_data("variations", fetched_at=_ago(CYCLE_DATA_MAX_AGE.days + 1))
+    third = await run_source(adapter.source_id, _woo(**options))
+    assert third.stats["requests"]["variations"] == 1
+    assert third.stats.get("cycle"), "three statuses, one a run"
+
+
+async def test_a_part_failing_partway_keeps_its_snapshot_and_waits_for_the_next_cycle(
+    shop, monkeypatch
+):
+    """Page 2 of the variations fails. The old snapshot stays, whole and dated as
+    old; the part is not fetched again, from page 1, on every run of the cycle."""
+    monkeypatch.setattr(woo_mod, "PER_PAGE", 4)
+    paged = _paged(_load("shop_c_variations.json"))
+    products = _load("shop_c_products.json")
+
+    def handler(params):
+        if params.get("type") == "variation":
+            if params.get("page") == "2":
+                return {"code": "rest_invalid_page"}, {"X-Fail": "1"}
+            return paged(params)
+        first_page = params.get("stock_status") == "instock" and params.get("page") == "1"
+        return (products if first_page else []), {}
+
+    original = shop._handle
+
+    def failing(request):
+        response = original(request)
+        if response.headers.get("X-Fail"):
+            return httpx.Response(404, json={"code": "rest_invalid_page"})
+        return response
+
+    monkeypatch.setattr(shop, "_handle", failing)
+    shop.serve("/wp-json/wc/store/v1/products", handler)
+    options = dict(max_partitions_per_run=1, category_tree=False, contact=False)
+    adapter = _woo(**options)
+    await _seed_source(adapter)
+    old = _ago(20)
+    snapshot = {"7102": [{"title": "Old option", "price": 10.0, "in_stock": True}]}
+    async with SessionLocal() as session:
+        source = (await session.execute(select(Source))).scalar_one()
+        source.cycle_data = {"variations": {"fetched_at": old, "data": snapshot}}
+        await session.commit()
+
+    first = await run_source(adapter.source_id, adapter)
+
+    assert any("cycle data variations" in e for e in first.stats["errors"])
+    assert first.stats["requests"]["variations"] == 2
+    entry = (await _cycle_data())["variations"]
+    assert entry["data"] == snapshot, "the partial list is not stored over the whole one"
+    assert entry["fetched_at"] == old
+    assert entry["attempted_at"] > old
+    listing = await _listing("7102")
+    assert listing.attributes["variants"] == snapshot["7102"]
+    assert listing.attributes["variants_checked_at"] == old
+
+    second = await run_source(adapter.source_id, _woo(**options))
+    assert "variations" not in second.stats["requests"]
+    assert "errors" not in second.stats
+
+
+async def test_a_part_never_fetched_that_fails_is_not_retried_every_run(shop):
+    _store_api(shop, {"instock": _load("shop_c_products.json")})
+    shop.routes.pop("/wp-json/wc/store/v1/products/categories")  # now a 404
+    options = dict(max_partitions_per_run=1, variations=False, contact=False)
+    adapter = _woo(**options)
+    await _seed_source(adapter)
+
+    await run_source(adapter.source_id, adapter)
+    await run_source(adapter.source_id, _woo(**options))
+
+    assert shop.count("/wp-json/wc/store/v1/products/categories") == 1
+    assert set((await _cycle_data())["categories"]) == {"attempted_at"}
+
+
+async def test_an_out_of_stock_listing_kept_by_id_keeps_its_price_age_and_loses_its_count(shop):
+    """The WordPress route says only "still sold, out of stock".
+
+    It re-states no price, so the price is no fresher than it was; but it is
+    enough to keep the listing from archiving, and no stock count survives it.
+    """
+    options = dict(hides_out_of_stock=True, variations=False, category_tree=False, contact=False)
+    _store_api(shop, {"instock": [_by_id("shop_c_products.json", 7103)]})
+    shop.serve("/wp-json/wp/v2/product", _paged([]))
+    await run_source("shop-c", _woo(**options))
+
+    checked = datetime.now(timezone.utc) - timedelta(days=10)
+    async with SessionLocal() as session:
+        listing = (await session.execute(select(Listing))).scalar_one()
+        listing.last_verified_at = listing.last_seen_at = checked
+        listing.status = ListingStatus.ARCHIVED  # an earlier cycle missed it
+        listing.attributes = {
+            **listing.attributes,
+            "stock_quantity": 4,
+            "variants": [{"title": "A", "price": 1.0, "in_stock": True, "stock_quantity": 3}],
+        }
+        await session.commit()
+
+    _store_api(shop, {"instock": []})
+    shop.serve("/wp-json/wp/v2/product", _paged([{"id": 7103, "class_list": ["outofstock"]}]))
+    for _ in range(2):  # two whole cycles: kept by id each time, never archived
+        run = await run_source("shop-c", _woo(**options))
+        assert run.stats.get("cycle") and "archived" not in run.stats
+
+    listing = await _listing("7103")
+    assert listing.status == ListingStatus.ACTIVE
+    assert listing.stock_signal == StockSignal.OUT_OF_STOCK
+    assert listing.last_verified_at == checked, "the price was not checked again"
+    assert listing.last_seen_at > checked
+    assert "stock_quantity" not in listing.attributes
+    assert listing.attributes["variants"] == [{"title": "A", "price": 1.0, "in_stock": False}]
+    assert listing.price is not None, "what was stored stays"
 
 
 def test_source_type_is_unchanged():

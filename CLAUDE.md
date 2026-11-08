@@ -110,6 +110,11 @@ Archiving waits for a complete cycle and keys off `cycle_started_at`, not the
 individual run. **Never archive based on a single run** — a partial run would
 retire everything it simply never reached.
 
+Archiving reads `last_seen_at` (the source said the listing exists, by any
+route), not `last_verified_at` (its price and details were read). They differ
+for a shop that lists out-of-stock products by id alone: that keeps the listing
+alive without re-pricing it, and the site shows `last_verified_at` as "checked".
+
 `limit=` makes a run ephemeral: cursors untouched, nothing archived. Use it for
 testing so you don't disturb a real sweep's resume point.
 

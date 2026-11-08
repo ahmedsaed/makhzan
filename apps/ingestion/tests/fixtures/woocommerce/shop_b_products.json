@@ -1,12 +1,12 @@
 [
  {
-  "id": 46825,
+  "id": 7301,
   "name": "PC817 Optocoupler",
   "parent": 0,
   "type": "simple",
   "variation": "",
-  "permalink": "https://shop-b.test/shop/components/integrated-circuits-ics/optoisolators-real-time-clock-rtc-ics/pc817-optocoupler/",
-  "sku": "SKU-46825",
+  "permalink": "https://shop-b.test/product/pc817/",
+  "sku": "SKU-7301",
   "on_sale": true,
   "prices": {
    "price": "175",
@@ -25,15 +25,15 @@
   "short_description": "<p>PC817 4-pin DIP optocoupler (phototransistor output). Isolates microcontroller signals from high-voltage or noisy circuits; used in SMPS feedback and I/O isolation.</p>",
   "categories": [
    {
-    "id": 79,
+    "id": 923,
     "name": "Components"
    },
    {
-    "id": 168,
+    "id": 921,
     "name": "Integrated Circuits (ICs)"
    },
    {
-    "id": 184,
+    "id": 922,
     "name": "Optoisolators Real Time Clock (RTC) ICs"
    }
   ],
@@ -57,7 +57,7 @@
   },
   "images": [
    {
-    "src": "https://shop-b.test/wp-content/uploads/2026/11/Screenshot-2026-11-08-183331.png"
+    "src": "https://shop-b.test/wp-content/uploads/image-2.png"
    }
   ],
   "formatted_weight": "N/A",

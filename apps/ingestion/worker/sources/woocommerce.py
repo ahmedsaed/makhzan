@@ -222,6 +222,7 @@ class WooCommerceAdapter(SourceAdapter):
         self._variants: dict[str, list[dict]] = {}
         self._category_parents: dict[str, list] = {}
         self._tiers: dict[str, dict] = {}
+        self._variants_checked_at: str | None = None
 
     def source_categories(self, raw: RawItem) -> list[str]:
         return [html.unescape(n).strip() for n in (raw.raw or {}).get("categories") or []]
@@ -388,7 +389,7 @@ class WooCommerceAdapter(SourceAdapter):
                 break
         return rows
 
-    def use_cycle_data(self, data: dict) -> None:
+    def use_cycle_data(self, data: dict, fetched_at: dict[str, str] | None = None) -> None:
         def part(name: str, wanted: bool) -> dict:
             value = data.get(name) if wanted else None
             return value if isinstance(value, dict) else {}
@@ -396,6 +397,9 @@ class WooCommerceAdapter(SourceAdapter):
         self._variants = part("variations", self.variations)
         self._category_parents = part("categories", self.category_tree)
         self._tiers = part("price_breaks", self.price_breaks)
+        #: When the variants were read. They come from once-a-cycle data, so can
+        #: be weeks older than the listing's own price, and say so beside it.
+        self._variants_checked_at = (fetched_at or {}).get("variations") if self._variants else None
 
     def _variant(self, v: dict) -> dict:
         """One variation as the shared `variants` entry."""
@@ -578,6 +582,8 @@ class WooCommerceAdapter(SourceAdapter):
             variants = self._variants.get(str(p.get("id")))
             if variants:
                 out["variants"] = variants[:_MAX_VARIANTS]
+                if self._variants_checked_at:
+                    out["variants_checked_at"] = self._variants_checked_at
 
         # A manufacturer part number the shop states in so many words. Kept for
         # display and search only: grouping does not read it (yet).

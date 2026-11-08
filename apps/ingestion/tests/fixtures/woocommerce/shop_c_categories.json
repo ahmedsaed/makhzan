@@ -1,32 +1,32 @@
 [
  {
-  "id": 1099,
+  "id": 903,
   "name": "3D Printer Resin",
-  "slug": "resin-3d-printer-elegoo",
-  "parent": 1096
+  "slug": "resin-printers-brand-e",
+  "parent": 901
  },
  {
-  "id": 341,
+  "id": 905,
   "name": "3D Printing",
-  "slug": "3d-printing",
+  "slug": "printing",
   "parent": 0
  },
  {
-  "id": 1096,
+  "id": 901,
   "name": "ELEGOO",
-  "slug": "elegoo",
+  "slug": "brand-e",
   "parent": 0
  },
  {
-  "id": 1097,
+  "id": 902,
   "name": "Spare Parts &amp; Accessories",
-  "slug": "spare-parts-and-accessories-elegoo",
-  "parent": 1096
+  "slug": "spare-parts-brand-e",
+  "parent": 901
  },
  {
-  "id": 1111,
+  "id": 904,
   "name": "Spare Parts &amp; Accessories",
-  "slug": "spare-parts-and-accessories-bambulab",
-  "parent": 341
+  "slug": "spare-parts-brand-b",
+  "parent": 905
  }
 ]

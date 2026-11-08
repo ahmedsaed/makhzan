@@ -184,12 +184,24 @@ class SourceAdapter(ABC):
         """
         raise NotImplementedError(part)
 
-    def use_cycle_data(self, data: dict) -> None:
+    def use_cycle_data(self, data: dict, fetched_at: dict[str, str] | None = None) -> None:
         """Receive the reference data for this run, keyed by part name.
 
         A part may be missing (never fetched, or its last fetch failed); the
         adapter then does without it rather than inventing anything.
+        `fetched_at` says when each part was read (ISO 8601): it can be weeks
+        older than the page a listing comes from, and a listing showing it
+        should say so.
         """
+
+    def extra_requests(self) -> dict[str, int]:
+        """Requests made inside `fetch_page` beyond the page itself, by label.
+
+        The pipeline counts one request per page; an adapter that makes more to
+        build a page (a Shopify shop's collection lists) reports them here, so
+        the run's `stats.requests` is every request its host received.
+        """
+        return {}
 
     @abstractmethod
     async def fetch_page(self, partition: str, page: int) -> Page:

@@ -1,12 +1,12 @@
 [
  {
-  "id": 31312,
+  "id": 7116,
   "name": "Bambu Lab 3D Effect Plate",
-  "parent": 31298,
+  "parent": 7102,
   "type": "variation",
   "variation": "Compatibility: A1 mini, Texture: Starry",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Starry",
-  "sku": "SKU-31312",
+  "permalink": "https://shop-c.test/product/effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Starry",
+  "sku": "SKU-7116",
   "on_sale": false,
   "prices": {
    "price": "1250",
@@ -44,20 +44,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifuefy022y01gn9pwm0crw_mini_614a70a7-c860-4663-94ca-2ce1c280eb77.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-6.webp"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 31311,
+  "id": 7115,
   "name": "Bambu Lab 3D Effect Plate",
-  "parent": 31298,
+  "parent": 7102,
   "type": "variation",
   "variation": "Compatibility: A1 mini, Texture: Galaxy",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Galaxy",
-  "sku": "SKU-31311",
+  "permalink": "https://shop-c.test/product/effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Galaxy",
+  "sku": "SKU-7115",
   "on_sale": false,
   "prices": {
    "price": "1250",
@@ -95,20 +95,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifufvq022z01gn0ohia48u_mini_69e256cc-c72f-4910-be0b-974fc01928c4.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-7.webp"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 31309,
+  "id": 7114,
   "name": "Bambu Lab 3D Effect Plate",
-  "parent": 31298,
+  "parent": 7102,
   "type": "variation",
   "variation": "Compatibility: A1 mini, Texture: Carbon Fiber",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Carbon+Fiber",
-  "sku": "SKU-31309",
+  "permalink": "https://shop-c.test/product/effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Carbon+Fiber",
+  "sku": "SKU-7114",
   "on_sale": false,
   "prices": {
    "price": "1250",
@@ -146,20 +146,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifuh70023001gndprwc583_mini_4fb205ee-21a9-4142-8053-4daf4082e228.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-8.webp"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 31308,
+  "id": 7113,
   "name": "Bambu Lab 3D Effect Plate",
-  "parent": 31298,
+  "parent": 7102,
   "type": "variation",
   "variation": "Compatibility: X1 Series/P1 Series/A1, Texture: Starry",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Starry",
-  "sku": "SKU-31308",
+  "permalink": "https://shop-c.test/product/effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Starry",
+  "sku": "SKU-7113",
   "on_sale": true,
   "prices": {
    "price": "2350",
@@ -197,20 +197,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifuefy022y01gn9pwm0crw_mini_614a70a7-c860-4663-94ca-2ce1c280eb77.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-6.webp"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 31307,
+  "id": 7112,
   "name": "Bambu Lab 3D Effect Plate",
-  "parent": 31298,
+  "parent": 7102,
   "type": "variation",
   "variation": "Compatibility: X1 Series/P1 Series/A1, Texture: Galaxy",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Galaxy",
-  "sku": "SKU-31307",
+  "permalink": "https://shop-c.test/product/effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Galaxy",
+  "sku": "SKU-7112",
   "on_sale": true,
   "prices": {
    "price": "2350",
@@ -248,20 +248,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifufvq022z01gn0ohia48u_mini_69e256cc-c72f-4910-be0b-974fc01928c4.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-7.webp"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 31306,
+  "id": 7111,
   "name": "Bambu Lab 3D Effect Plate",
-  "parent": 31298,
+  "parent": 7102,
   "type": "variation",
   "variation": "Compatibility: X1 Series/P1 Series/A1, Texture: Diamond",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Diamond",
-  "sku": "SKU-31306",
+  "permalink": "https://shop-c.test/product/effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Diamond",
+  "sku": "SKU-7111",
   "on_sale": true,
   "prices": {
    "price": "2350",
@@ -299,7 +299,7 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifvso7023501gnfwqa2mxm_mini_e341a6bc-6f37-4577-a2fb-38cf2181f7e3__1_.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-9.webp"
    }
   ],
   "formatted_weight": "N/A",
