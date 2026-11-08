@@ -40,9 +40,6 @@ test.describe("one offer", () => {
 
   test("the bar never covers the end of the page", async ({ page }) => {
     await page.goto("/products/p-single");
-    // The page settles once the description's cap and Read more are in;
-    // scrolling before that measures a page about to change height.
-    await expect(page.getByRole("button", { name: "Read more" })).toBeVisible();
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     const bar = await page.locator("[data-bottom-bar]").boundingBox();
     const footer = await page.locator("footer").boundingBox();
@@ -326,56 +323,70 @@ test.describe("the photo viewer", () => {
   });
 });
 
-test.describe("a long description", () => {
-  // p-single's description runs far past three quarters of a phone screen.
-  test.use({ viewport: PHONE });
+/** The description's text: how tall it is drawn, and how tall it would be in full. */
+const descriptionHeights = (page: import("@playwright/test").Page) =>
+  page.locator("[data-description] p").evaluate((node) => ({
+    shown: node.clientHeight,
+    full: node.scrollHeight,
+    line: parseFloat(getComputedStyle(node).lineHeight),
+  }));
 
-  /** The description's box: how tall it is drawn, and how tall its text is. */
-  const heights = (page: import("@playwright/test").Page) =>
-    page
-      .locator("[data-description] > div")
-      .evaluate((node) => ({ shown: node.clientHeight, full: node.scrollHeight }));
+for (const viewport of [PHONE, { width: 1440, height: 900 }]) {
+  test.describe(`a long description at ${viewport.width}px`, () => {
+    // p-single's description runs well past 25 lines in either column.
+    test.use({ viewport });
 
-  test("is capped at three quarters of the screen, with Read more", async ({ page }) => {
-    await page.goto("/products/p-single");
-    const more = page.getByRole("button", { name: "Read more" });
-    await expect(more).toBeVisible();
-    await expect(more).toHaveAttribute("aria-expanded", "false");
-    const capped = await heights(page);
-    expect(capped.shown).toBeLessThanOrEqual(Math.ceil(PHONE.height * 0.75) + 1);
-    expect(capped.full).toBeGreaterThan(capped.shown);
+    test("is clamped to 25 lines with a fade and Read more, and opens", async ({ page }) => {
+      await page.goto("/products/p-single");
+      const clamped = await descriptionHeights(page);
+      expect(Math.round(clamped.shown / clamped.line)).toBe(25);
+      expect(clamped.full).toBeGreaterThan(clamped.shown);
+      await expect(page.locator("[data-description-fade]")).toBeVisible();
 
-    await more.click();
-    const less = page.getByRole("button", { name: "Show less" });
-    await expect(less).toHaveAttribute("aria-expanded", "true");
-    const open = await heights(page);
-    expect(open.shown).toBeGreaterThanOrEqual(open.full - 1);
+      await page.getByText("Read more").click();
+      await expect(page.getByText("Show less")).toBeVisible();
+      const open = await descriptionHeights(page);
+      expect(open.shown).toBeGreaterThanOrEqual(open.full - 1);
+      await expect(page.locator("[data-description-fade]")).toBeHidden();
 
-    await less.click();
-    await expect(page.getByRole("button", { name: "Read more" })).toBeVisible();
-    expect((await heights(page)).shown).toBe(capped.shown);
+      await page.getByText("Show less").click();
+      expect((await descriptionHeights(page)).shown).toBe(clamped.shown);
+    });
+
+    test("is drawn clamped from the first paint, and never moves", async ({ page }) => {
+      // The HTML alone, before any script has run, already holds the clamp.
+      await page.goto("/products/p-single", { waitUntil: "commit" });
+      await page.waitForSelector("[data-description] p");
+      const first = await descriptionHeights(page);
+      await page.waitForLoadState("networkidle");
+      await page.waitForTimeout(300);
+      expect(await descriptionHeights(page)).toEqual(first);
+      expect(Math.round(first.shown / first.line)).toBe(25);
+    });
   });
+}
 
-  test("a short one shows in full, with no button", async ({ page }) => {
-    await page.goto("/products/p-specs");
-    await expect(page.locator("[data-description]")).toContainText("USB data link.");
-    await expect(page.getByRole("button", { name: /Read more|Show less/ })).toHaveCount(0);
-  });
+test("a short description shows in full, with no Read more", async ({ page }) => {
+  await page.goto("/products/p-specs");
+  await expect(page.locator("[data-description]")).toContainText("USB data link.");
+  await expect(page.getByText("Read more")).toHaveCount(0);
+  await expect(page.locator("[data-description-fade]")).toHaveCount(0);
+  const box = await descriptionHeights(page);
+  expect(box.full - box.shown).toBeLessThanOrEqual(1);
 });
 
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false, viewport: PHONE });
 
-  test("the description shows in full, with no Read more", async ({ page }) => {
+  test("the description's Read more still opens", async ({ page }) => {
     await page.goto("/products/p-single");
-    await expect(page.getByText("This sentence is the end of it.", { exact: false })).toBeVisible();
-    await expect(page.getByText("Read more")).toHaveCount(0);
-    // Not capped: the box is as tall as its text.
-    const box = await page
-      .locator("[data-description] > div")
-      .evaluate((node) => ({ shown: node.clientHeight, full: node.scrollHeight }));
-    expect(box.full - box.shown).toBeLessThanOrEqual(1);
-    expect(box.shown).toBeGreaterThan(PHONE.height);
+    const clamped = await descriptionHeights(page);
+    expect(Math.round(clamped.shown / clamped.line)).toBe(25);
+    await page.getByText("Read more").click();
+    await expect(page.getByText("Show less")).toBeVisible();
+    const open = await descriptionHeights(page);
+    expect(open.shown).toBeGreaterThan(clamped.shown);
+    expect(open.shown).toBeGreaterThanOrEqual(open.full - 1);
   });
 
   test("the out-of-stock offers unfold", async ({ page }) => {
