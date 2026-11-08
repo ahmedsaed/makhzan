@@ -124,4 +124,3 @@ export function productIdFrom(param: string): string {
   const match = decoded.match(UUID);
   return match ? match[0] : decoded;
 }
-

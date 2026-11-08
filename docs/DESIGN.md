@@ -51,7 +51,7 @@ Measured on 60.9k active listings (November 2026).
 ```
 /                               Home: search and examples, trades, sold by several shops, the shops, how it works
 ├── /search?q=…                 Results (list or grid), top categories, filters
-│   └── /products/{id}          Product: one shop, or several (offers list)
+│   └── /products/{id}-{slug}   Product: one shop, or several (offers list)
 │       └── shop's own page ↗   the only exit
 ├── /trades                     All 16 trades as a directory: each with its categories as links
 │   └── /trades/{trade}         Group tiles, category tiles, results underneath
@@ -70,6 +70,10 @@ How we crawl, theme toggle, Made by Merope), 404 and error pages.
 - **Categories are addressed through their trade**, because category slugs are unique
   per trade only: `/trades/tools/calipers`.
 - **No listing pages.** `/listings/{id}` redirects to its product.
+- **Product URLs read:** `/products/{id}-{words-of-the-title}`. The id is a UUID at the
+  front, so the page always finds it; a bare id, an old title's words or a typo
+  redirect permanently (308) to the current form. An id a regroup replaced redirects
+  to its successor's readable URL in the same single hop.
 - Old routes redirect: `/{lang}/browse/{trade}` → `/trades/{trade}`,
   `/{lang}/browse/{trade}/{category}` → `/trades/{trade}/{category}`,
   `/{lang}/suppliers/{slug}` → `/shops/{slug}`, and every other `/{lang}/x` → `/x`.
