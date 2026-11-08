@@ -176,7 +176,7 @@ export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSum
                 <TradeIcon domain={card.domain} className="size-5 text-ink-3" />
               </span>
               <span className="flex min-w-0 flex-col">
-                <span className="truncate text-base font-semibold">{card.label}</span>
+                <span className="text-base leading-snug font-semibold">{card.label}</span>
                 <span className="text-[13px] text-ink-3 tabular">
                   {formatCount(card.count)} products
                 </span>
@@ -190,7 +190,7 @@ export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSum
                       href={routes.category(category.ref)}
                       className="flex items-baseline justify-between gap-3 px-4 py-1.5 text-sm text-ink-2 hover:bg-ground hover:text-ink"
                     >
-                      <span className="truncate">{category.name}</span>
+                      <span className="min-w-0">{category.name}</span>
                       <span className="shrink-0 text-[13px] text-ink-3 tabular">
                         {formatCount(category.count)}
                       </span>

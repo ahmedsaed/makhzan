@@ -57,7 +57,14 @@ test("on a phone each trade is a row, its categories behind a chevron", async ({
     "href",
     "/trades/seals-bearings",
   );
-  await expect(seals).toContainText("O-Rings, bearings, oil seals, gaskets");
+  const phrase = seals.getByText("O-Rings, bearings, oil seals, gaskets", { exact: true });
+  await expect(phrase).toBeVisible();
+  // Wrapped, never cut off with an ellipsis.
+  expect(
+    await phrase.evaluate(
+      (el) => el.scrollWidth <= el.clientWidth && getComputedStyle(el).textOverflow !== "ellipsis",
+    ),
+  ).toBe(true);
   const oRings = seals.getByRole("link", { name: "O-Rings 400" });
   await expect(oRings).toBeHidden();
 

@@ -97,7 +97,7 @@ function TradeHead({ trade }: { trade: DirectoryTrade }) {
           </span>
         </span>
         {trade.inside.length > 0 && (
-          <span className="truncate text-[13px] text-ink-2 md:hidden">
+          <span className="text-[13px] leading-snug text-pretty text-ink-2 md:hidden">
             {asPhrase(trade.inside)}
           </span>
         )}
