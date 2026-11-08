@@ -144,7 +144,17 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: jsonLdText(productJsonLd(product, absoluteUrl(routes.product(id)), title)),
+          __html: jsonLdText(
+            productJsonLd(
+              product,
+              absoluteUrl(routes.product(id)),
+              title,
+              // The richest shop's own words, else the same summary the meta
+              // description uses: Google asks for a description either way.
+              sources.find((source) => source.description)?.description ??
+                productDescription(product),
+            ),
+          ),
         }}
       />
       {product.category && (
