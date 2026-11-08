@@ -238,6 +238,14 @@ class Product(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3), default=DEFAULT_CURRENCY, nullable=False)
     in_stock: Mapped[bool] = mapped_column(default=False, nullable=False)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When what a reader sees last changed: title, price range, stock, how many
+    # offers and shops, the photo. The sitemap's lastmod. Not bumped by a
+    # recheck that found nothing new (that is last_verified_at), and not by
+    # updated_at, which every rebuild touches: Google ignores a lastmod that is
+    # not "consistently and verifiably accurate". Set by grouping.rebuild_products.
+    content_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
     listings: Mapped[list[Listing]] = relationship(back_populates="product")
     category: Mapped[Category | None] = relationship()

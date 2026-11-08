@@ -7,7 +7,7 @@ supplier-portal API. Reads from Postgres + Meilisearch; the ingestion worker
 
 import os
 
-from app.routers import categories, listings, products, search, suppliers
+from app.routers import categories, listings, products, search, sitemap, suppliers
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -34,3 +34,4 @@ app.include_router(listings.router)
 app.include_router(products.router)
 app.include_router(categories.router)
 app.include_router(suppliers.router)
+app.include_router(sitemap.router)

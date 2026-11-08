@@ -18,7 +18,14 @@ const nextConfig: NextConfig = {
   // Evaluated at server startup, so API_INTERNAL_URL is a runtime env.
   async rewrites() {
     const api = process.env.API_INTERNAL_URL ?? "http://api:8000";
-    return [{ source: "/api/:path*", destination: `${api}/:path*` }];
+    return [
+      { source: "/api/:path*", destination: `${api}/:path*` },
+      // The sitemap index, at the address robots.txt names. `generateSitemaps`
+      // (app/sitemap.ts) serves only /sitemap/{id}.xml, yet still claims
+      // /sitemap.xml, so the index cannot be a route there; see
+      // app/sitemap-index.xml/route.ts.
+      { source: "/sitemap.xml", destination: "/sitemap-index.xml" },
+    ];
   },
 };
 
