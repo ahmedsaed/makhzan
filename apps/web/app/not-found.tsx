@@ -22,7 +22,7 @@ export default function NotFound() {
           <h1 className="mt-1 text-2xl sm:text-3xl">Page not found</h1>
           <p className="mx-auto mt-2 max-w-md text-[15px] leading-relaxed text-ink-2">
             The link may be old, or the product is no longer listed by any shop. Search for it, or
-            browse by trade or shop.
+            browse by department or shop.
           </p>
           <Detour />
         </Container>

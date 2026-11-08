@@ -62,9 +62,9 @@ test("the search page's controls", async ({ page }) => {
 });
 
 test("a trade page's controls", async ({ page }) => {
-  await page.goto("/trades/seals-bearings");
+  await page.goto("/departments/seals-bearings");
   await expectTappable(page, {
-    "back to all trades": page.getByRole("link", { name: "All trades", exact: true }),
+    "back to all departments": page.getByRole("link", { name: "All departments", exact: true }),
     "In stock chip": page.getByRole("link", { name: "In stock" }),
     "2+ shops chip": page.getByRole("link", { name: "2+ shops" }),
     "out of stock link": page.getByRole("link", { name: "2 more out of stock" }),
@@ -73,7 +73,7 @@ test("a trade page's controls", async ({ page }) => {
     "group tile": page.getByRole("navigation", { name: "Groups" }).getByRole("link").first(),
   });
 
-  await page.goto("/trades/seals-bearings/oil-seals");
+  await page.goto("/departments/seals-bearings/oil-seals");
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link");
   await expect(crumbs).toHaveCount(3);
   for (const index of [0, 1, 2]) {
@@ -111,7 +111,7 @@ test("the product page's controls", async ({ page }) => {
 
 test("nothing scrolls sideways at 320px on the trade pages", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
-  for (const path of ["/trades/seals-bearings", "/trades/seals-bearings/oil-seals"]) {
+  for (const path of ["/departments/seals-bearings", "/departments/seals-bearings/oil-seals"]) {
     await page.goto(path);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

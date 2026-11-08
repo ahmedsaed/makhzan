@@ -20,7 +20,7 @@ export async function generateMetadata({
   return pageMetadata({
     title: tradeLabel(trade),
     description: tradeDescription(trade, categories),
-    path: pagedPath(routes.trade(trade), await searchParams),
+    path: pagedPath(routes.department(trade), await searchParams),
     ownCard: true,
   });
 }

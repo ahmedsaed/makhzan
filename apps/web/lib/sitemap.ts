@@ -42,8 +42,8 @@ export function sitemapEntries(
 
   return [
     page(routes.home(), "daily", 1),
-    page(routes.trades(), "weekly", 0.8),
-    ...trades.map((trade) => page(routes.trade(trade.domain), "weekly", 0.8)),
+    page(routes.departments(), "weekly", 0.8),
+    ...trades.map((trade) => page(routes.department(trade.domain), "weekly", 0.8)),
     ...withProducts.map((category) => page(routes.category(category.ref), "weekly", 0.7)),
     page(routes.shops(), "weekly", 0.6),
     ...listedShops(shops).map((shop) =>

@@ -175,7 +175,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
       : [
           {
             label: tradeLabel(product.category.domain),
-            href: routes.trade(product.category.domain),
+            href: routes.department(product.category.domain),
           },
           { label: product.category.name_en, href: routes.category(product.category.ref) },
         ];

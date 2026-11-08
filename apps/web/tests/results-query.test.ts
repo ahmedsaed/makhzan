@@ -85,9 +85,9 @@ describe("parseResultsQuery", () => {
 
   it("links to everything with in_stock=all, the one way to say it", () => {
     const raw = { q: "relay" };
-    const links = resultsLinks("/trades/tools", raw, parseResultsQuery(raw));
-    expect(links.showOutOfStock).toBe("/trades/tools?q=relay&in_stock=all");
-    expect(links.inStock).toBe("/trades/tools?q=relay&in_stock=all");
+    const links = resultsLinks("/departments/tools", raw, parseResultsQuery(raw));
+    expect(links.showOutOfStock).toBe("/departments/tools?q=relay&in_stock=all");
+    expect(links.inStock).toBe("/departments/tools?q=relay&in_stock=all");
   });
 
   it("counts what the stock filter shows in its own words", () => {
@@ -139,8 +139,8 @@ describe("resultsLinks", () => {
 
   it("works on any results path, so trade and category pages share it", () => {
     const trade = { q: "relay" };
-    expect(resultsLinks("/trades/tools", trade, parseResultsQuery(trade)).twoShops).toBe(
-      "/trades/tools?q=relay&min_suppliers=2",
+    expect(resultsLinks("/departments/tools", trade, parseResultsQuery(trade)).twoShops).toBe(
+      "/departments/tools?q=relay&min_suppliers=2",
     );
   });
 });

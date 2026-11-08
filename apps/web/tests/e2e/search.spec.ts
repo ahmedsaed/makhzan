@@ -172,7 +172,7 @@ test("an empty query prompts and offers trades", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Search the catalogue" })).toBeVisible();
   await expect(page.getByRole("link", { name: /Electronics/ })).toHaveAttribute(
     "href",
-    "/trades/electronics",
+    "/departments/electronics",
   );
 });
 

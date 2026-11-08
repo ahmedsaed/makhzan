@@ -163,14 +163,14 @@ async function Landing() {
     <Container className="py-8">
       <h1 className="text-xl text-ink">Search the catalogue</h1>
       <p className="mt-1 text-sm text-ink-2">
-        Type a part number or a name in the search field above, or start from a trade.
+        Type a part number or a name in the search field above, or start from a department.
       </p>
       {trades.length > 0 && (
         <ul className="mt-5 flex flex-wrap gap-2">
           {trades.map((trade) => (
             <li key={trade.domain}>
               <Link
-                href={routes.trade(trade.domain)}
+                href={routes.department(trade.domain)}
                 className="inline-flex h-11 items-center gap-1.5 rounded-control border border-line bg-surface px-3 text-sm text-ink hover:border-line-strong"
               >
                 {trade.label}
@@ -180,10 +180,10 @@ async function Landing() {
           ))}
           <li>
             <Link
-              href={routes.trades()}
+              href={routes.departments()}
               className="inline-flex h-11 items-center px-3 text-sm text-link underline-offset-2 hover:underline"
             >
-              All trades
+              All departments
             </Link>
           </li>
         </ul>

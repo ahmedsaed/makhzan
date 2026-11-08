@@ -36,8 +36,8 @@ test.describe("on a phone", () => {
     // The desktop cards are not shown as well.
     await expect(page.locator("[data-home-trade]").first()).toBeHidden();
 
-    await page.getByRole("link", { name: "All 11 trades" }).click();
-    await expect(page).toHaveURL("/trades");
+    await page.getByRole("link", { name: "All 11 departments" }).click();
+    await expect(page).toHaveURL("/departments");
   });
 
   test("does not focus the search field, so the keyboard stays down", async ({ page }) => {
@@ -46,8 +46,8 @@ test.describe("on a phone", () => {
     await expect(field).toBeVisible();
     expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
     // Revisiting the page is what brought the keyboard up.
-    await page.getByRole("link", { name: "All 11 trades" }).click();
-    await expect(page).toHaveURL("/trades");
+    await page.getByRole("link", { name: "All 11 departments" }).click();
+    await expect(page).toHaveURL("/departments");
     await page.goBack();
     await expect(field).toBeVisible();
     expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
@@ -132,14 +132,14 @@ test.describe("on a desktop", () => {
     await expect(first).toHaveAttribute("data-home-trade", "seals-bearings");
     await expect(first.getByRole("link", { name: /^O-Rings/ })).toHaveAttribute(
       "href",
-      "/trades/seals-bearings/o-rings",
+      "/departments/seals-bearings/o-rings",
     );
     await expect(first).not.toContainText("Other Seals");
     // The trades past eight are still one click away.
     await expect(page.getByText("Also:")).toBeVisible();
     await expect(page.getByRole("link", { name: "Cleaning" })).toHaveAttribute(
       "href",
-      "/trades/cleaning",
+      "/departments/cleaning",
     );
   });
 

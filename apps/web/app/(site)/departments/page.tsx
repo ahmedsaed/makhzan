@@ -16,12 +16,12 @@ export async function generateMetadata(): Promise<Metadata> {
   const products = trades.reduce((sum, trade) => sum + trade.count, 0);
   const names = trades.slice(0, 4).map((trade) => trade.label);
   return pageMetadata({
-    title: "All trades",
+    title: "All departments",
     description:
       trades.length > 0
-        ? `${plural(trades.length, "trade")} and ${plural(products, "product")} from Egypt's suppliers, largest first: ${names.join(", ")} and more, each with its categories and how much each holds.`
-        : "Every trade makhzan covers, largest first, with its categories and how much each holds.",
-    path: routes.trades(),
+        ? `${plural(trades.length, "department")} and ${plural(products, "product")} from Egypt's suppliers, largest first: ${names.join(", ")} and more, each with its categories and how much each holds.`
+        : "Every department makhzan covers, largest first, with its categories and how much each holds.",
+    path: routes.departments(),
   });
 }
 
@@ -31,7 +31,7 @@ export default async function TradesPage() {
   if (!categories) {
     return (
       <Container className="py-5">
-        <h1 className="mb-3 text-2xl">All trades</h1>
+        <h1 className="mb-3 text-2xl">All departments</h1>
         <NotAnswering title="The catalogue is not answering" />
       </Container>
     );
@@ -43,10 +43,10 @@ export default async function TradesPage() {
   return (
     <Container className="py-5 md:py-6">
       <div className="mb-3 flex flex-col gap-0.5 md:mb-4 md:flex-row md:items-baseline md:gap-3">
-        <h1 className="text-2xl">All {trades.length} trades</h1>
+        <h1 className="text-2xl">All {trades.length} departments</h1>
         {trades.length > 0 && (
           <p data-directory-total className="text-[13px] text-ink-3 tabular">
-            {formatCount(products)} products in {formatCount(listed)} categories, largest trade
+            {formatCount(products)} products in {formatCount(listed)} categories, largest department
             first
           </p>
         )}
@@ -54,7 +54,7 @@ export default async function TradesPage() {
       {trades.length > 0 ? (
         <TradeDirectory trades={trades} />
       ) : (
-        <Empty title="No trades yet" hint="The catalogue is empty right now." />
+        <Empty title="No departments yet" hint="The catalogue is empty right now." />
       )}
     </Container>
   );

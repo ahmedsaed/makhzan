@@ -2,13 +2,15 @@
  * Every internal URL is built here, so the path scheme and the category `ref`
  * encoding can never drift between call sites.
  *
- * A category is addressed through its trade, because category slugs are unique
- * per trade only: `tools:measurement` → `/trades/tools/measurement`. The bare
- * slug is never a URL on its own — `measurement` exists in two trades, and a
- * link built from it silently mixes them.
+ * A category is addressed through its department, because category slugs are
+ * unique per department only: `tools:measurement` → `/departments/tools/measurement`.
+ * The bare slug is never a URL on its own — `measurement` exists in two
+ * departments, and a link built from it silently mixes them.
  *
- * "Trade" is the reader's word for what the backend calls a domain; the two are
- * the same thing, and only URLs and copy use the new name.
+ * "Department" is the reader's word for what the backend calls a domain; the two
+ * are the same thing, and only URLs and copy use the new name. (Until November
+ * 2026 the reader's word was "trade"; internal names such as lib/trades.ts and
+ * `tradeLabel` still use it.)
  */
 
 /** Split `domain:slug` into its parts. Returns null for a bare slug, which is
@@ -26,15 +28,16 @@ export function joinRef(domain: string, slug: string): string {
 export const routes = {
   home: () => "/",
 
-  trades: () => "/trades",
-  trade: (domain: string) => `/trades/${encodeURIComponent(domain)}`,
+  departments: () => "/departments",
+  department: (domain: string) => `/departments/${encodeURIComponent(domain)}`,
 
-  /** One category, through its trade. Falls back to search when handed a bare
-   *  slug, which is the honest answer: we cannot tell which trade was meant. */
+  /** One category, through its department. Falls back to search when handed a
+   *  bare slug, which is the honest answer: we cannot tell which department was
+   *  meant. */
   category: (ref: string) => {
     const parts = splitRef(ref);
     if (!parts) return `/search?${new URLSearchParams({ category: ref })}`;
-    return `/trades/${encodeURIComponent(parts.domain)}/${encodeURIComponent(parts.slug)}`;
+    return `/departments/${encodeURIComponent(parts.domain)}/${encodeURIComponent(parts.slug)}`;
   },
 
   /** A product's page. With its title, the readable form Google prefers:

@@ -8,7 +8,7 @@ import TradeImage from "../opengraph-image";
  * image, it falls back to the site's (lib/metadata.ts).
  */
 
-export const alt = "A trade on makhzan: how many products it holds, and its biggest categories";
+export const alt = "A department on makhzan: how many products it holds, and its biggest categories";
 export const size = OG_SIZE;
 export const contentType = "image/png";
 export const revalidate = 3600;

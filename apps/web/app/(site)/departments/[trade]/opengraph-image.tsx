@@ -8,7 +8,7 @@ import { OG_SIZE, renderCard } from "@/lib/og";
  * Category pages under it share this card; the trade is what they belong to.
  */
 
-export const alt = "A trade on makhzan: how many products it holds, and its biggest categories";
+export const alt = "A department on makhzan: how many products it holds, and its biggest categories";
 export const size = OG_SIZE;
 export const contentType = "image/png";
 export const revalidate = 3600;
