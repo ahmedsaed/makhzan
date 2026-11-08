@@ -27,11 +27,15 @@ from makhzan_schemas.contracts import NormalizedListing, RawItem
 from makhzan_schemas.domains.base import DEFAULT_DOMAIN
 from makhzan_schemas.enums import SourceType
 
-from worker.http import POLITE_DELAY
+from worker.http import POLITE_DELAY, CycleFetcher
 
 
 #: Partition key used by sources that have no natural slicing.
 SINGLE_PARTITION = ""
+
+#: The reference-data part that holds the shop's own contact details, which the
+#: pipeline writes to `Supplier.contact` as well as keeping.
+CONTACT_PART = "contact"
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,12 @@ class Page:
 
     items: list[RawItem] = field(default_factory=list)
     has_more: bool = False
+    #: External ids the source says it still sells but has out of stock, without
+    #: giving the product itself. A shop that hides out-of-stock items from its
+    #: catalogue feed still lists them elsewhere; this is how they stay listed —
+    #: as out of stock — instead of being archived at the end of the cycle as if
+    #: they were discontinued. Only listings already stored are touched.
+    out_of_stock_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -152,6 +162,34 @@ class SourceAdapter(ABC):
         when those workers have distinct egress IPs.
         """
         return [SINGLE_PARTITION]
+
+    def cycle_data_parts(self) -> list[str]:
+        """Names of the reference data this source fetches once a cycle.
+
+        Some of what a shop publishes is per shop rather than per product page:
+        its category tree, the price of every variant, its address. The pipeline
+        fetches each part named here at the start of a cycle (see
+        `fetch_cycle_part`), keeps it on the source's row so the runs of a
+        week-long cycle share one copy, and hands it back via `use_cycle_data`
+        before any page is fetched. `CONTACT_PART` is also written to the
+        supplier. Empty by default: most sources need nothing beyond their pages.
+        """
+        return []
+
+    async def fetch_cycle_part(self, fetcher: CycleFetcher, part: str) -> object:
+        """Fetch one part of this source's reference data (JSON-serialisable).
+
+        Every request goes through `fetcher`, which paces, counts and checks
+        robots.txt. Raising leaves the part's previous copy in place.
+        """
+        raise NotImplementedError(part)
+
+    def use_cycle_data(self, data: dict) -> None:
+        """Receive the reference data for this run, keyed by part name.
+
+        A part may be missing (never fetched, or its last fetch failed); the
+        adapter then does without it rather than inventing anything.
+        """
 
     @abstractmethod
     async def fetch_page(self, partition: str, page: int) -> Page:
