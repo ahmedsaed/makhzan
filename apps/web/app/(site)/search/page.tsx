@@ -15,7 +15,7 @@ import {
   type RawParams,
   type ResultsQuery,
 } from "@/lib/results-query";
-import { tradeLabel, tradesFrom } from "@/lib/trades";
+import { departmentLabel, departmentsFrom } from "@/lib/departments";
 
 const PATHNAME = "/search";
 
@@ -26,7 +26,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { q } = parseResultsQuery(await searchParams);
   // A filtered result set is not a page worth indexing on its own; the
-  // canonical browse surfaces are the trade and category pages. No canonical
+  // canonical browse surfaces are the department and category pages. No canonical
   // either: a query is not a page.
   return pageMetadata({ title: q || "Search", noindex: true });
 }
@@ -106,7 +106,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                       href={links.category(ref)}
                       className="flex min-h-11 flex-col gap-0.5 rounded-control border border-line bg-surface px-3 py-2 text-ink hover:border-line-strong"
                     >
-                      <span className="text-xs text-ink-3">{tradeLabel(ref.split(":")[0])} ›</span>
+                      <span className="text-xs text-ink-3">{departmentLabel(ref.split(":")[0])} ›</span>
                       <span className="text-sm font-semibold">
                         {names.get(ref) ?? ref}{" "}
                         <span className="font-normal text-ink-3 tabular">{formatCount(count)}</span>
@@ -136,7 +136,7 @@ function Heading({
   raw: RawParams;
   shopName?: string;
 }) {
-  const scope = shopName ?? (query.domain ? tradeLabel(query.domain) : undefined);
+  const scope = shopName ?? (query.domain ? departmentLabel(query.domain) : undefined);
   const subject = query.q ? <>Results for “{query.q}”</> : scope ? <>Everything</> : <>Results</>;
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -156,25 +156,25 @@ function Heading({
   );
 }
 
-/** /search with nothing to search: a prompt and the biggest trades. */
+/** /search with nothing to search: a prompt and the biggest departments. */
 async function Landing() {
-  const trades = tradesFrom(await fetchCategories().catch((): Category[] => [])).slice(0, 8);
+  const departments = departmentsFrom(await fetchCategories().catch((): Category[] => [])).slice(0, 8);
   return (
     <Container className="py-8">
       <h1 className="text-xl text-ink">Search the catalogue</h1>
       <p className="mt-1 text-sm text-ink-2">
         Type a part number or a name in the search field above, or start from a department.
       </p>
-      {trades.length > 0 && (
+      {departments.length > 0 && (
         <ul className="mt-5 flex flex-wrap gap-2">
-          {trades.map((trade) => (
-            <li key={trade.domain}>
+          {departments.map((department) => (
+            <li key={department.domain}>
               <Link
-                href={routes.department(trade.domain)}
+                href={routes.department(department.domain)}
                 className="inline-flex h-11 items-center gap-1.5 rounded-control border border-line bg-surface px-3 text-sm text-ink hover:border-line-strong"
               >
-                {trade.label}
-                <span className="text-ink-3 tabular">{formatCount(trade.count)}</span>
+                {department.label}
+                <span className="text-ink-3 tabular">{formatCount(department.count)}</span>
               </Link>
             </li>
           ))}

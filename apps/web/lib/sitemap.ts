@@ -10,12 +10,12 @@ import {
 import { routes } from "@/lib/routes";
 import { listedShops } from "@/lib/shops";
 import { absoluteUrl } from "@/lib/site";
-import { totalOf, tradesFrom } from "@/lib/trades";
+import { totalOf, departmentsFrom } from "@/lib/departments";
 
 /**
  * The sitemap's entries, from the taxonomy and the shop list.
  *
- * Only pages with something on them: a trade or category with no products,
+ * Only pages with something on them: a department or category with no products,
  * or a shop with no active listings, is left out, as the site's own lists
  * leave them out.
  *
@@ -37,13 +37,13 @@ export function sitemapEntries(
     ...(lastModified && { lastModified }),
   });
 
-  const trades = tradesFrom(categories).filter((trade) => trade.count > 0);
+  const departments = departmentsFrom(categories).filter((department) => department.count > 0);
   const withProducts = categories.filter((category) => totalOf(category.ref, categories) > 0);
 
   return [
     page(routes.home(), "daily", 1),
     page(routes.departments(), "weekly", 0.8),
-    ...trades.map((trade) => page(routes.department(trade.domain), "weekly", 0.8)),
+    ...departments.map((department) => page(routes.department(department.domain), "weekly", 0.8)),
     ...withProducts.map((category) => page(routes.category(category.ref), "weekly", 0.7)),
     page(routes.shops(), "weekly", 0.6),
     ...listedShops(shops).map((shop) =>

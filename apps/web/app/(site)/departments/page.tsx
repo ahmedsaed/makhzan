@@ -6,27 +6,27 @@ import { fetchCategories } from "@/lib/api";
 import { formatCount, plural } from "@/lib/format";
 import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
-import { tradeDirectory } from "@/lib/trade-directory";
+import { departmentDirectory } from "@/lib/department-directory";
 
-import { TradeDirectory } from "./_components/trade-directory";
+import { DepartmentDirectory } from "./_components/department-directory";
 
 export async function generateMetadata(): Promise<Metadata> {
   const categories = await fetchCategories().catch(() => null);
-  const trades = categories ? tradeDirectory(categories) : [];
-  const products = trades.reduce((sum, trade) => sum + trade.count, 0);
-  const names = trades.slice(0, 4).map((trade) => trade.label);
+  const departments = categories ? departmentDirectory(categories) : [];
+  const products = departments.reduce((sum, department) => sum + department.count, 0);
+  const names = departments.slice(0, 4).map((department) => department.label);
   return pageMetadata({
     title: "All departments",
     description:
-      trades.length > 0
-        ? `${plural(trades.length, "department")} and ${plural(products, "product")} from Egypt's suppliers, largest first: ${names.join(", ")} and more, each with its categories and how much each holds.`
+      departments.length > 0
+        ? `${plural(departments.length, "department")} and ${plural(products, "product")} from Egypt's suppliers, largest first: ${names.join(", ")} and more, each with its categories and how much each holds.`
         : "Every department makhzan covers, largest first, with its categories and how much each holds.",
     path: routes.departments(),
   });
 }
 
-/** Every trade as a directory: largest first, each with its categories as links. */
-export default async function TradesPage() {
+/** Every department as a directory: largest first, each with its categories as links. */
+export default async function DepartmentsPage() {
   const categories = await fetchCategories().catch(() => null);
   if (!categories) {
     return (
@@ -36,23 +36,23 @@ export default async function TradesPage() {
       </Container>
     );
   }
-  const trades = tradeDirectory(categories);
-  const products = trades.reduce((sum, trade) => sum + trade.count, 0);
-  const listed = trades.reduce((sum, trade) => sum + trade.categoryCount, 0);
+  const departments = departmentDirectory(categories);
+  const products = departments.reduce((sum, department) => sum + department.count, 0);
+  const listed = departments.reduce((sum, department) => sum + department.categoryCount, 0);
 
   return (
     <Container className="py-5 md:py-6">
       <div className="mb-3 flex flex-col gap-0.5 md:mb-4 md:flex-row md:items-baseline md:gap-3">
-        <h1 className="text-2xl">All {trades.length} departments</h1>
-        {trades.length > 0 && (
+        <h1 className="text-2xl">All {departments.length} departments</h1>
+        {departments.length > 0 && (
           <p data-directory-total className="text-[13px] text-ink-3 tabular">
             {formatCount(products)} products in {formatCount(listed)} categories, largest department
             first
           </p>
         )}
       </div>
-      {trades.length > 0 ? (
-        <TradeDirectory trades={trades} />
+      {departments.length > 0 ? (
+        <DepartmentDirectory departments={departments} />
       ) : (
         <Empty title="No departments yet" hint="The catalogue is empty right now." />
       )}

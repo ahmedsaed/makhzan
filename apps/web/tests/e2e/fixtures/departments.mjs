@@ -1,16 +1,16 @@
 /**
- * Stub data for the home, trades, trade and category pages.
+ * Stub data for the home, departments, department and category pages.
  *
- * One trade with a real two-level tree (seals-bearings: groups, leaves, an
- * "Other" bucket that must never describe the trade, an empty group that must
+ * One department with a real two-level tree (seals-bearings: groups, leaves, an
+ * "Other" bucket that must never describe the department, an empty group that must
  * not become a tile) and products some of which are out of stock, so the
- * hidden count has something to count. Then enough single-category trades to
+ * hidden count has something to count. Then enough single-category departments to
  * push the total past the eight the home page shows.
  *
  * The search filters `category` the way the API does since products carry
  * their ancestors (`category_refs`): a group's ref matches everything filed
  * under it. Two ways to make the API fail, for the pages' degraded states: a
- * search in the Gaskets category, and the taxonomy of the `catfail` trade.
+ * search in the Gaskets category, and the taxonomy of the `catfail` department.
  *
  * The shops are made up: the repository is public.
  */
@@ -25,7 +25,7 @@ const cat = (domain, slug, name_en, parent, count) => ({
   count,
 });
 
-export const TRADE_CATEGORIES = [
+export const DEPARTMENT_CATEGORIES = [
   cat("seals-bearings", "seals", "Seals & Gaskets", null, 0),
   cat("seals-bearings", "o-rings", "O-Rings", "seals", 400),
   cat("seals-bearings", "oil-seals", "Oil Seals", "seals", 250),
@@ -61,7 +61,7 @@ const hit = (
   brand: null,
   category_slug: category,
   category_ref: `seals-bearings:${category}`,
-  category_name: TRADE_CATEGORIES.find((c) => c.slug === category)?.name_en ?? null,
+  category_name: DEPARTMENT_CATEGORIES.find((c) => c.slug === category)?.name_en ?? null,
   supplier_name: shops > 1 ? null : shop,
   supplier_count: shops,
   offer_count: shops,
@@ -89,7 +89,7 @@ const HITS = [
 /** A category's ref and every ancestor's, as the index stores them. */
 function ancestry(ref) {
   const refs = [];
-  for (let at = ref; at; at = TRADE_CATEGORIES.find((c) => c.ref === at)?.parent ?? null) {
+  for (let at = ref; at; at = DEPARTMENT_CATEGORIES.find((c) => c.ref === at)?.parent ?? null) {
     refs.push(at);
   }
   return refs;
@@ -101,11 +101,11 @@ function count(hits, key) {
   return out;
 }
 
-/** `/categories?domain=catfail` fails: the trade pages' "not answering" state. */
-export const FAILING_TRADE = "catfail";
+/** `/categories?domain=catfail` fails: the department pages' "not answering" state. */
+export const FAILING_DEPARTMENT = "catfail";
 
-/** `{status, body}` for this fixture's trade, or null for anything else. */
-export function tradeSearch(url) {
+/** `{status, body}` for this fixture's department, or null for anything else. */
+export function departmentSearch(url) {
   const params = url.searchParams;
   if (params.get("domain") !== "seals-bearings") return null;
   const category = params.get("category");

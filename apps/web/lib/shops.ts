@@ -1,7 +1,7 @@
 import type { Listing, SearchHit, ShopSummary } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { freshnessTier, parseVerified } from "@/lib/freshness";
-import { tradeLabel } from "@/lib/trades";
+import { departmentLabel } from "@/lib/departments";
 
 /**
  * What the shop pages say about a shop, kept out of the components so the
@@ -57,15 +57,15 @@ export function formatDay(date: Date, now: Date = new Date()): string {
 }
 
 /** "Electronics", "Electronics and Tools", "Electronics, Tools and Chemicals". */
-export function tradesInWords(domains: ShopSummary["domains"], limit = 3): string {
-  const names = domains.slice(0, limit).map((d) => tradeLabel(d.domain));
+export function departmentsInWords(domains: ShopSummary["domains"], limit = 3): string {
+  const names = domains.slice(0, limit).map((d) => departmentLabel(d.domain));
   const rest = domains.length - names.length;
   if (rest > 0) names.push(rest === 1 ? "1 more department" : `${rest} more departments`);
   if (names.length <= 1) return names[0] ?? "";
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-export type TradeShare = {
+export type DepartmentShare = {
   domain: string | null;
   label: string;
   count: number;
@@ -73,18 +73,18 @@ export type TradeShare = {
 };
 
 /**
- * A shop's catalogue by trade, for the bar on its page: the largest few, then
- * everything else folded into one segment so a shop spread over many trades
+ * A shop's catalogue by department, for the bar on its page: the largest few, then
+ * everything else folded into one segment so a shop spread over many departments
  * still draws a readable bar. `domain` is null for that fold.
  */
-export function tradeShares(domains: ShopSummary["domains"], segments = 3): TradeShare[] {
+export function departmentShares(domains: ShopSummary["domains"], segments = 3): DepartmentShare[] {
   const total = domains.reduce((sum, d) => sum + d.count, 0);
   if (total === 0) return [];
   const share = (count: number) => (count / total) * 100;
   const head = domains.length > segments + 1 ? domains.slice(0, segments) : domains;
-  const out: TradeShare[] = head.map((d) => ({
+  const out: DepartmentShare[] = head.map((d) => ({
     domain: d.domain,
-    label: `${tradeLabel(d.domain)} ${formatCount(d.count)}`,
+    label: `${departmentLabel(d.domain)} ${formatCount(d.count)}`,
     count: d.count,
     percent: share(d.count),
   }));

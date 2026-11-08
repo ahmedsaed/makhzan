@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { balancedColumns } from "@/app/(site)/departments/_components/browse-tile";
 import type { Category } from "@/lib/api";
-import { categoryLimit, tradeDirectory } from "@/lib/trade-directory";
+import { categoryLimit, departmentDirectory } from "@/lib/department-directory";
 
 const cat = (
   domain: string,
@@ -20,7 +20,7 @@ const cat = (
   count,
 });
 
-/** One big trade with a two-level tree, one mid-sized flat one, one small. */
+/** One big department with a two-level tree, one mid-sized flat one, one small. */
 const CATEGORIES = [
   cat("seals-bearings", "seals", "Seals & Gaskets", null, 0),
   cat("seals-bearings", "seals-other", "Other Seals", "seals", 900),
@@ -42,10 +42,10 @@ const CATEGORIES = [
   cat("timber", "elm", "Elm", null, 1),
 ];
 
-describe("the trades directory", () => {
-  const [seals, piping, timber] = tradeDirectory(CATEGORIES);
+describe("the departments directory", () => {
+  const [seals, piping, timber] = departmentDirectory(CATEGORIES);
 
-  it("lists trades largest first", () => {
+  it("lists departments largest first", () => {
     expect([seals.domain, piping.domain, timber.domain]).toEqual([
       "seals-bearings",
       "piping",
@@ -53,7 +53,7 @@ describe("the trades directory", () => {
     ]);
   });
 
-  it("maps a major trade group by group, leaving out empty groups", () => {
+  it("maps a major department group by group, leaving out empty groups", () => {
     expect(seals.major).toBe(true);
     expect(seals.groups.map((g) => [g.name, g.count])).toEqual([
       ["Seals & Gaskets", 41241],
@@ -77,7 +77,7 @@ describe("the trades directory", () => {
     expect(group.more).toBe(4);
   });
 
-  it("gives a minor trade its biggest categories, more for a bigger trade", () => {
+  it("gives a minor department its biggest categories, more for a bigger department", () => {
     expect(piping.major).toBe(false);
     expect(piping.categories).toHaveLength(categoryLimit(piping.count));
     expect(piping.more).toBe(12 - piping.categories.length);
@@ -86,13 +86,13 @@ describe("the trades directory", () => {
     expect(timber.categoryCount).toBe(6);
   });
 
-  it("scales the number of links with the trade's size", () => {
+  it("scales the number of links with the department's size", () => {
     expect(categoryLimit(50)).toBeLessThan(categoryLimit(500));
     expect(categoryLimit(500)).toBeLessThan(categoryLimit(5000));
   });
 
-  it("makes a big minor trade wide, and only that", () => {
-    const [, wide] = tradeDirectory([
+  it("makes a big minor department wide, and only that", () => {
+    const [, wide] = departmentDirectory([
       ...CATEGORIES,
       ...Array.from({ length: 30 }, (_, i) => cat("electrical", `c${i}`, `C${i}`, null, 40)),
     ]);
@@ -103,7 +103,7 @@ describe("the trades directory", () => {
     expect(timber.wide).toBe(false);
   });
 
-  it("says what share of the catalogue each trade holds", () => {
+  it("says what share of the catalogue each department holds", () => {
     const total = seals.count + piping.count + timber.count;
     expect(seals.share).toBeCloseTo(seals.count / total);
   });

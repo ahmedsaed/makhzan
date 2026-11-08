@@ -18,7 +18,7 @@ import type { ComponentProps } from "react";
  *
  * In the App Router `prefetch={false}` disables prefetching on both viewport
  * and hover. The cost is that a click now waits for the navigation instead of
- * having it in hand; that is the intended trade, and it is a per-click cost
+ * having it in hand; that is the intended exchange, and it is a per-click cost
  * paid only for pages someone actually opens.
  *
  * Pass `prefetch` explicitly to opt a specific link back in.

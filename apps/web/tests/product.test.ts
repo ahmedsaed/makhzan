@@ -191,7 +191,7 @@ describe("breadcrumb trail", () => {
     count: 1,
   });
 
-  it("walks trade › group › category, every crumb a link", () => {
+  it("walks department › group › category, every crumb a link", () => {
     const leaf = category("electronics:ics", "ICs", "electronics:components");
     const trail = categoryTrail(leaf, [
       category("electronics:components", "Components", null),

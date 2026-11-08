@@ -63,7 +63,7 @@ export type ShopSummary = {
   listing_count: number;
   in_stock_count: number;
   last_verified_at: string | null;
-  /** Listings per trade, largest first. */
+  /** Listings per department, largest first. */
   domains: { domain: string; count: number }[];
 };
 

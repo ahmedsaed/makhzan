@@ -1,39 +1,39 @@
 import type { Category } from "@/lib/api";
 
 /**
- * Trades are what the backend calls domains. The API has no /domains endpoint —
- * a trade exists because categories belong to it — so names are derived from
+ * Departments are what the backend calls domains. The API has no /domains endpoint —
+ * a department exists because categories belong to it — so names are derived from
  * the slug and sizes from the categories' counts.
  */
 
-export type Trade = { domain: string; label: string; count: number };
+export type Department = { domain: string; label: string; count: number };
 
 /** "seals-bearings" → "Seals & Bearings". */
-export function tradeLabel(domain: string): string {
+export function departmentLabel(domain: string): string {
   return domain
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" & ");
 }
 
-/** Roll the flat category payload up into trades, largest first. */
-export function tradesFrom(categories: Category[]): Trade[] {
+/** Roll the flat category payload up into departments, largest first. */
+export function departmentsFrom(categories: Category[]): Department[] {
   const totals = new Map<string, number>();
   for (const category of categories) {
     totals.set(category.domain, (totals.get(category.domain) ?? 0) + category.count);
   }
   return [...totals.entries()]
-    .map(([domain, count]) => ({ domain, label: tradeLabel(domain), count }))
+    .map(([domain, count]) => ({ domain, label: departmentLabel(domain), count }))
     .sort((a, b) => b.count - a.count);
 }
 
 // --------------------------------------------------------------------------- //
-// What is inside a trade, and how its tree is browsed
+// What is inside a department, and how its tree is browsed
 // --------------------------------------------------------------------------- //
 
-/** A trade as the home and all-trades pages list it: its name, its size, and
+/** A department as the home and all-departments pages list it: its name, its size, and
  *  what is inside it, in words. */
-export type TradeSummary = Trade & { inside: string[] };
+export type DepartmentSummary = Department & { inside: string[] };
 
 /** Leaves hold the products; parents are browse groups. */
 export function leavesOf(categories: Category[]): Category[] {
@@ -73,7 +73,7 @@ export function asPhrase(names: string[]): string {
 }
 
 /**
- * A trade's biggest categories, which say what is inside far better than its
+ * A department's biggest categories, which say what is inside far better than its
  * name does ("Seals & Bearings": O-rings, bearings, oil seals). "Other …"
  * buckets are skipped: they are the one thing a name cannot describe.
  */
@@ -85,29 +85,29 @@ export function insideOf(domain: string, categories: Category[], limit = 4): str
     .map((category) => category.name_en);
 }
 
-/** Every trade that has products, with what is inside, largest first. */
-export function tradeSummaries(categories: Category[], limit = 4): TradeSummary[] {
-  return tradesFrom(categories)
-    .filter((trade) => trade.count > 0)
-    .map((trade) => ({
-      ...trade,
-      inside: insideOf(trade.domain, categories, limit),
+/** Every department that has products, with what is inside, largest first. */
+export function departmentSummaries(categories: Category[], limit = 4): DepartmentSummary[] {
+  return departmentsFrom(categories)
+    .filter((department) => department.count > 0)
+    .map((department) => ({
+      ...department,
+      inside: insideOf(department.domain, categories, limit),
     }));
 }
 
-export type TradeNode = Category & { total: number };
+export type DepartmentNode = Category & { total: number };
 
 /**
- * One trade's tree as its page shows it: the top-level groups, the selected
- * group and its categories, and — when nothing is selected — the trade's
+ * One department's tree as its page shows it: the top-level groups, the selected
+ * group and its categories, and — when nothing is selected — the department's
  * biggest categories. Empty branches are left out: a tile that leads to
  * nothing is a dead end.
  *
  * `selected` is the category the page is narrowed to; its group is the
  * top-level category above it, or itself when it is top level.
  */
-export function tradeTree(categories: Category[], selected: string | null = null) {
-  const withTotals = (list: Category[]): TradeNode[] =>
+export function departmentTree(categories: Category[], selected: string | null = null) {
+  const withTotals = (list: Category[]): DepartmentNode[] =>
     list
       .map((category) => ({
         ...category,
@@ -123,7 +123,7 @@ export function tradeTree(categories: Category[], selected: string | null = null
   const groups = withTotals(categories.filter((category) => !category.parent));
   const group = root ? (groups.find((node) => node.ref === root.ref) ?? null) : null;
   const children = group ? withTotals(categories.filter((c) => c.parent === group.ref)) : [];
-  // A flat trade has nothing to add here: its groups already are its categories.
+  // A flat department has nothing to add here: its groups already are its categories.
   const nested = groups.some((node) => categories.some((c) => c.parent === node.ref));
   const top = !group && nested ? withTotals(leavesOf(categories)).slice(0, 8) : [];
 

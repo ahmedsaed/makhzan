@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * All trades, a trade and a category; home is in home.spec.ts. Stub data:
- * tests/e2e/fixtures/trades.mjs.
+ * All departments, a department and a category; home is in home.spec.ts. Stub data:
+ * tests/e2e/fixtures/departments.mjs.
  */
 
 // "Trade" names a profession, not a kind of product; the grouping is a
@@ -16,22 +16,22 @@ for (const path of ["/", "/departments", "/departments/seals-bearings"]) {
   });
 }
 
-test("all trades lists every trade by size", async ({ page }) => {
+test("all departments lists every department by size", async ({ page }) => {
   await page.goto("/departments");
   await expect(page.getByRole("heading", { level: 1, name: "All 11 departments" })).toBeVisible();
-  await expect(page.locator("[data-trade]")).toHaveCount(11);
-  await expect(page.locator("[data-trade]").last()).toHaveAttribute("data-trade", "cleaning");
+  await expect(page.locator("[data-department]")).toHaveCount(11);
+  await expect(page.locator("[data-department]").last()).toHaveAttribute("data-department", "cleaning");
   await expect(page).toHaveTitle(/All departments/);
 });
 
-test("all trades is a directory across the whole width on a desktop", async ({ page }) => {
+test("all departments is a directory across the whole width on a desktop", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/departments");
-  const directory = page.locator("ul:has(> [data-trade])");
+  const directory = page.locator("ul:has(> [data-department])");
   expect((await directory.boundingBox())?.width).toBeGreaterThan(1000);
 
-  // The trade that holds most of the catalogue is mapped group by group.
-  const seals = page.locator("[data-trade=seals-bearings]");
+  // The department that holds most of the catalogue is mapped group by group.
+  const seals = page.locator("[data-department=seals-bearings]");
   await expect(seals).toHaveAttribute("data-major", "true");
   await expect(seals.locator("[data-group]")).toHaveCount(2);
   await expect(seals.getByRole("link", { name: /^Seals & Gaskets/ })).toHaveAttribute(
@@ -50,8 +50,8 @@ test("all trades is a directory across the whole width on a desktop", async ({ p
     "Other Seals 500",
   ]);
 
-  // A smaller trade lists its categories as links too, and is not folded away.
-  const piping = page.locator("[data-trade=piping]");
+  // A smaller department lists its categories as links too, and is not folded away.
+  const piping = page.locator("[data-department=piping]");
   await expect(piping).not.toHaveAttribute("data-major", "true");
   await expect(piping.getByRole("link", { name: "Butterfly Valves 120" })).toHaveAttribute(
     "href",
@@ -60,10 +60,10 @@ test("all trades is a directory across the whole width on a desktop", async ({ p
   await expect(page.getByRole("button", { name: /^Categories in/ })).toHaveCount(0);
 });
 
-test("on a phone each trade is a row, its categories behind a chevron", async ({ page }) => {
+test("on a phone each department is a row, its categories behind a chevron", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 800 });
   await page.goto("/departments");
-  const seals = page.locator("[data-trade=seals-bearings]");
+  const seals = page.locator("[data-department=seals-bearings]");
   await expect(seals.getByRole("link", { name: /Seals & Bearings/ })).toHaveAttribute(
     "href",
     "/departments/seals-bearings",
@@ -91,7 +91,7 @@ test("on a phone each trade is a row, its categories behind a chevron", async ({
   await expect(page).toHaveURL("/departments/seals-bearings/o-rings");
 });
 
-test("all trades does not scroll sideways at 320px", async ({ page }) => {
+test("all departments does not scroll sideways at 320px", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   await page.goto("/departments");
   await page.getByRole("button", { name: "Categories in Seals & Bearings" }).click();
@@ -101,7 +101,7 @@ test("all trades does not scroll sideways at 320px", async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
-test("a trade page fills a wide screen", async ({ page }) => {
+test("a department page fills a wide screen", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/departments/seals-bearings");
   // The group tiles lie on their side across the page, not a strip of squares.
@@ -117,7 +117,7 @@ test("a trade page fills a wide screen", async ({ page }) => {
   expect(Math.abs(heading!.y - search!.y)).toBeLessThan(40);
 });
 
-test("a trade page shows its groups, its biggest categories and results", async ({ page }) => {
+test("a department page shows its groups, its biggest categories and results", async ({ page }) => {
   await page.goto("/departments/seals-bearings");
   await expect(page).toHaveTitle(/Seals & Bearings/);
   await expect(page.getByRole("heading", { level: 1, name: "Seals & Bearings" })).toBeVisible();
@@ -164,7 +164,7 @@ test("a group page narrows to the products filed under its categories", async ({
   await expect(page.locator("[data-result=row]").first()).toContainText("Ball Bearing");
 });
 
-test("the trade's filters list its own categories, and narrow in place", async ({ page }) => {
+test("the department's filters list its own categories, and narrow in place", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/departments/seals-bearings?in_stock=all");
   const rail = page.getByRole("complementary", { name: "Filters" });
@@ -179,7 +179,7 @@ test("the trade's filters list its own categories, and narrow in place", async (
   await expect(page.locator("[data-result=row]")).toHaveCount(4);
 });
 
-test("a category from another trade is ignored, not shown under this one", async ({ page }) => {
+test("a category from another department is ignored, not shown under this one", async ({ page }) => {
   await page.goto("/departments/seals-bearings?category=electronics:ics");
   await expect(page.locator("[data-result=row]")).toHaveCount(2);
 });
@@ -207,7 +207,7 @@ test("an API failure is a message on the page, not an error page", async ({ page
 });
 
 test("a taxonomy failure degrades too, rather than claiming a 404", async ({ page }) => {
-  // The stub fails /categories for this trade.
+  // The stub fails /categories for this department.
   for (const path of ["/departments/catfail", "/departments/catfail/anything"]) {
     const response = await page.goto(path);
     expect(response?.status(), path).toBe(200);
@@ -215,7 +215,7 @@ test("a taxonomy failure degrades too, rather than claiming a 404", async ({ pag
   }
 });
 
-test("search in a trade stays in the trade", async ({ page }) => {
+test("search in a department stays in the department", async ({ page }) => {
   await page.goto("/departments/seals-bearings");
   const field = page.getByRole("searchbox", {
     name: "Search in Seals & Bearings",
@@ -225,14 +225,14 @@ test("search in a trade stays in the trade", async ({ page }) => {
   await expect(page).toHaveURL(/\/search\?domain=seals-bearings&q=bearing/);
 });
 
-test("searching a trade for nothing says everything in it", async ({ page }) => {
+test("searching a department for nothing says everything in it", async ({ page }) => {
   await page.goto("/search?domain=seals-bearings&q=");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Everything in Seals & Bearings",
   );
 });
 
-test("a category narrows the trade page", async ({ page }) => {
+test("a category narrows the department page", async ({ page }) => {
   await page.goto("/departments/seals-bearings");
   await page
     .getByRole("navigation", { name: "Groups" })
@@ -260,7 +260,7 @@ test("a category narrows the trade page", async ({ page }) => {
   await expect(page.locator("[data-result=row]").first()).toContainText("6204-2RS");
 });
 
-test("the trade page works with JavaScript off", async ({ browser }) => {
+test("the department page works with JavaScript off", async ({ browser }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
   await page.goto("/departments/seals-bearings/oil-seals");
@@ -276,8 +276,8 @@ test("an unknown category is a 404", async ({ page }) => {
   expect(response?.status()).toBe(404);
 });
 
-test("an unknown trade is a 404 on its category pages too", async ({ page }) => {
-  const response = await page.goto("/departments/not-a-trade/bearings");
+test("an unknown department is a 404 on its category pages too", async ({ page }) => {
+  const response = await page.goto("/departments/not-a-department/bearings");
   expect(response?.status()).toBe(404);
 });
 
