@@ -307,7 +307,8 @@ async def test_a_full_run(shop):
     assert len(listings) == 7
     assert run.items_seen == 8
     # Every request the host received: /shop, /shop-2 twice, the sitemap.
-    assert run.stats["requests"] == {"pages": 4}
+    # Pages only: robots.txt fetches may be counted beside them.
+    assert run.stats["requests"]["pages"] == 4
     assert shop.pages() == [
         "/shop",
         "/shop-2",
