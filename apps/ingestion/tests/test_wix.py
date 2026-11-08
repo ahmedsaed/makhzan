@@ -228,13 +228,24 @@ async def test_a_resumed_gallery_emits_its_whole_cumulative_page(shop):
     assert len(second.items) == 5 and not second.has_more
 
 
-async def test_a_page_that_does_not_grow_ends_the_gallery(shop):
-    """A shop that ignores ?page would otherwise be asked for page 3, 4, 5..."""
+async def test_a_page_that_does_not_grow_is_an_error_not_the_end(shop):
+    """A shop that ignores ?page would otherwise be asked for page 3, 4, 5...,
+    and ending the gallery there would let the cycle complete and archive every
+    product on the pages never reached. It fails, so the partition keeps its
+    cursor and the cycle stays open."""
     shop.routes[("/shop-2", "2")] = _read("gallery_pla.html")
     adapter = _wix()
     await adapter.fetch_page("/shop-2", 1)
-    second = await adapter.fetch_page("/shop-2", 2)
-    assert second.items == [] and not second.has_more
+    with pytest.raises(ValueError, match="stopped growing"):
+        await adapter.fetch_page("/shop-2", 2)
+
+
+async def test_a_gallery_without_a_product_total_is_an_error(shop):
+    """Without totalCount there is no telling whether the list is complete."""
+    html = _read("gallery_pla.html").replace('"totalCount"', '"totalCountGone"')
+    shop.routes[("/shop-2", None)] = html
+    with pytest.raises(ValueError, match="no product total"):
+        await _wix().fetch_page("/shop-2", 1)
 
 
 async def test_a_page_without_the_store_data_is_an_error_not_an_empty_gallery(shop):
