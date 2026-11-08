@@ -1,6 +1,12 @@
 import type { MetadataRoute } from "next";
 
-import type { Category, ShopSummary, SitemapPage, SitemapProduct } from "@/lib/api";
+import {
+  titleOf,
+  type Category,
+  type ShopSummary,
+  type SitemapPage,
+  type SitemapProduct,
+} from "@/lib/api";
 import { routes } from "@/lib/routes";
 import { listedShops } from "@/lib/shops";
 import { absoluteUrl } from "@/lib/site";
@@ -103,7 +109,15 @@ export async function productChunk(
 /** A product's sitemap entry: its readable URL, and when its content changed. */
 export function productEntries(products: SitemapProduct[]): MetadataRoute.Sitemap {
   return products.map((product) => ({
-    url: absoluteUrl(routes.product(product.id, product.title_en)),
+    // The same slug the product page builds, so the listed URL is the one it
+    // answers 200 on rather than one it redirects.
+    url: absoluteUrl(
+      routes.product(
+        product.id,
+        titleOf({ title_en: product.title_en, title_ar: product.title_ar ?? null }) ||
+          product.part_number,
+      ),
+    ),
     lastModified: product.changed_at,
   }));
 }

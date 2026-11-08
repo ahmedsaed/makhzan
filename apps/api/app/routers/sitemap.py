@@ -33,6 +33,11 @@ SITEMAP_MAX = 50_000
 class SitemapProduct(BaseModel):
     id: uuid.UUID
     title_en: str | None
+    #: With `title_en` and `part_number`, what the product page builds its slug
+    #: from (`titleOf(product) || part_number`): the sitemap must list the URL
+    #: the page answers 200 on, not one it redirects.
+    title_ar: str | None = None
+    part_number: str | None = None
     changed_at: datetime
 
 
@@ -62,7 +67,13 @@ async def sitemap_products(
 ) -> SitemapPage:
     """Products with an active offer, ordered by id, `limit` after `after`."""
     query = (
-        select(Product.id, Product.title_en, Product.content_changed_at)
+        select(
+            Product.id,
+            Product.title_en,
+            Product.title_ar,
+            Product.part_number,
+            Product.content_changed_at,
+        )
         .where(_has_active_offer)
         .order_by(Product.id)
         .limit(limit)
@@ -79,7 +90,13 @@ async def sitemap_products(
 
     return SitemapPage(
         items=[
-            SitemapProduct(id=r.id, title_en=r.title_en, changed_at=r.content_changed_at)
+            SitemapProduct(
+                id=r.id,
+                title_en=r.title_en,
+                title_ar=r.title_ar,
+                part_number=r.part_number,
+                changed_at=r.content_changed_at,
+            )
             for r in rows
         ],
         # A full page may be followed by more; a short one is the last.

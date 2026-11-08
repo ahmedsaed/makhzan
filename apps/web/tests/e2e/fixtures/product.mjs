@@ -209,8 +209,10 @@ export function productFixture(path) {
   if (path === "/products/p-replaced/redirect") return [200, { id: "p-multi" }];
   if (/^\/products\/[^/]+\/redirect$/.test(path)) return [404, { detail: "no redirect" }];
 
+  // Case-insensitive, as the real API is: a UUID parses either way.
   const productId = path.match(/^\/products\/([^/]+)$/)?.[1];
-  if (productId && PRODUCTS[productId]) return [200, PRODUCTS[productId]];
+  const found = productId && (PRODUCTS[productId] ?? PRODUCTS[productId.toLowerCase()]);
+  if (found) return [200, found];
 
   const listingId = path.match(/^\/listings\/([^/]+)$/)?.[1];
   for (const item of Object.values(PRODUCTS)) {

@@ -40,6 +40,8 @@ async def test_lists_id_title_and_content_change_date(client, db):
             {
                 "id": str(product.id),
                 "title_en": "SG90 Micro Servo",
+                "title_ar": None,
+                "part_number": None,
                 "changed_at": "2026-03-04T05:06:00Z",
             }
         ],

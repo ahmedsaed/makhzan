@@ -312,7 +312,13 @@ export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
 
 /** One sitemap entry's worth of a product. `changed_at` is when what a reader
  *  sees last changed, not the last recheck. */
-export type SitemapProduct = { id: string; title_en: string | null; changed_at: string };
+export type SitemapProduct = {
+  id: string;
+  title_en: string | null;
+  title_ar?: string | null;
+  part_number?: string | null;
+  changed_at: string;
+};
 
 export type SitemapPage = {
   items: SitemapProduct[];
