@@ -175,12 +175,19 @@ function similarTo() {
   ];
 }
 
-const DESCRIPTION =
-  "Range 0–150mm, reading 0.01mm, IP54 housing against dust and splashes. " +
-  "Metric and inch conversion at any position, zero setting anywhere along the beam. " +
-  "Runs on one CR2032 cell, with automatic power-off after five minutes idle. " +
+/** Long, like the median shop description and then some: far taller than
+ *  three quarters of a phone screen, so the page caps it behind Read more. */
+const DESCRIPTION = [
+  ...Array.from(
+    { length: 8 },
+    (_, i) =>
+      `Part ${i + 1}. Range 0–150mm, reading 0.01mm, IP54 housing against dust and splashes. ` +
+      "Metric and inch conversion at any position, zero setting anywhere along the beam. " +
+      "Runs on one CR2032 cell, with automatic power-off after five minutes idle.",
+  ),
   "Packed in a hard plastic case with a spare battery. Hardened stainless steel jaws " +
-  "for outside, inside, depth and step measurements. This sentence is the end of it.";
+    "for outside, inside, depth and step measurements. This sentence is the end of it.",
+].join("\n\n");
 
 const DESCRIPTIONS = {
   "o-single": DESCRIPTION,

@@ -91,6 +91,7 @@ test("the product page's controls", async ({ page }) => {
     "similar fact": page.locator("[data-fact=similar] a"),
     "next photo": page.getByRole("button", { name: "Next photo" }),
     "next similar products": page.getByRole("button", { name: "Next products" }),
+    "read more": page.getByRole("button", { name: "Read more" }),
   });
 
   await page.locator('a[data-photo="0"]').click();
@@ -100,6 +101,9 @@ test("the product page's controls", async ({ page }) => {
     "viewer next": viewer.getByRole("button", { name: "Next photo" }),
   });
   await page.keyboard.press("Escape");
+
+  await page.goto("/products/p-multi");
+  await expectTappable(page, { "shop tab": page.locator("[data-details-tab]").last() });
 
   await page.goto("/products/p-specs");
   await expectTappable(page, { "datasheet link": page.locator("[data-datasheet]").first() });
