@@ -58,7 +58,7 @@ Measured on 60.9k active listings (November 2026).
 │       └── /departments/{department}/{category}   the same page, narrowed
 ├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
 │   └── /shops/{shop}           Freshness, what they carry, its products as scoped results
-├── /how-we-crawl               The crawling policy, written for suppliers
+├── /how-we-crawl               The crawling policy, written for suppliers, and what the crawler did (#activity)
 └── /for-suppliers              Remove, add or correct a shop (requests, by email)
 
 Everywhere: header (logo, search, Departments, Shops), footer (For suppliers,
@@ -174,7 +174,27 @@ shop, on the same URL (`/shops/{shop}?category=…`): chips, rail, toolbar, list
 paging. Rows leave out the shop's name, which would only repeat the heading (the one
 exception to C1's "shop name"); a product other shops sell keeps its "N shops" badge.
 "Biggest categories" is a phone list only, since the desktop rail already lists them.
-Then "Own this shop? Add your details."
+At the foot of the band, one line on what the crawler did there: "makhzan read this site
+3 hours ago · 412 requests in the last 7 days · at least 15 s apart · How we crawl", the
+link going to `/how-we-crawl#activity`; for a paused shop only "makhzan is not reading this
+site at the moment." The line is left out, and the page still renders, when the activity
+cannot be fetched. Then "Own this shop? Add your details."
+
+**How we crawl.** The policy as prose, then **Crawler activity** (`#activity`): the measured
+proof of it, from `GET /crawler/activity`, cached for ten minutes. Four tiles of totals
+(shops read this week of all shops, requests this week, the next daily run as a relative
+time with "Early morning, Egypt time (03:00 UTC)" under it, and "robots.txt: Honoured"),
+then one row per shop: last read, requests over 7 days, the shortest and the typical
+(median) gap between requests, and a status. A table from `md`; on phones a card per shop
+with the same facts, never a sideways scroll. Times are relative ("3 hours ago") with the
+absolute UTC time as a tooltip. Gaps are floored to the second, so a published figure never
+flatters, and a gap not measured reads "—". A count that some run did not record reads
+"at least 412". Status uses neutral words only: "Active" or "Paused", and a pause is never
+given a reason. The section never shows errors, status codes, refusals or block counts,
+resume points, crosswalk drift, the review queue, internal ids or anything about our
+servers. A shop removed at its request is retired with its runs, so it is simply absent.
+When the API cannot answer, the policy still renders and the section says the figures can't
+be shown right now.
 
 **Desktop.** Results get a side rail (category, price); the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
