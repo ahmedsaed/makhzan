@@ -1,6 +1,7 @@
 import { ChevronRight, ExternalLink } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
+import { preconnect } from "react-dom";
 
 import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
 import { Freshness, StaleNote } from "@/components/freshness";
@@ -152,6 +153,12 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   // title; the offers go there instead, as before.
   const split = sources.length > 0;
   const images = galleryImages(product);
+  // The main photo is the page's largest element (its LCP) and comes from the
+  // shop's server, not ours (decision 0003). Opening that connection while the
+  // rest of the page streams saves the DNS, TCP and TLS round trips before the
+  // photo can even be requested: 100–300 ms on a phone.
+  const photoOrigin = originOf(images[0]);
+  if (photoOrigin) preconnect(photoOrigin);
   const crumbs: Crumb[] | null = !product.category
     ? null
     : categories.length > 0
@@ -215,7 +222,9 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           <Gallery
             images={images}
             alt={title}
-            priority={!several}
+            // High priority whether or not a phone hides it: the phone shows
+            // the same first photo as a thumbnail, so it is one download.
+            priority
             frameClassName="aspect-[4/3] lg:aspect-square"
           />
         </div>
@@ -457,3 +466,14 @@ function BottomBar({ offer, now }: { offer: Offer; now: Date }) {
  * build has no access to. SSR still gives crawlers complete HTML.
  */
 export const dynamic = "force-dynamic";
+
+/** `https://shop.example` for a photo URL, or null for anything unparseable. */
+function originOf(src: string | undefined): string | null {
+  if (!src) return null;
+  try {
+    const url = new URL(src);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}

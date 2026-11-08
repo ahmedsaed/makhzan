@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { categoryNameOf, fetchCategories } from "@/lib/api";
-import { categoryDescription, pageMetadata } from "@/lib/metadata";
+import { categoryDescription, pageMetadata, pagedPath } from "@/lib/metadata";
 import { joinRef, routes } from "@/lib/routes";
 import { totalOf, tradeLabel } from "@/lib/trades";
 
@@ -14,8 +14,10 @@ import { TradeBrowse, type RawParams } from "../../_components/trade-browse";
  */
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: Promise<{ trade: string; category: string }>;
+  searchParams: Promise<RawParams>;
 }): Promise<Metadata> {
   const { trade, category: slug } = await params;
   const categories = await fetchCategories(trade).catch(() => []);
@@ -26,7 +28,7 @@ export async function generateMetadata({
     description: category
       ? categoryDescription(category, totalOf(category.ref, categories))
       : undefined,
-    path: routes.category(joinRef(trade, slug)),
+    path: pagedPath(routes.category(joinRef(trade, slug)), await searchParams),
     ownCard: true,
   });
 }

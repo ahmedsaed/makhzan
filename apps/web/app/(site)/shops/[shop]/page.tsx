@@ -16,7 +16,7 @@ import {
 } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
-import { pageMetadata, shopDescription } from "@/lib/metadata";
+import { pageMetadata, shopDescription, pagedPath } from "@/lib/metadata";
 import { routes, withParams } from "@/lib/routes";
 import {
   fetchResults,
@@ -45,8 +45,10 @@ import { TradeBar } from "../_components/trade-bar";
  */
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: Promise<{ shop: string }>;
+  searchParams: Promise<RawParams>;
 }): Promise<Metadata> {
   const { shop } = await params;
   const supplier = await fetchSupplier(shop);
@@ -54,7 +56,7 @@ export async function generateMetadata({
     ? pageMetadata({
         title: supplier.name,
         description: shopDescription(supplier),
-        path: routes.shop(supplier.slug),
+        path: pagedPath(routes.shop(supplier.slug), await searchParams),
         ownCard: true,
       })
     : {};

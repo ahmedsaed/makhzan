@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Category, Offer, Product, StockSignal, SupplierProfile } from "@/lib/api";
 import {
   breadcrumbJsonLd,
+  pagedPath,
   categoryDescription,
   homeDescription,
   homeJsonLd,
@@ -316,5 +317,15 @@ describe("breadcrumbJsonLd", () => {
     ]);
     expect(data.itemListElement[0].item).toMatch(/^https?:\/\/.+\/trades\/electronics$/);
     expect(data.itemListElement[2]).not.toHaveProperty("item");
+  });
+});
+
+describe("pagedPath", () => {
+  it("keeps a positive offset and drops everything else", () => {
+    expect(pagedPath("/trades/x", { offset: "24", sort: "price_asc" })).toBe("/trades/x?offset=24");
+    expect(pagedPath("/trades/x", { sort: "price_asc", in_stock: "all" })).toBe("/trades/x");
+    expect(pagedPath("/trades/x", { offset: "0" })).toBe("/trades/x");
+    expect(pagedPath("/trades/x", { offset: "abc" })).toBe("/trades/x");
+    expect(pagedPath("/trades/x", { offset: ["48", "72"] })).toBe("/trades/x?offset=48");
   });
 });
