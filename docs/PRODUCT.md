@@ -65,6 +65,35 @@ and the referral numbers.
   no discounts: one shop's before prices are a standing markup on most of its stock.
 - **Specs and datasheets are shown when the shop provides them** (DESIGN.md, C4).
 
+## Shop data: what is collected, and what is shown next (November 2026)
+
+Phase 1 (shipped) collects more of what shops already publish: units of sale, variants,
+quantity breaks, manufacturer part numbers, compatibility, "ships from abroad", videos,
+shop contact details; it also keeps hidden out-of-stock items and flags "price on
+request". The per-shop findings and costs are in the private configuration's
+`docs/qa/2026-11-discovery-summary.md`. Anything that costs a request per product stays
+switched off until the shop agrees.
+
+Phase 2 shows it, decided 2026-11-09:
+
+- **Product page:** minimum order ("EGP 0.25 each · min. 10 (EGP 2.50)"), the
+  manufacturer part number, an options table (each option with its own price, stock
+  and the date it was read), quantity breaks, "Ships from abroad" and "Fits: …"
+  badges, videos, "Price on request". Stock counts only where the shop itself shows
+  them.
+- **Shop page:** address, phone, WhatsApp and opening hours, from the shop's own site.
+- **Price history**, recorded from now (a row only when a listing's price or stock
+  changes) and shown once there is history: "lowest in 90 days", a small chart, "in
+  stock N of the last 12 weeks".
+- **Grouping by material for products sold per colour.** A maker lists one product per
+  colour; its resellers list one product per material with colour as an option. Until
+  the options table exists they stay separate products. With it, one product per
+  material (for example a filament type and weight) can hold every colour from every
+  shop, each with its own price.
+- **Crawler activity** on `/how-we-crawl` and each shop page: when we last read the
+  site, requests in the last 7 days, the measured gap between requests, and "Active" or
+  "Paused" with no reason given.
+
 ## Proposed, not yet discussed
 
 From the last round of the discussion, recorded to resume later.
