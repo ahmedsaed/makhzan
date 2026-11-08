@@ -42,6 +42,9 @@
   /* The filled compartment of the logo's organizer grid. The same orange as
    * `action` today, named apart so the mark never changes with a button. */
   --brand: #c2410c;
+  /* The scattered product icons at the top of every page (.bg-pattern). Barely
+   * off the ground: decoration, never something text has to read against. */
+  --pattern: #e2e1d9;
 }
 
 .dark {
@@ -68,6 +71,7 @@
   --age-muted: #d9c46c;
   --photo-frame: #ffffff;
   --brand: #c2410c;
+  --pattern: #24262b;
 }
 
 /* shadcn/Base UI primitives speak these names. Mapping them onto the palette
@@ -120,6 +124,7 @@
   --color-age-muted: var(--age-muted);
   --color-photo-frame: var(--photo-frame);
   --color-brand: var(--brand);
+  --color-pattern: var(--pattern);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -212,6 +217,46 @@
     font-weight: 500;
     direction: ltr;
     unicode-bidi: isolate;
+  }
+}
+
+/* The background pattern: product icons scattered over the top of every page,
+ * fading out by about a screen and a third down. The tile is a mask drawn by
+ * scripts/pattern-tile.mjs, painted here in the `pattern` token, so the colour
+ * follows the theme. It is absolutely positioned inside the page (layout.tsx),
+ * not fixed, so scrolling leaves it behind. The gradient's black and
+ * transparent are mask alpha, not colours. Phones get their own sparser tile. */
+@layer components {
+  .bg-pattern {
+    position: absolute;
+    inset: 0 0 auto;
+    height: 135svh;
+    background-color: var(--pattern);
+    mask-image: linear-gradient(to bottom, black 8%, transparent), url("/pattern-wide.svg");
+    mask-size:
+      100% 100%,
+      1180px 740px;
+    mask-repeat: no-repeat, repeat;
+    mask-position:
+      0 0,
+      center top;
+    mask-composite: intersect;
+  }
+
+  @media (width < 40rem) {
+    .bg-pattern {
+      height: 115svh;
+      mask-image: linear-gradient(to bottom, black 8%, transparent), url("/pattern-narrow.svg");
+      mask-size:
+        100% 100%,
+        430px 620px;
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .bg-pattern {
+      display: none;
+    }
   }
 }
 
