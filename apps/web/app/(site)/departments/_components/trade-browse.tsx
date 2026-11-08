@@ -66,7 +66,7 @@ export async function TradeBrowse({
   }
 
   const tree = tradeTree(categories, selected?.ref ?? null);
-  const pathname = selected ? routes.category(selected.ref) : routes.trade(trade);
+  const pathname = selected ? routes.category(selected.ref) : routes.department(trade);
   const query = scopedQuery(params, trade, categories, selected);
   const data = await fetchResults(query, { baseCategory: selected?.ref });
 
@@ -76,8 +76,8 @@ export async function TradeBrowse({
     ? totalOf(selected.ref, categories)
     : categories.reduce((sum, category) => sum + category.count, 0);
   const crumbs: Crumb[] = [
-    { label: "Trades", href: routes.trades() },
-    { label, href: routes.trade(trade) },
+    { label: "Departments", href: routes.departments() },
+    { label, href: routes.department(trade) },
   ];
   if (tree.group && tree.group.ref !== selected?.ref) {
     crumbs.push({ label: categoryNameOf(tree.group), href: routes.category(tree.group.ref) });
@@ -239,11 +239,11 @@ function TradeHeader({
           <Breadcrumb items={crumbs} className="flex min-h-11 items-center" />
         ) : (
           <Link
-            href={routes.trades()}
+            href={routes.departments()}
             className="inline-flex h-11 items-center gap-1 self-start text-sm text-ink-2 hover:text-ink"
           >
             <ChevronLeft aria-hidden="true" className="size-4" />
-            All trades
+            All departments
           </Link>
         )}
         {/* From `lg` the search sits beside the name rather than under it. */}

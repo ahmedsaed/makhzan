@@ -12,7 +12,7 @@ export function Detour() {
     <div className="mx-auto mt-8 flex max-w-xl flex-col gap-4">
       <SearchField />
       <nav aria-label="Browse" className="flex flex-wrap justify-center gap-x-5 text-sm">
-        <DetourLink href={routes.trades()}>All trades</DetourLink>
+        <DetourLink href={routes.departments()}>All departments</DetourLink>
         <DetourLink href={routes.shops()}>All shops</DetourLink>
         <DetourLink href={routes.home()}>Home</DetourLink>
       </nav>

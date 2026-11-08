@@ -53,7 +53,7 @@ describe("shop text", () => {
       "Electronics and Seals & Bearings",
     );
     expect(tradesInWords([d("a"), d("b"), d("c"), d("d"), d("e")])).toBe(
-      "A, B, C and 2 more trades",
+      "A, B, C and 2 more departments",
     );
   });
 });
@@ -68,7 +68,7 @@ describe("the trade bar", () => {
       { domain: "safety", count: 5 },
     ]);
     expect(shares.map((s) => s.domain)).toEqual(["electronics", "tools", "chemicals", null]);
-    expect(shares[3]).toMatchObject({ count: 10, label: "2 other trades 10" });
+    expect(shares[3]).toMatchObject({ count: 10, label: "2 other departments 10" });
     expect(shares.reduce((sum, s) => sum + s.percent, 0)).toBeCloseTo(100);
   });
 

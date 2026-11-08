@@ -42,7 +42,7 @@ function TradeRow({ trade }: { trade: TradeSummary }) {
   const image = objectImage(trade.domain);
   return (
     <Link
-      href={routes.trade(trade.domain)}
+      href={routes.department(trade.domain)}
       className="flex min-h-11 items-center gap-3 px-3 py-2.5 text-ink hover:bg-ground"
     >
       {image ? (

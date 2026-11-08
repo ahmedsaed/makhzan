@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { balancedColumns } from "@/app/(site)/trades/_components/browse-tile";
+import { balancedColumns } from "@/app/(site)/departments/_components/browse-tile";
 import type { Category } from "@/lib/api";
 import { categoryLimit, tradeDirectory } from "@/lib/trade-directory";
 
@@ -60,7 +60,7 @@ describe("the trades directory", () => {
       ["Bearings & Transmission", 300],
     ]);
     expect(seals.categories).toEqual([]);
-    expect(seals.groups[0].href).toBe("/trades/seals-bearings/seals");
+    expect(seals.groups[0].href).toBe("/departments/seals-bearings/seals");
   });
 
   it("lists a group's biggest categories, the 'Other' bucket last, then counts the rest", () => {

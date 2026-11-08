@@ -13,8 +13,8 @@ describe("siteUrl", () => {
 
   it("falls back to the dev server when unset or malformed", () => {
     vi.stubEnv("SITE_URL", "");
-    expect(absoluteUrl("/trades")).toBe("http://localhost:3000/trades");
+    expect(absoluteUrl("/departments")).toBe("http://localhost:3000/departments");
     vi.stubEnv("SITE_URL", "not a url");
-    expect(absoluteUrl("/trades")).toBe("http://localhost:3000/trades");
+    expect(absoluteUrl("/departments")).toBe("http://localhost:3000/departments");
   });
 });

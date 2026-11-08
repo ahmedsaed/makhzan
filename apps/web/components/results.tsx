@@ -340,7 +340,7 @@ function NoResults({
     removals.push({ label: "Any category", href: links.clear("category") });
   }
   if (query.domain && removable("domain")) {
-    removals.push({ label: "Every trade", href: links.clear("domain") });
+    removals.push({ label: "Every department", href: links.clear("domain") });
   }
   if (query.minPrice !== undefined || query.maxPrice !== undefined) {
     removals.push({ label: "Any price", href: links.clear("min_price", "max_price") });

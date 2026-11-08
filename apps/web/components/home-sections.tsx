@@ -155,8 +155,8 @@ export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSum
     <section aria-labelledby="trades-heading" data-home-section="trades">
       <SectionHead
         id="trades-heading"
-        title="Browse by trade"
-        more={{ href: routes.trades(), label: `All ${cards.length} trades` }}
+        title="Browse by department"
+        more={{ href: routes.departments(), label: `All ${cards.length} departments` }}
       />
 
       <TradeList trades={rows.slice(0, HOME_TRADES)} className="md:hidden" />
@@ -169,7 +169,7 @@ export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSum
             className="flex flex-col rounded-card border border-line bg-surface"
           >
             <Link
-              href={routes.trade(card.domain)}
+              href={routes.department(card.domain)}
               className="flex items-center gap-3 rounded-t-card border-b border-line px-4 py-3 text-ink hover:bg-ground"
             >
               <span className="grid size-10 shrink-0 place-items-center rounded-md border border-line bg-photo-frame">
@@ -209,7 +209,7 @@ export function HomeTrades({ cards, rows }: { cards: TradeCard[]; rows: TradeSum
           {rest.map((card, index) => (
             <span key={card.domain}>
               {index > 0 && ", "}
-              <Link href={routes.trade(card.domain)} className="text-link hover:underline">
+              <Link href={routes.department(card.domain)} className="text-link hover:underline">
                 {card.label}
               </Link>{" "}
               <span className="text-ink-3 tabular">{formatCount(card.count)}</span>
@@ -364,7 +364,7 @@ export function HomeStats({
   const figures = [
     stats && { label: "products", value: stats.products },
     stats && { label: "shops", value: stats.suppliers },
-    trades > 0 && { label: "trades", value: trades },
+    trades > 0 && { label: "departments", value: trades },
     stats && { label: "categories", value: stats.categories },
   ].filter((figure): figure is { label: string; value: number } => Boolean(figure));
   if (figures.length === 0) return null;

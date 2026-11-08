@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * The previous site's URLs were shared, bookmarked and indexed. Each still has
- * an equivalent, so each must answer with a permanent redirect to it — one
- * hop, 308, query string intact — rather than a 404.
+ * The previous site's URLs were shared, bookmarked and indexed, and so were the
+ * /trades URLs that became /departments in November 2026. Each still has an
+ * equivalent, so each must answer with a permanent redirect to it — one hop,
+ * 308, query string intact — rather than a 404. `maxRedirects: 0` is what
+ * makes it one hop: the first Location must already be the final URL, so
+ * /en/browse/x may not pass through /trades/x on its way.
  */
 
 const OLD_TO_NEW: [string, string][] = [
@@ -12,9 +15,14 @@ const OLD_TO_NEW: [string, string][] = [
   ["/en/search?q=ESP32", "/search?q=ESP32"],
   ["/ar/products/prod-1", "/products/prod-1"],
   ["/en/how-we-crawl", "/how-we-crawl"],
-  ["/en/browse/electronics", "/trades/electronics"],
-  ["/ar/browse/electronics/ics", "/trades/electronics/ics"],
-  ["/browse/electronics", "/trades/electronics"],
+  ["/en/browse/electronics", "/departments/electronics"],
+  ["/ar/browse/electronics/ics", "/departments/electronics/ics"],
+  ["/browse/electronics", "/departments/electronics"],
+  ["/en/browse/electronics/ics?sort=price_asc", "/departments/electronics/ics?sort=price_asc"],
+  ["/trades", "/departments"],
+  ["/trades/electronics", "/departments/electronics"],
+  ["/trades/electronics/resistors?sort=price_asc", "/departments/electronics/resistors?sort=price_asc"],
+  ["/en/trades/electronics", "/departments/electronics"],
   ["/en/suppliers/shop-a", "/shops/shop-a"],
   ["/suppliers/shop-a", "/shops/shop-a"],
   // The prefix goes first; the listing's own redirect is checked below.
@@ -50,7 +58,7 @@ test("a listing with no product has nowhere to go, so it is a 404 too", async ({
 });
 
 test("current URLs are served, not redirected", async ({ request }) => {
-  for (const path of ["/", "/search?q=ESP32", "/trades/electronics", "/shops/shop-a"]) {
+  for (const path of ["/", "/search?q=ESP32", "/departments/electronics", "/shops/shop-a"]) {
     const response = await request.get(path, { maxRedirects: 0 });
     expect(response.status(), path).toBe(200);
   }

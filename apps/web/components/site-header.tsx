@@ -48,7 +48,7 @@ export function SiteHeader({ search = true }: { search?: boolean }) {
         )}
 
         <nav aria-label="Site" className="ms-auto flex items-center gap-1 text-sm">
-          <NavLink href={routes.trades()}>Trades</NavLink>
+          <NavLink href={routes.departments()}>Departments</NavLink>
           <NavLink href={routes.shops()}>Shops</NavLink>
           <NavLink href={routes.howWeCrawl()} className="hidden md:flex">
             How we crawl

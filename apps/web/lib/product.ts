@@ -269,7 +269,7 @@ export function categoryTrail(category: CategoryRef, categories: Category[]): Cr
     current = parent ? byRef.get(parent) : undefined;
   }
   return [
-    { label: tradeLabel(category.domain), href: routes.trade(category.domain) },
+    { label: tradeLabel(category.domain), href: routes.department(category.domain) },
     ...chain.map((item) => ({
       label: item.name_en,
       href: routes.category(item.ref),

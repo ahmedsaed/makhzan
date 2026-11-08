@@ -10,7 +10,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 const SITE = "https://makhzan.test";
 
 test("the header carries the logo, named as the way home", async ({ page }) => {
-  await page.goto("/trades");
+  await page.goto("/departments");
   const home = page.locator("header").getByRole("link", { name: "makhzan, home" });
   await expect(home).toBeVisible();
   await expect(home.locator("[data-logo] svg")).toBeVisible();
@@ -55,7 +55,7 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   const sitemap = await request.get("/sitemap/0.xml");
   expect(sitemap.status()).toBe(200);
   const xml = await sitemap.text();
-  for (const path of ["/", "/trades", "/trades/electronics", "/trades/electronics/ics"]) {
+  for (const path of ["/", "/departments", "/departments/electronics", "/departments/electronics/ics"]) {
     expect(xml, path).toContain(`<loc>${SITE}${path === "/" ? "" : path}`);
   }
   expect(xml).toContain(`<loc>${SITE}/shops/shop-a</loc>`);
@@ -74,7 +74,7 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   expect(productXml).toContain("<lastmod>2026-10-02T08:30:00Z</lastmod>");
   expect(productXml).toContain(`<loc>${SITE}/products/6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b</loc>`);
   expect(productXml).toContain(`<loc>${SITE}/products/9f8e7d6c-5b4a-4321-8fed-cba987654321</loc>`);
-  expect(productXml).not.toContain("/trades");
+  expect(productXml).not.toContain("/departments");
   expect((await request.get("/sitemap/2.xml")).status()).toBe(404);
 
   const robots = await request.get("/robots.txt");
@@ -140,7 +140,7 @@ test("a product card renders with its photo, and without one it cannot get", asy
 });
 
 test("every kind of page has a card, and search is not indexed", async ({ page, request }) => {
-  for (const path of ["/", "/trades/electronics", "/trades/electronics/ics", "/shops/shop-a"]) {
+  for (const path of ["/", "/departments/electronics", "/departments/electronics/ics", "/shops/shop-a"]) {
     await page.goto(path);
     const image = await meta(page, "og:image");
     expect(image, path).toMatch(new RegExp(`^${SITE}/`));

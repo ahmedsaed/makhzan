@@ -63,7 +63,7 @@ function TradeHead({ trade }: { trade: DirectoryTrade }) {
   const frame = trade.major ? "size-[52px] md:size-14" : "size-[52px] md:size-11";
   return (
     <Link
-      href={routes.trade(trade.domain)}
+      href={routes.department(trade.domain)}
       className={cn(
         "group flex min-h-11 items-center gap-3 py-2.5 pl-3 text-ink hover:bg-ground",
         "md:rounded-t-card md:px-4 md:py-3 md:hover:bg-transparent",
@@ -164,7 +164,7 @@ function CategoryList({ trade }: { trade: DirectoryTrade }) {
         ))}
       </ul>
       {trade.more > 0 && (
-        <MoreLink href={routes.trade(trade.domain)}>
+        <MoreLink href={routes.department(trade.domain)}>
           All {trade.categoryCount} categories in {trade.label}
         </MoreLink>
       )}

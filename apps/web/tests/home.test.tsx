@@ -142,7 +142,7 @@ describe("home page", () => {
   it("links a trade's categories through the trade", async () => {
     await renderHome();
     const link = screen.getAllByRole("link", { name: /^O-Rings/ })[0];
-    expect(link).toHaveAttribute("href", "/trades/seals-bearings/o-rings");
+    expect(link).toHaveAttribute("href", "/departments/seals-bearings/o-rings");
   });
 
   it("leaves out each section whose fetch failed and keeps the search", async () => {

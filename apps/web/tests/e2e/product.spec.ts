@@ -505,7 +505,7 @@ test("the breadcrumb walks trade › group › category, all links", async ({ pa
   await page.goto("/products/p-single");
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link");
   await expect(crumbs).toHaveText(["Electronics", "Components", "Integrated Circuits"]);
-  await expect(crumbs.last()).toHaveAttribute("href", "/trades/electronics/ics");
+  await expect(crumbs.last()).toHaveAttribute("href", "/departments/electronics/ics");
 });
 
 test("an offer with no price stays visible and is not shown as free", async ({ page }) => {
@@ -861,7 +861,7 @@ test.describe("readable product URLs", () => {
     const crumbs = await jsonLd(page, "BreadcrumbList");
     const names = crumbs.itemListElement.map((item: { name: string }) => item.name);
     expect(names.at(-1)).toBe("Servo Motor Metal Gear MG90S (180°)");
-    expect(crumbs.itemListElement[0].item).toMatch(/^https:\/\/makhzan\.test\/trades\//);
+    expect(crumbs.itemListElement[0].item).toMatch(/^https:\/\/makhzan\.test\/departments\//);
   });
 });
 

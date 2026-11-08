@@ -60,7 +60,7 @@ export function formatDay(date: Date, now: Date = new Date()): string {
 export function tradesInWords(domains: ShopSummary["domains"], limit = 3): string {
   const names = domains.slice(0, limit).map((d) => tradeLabel(d.domain));
   const rest = domains.length - names.length;
-  if (rest > 0) names.push(rest === 1 ? "1 more trade" : `${rest} more trades`);
+  if (rest > 0) names.push(rest === 1 ? "1 more department" : `${rest} more departments`);
   if (names.length <= 1) return names[0] ?? "";
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
@@ -93,7 +93,7 @@ export function tradeShares(domains: ShopSummary["domains"], segments = 3): Trad
     const count = tail.reduce((sum, d) => sum + d.count, 0);
     out.push({
       domain: null,
-      label: `${tail.length} other trades ${formatCount(count)}`,
+      label: `${tail.length} other departments ${formatCount(count)}`,
       count,
       percent: share(count),
     });
