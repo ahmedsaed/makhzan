@@ -216,8 +216,8 @@ def test_variants_and_options_are_kept_when_there_is_a_choice():
     raw = _volta()._to_raw(product)
     assert raw.raw["options"] == {"Color": ["Red", "Black"]}
     assert raw.raw["variants"] == [
-        {"title": "Red", "price": "150.00", "sku": "R", "available": True},
-        {"title": "Black", "price": "155.00", "available": False},
+        {"title": "Red", "price": "150.00", "in_stock": True, "sku": "R"},
+        {"title": "Black", "price": "155.00", "in_stock": False},
     ]
     assert raw.price_text == "150.00" and raw.availability_text == "in stock"
 

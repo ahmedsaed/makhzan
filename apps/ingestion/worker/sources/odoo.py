@@ -14,7 +14,8 @@ Three Odoo quirks handled here:
 
 A card also carries the internal reference (in the image alt), a struck-through
 list price when the product is reduced, and a short subtitle that some shops use
-for the brand ("Acme Brand") or the warranty. All of it is read here. The full
+for the brand ("Acme Brand") or the warranty, and its image URL ends in a token
+that changes when the product is edited. All of it is read here. The full
 description, the photo gallery and datasheet links are only on the product page —
 one request per product, which is why they are not.
 """
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 from makhzan_schemas.contracts import RawItem
 from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_category_name
@@ -192,6 +193,8 @@ class OdooAdapter(SourceAdapter):
         raw: dict = {"platform": "odoo", "category": partition or None}
         if sku := _internal_reference(img):
             raw["sku"] = sku
+        if token := _change_token(img_src):
+            raw["change_token"] = token
         if compare_at := _compare_at(card, price_text):
             raw["compare_at_price"] = compare_at
         if warranty := next((m.group(0) for m in map(_WARRANTY_RE.search, lines) if m), None):
@@ -238,6 +241,22 @@ def _internal_reference(img) -> str | None:
     alt = (img.attributes.get("alt") or "") if img else ""
     match = _REFERENCE_RE.match(alt)
     return match.group(1).strip() if match else None
+
+
+def _change_token(img_src: str | None) -> str | None:
+    """The `?unique=` token on the card's product image, kept but never shown.
+
+    Odoo derives it from the product template's last write, so it moves when the
+    shop edits the product (a price, a description) and stays put otherwise —
+    stock moves do not write the template, but the card's ribbon covers stock.
+    It is what lets a later detail fetch visit only the products that changed,
+    instead of every product page every cycle. An opaque token, not a date.
+    """
+    if not img_src or "/product.template/" not in img_src:
+        return None  # the shop's logo or a placeholder, not the product's photo
+    values = parse_qs(urlsplit(img_src).query).get("unique") or []
+    token = values[0].strip() if values else ""
+    return token if 0 < len(token) <= 64 else None
 
 
 def _compare_at(card, price_text: str | None) -> str | None:
