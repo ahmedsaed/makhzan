@@ -179,3 +179,61 @@ async def test_a_source_with_no_host_still_paces(monkeypatch):
             raise NotImplementedError
 
     assert await _pace(_Stub()) == 7.0
+
+
+# --------------------------------------------------------------------------- #
+# Matching, as RFC 9309 has it — not as the 3.12 standard library does
+# --------------------------------------------------------------------------- #
+
+STOREFRONT = """
+User-agent: *
+Allow: /
+Disallow: /cart
+Disallow: /collections/*sort_by*
+Disallow: /collections/*+*
+Disallow: /*.atom$
+Allow: /cart/help
+"""
+
+
+@pytest.mark.parametrize(
+    ("path", "allowed"),
+    [
+        ("/products.json?limit=250&page=2", True),
+        ("/collections/sensors/products.json?limit=250&page=1", True),
+        # Wildcards: the standard library on Python 3.12 reads these literally.
+        ("/collections/all?sort_by=price-ascending", False),
+        ("/collections/sensors+motors", False),
+        ("/collections/sensors%2Bmotors/products.json", False),  # however it is spelled
+        # `$` anchors the end: the feed is disallowed, a page named like it is not.
+        ("/collections/all.atom", False),
+        ("/collections/all.atom/more", True),
+        # Longest match wins, not the first line: `Allow: /` comes first.
+        ("/cart", False),
+        ("/cart/help", True),
+        ("/robots.txt", True),
+    ],
+)
+def test_rules_match_the_way_rfc_9309_says(path, allowed):
+    rules = robots_mod.Rules(STOREFRONT)
+    assert rules.allowed(f"https://shop.test{path}", UA) is allowed
+
+
+def test_a_group_naming_us_replaces_the_star_group():
+    rules = robots_mod.Rules(
+        "User-agent: *\nDisallow: /\n\nUser-agent: mozilla\nUser-agent: other\nDisallow: /x\n"
+    )
+    assert rules.allowed("https://shop.test/a", UA) is True
+    assert rules.allowed("https://shop.test/x", UA) is False
+
+
+def test_rules_before_any_user_agent_bind_nobody():
+    rules = robots_mod.Rules("Disallow: /\nUser-agent: *\nDisallow: /private\n")
+    assert rules.allowed("https://shop.test/a", UA) is True
+    assert rules.allowed("https://shop.test/private/a", UA) is False
+
+
+def test_a_malformed_crawl_delay_is_not_a_rule():
+    rules = robots_mod.Rules("User-agent: *\nCrawl-delay: soon\nDisallow: /x\n")
+    assert rules.crawl_delay(UA) is None
+    assert rules.allowed("https://shop.test/x", UA) is False
