@@ -50,6 +50,12 @@ describe("what's inside a trade", () => {
       "Resistors, integrated circuits, PLCs, O-Rings, 3D printers",
     );
   });
+
+  it("lowers the first name's later words too, so the phrase reads in one style", () => {
+    expect(asPhrase(["Batteries & Chargers", "Power Supplies", "LED Strips"])).toBe(
+      "Batteries & chargers, power supplies, LED strips",
+    );
+  });
 });
 
 describe("trades are listed by size", () => {

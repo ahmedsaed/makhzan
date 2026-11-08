@@ -40,6 +40,41 @@ test.describe("on a phone", () => {
     await expect(page).toHaveURL("/trades");
   });
 
+  test("does not focus the search field, so the keyboard stays down", async ({ page }) => {
+    await page.goto("/");
+    const field = page.getByRole("searchbox", { name: "Search" });
+    await expect(field).toBeVisible();
+    expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
+    // Revisiting the page is what brought the keyboard up.
+    await page.getByRole("link", { name: "All 11 trades" }).click();
+    await expect(page).toHaveURL("/trades");
+    await page.goBack();
+    await expect(field).toBeVisible();
+    expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
+    // A tap still focuses it.
+    await field.click();
+    expect(await field.evaluate((el) => el === document.activeElement)).toBe(true);
+  });
+
+  test("a trade row's categories wrap at 320px instead of being cut off", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto("/");
+    const phrase = page
+      .locator("[data-trade=seals-bearings]")
+      .getByText("O-Rings, bearings, oil seals, gaskets", { exact: true });
+    await expect(phrase).toBeVisible();
+    const box = await phrase.evaluate((el) => ({
+      clipped: el.scrollWidth > el.clientWidth,
+      ellipsis: getComputedStyle(el).textOverflow === "ellipsis",
+      lines: Math.round(
+        el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight),
+      ),
+    }));
+    expect(box.clipped).toBe(false);
+    expect(box.ellipsis).toBe(false);
+    expect(box.lines).toBeGreaterThan(1);
+  });
+
   test("has no horizontal scroll", async ({ page }) => {
     await page.goto("/");
     const overflow = await page.evaluate(
@@ -64,6 +99,15 @@ test.describe("on a desktop", () => {
     const how = await page.locator('[data-home-section="how"]').boundingBox();
     expect(hero!.width + how!.width).toBeGreaterThan(1000);
     expect(Math.abs(hero!.y - how!.y)).toBeLessThan(80);
+  });
+
+  test("does not focus the search field until it is clicked", async ({ page }) => {
+    await page.goto("/");
+    const field = page.getByRole("searchbox", { name: "Search" });
+    await expect(field).toBeVisible();
+    expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
+    await field.click();
+    expect(await field.evaluate((el) => el === document.activeElement)).toBe(true);
   });
 
   test("shows the totals as figures and example searches", async ({ page }) => {
