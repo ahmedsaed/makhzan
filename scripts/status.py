@@ -203,6 +203,9 @@ async def recent_runs(session, source_filter: str | None, limit: int) -> None:
             print(f"  {RED}{'':11s}! {str(message)[:96]}{RESET}")
         if len(errors) > 2:
             print(f"  {RED}{'':11s}! ... {len(errors) - 2} more{RESET}")
+        # Checks only the adapter can make (a Wix sitemap product on no gallery).
+        for message in ((run.stats or {}).get("source_report") or {}).get("warnings", [])[:2]:
+            print(f"  {YELLOW}{'':11s}? {str(message)[:96]}{RESET}")
 
 
 async def cycle_history(session, source_filter: str | None, days: int = 30) -> None:

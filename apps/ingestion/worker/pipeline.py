@@ -681,6 +681,8 @@ async def _run(
         requests.update(adapter.extra_requests())
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}
+        if report := adapter.run_report():
+            stats["source_report"] = report
         if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:
             # Kept as out of stock rather than archived; "unknown" ones were
             # never stored, and a route with no price or photo creates nothing.
