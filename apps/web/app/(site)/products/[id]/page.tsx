@@ -288,7 +288,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
         {split && (
           <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-2">
-            <Details sources={sources} single={!several} />
+            <Details sources={sources} />
           </div>
         )}
       </div>

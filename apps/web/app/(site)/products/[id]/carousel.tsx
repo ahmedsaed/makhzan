@@ -110,6 +110,37 @@ export function ArrowButton({
 }
 
 /**
+ * A fade at whichever edge of a horizontal strip (its child marked
+ * `data-carousel-track`) has more beyond it: for a strip too short for arrow
+ * buttons, such as a row of tabs. In the page's `ground` colour, so it reads
+ * as the strip running on under the edge. Without JavaScript there is no fade,
+ * and the strip still scrolls.
+ */
+export function EdgeFade({ children, className }: { children: ReactNode; className?: string }) {
+  const [track, setTrack] = useState<HTMLElement | null>(null);
+  const strip = useStrip(track);
+  const box = useCallback((node: HTMLDivElement | null) => {
+    setTrack(node?.querySelector<HTMLElement>("[data-carousel-track]") ?? null);
+  }, []);
+  const fade = "pointer-events-none absolute inset-y-0 z-10 w-10";
+  return (
+    <div ref={box} className={cn("relative", className)}>
+      {children}
+      {strip.scrollable && !strip.atStart && (
+        <div aria-hidden="true" className={cn(fade, "start-0 bg-linear-to-r from-ground")} />
+      )}
+      {strip.scrollable && !strip.atEnd && (
+        <div
+          aria-hidden="true"
+          data-edge-fade
+          className={cn(fade, "end-0 bg-linear-to-l from-ground")}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
  * Previous and next buttons over a horizontal scroll strip: its child marked
  * `data-carousel-track`. The strip is server-rendered and swipes and snaps
  * without JavaScript; the buttons need it, so they appear only once it runs,

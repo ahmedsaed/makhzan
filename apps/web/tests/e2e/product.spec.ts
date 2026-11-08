@@ -40,6 +40,9 @@ test.describe("one offer", () => {
 
   test("the bar never covers the end of the page", async ({ page }) => {
     await page.goto("/products/p-single");
+    // The page settles once the description's cap and Read more are in;
+    // scrolling before that measures a page about to change height.
+    await expect(page.getByRole("button", { name: "Read more" })).toBeVisible();
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     const bar = await page.locator("[data-bottom-bar]").boundingBox();
     const footer = await page.locator("footer").boundingBox();
@@ -323,6 +326,43 @@ test.describe("the photo viewer", () => {
   });
 });
 
+test.describe("a long description", () => {
+  // p-single's description runs far past three quarters of a phone screen.
+  test.use({ viewport: PHONE });
+
+  /** The description's box: how tall it is drawn, and how tall its text is. */
+  const heights = (page: import("@playwright/test").Page) =>
+    page
+      .locator("[data-description] > div")
+      .evaluate((node) => ({ shown: node.clientHeight, full: node.scrollHeight }));
+
+  test("is capped at three quarters of the screen, with Read more", async ({ page }) => {
+    await page.goto("/products/p-single");
+    const more = page.getByRole("button", { name: "Read more" });
+    await expect(more).toBeVisible();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    const capped = await heights(page);
+    expect(capped.shown).toBeLessThanOrEqual(Math.ceil(PHONE.height * 0.75) + 1);
+    expect(capped.full).toBeGreaterThan(capped.shown);
+
+    await more.click();
+    const less = page.getByRole("button", { name: "Show less" });
+    await expect(less).toHaveAttribute("aria-expanded", "true");
+    const open = await heights(page);
+    expect(open.shown).toBeGreaterThanOrEqual(open.full - 1);
+
+    await less.click();
+    await expect(page.getByRole("button", { name: "Read more" })).toBeVisible();
+    expect((await heights(page)).shown).toBe(capped.shown);
+  });
+
+  test("a short one shows in full, with no button", async ({ page }) => {
+    await page.goto("/products/p-specs");
+    await expect(page.locator("[data-description]")).toContainText("USB data link.");
+    await expect(page.getByRole("button", { name: /Read more|Show less/ })).toHaveCount(0);
+  });
+});
+
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false, viewport: PHONE });
 
@@ -330,11 +370,12 @@ test.describe("without JavaScript", () => {
     await page.goto("/products/p-single");
     await expect(page.getByText("This sentence is the end of it.", { exact: false })).toBeVisible();
     await expect(page.getByText("Read more")).toHaveCount(0);
-    const text = page.locator("[data-description] p");
-    // Not clamped: the box is as tall as its text.
-    expect(
-      await text.evaluate((node) => node.scrollHeight - node.clientHeight),
-    ).toBeLessThanOrEqual(1);
+    // Not capped: the box is as tall as its text.
+    const box = await page
+      .locator("[data-description] > div")
+      .evaluate((node) => ({ shown: node.clientHeight, full: node.scrollHeight }));
+    expect(box.full - box.shown).toBeLessThanOrEqual(1);
+    expect(box.shown).toBeGreaterThan(PHONE.height);
   });
 
   test("the out-of-stock offers unfold", async ({ page }) => {
@@ -467,9 +508,17 @@ test.describe("what the shop published (C4)", () => {
     await page.goto("/products/p-specs");
     await expect(page.locator("[data-brand]")).toHaveText("Brand · UNI-T");
 
+    // One shop: the heading and whose listing it is, and no tab strip.
+    const details = page.locator("[data-details]");
+    await expect(details.getByRole("heading", { name: "What the shops say" })).toBeVisible();
+    await expect(details.locator("[data-details-source]")).toHaveText([
+      "From Nile Parts's listing",
+    ]);
+    await expect(details.locator("[data-details-tab]")).toHaveCount(0);
+    await expect(details.getByRole("radiogroup")).toHaveCount(0);
+
     const specs = page.locator("[data-specs]");
     await expect(specs.getByRole("heading", { name: "Specifications" })).toBeVisible();
-    await expect(specs).toContainText("From Nile Parts's listing");
     await expect(specs.locator("dt")).toHaveText(["Model", "DC Voltage", "Display"]);
     await expect(specs.locator("dd")).toHaveText(["UT61E", "220mV – 1000V", "22000 counts"]);
     // Monospace only where the value is a part number (S3).
@@ -477,7 +526,6 @@ test.describe("what the shop published (C4)", () => {
 
     const sheets = page.locator("[data-datasheets]");
     await expect(sheets.getByRole("heading", { name: "Datasheets" })).toBeVisible();
-    await expect(sheets).toContainText("From Nile Parts's listing");
     const links = sheets.locator("[data-datasheet]");
     await expect(links).toHaveText(["UT61E user manual", "ut61e-datasheet.pdf"]);
     // Each opens the file on the shop's site, through the one way out (P4).
@@ -531,18 +579,63 @@ test.describe("what the shop published (C4)", () => {
 
   test("several shops: a tab per shop that wrote something, richest first", async ({ page }) => {
     await page.goto("/products/p-multi");
+    await expect(page.getByRole("heading", { name: "What the shops say" })).toBeVisible();
     const tabs = page.locator("[data-details-tab]");
     await expect(tabs).toHaveText(["Delta Bench", "Nile Parts"]);
+    const source = page.locator("[data-details-source]:visible");
     const specs = page.locator("[data-specs]:visible");
     await expect(specs).toHaveCount(1);
-    await expect(specs).toContainText("From Delta Bench's listing");
+    await expect(source).toHaveText("From Delta Bench's listing");
     await expect(specs.locator("dt")).toHaveText(["Flash Memory", "GPIO Pins"]);
     await expect(page.getByText("USB Chip")).toBeHidden();
 
     await tabs.filter({ hasText: "Nile Parts" }).click();
-    await expect(specs).toContainText("From Nile Parts's listing");
+    await expect(source).toHaveText("From Nile Parts's listing");
     await expect(specs.locator("dt")).toHaveText(["USB Chip"]);
     await expect(page.locator("[data-datasheets]")).toHaveCount(0);
+  });
+
+  test("the selected tab is underlined in the action colour, the rest in ink-2", async ({
+    page,
+  }) => {
+    await page.goto("/products/p-multi");
+    const tabs = page.locator("[data-details-tab]");
+    const ACTION = "rgb(194, 65, 12)";
+    await expect(tabs.first()).toHaveCSS("border-bottom-color", ACTION);
+    await expect(tabs.first()).toHaveCSS("border-bottom-width", "2px");
+    await expect(tabs.last()).not.toHaveCSS("border-bottom-color", ACTION);
+    const [first, last] = await tabs.evaluateAll((nodes) =>
+      nodes.map((n) => getComputedStyle(n).color),
+    );
+    expect(first).not.toBe(last);
+  });
+
+  test("arrow keys move between shops: one radio group, one tab stop", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    const group = page.getByRole("radiogroup", { name: "What the shops say" });
+    await expect(group.getByRole("radio")).toHaveCount(2);
+    await group.getByRole("radio", { name: "Delta Bench" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(group.getByRole("radio", { name: "Nile Parts" })).toBeChecked();
+    await expect(page.locator("[data-specs]:visible dt")).toHaveText(["USB Chip"]);
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.locator("[data-specs]:visible dt")).toHaveText(["Flash Memory", "GPIO Pins"]);
+  });
+
+  test("the tabs stay on one row at 320px, scrolling rather than wrapping", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto("/products/p-multi");
+    const tops = await page
+      .locator("[data-details-tab]")
+      .evaluateAll((nodes) => nodes.map((n) => Math.round(n.getBoundingClientRect().top)));
+    expect(new Set(tops).size).toBe(1);
+    const strip = page.getByRole("radiogroup");
+    expect(await strip.evaluate((n) => getComputedStyle(n).flexWrap)).toBe("nowrap");
+    expect((await page.locator("[data-details-tab]").first().boundingBox())!.height).toBe(44);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 
   test.describe("without JavaScript", () => {

@@ -24,7 +24,7 @@ Measured on 60.9k active listings (November 2026).
 | 41% of listings are out of stock | Out of stock is **hidden by default**, and the count of hidden items is always shown. |
 | A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). |
 | Arabic titles 0.1%, Arabic descriptions 3% | **English only.** Arabic search queries keep working; the Arabic interface is gone. |
-| Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions are shown in full, after makhzan's own facts and the way to the shop. |
+| Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions come after makhzan's own facts and the way to the shop, capped at three quarters of the screen behind Read more. |
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
@@ -118,16 +118,25 @@ the page container on desktop; each section is left out when its fetch fails.
   swipe, arrows, Left/Right and Esc, an "n / N" counter, and focus back on the photo
   when it closes.
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
-  shop page, the description (in full: no clamp, no Read more). A fixed bottom bar on
-  phones: price, "checked …" and **View at {shop}**.
+  shop page, then what the shop wrote. A fixed bottom bar on phones: price, "checked …"
+  and **View at {shop}**.
 - Similar products are always last, on every product page: a swipeable row with arrows
   on a phone, a grid from `sm`.
-- What the shops wrote: description, specifications (name/value rows) and datasheets
-  (PDF links), each labelled with its source ("From Shop A's listing"). With several
-  shops, a **Details** section with a "From:" tab per shop that wrote anything, richest
-  first; one shop at a time, never merged (shops contradict each other). The tabs are
-  radio buttons and work without JavaScript. A shop that wrote nothing gets no tab;
-  absent data means no section, never an empty one.
+- **What the shops say** (a heading on its own line): description, specifications
+  (name/value rows) and datasheets (PDF links), one shop at a time, never merged (shops
+  contradict each other), each shop's panel opening with its source ("From Shop A's
+  listing", rule C4). With several shops, an underline tab strip of their names under
+  the heading, richest first: one row that never wraps and scrolls sideways on a phone
+  (faded at the edge with more beyond), 44px tall on phones, a hairline under the
+  strip, the selected tab in `ink` with a 2px `action` underline and the rest in
+  `ink-2`. The tabs are a radio group (one tab stop, arrow keys between shops) and work
+  without JavaScript. With one shop there is no strip. A shop that wrote nothing gets
+  no tab; absent data means no section, never an empty one.
+- The description is capped at three quarters of the screen's height (at least 16rem;
+  about 28 lines on a laptop), faded at the cut, with **Read more** and **Show less**:
+  the cap fills most of any screen without forcing a long scroll. The button appears
+  only when the text actually overflows the cap, measured in the browser; a short
+  description shows in full. Without JavaScript nothing is capped.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
