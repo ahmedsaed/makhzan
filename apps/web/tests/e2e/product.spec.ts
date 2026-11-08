@@ -510,3 +510,16 @@ test.describe("readable product URLs", () => {
     expect(crumbs.itemListElement[0].item).toMatch(/^https:\/\/makhzan\.test\/trades\//);
   });
 });
+
+test("the page opens a connection to the main photo's server early", async ({ page }) => {
+  await page.goto("/products/p-single");
+  await expect(page.locator('link[rel="preconnect"][href="https://volt-corner.test"]')).toHaveCount(
+    1,
+  );
+  // In the server's HTML: the test photos' host does not resolve, so in the
+  // browser the frame swaps a failed photo for its fallback.
+  const html = await (await page.request.get("/products/p-single")).text();
+  expect(html).toMatch(
+    /<img[^>]*caliper-1\.jpg[^>]*fetchPriority="high"|<img[^>]*fetchPriority="high"[^>]*caliper-1\.jpg/i,
+  );
+});

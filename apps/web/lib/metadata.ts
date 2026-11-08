@@ -31,6 +31,22 @@ const SITE_CARD = {
  * path, and the three can never disagree between the tab, the canonical link
  * and the preview card.
  */
+/**
+ * The canonical path of a results page (trade, category, shop): the page
+ * itself with every filter dropped, so a sorted, price-ranged or "show out of
+ * stock" view counts as the page and not as thousands of near-copies; but its
+ * paging kept, so page 3 is its own page. Pointing page 3 at page 1 would tell
+ * Google to ignore the products only page 3 lists.
+ */
+export function pagedPath(
+  path: string,
+  searchParams: Record<string, string | string[] | undefined>,
+): string {
+  const raw = searchParams.offset;
+  const offset = Number.parseInt(Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? ""), 10);
+  return Number.isFinite(offset) && offset > 0 ? `${path}?offset=${offset}` : path;
+}
+
 export function pageMetadata({
   title,
   description,
