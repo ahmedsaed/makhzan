@@ -82,6 +82,50 @@ def html_to_text(html: str | None) -> str | None:
     return text or None
 
 
+_HEADING = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
+
+
+def _heading_key(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.casefold()).split())
+
+
+def without_sections(html: str | None, headings: list[str] | tuple[str, ...]) -> str | None:
+    """`html` without the sections under the named headings.
+
+    For a shop that appends the same boilerplate ("Why buy from us?", "Ordering
+    and delivery") to every description: identical on most of the catalogue, it
+    would otherwise dominate every text index and bury the product's own words.
+
+    A section is its heading and everything after it up to the next heading of
+    the same or a higher level, so a sub-heading inside it goes with it. Headings
+    match by their words, ignoring case and punctuation. Only top-level siblings
+    are removed: a template's sections are flat, and reaching into nested markup
+    risks taking the product's own text with it.
+    """
+    if not html or not headings:
+        return html
+    wanted = {_heading_key(h) for h in headings if h.strip()}
+    tree = HTMLParser(html)
+    root = tree.body or tree.root
+    if root is None:
+        return html
+    doomed: list[Node] = []
+    level = None  # the level of the section being removed, while inside one
+    for node in root.iter():
+        rank = _HEADING.get(node.tag)
+        if rank is not None and level is not None and rank <= level:
+            level = None
+        if level is None and rank is not None and _heading_key(node.text()) in wanted:
+            level = rank
+        if level is not None:
+            doomed.append(node)
+    if not doomed:
+        return html
+    for node in doomed:
+        node.decompose()
+    return "".join(child.html or "" for child in root.iter(include_text=True))
+
+
 # --------------------------------------------------------------------------- #
 # Specs
 # --------------------------------------------------------------------------- #
