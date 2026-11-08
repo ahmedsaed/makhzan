@@ -93,7 +93,7 @@ export function BrowseTile({
           )}
         </span>
         {hint && (
-          <span className="hidden truncate text-xs leading-snug text-ink-2 lg:block">{hint}</span>
+          <span className="hidden text-xs leading-snug text-pretty text-ink-2 lg:block">{hint}</span>
         )}
       </span>
     </Link>

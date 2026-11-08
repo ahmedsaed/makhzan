@@ -82,7 +82,6 @@ export default async function HomePage() {
               {TAGLINE}
             </h1>
             <SearchField
-              autoFocus
               placeholder="ESP32, oil seal, digital caliper"
               className="mt-1 w-full lg:mt-3"
             />
