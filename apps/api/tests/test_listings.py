@@ -59,6 +59,7 @@ async def test_returns_the_listing_with_its_supplier_and_category(client, db):
         "area": "Bab El Louk",
         "governorate": "Cairo",
         "website_url": "https://shop-a.test",
+        "contact": None,
     }
     # Exact, so that widening the nested category contract stays a deliberate,
     # visible change.
