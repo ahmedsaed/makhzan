@@ -361,3 +361,15 @@ function clampText(text: string, max: number): string {
 export function jsonLdText(data: unknown): string {
   return JSON.stringify(data).replace(/</g, "\\u003c");
 }
+
+// --------------------------------------------------------------------------- //
+// makhzan's own facts: what no single shop's page can say.
+
+/** How many shops sell it, as how many listings, and how many have it in stock. */
+export function shopsFact(offers: Offer[]): { shops: number; listings: number; inStockAt: number } {
+  return {
+    shops: shopsIn(offers),
+    listings: offers.length,
+    inStockAt: shopsIn(offers.filter((offer) => isInStock(offer.stock_signal))),
+  };
+}

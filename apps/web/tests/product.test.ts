@@ -8,6 +8,7 @@ import {
   orderOffers,
   primaryOffer,
   productJsonLd,
+  shopsFact,
   splitOffers,
   summarizeOffers,
   summaryText,
@@ -274,5 +275,18 @@ describe("structured data", () => {
 
   it("cannot close its own script tag", () => {
     expect(jsonLdText({ name: "</script><script>alert(1)" })).not.toContain("</script>");
+  });
+});
+
+describe("makhzan's facts", () => {
+  it("counts shops, listings and the shops with stock", () => {
+    expect(
+      shopsFact([
+        offer("a", 10, "in_stock", { shop: "one" }),
+        offer("b", 12, "in_stock", { shop: "one" }),
+        offer("c", 11, "out_of_stock", { shop: "two" }),
+        offer("d", 9, "low_stock", { shop: "three" }),
+      ]),
+    ).toEqual({ shops: 3, listings: 4, inStockAt: 2 });
   });
 });
