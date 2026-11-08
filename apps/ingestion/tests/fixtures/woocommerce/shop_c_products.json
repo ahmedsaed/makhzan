@@ -1,0 +1,259 @@
+[
+ {
+  "id": 31094,
+  "name": "Assembled Extruder Kit for Neptune 4 Plus / 4 Max",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://shop-c.test/product/assembled-extruder-kit-for-neptune-4-plus-4-max/",
+  "sku": "SKU-31094",
+  "on_sale": false,
+  "prices": {
+   "price": "0",
+   "regular_price": "0",
+   "sale_price": "0",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [
+   {
+    "id": 1096,
+    "name": "ELEGOO"
+   },
+   {
+    "id": 1097,
+    "name": "Spare Parts &amp; Accessories"
+   }
+  ],
+  "tags": [],
+  "brands": [
+   {
+    "name": "ELEGOO"
+   }
+  ],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": false,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 20,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/03/Screenshot-2026-03-13-221458.png"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 31298,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 0,
+  "type": "variable",
+  "variation": "",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/",
+  "sku": "SKU-31298",
+  "on_sale": true,
+  "prices": {
+   "price": "1250",
+   "regular_price": "1250",
+   "sale_price": "1250",
+   "price_range": {
+    "min_amount": "1250",
+    "max_amount": "2350"
+   },
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [
+   {
+    "id": 1111,
+    "name": "Spare Parts &amp; Accessories"
+   },
+   {
+    "id": 341,
+    "name": "3D Printing"
+   }
+  ],
+  "tags": [],
+  "brands": [],
+  "attributes": [
+   {
+    "id": 0,
+    "name": "Compatibility",
+    "taxonomy": null,
+    "has_variations": true,
+    "terms": [
+     {
+      "id": 0,
+      "name": "X1 Series/P1 Series/A1",
+      "slug": "X1 Series/P1 Series/A1"
+     },
+     {
+      "id": 0,
+      "name": "A1 mini",
+      "slug": "A1 mini"
+     }
+    ]
+   },
+   {
+    "id": 0,
+    "name": "Texture",
+    "taxonomy": null,
+    "has_variations": true,
+    "terms": [
+     {
+      "id": 0,
+      "name": "Carbon Fiber",
+      "slug": "Carbon Fiber"
+     },
+     {
+      "id": 0,
+      "name": "Diamond",
+      "slug": "Diamond"
+     },
+     {
+      "id": 0,
+      "name": "Galaxy",
+      "slug": "Galaxy"
+     },
+     {
+      "id": 0,
+      "name": "Starry",
+      "slug": "Starry"
+     }
+    ]
+   }
+  ],
+  "variations": [
+   {
+    "id": 31306
+   },
+   {
+    "id": 31307
+   },
+   {
+    "id": 31308
+   },
+   {
+    "id": 31309
+   },
+   {
+    "id": 31311
+   },
+   {
+    "id": 31312
+   }
+  ],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 7,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifvso7023501gnfwqa2mxm_mini_e341a6bc-6f37-4577-a2fb-38cf2181f7e3__1_.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 33501,
+  "name": "Jupiter 2 16K ELEGOO",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://shop-c.test/product/jupiter-2-16k-elegoo-egypt/",
+  "sku": "SKU-33501",
+  "on_sale": true,
+  "prices": {
+   "price": "150000",
+   "regular_price": "170000",
+   "sale_price": "150000",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [
+   {
+    "id": 1099,
+    "name": "3D Printer Resin"
+   },
+   {
+    "id": 1096,
+    "name": "ELEGOO"
+   }
+  ],
+  "tags": [],
+  "brands": [
+   {
+    "name": "ELEGOO"
+   }
+  ],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 4,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/11/JPT2-_1_ea574cd2-1fc4-4a47-b254-e72beb62f9fd.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ }
+]

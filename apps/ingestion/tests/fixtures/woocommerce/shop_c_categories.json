@@ -1,0 +1,32 @@
+[
+ {
+  "id": 1099,
+  "name": "3D Printer Resin",
+  "slug": "resin-3d-printer-elegoo",
+  "parent": 1096
+ },
+ {
+  "id": 341,
+  "name": "3D Printing",
+  "slug": "3d-printing",
+  "parent": 0
+ },
+ {
+  "id": 1096,
+  "name": "ELEGOO",
+  "slug": "elegoo",
+  "parent": 0
+ },
+ {
+  "id": 1097,
+  "name": "Spare Parts &amp; Accessories",
+  "slug": "spare-parts-and-accessories-elegoo",
+  "parent": 1096
+ },
+ {
+  "id": 1111,
+  "name": "Spare Parts &amp; Accessories",
+  "slug": "spare-parts-and-accessories-bambulab",
+  "parent": 341
+ }
+]
