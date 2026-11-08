@@ -16,6 +16,7 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
+import { crawlerActivity } from "./fixtures/crawler.mjs";
 import { productFixture } from "./fixtures/product.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopName, shopRoute } from "./fixtures/shops.mjs";
@@ -288,6 +289,7 @@ const server = createServer((req, res) => {
   if (department) return send(department.status, department.body);
   if (path === "/search") return send(200, search(url));
   if (path === "/sitemap/products") return send(200, sitemapProducts(url));
+  if (path === "/crawler/activity") return send(200, crawlerActivity());
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
     const summary = { ...PRODUCT };

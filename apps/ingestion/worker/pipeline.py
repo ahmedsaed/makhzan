@@ -42,7 +42,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
-from worker.http import CycleFetcher
+from worker.http import CycleFetcher, RequestLog, logging_requests, set_host_pace
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
 
@@ -203,9 +203,18 @@ async def _ingest_item(
 
     listing, created = await _upsert_listing(session, adapter, supplier_id, norm)
 
-    if slug is None and not adapter.authoritative_categories:
+    knows = adapter.knows_category(raw)
+    if (
+        slug is None
+        and not adapter.authoritative_categories
+        and (knows or listing.category_id is None)
+    ):
         # Only sources whose categories are a tag cloud get to guess. For a
-        # source whose taxonomy covers its catalogue, a miss stays a miss.
+        # source whose taxonomy covers its catalogue, a miss stays a miss. And
+        # a pass that carries no category signal guesses only for a listing
+        # that has no category yet: replacing one with a guess erases it as
+        # surely as clearing it would ("Raspberry Red PLA+" infers as a dev
+        # board, and its Wix type gallery has already said it is filament).
         slug = category_slug_for(norm.attributes, norm.title_en or norm.title_ar, domain)
 
     cat = cat_index.get((domain, slug)) if slug else None
@@ -214,7 +223,7 @@ async def _ingest_item(
         # applies while a listing is uncategorized.
         listing.category_id = cat.id
         listing.domain = cat.domain
-    elif adapter.knows_category(raw):
+    elif knows:
         # This sweep was in a position to know, and there is no category: clear
         # whatever was there, so a supplier dropping a category is visible.
         listing.category_id = None
@@ -607,8 +616,28 @@ async def _run(
     *,
     limit: int | None,
 ) -> IngestionRun:
-    """Shared body for whole-source and single-partition runs."""
+    """Shared body for whole-source and single-partition runs.
+
+    Every request the run sends — cycle data, every partition's pages, whatever
+    the adapter fetches to build a page — is logged with when it went out, so
+    the run's `stats.pacing` is the pace the shop actually saw.
+    """
+    with logging_requests() as log:
+        return await _logged_run(source_id, adapter, partitions, limit=limit, log=log)
+
+
+async def _logged_run(
+    source_id: str,
+    adapter: SourceAdapter,
+    partitions: list[str],
+    *,
+    limit: int | None,
+    log: RequestLog,
+) -> IngestionRun:
     errors: list[str] = []
+    # The least gap between any two requests to this host, retries and
+    # robots.txt included (worker.http.take_turn); Crawl-Delay is a floor on it.
+    set_host_pace(adapter.base_url, adapter.polite_delay)
 
     async with SessionLocal() as session:
         run = IngestionRun(source=source_id, source_type=adapter.source_type)
@@ -679,8 +708,16 @@ async def _run(
         requests: Counter = Counter({"pages": tally["pages"]})
         requests.update(cycle_requests)
         requests.update(adapter.extra_requests())
+        requests.update({"robots": sum(log.robots.values())})
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}
+        # What the shop's server saw: requests sent (a retry is one more) and the
+        # gaps between them, which is what /how-we-crawl publishes. `requests`
+        # above counts by purpose, and a page refused before sending (robots.txt,
+        # a host still backing off) is in it but not here.
+        stats["pacing"] = log.pacing()
+        if report := adapter.run_report():
+            stats["source_report"] = report
         if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:
             # Kept as out of stock rather than archived; "unknown" ones were
             # never stored, and a route with no price or photo creates nothing.

@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-from worker.http import BROWSER_HEADERS
+from worker.http import BROWSER_HEADERS, HostBackingOff, take_turn
 
 #: Re-read a host's robots.txt this often. A sweep of one source runs for hours,
 #: and a rule added mid-sweep should take effect within it.
@@ -150,6 +150,17 @@ class RobotsCache:
         if cached and (time.monotonic() - cached.fetched_at) < self._ttl:
             return cached
 
+        try:
+            # A request like any other to the shop: it waits the host's pace,
+            # is logged in the run's pacing, and the page after it waits too.
+            await take_turn(host, robots=True)
+        except HostBackingOff:
+            # The host asked us to hold back. Keep the rules we have rather than
+            # forgetting them; with none, the request waits on the host anyway.
+            if cached:
+                return cached
+            raise
+
         rules: Rules | None = None
         try:
             # A bare client on purpose: routing this through the adapters' own
@@ -181,8 +192,18 @@ class RobotsCache:
 
     async def crawl_delay(self, url: str, user_agent: str) -> float | None:
         """Seconds the host asks between requests, if it says."""
-        entry = await self._entry(url)
+        try:
+            entry = await self._entry(url)
+        except HostBackingOff:
+            return None  # nothing will be sent to it anyway until it lets us
         if entry.rules is None:
+            return None
+        return entry.rules.crawl_delay(user_agent)
+
+    def cached_crawl_delay(self, host: str, user_agent: str) -> float | None:
+        """`crawl_delay` from what is already cached, never fetching (for the pace gate)."""
+        entry = self._hosts.get(host)
+        if entry is None or entry.rules is None:
             return None
         return entry.rules.crawl_delay(user_agent)
 

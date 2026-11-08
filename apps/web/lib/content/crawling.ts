@@ -13,10 +13,22 @@
 
 export type CrawlingSection = { heading: string; body: string[] };
 
+/** The "Crawler activity" section: measured figures, read from the API. */
+export type ActivityContent = {
+  heading: string;
+  lead: string;
+  gapNote: string;
+  /** Shown in place of the figures when the API cannot give them. */
+  unavailable: string;
+  /** When the daily sweep is switched off: no next run to announce. */
+  noNextRun: string;
+};
+
 export type CrawlingContent = {
   title: string;
   lead: string;
   sections: CrawlingSection[];
+  activity: ActivityContent;
   contactHeading: string;
   contactBody: string;
   contactEmail: string;
@@ -70,6 +82,14 @@ export const crawlingContent: CrawlingContent = {
       ],
     },
   ],
+  activity: {
+    heading: "Crawler activity",
+    lead: "What our crawler did on each shop's site over the last 7 days, recorded as each request was sent. If you run one of these shops, you can check it against your own server logs.",
+    gapNote:
+      "A gap is the time between one request to a site and the next. The shortest and the typical (median) gap are both measured, not set. “—” means nothing was recorded for that shop this week: we began recording the gaps in November 2026.",
+    unavailable: "These figures can't be shown right now. Please check back in a few minutes.",
+    noNextRun: "Not scheduled at the moment",
+  },
   contactHeading: "Contact",
   contactBody: "Questions, corrections, or a request to change how we crawl your site:",
   contactEmail: CONTACT_EMAIL,

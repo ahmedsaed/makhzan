@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from arq import cron
 from arq.connections import RedisSettings
+from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
 from makhzan_schemas.grouping import rebuild_products
@@ -25,19 +26,15 @@ from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
 from worker.sources.registry import all_enabled, get, load_adapters
 
-#: Hour of day (UTC) for the daily full refresh.
-REFRESH_HOUR = int(os.getenv("REFRESH_HOUR", "3"))
+#: Hour of day (UTC) for the daily full refresh. Defined beside the API's reading
+#: of it, which publishes when the next run starts.
+REFRESH_HOUR = crawl.REFRESH_HOUR
 
 #: Off pauses the daily sweep without stopping the worker. Stopping the container
 #: would also pause it, but deploy.sh runs `up -d` and would quietly restart it.
 #: Progress is durable and archiving is cycle-gated, so a pause loses nothing —
 #: the next sweep resumes where the last one stopped. Manual run_source still works.
-CRAWL_ENABLED = os.getenv("CRAWL_ENABLED", "true").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
+CRAWL_ENABLED = crawl.crawl_enabled()
 
 #: How many sources to scrape concurrently. Each source hits a different host
 #: with an independent rate limit, so concurrency doesn't stack on any one
