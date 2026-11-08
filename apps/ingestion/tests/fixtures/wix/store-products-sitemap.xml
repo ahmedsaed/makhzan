@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" generatedBy="WIX">
+<url>
+<loc>https://www.shop-w.test/product-page/black-pla</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_00000000000000000000000000000384~mv2.jpg</image:loc>
+<image:title>Acme Black Pla 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/gold-pla</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_00000000000000000000000000000385~mv2.jpg</image:loc>
+<image:title>Acme Gold Pla 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/cold-white-pla</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_00000000000000000000000000000386~mv2.jpg</image:loc>
+<image:title>Acme Cold White Pla 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/light-brown</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_00000000000000000000000000000387~mv2.jpg</image:loc>
+<image:title>Acme Light Brown 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/skin-pla</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_00000000000000000000000000000388~mv2.jpg</image:loc>
+<image:title>Acme Skin Pla 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/asa</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_00000000000000000000000000000389~mv2.jpg</image:loc>
+<image:title>Acme Asa 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/pla-matte</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_0000000000000000000000000000038a~mv2.jpg</image:loc>
+<image:title>Acme Pla Matte 3D printer filament</image:title>
+</image:image>
+</url>
+<url>
+<loc>https://www.shop-w.test/product-page/discontinued-spool</loc>
+<lastmod>2026-11-04</lastmod>
+<image:image>
+<image:loc>https://static.wixstatic.com/media/a1b2c3_0000000000000000000000000000038b~mv2.jpg</image:loc>
+<image:title>Acme Discontinued Spool 3D printer filament</image:title>
+</image:image>
+</url>
+</urlset>

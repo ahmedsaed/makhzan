@@ -448,6 +448,33 @@ def test_a_mount_for_a_part_is_still_an_accessory(accessory):
     assert len(groups) == 2
 
 
+def test_a_makers_colours_and_a_resellers_spool_stay_apart():
+    """A filament maker lists one product per colour; resellers list one per
+    material, with colour as an option. Grouping is not taught that a reseller's
+    spool is "any of" the maker's colours, so nothing merges: no identifier is
+    read from these titles, and each listing stands alone. Titles are the
+    shapes the real shops use, with the brand changed."""
+    from makhzan_schemas.domains import get_profile
+
+    profile = get_profile("electronics")
+    maker = [
+        "Acme Black PLA+ 3D printer filament",
+        "Acme White PLA+ 3D printer filament",
+        "Acme Black PETG HF 3D printer filament",
+        "Acme PLA-CF 3D printer filament",
+    ]
+    resellers = [
+        ("Acme PLA+ Filament 1.75mm 1Kg Roll for 3D Printer", "ohmic"),
+        ("Acme Brand PLA+ 3D Printer Filament (1.75mm) - 1Kg Roll", "volta"),
+        ("Acme PLA CF Filament 1.75mm (Carbon Fiber Reinforced, 1kg)", "ohmic"),
+    ]
+    listings = [_listing(t, 695, profile.extract_identifier(t), source="maker") for t in maker] + [
+        _listing(t, 650, profile.extract_identifier(t), source=s) for t, s in resellers
+    ]
+    assert all(item.part_number is None for item in listings)
+    assert _sizes(_group_listings(listings)) == [1] * len(listings)
+
+
 def test_grouping_does_not_depend_on_the_order_listings_arrive_in():
     """External ids are unique only within a shop: two shops' "1" must still sort
     the same way every run, or the seed (and so the key) of a group drifts."""
