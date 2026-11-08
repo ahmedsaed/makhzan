@@ -41,7 +41,18 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
     expect.arrayContaining(["192x192", "512x512"]),
   );
 
-  const sitemap = await request.get("/sitemap.xml");
+  // /sitemap.xml is the index; the pages are file 0, the products 1..N.
+  const index = await request.get("/sitemap.xml");
+  expect(index.status()).toBe(200);
+  expect(index.headers()["content-type"]).toContain("xml");
+  const indexXml = await index.text();
+  expect(indexXml).toContain("<sitemapindex");
+  expect(indexXml).toContain(`<loc>${SITE}/sitemap/0.xml</loc>`);
+  expect(indexXml).toContain(`<loc>${SITE}/sitemap/1.xml</loc>`);
+  // Three stub products fill one file, and the index promises no other.
+  expect(indexXml).not.toContain("/sitemap/2.xml");
+
+  const sitemap = await request.get("/sitemap/0.xml");
   expect(sitemap.status()).toBe(200);
   const xml = await sitemap.text();
   for (const path of ["/", "/trades", "/trades/electronics", "/trades/electronics/ics"]) {
@@ -51,6 +62,20 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   expect(xml).toContain(`<loc>${SITE}/how-we-crawl</loc>`);
   // A shop with nothing listed is not a page worth sending a crawler to.
   expect(xml).not.toContain("/shops/gone-shop");
+
+  const products = await request.get("/sitemap/1.xml");
+  expect(products.status()).toBe(200);
+  const productXml = await products.text();
+  // The readable URL where the title has Latin words, the bare id where not;
+  // lastmod is when the product's content changed.
+  expect(productXml).toContain(
+    `<loc>${SITE}/products/1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed-sg90-micro-servo-180</loc>`,
+  );
+  expect(productXml).toContain("<lastmod>2026-10-02T08:30:00Z</lastmod>");
+  expect(productXml).toContain(`<loc>${SITE}/products/6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b</loc>`);
+  expect(productXml).toContain(`<loc>${SITE}/products/9f8e7d6c-5b4a-4321-8fed-cba987654321</loc>`);
+  expect(productXml).not.toContain("/trades");
+  expect((await request.get("/sitemap/2.xml")).status()).toBe(404);
 
   const robots = await request.get("/robots.txt");
   expect(robots.status()).toBe(200);

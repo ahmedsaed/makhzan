@@ -196,6 +196,40 @@ const PHOTO_PRODUCTS = Object.fromEntries(
   }),
 );
 
+/**
+ * What `GET /sitemap/products` lists, ordered by id as the API orders them:
+ * a Latin title (slugged), an Arabic one (no slug: the bare id), none at all.
+ */
+const SITEMAP_PRODUCTS = [
+  {
+    id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+    title_en: "SG90 Micro Servo (180°)",
+    changed_at: "2026-10-02T08:30:00Z",
+  },
+  {
+    id: "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b",
+    title_en: "مقاومة كربون",
+    changed_at: "2026-09-15T00:00:00Z",
+  },
+  {
+    id: "9f8e7d6c-5b4a-4321-8fed-cba987654321",
+    title_en: null,
+    changed_at: "2026-08-01T00:00:00Z",
+  },
+];
+
+/** Keyset paging by id, like the API: `after` an id, at most `limit`. */
+function sitemapProducts(url) {
+  const after = url.searchParams.get("after");
+  const limit = Number(url.searchParams.get("limit") ?? 50000);
+  const items = SITEMAP_PRODUCTS.filter((p) => !after || p.id > after).slice(0, limit);
+  return {
+    items,
+    next: items.length === limit ? items[items.length - 1].id : null,
+    total: after ? null : SITEMAP_PRODUCTS.length,
+  };
+}
+
 function search(url) {
   const q = url.searchParams.get("q") ?? "";
   const domain = url.searchParams.get("domain");
@@ -253,6 +287,7 @@ const server = createServer((req, res) => {
   const trade = path === "/search" && tradeSearch(url);
   if (trade) return send(trade.status, trade.body);
   if (path === "/search") return send(200, search(url));
+  if (path === "/sitemap/products") return send(200, sitemapProducts(url));
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
     const summary = { ...PRODUCT };
