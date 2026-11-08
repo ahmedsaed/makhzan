@@ -1,6 +1,7 @@
 /**
- * Permanent redirects from the URLs of the previous, bilingual site — the
- * mapping is in lib/redirects.ts.
+ * Permanent redirects from the URLs of the previous, bilingual site, and from
+ * /trades (renamed /departments in November 2026) — the mapping is in
+ * lib/redirects.ts.
  *
  * Those URLs were shared, bookmarked and indexed, and each still has an
  * equivalent, so they redirect rather than 404. 308, permanent, because the
@@ -36,6 +37,8 @@ export const config = {
     "/ar/:path*",
     "/browse",
     "/browse/:path*",
+    "/trades",
+    "/trades/:path*",
     "/suppliers",
     "/suppliers/:path*",
   ],

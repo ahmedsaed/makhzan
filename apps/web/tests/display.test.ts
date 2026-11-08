@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { hitFromSummary, titleOf } from "@/lib/api";
 import type { Category, ProductSummary } from "@/lib/api";
-import { tradeLabel, tradesFrom } from "@/lib/trades";
+import { departmentLabel, departmentsFrom } from "@/lib/departments";
 
 const category = (over: Partial<Category>): Category => ({
   ref: "electronics:resistors",
@@ -28,22 +28,22 @@ describe("supplier prose falls back rather than rendering empty", () => {
   });
 });
 
-describe("trades are rolled up from categories", () => {
-  it("sums each trade's categories and orders by size", () => {
-    const trades = tradesFrom([
+describe("departments are rolled up from categories", () => {
+  it("sums each department's categories and orders by size", () => {
+    const departments = departmentsFrom([
       category({ ref: "electronics:a", domain: "electronics", count: 10 }),
       category({ ref: "electronics:b", domain: "electronics", count: 5 }),
       category({ ref: "tools:c", domain: "tools", count: 20 }),
     ]);
-    expect(trades.map((t) => [t.domain, t.count])).toEqual([
+    expect(departments.map((t) => [t.domain, t.count])).toEqual([
       ["tools", 20],
       ["electronics", 15],
     ]);
   });
 
   it("titles a slug", () => {
-    expect(tradeLabel("seals-bearings")).toBe("Seals & Bearings");
-    expect(tradeLabel("electronics")).toBe("Electronics");
+    expect(departmentLabel("seals-bearings")).toBe("Seals & Bearings");
+    expect(departmentLabel("electronics")).toBe("Electronics");
   });
 });
 

@@ -1,4 +1,4 @@
-import type { TradeShare } from "@/lib/shops";
+import type { DepartmentShare } from "@/lib/shops";
 import { cn } from "@/lib/utils";
 
 /** Bar segments, largest first. Opacity steps of the one accent rather than new
@@ -6,10 +6,10 @@ import { cn } from "@/lib/utils";
 const SEGMENT = ["bg-action", "bg-action/55", "bg-action/30", "bg-ink-3/40"];
 
 /**
- * A shop's catalogue by trade as one thin bar. Decoration only: the same
+ * A shop's catalogue by department as one thin bar. Decoration only: the same
  * numbers are always in words beside it, which is what a screen reader gets.
  */
-export function TradeBar({ shares, className }: { shares: TradeShare[]; className?: string }) {
+export function DepartmentBar({ shares, className }: { shares: DepartmentShare[]; className?: string }) {
   return (
     <div
       aria-hidden="true"

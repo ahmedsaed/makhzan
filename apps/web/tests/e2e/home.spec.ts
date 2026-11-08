@@ -1,17 +1,17 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * The home page, on a phone and on a desktop. Stub data: the trades fixture
- * (tests/e2e/fixtures/trades.mjs), the shops fixture and the stub's own
+ * The home page, on a phone and on a desktop. Stub data: the departments fixture
+ * (tests/e2e/fixtures/departments.mjs), the shops fixture and the stub's own
  * search, which answers `min_suppliers=2` with one product sold by 3 shops.
  */
 
-const SECTIONS = ["hero", "trades", "several-shops", "shops", "for-suppliers"];
+const SECTIONS = ["hero", "departments", "several-shops", "shops", "for-suppliers"];
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test("keeps the trade rows, each saying what is inside", async ({ page }) => {
+  test("keeps the department rows, each saying what is inside", async ({ page }) => {
     await page.goto("/");
     await expect(
       page.getByRole("heading", {
@@ -23,21 +23,21 @@ test.describe("on a phone", () => {
       page.getByText("57,207 products from 8 shops. Prices rechecked about weekly."),
     ).toBeVisible();
 
-    const rows = page.locator("[data-trade]");
+    const rows = page.locator("[data-department]");
     await expect(rows).toHaveCount(8);
-    // Largest first, and the "Other" bucket never describes a trade.
+    // Largest first, and the "Other" bucket never describes a department.
     const first = rows.first();
     await expect(first).toBeVisible();
-    await expect(first).toHaveAttribute("data-trade", "seals-bearings");
+    await expect(first).toHaveAttribute("data-department", "seals-bearings");
     await expect(first).toContainText("Seals & Bearings");
     await expect(first).toContainText("1,580");
     await expect(first).toContainText("O-Rings, bearings, oil seals, gaskets");
     await expect(first).not.toContainText("Other");
     // The desktop cards are not shown as well.
-    await expect(page.locator("[data-home-trade]").first()).toBeHidden();
+    await expect(page.locator("[data-home-department]").first()).toBeHidden();
 
-    await page.getByRole("link", { name: "All 11 trades" }).click();
-    await expect(page).toHaveURL("/trades");
+    await page.getByRole("link", { name: "All 11 departments" }).click();
+    await expect(page).toHaveURL("/departments");
   });
 
   test("does not focus the search field, so the keyboard stays down", async ({ page }) => {
@@ -46,8 +46,8 @@ test.describe("on a phone", () => {
     await expect(field).toBeVisible();
     expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
     // Revisiting the page is what brought the keyboard up.
-    await page.getByRole("link", { name: "All 11 trades" }).click();
-    await expect(page).toHaveURL("/trades");
+    await page.getByRole("link", { name: "All 11 departments" }).click();
+    await expect(page).toHaveURL("/departments");
     await page.goBack();
     await expect(field).toBeVisible();
     expect(await field.evaluate((el) => el === document.activeElement)).toBe(false);
@@ -56,11 +56,11 @@ test.describe("on a phone", () => {
     expect(await field.evaluate((el) => el === document.activeElement)).toBe(true);
   });
 
-  test("a trade row's categories wrap at 320px instead of being cut off", async ({ page }) => {
+  test("a department row's categories wrap at 320px instead of being cut off", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto("/");
     const phrase = page
-      .locator("[data-trade=seals-bearings]")
+      .locator("[data-department=seals-bearings]")
       .getByText("O-Rings, bearings, oil seals, gaskets", { exact: true });
     await expect(phrase).toBeVisible();
     const box = await phrase.evaluate((el) => ({
@@ -124,22 +124,22 @@ test.describe("on a desktop", () => {
     );
   });
 
-  test("trades are cards whose biggest categories are links", async ({ page }) => {
+  test("departments are cards whose biggest categories are links", async ({ page }) => {
     await page.goto("/");
-    const cards = page.locator("[data-home-trade]");
+    const cards = page.locator("[data-home-department]");
     await expect(cards).toHaveCount(8);
     const first = cards.first();
-    await expect(first).toHaveAttribute("data-home-trade", "seals-bearings");
+    await expect(first).toHaveAttribute("data-home-department", "seals-bearings");
     await expect(first.getByRole("link", { name: /^O-Rings/ })).toHaveAttribute(
       "href",
-      "/trades/seals-bearings/o-rings",
+      "/departments/seals-bearings/o-rings",
     );
     await expect(first).not.toContainText("Other Seals");
-    // The trades past eight are still one click away.
+    // The departments past eight are still one click away.
     await expect(page.getByText("Also:")).toBeVisible();
     await expect(page.getByRole("link", { name: "Cleaning" })).toHaveAttribute(
       "href",
-      "/trades/cleaning",
+      "/departments/cleaning",
     );
   });
 

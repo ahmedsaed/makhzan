@@ -85,9 +85,9 @@ describe("parseResultsQuery", () => {
 
   it("links to everything with in_stock=all, the one way to say it", () => {
     const raw = { q: "relay" };
-    const links = resultsLinks("/trades/tools", raw, parseResultsQuery(raw));
-    expect(links.showOutOfStock).toBe("/trades/tools?q=relay&in_stock=all");
-    expect(links.inStock).toBe("/trades/tools?q=relay&in_stock=all");
+    const links = resultsLinks("/departments/tools", raw, parseResultsQuery(raw));
+    expect(links.showOutOfStock).toBe("/departments/tools?q=relay&in_stock=all");
+    expect(links.inStock).toBe("/departments/tools?q=relay&in_stock=all");
   });
 
   it("counts what the stock filter shows in its own words", () => {
@@ -137,10 +137,10 @@ describe("resultsLinks", () => {
     expect(links.page(0)).toBe("/search?q=relay");
   });
 
-  it("works on any results path, so trade and category pages share it", () => {
-    const trade = { q: "relay" };
-    expect(resultsLinks("/trades/tools", trade, parseResultsQuery(trade)).twoShops).toBe(
-      "/trades/tools?q=relay&min_suppliers=2",
+  it("works on any results path, so department and category pages share it", () => {
+    const department = { q: "relay" };
+    expect(resultsLinks("/departments/tools", department, parseResultsQuery(department)).twoShops).toBe(
+      "/departments/tools?q=relay&min_suppliers=2",
     );
   });
 });
@@ -153,7 +153,7 @@ describe("category facets", () => {
     "electronics:empty": 0,
   };
 
-  it("groups under trades, both largest first, and skips empty ones", () => {
+  it("groups under departments, both largest first, and skips empty ones", () => {
     expect(groupCategoryFacet(facet)).toEqual([
       {
         domain: "electronics",

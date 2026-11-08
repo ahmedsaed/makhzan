@@ -1,12 +1,12 @@
 /**
  * The results URL contract, shared by every page that lists results (search,
- * trade, category, a shop's own search). The URL is the only state: each
+ * department, category, a shop's own search). The URL is the only state: each
  * filter is a query parameter, so a filtered view can be shared, bookmarked,
  * reached with the back button, and built with JavaScript off.
  *
  *   q              the query text
  *   category       `domain:slug` (a bare slug is accepted, as the API does)
- *   domain         a trade
+ *   domain         a department
  *   shop           a supplier slug: search within one shop
  *   in_stock       absent → in stock only (rule C2); `all` → everything.
  *                  `false` is read as `all`, `true` as the default.
@@ -199,20 +199,20 @@ export function resultsLinks(pathname: string, raw: RawParams, query: ResultsQue
   };
 }
 
-/** Categories from the facet, grouped under their trade; both orders are by
+/** Categories from the facet, grouped under their department; both orders are by
  *  count, largest first. */
 export function groupCategoryFacet(facet: Record<string, number> | undefined): {
   domain: string;
   count: number;
   categories: { ref: string; count: number }[];
 }[] {
-  const trades = new Map<string, { ref: string; count: number }[]>();
+  const departments = new Map<string, { ref: string; count: number }[]>();
   for (const [ref, count] of Object.entries(facet ?? {})) {
     if (count <= 0) continue;
     const domain = ref.includes(":") ? ref.slice(0, ref.indexOf(":")) : "";
-    trades.set(domain, [...(trades.get(domain) ?? []), { ref, count }]);
+    departments.set(domain, [...(departments.get(domain) ?? []), { ref, count }]);
   }
-  return [...trades.entries()]
+  return [...departments.entries()]
     .map(([domain, categories]) => ({
       domain,
       count: categories.reduce((sum, c) => sum + c.count, 0),

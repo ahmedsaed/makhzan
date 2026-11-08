@@ -191,16 +191,16 @@ describe("breadcrumb trail", () => {
     count: 1,
   });
 
-  it("walks trade › group › category, every crumb a link", () => {
+  it("walks department › group › category, every crumb a link", () => {
     const leaf = category("electronics:ics", "ICs", "electronics:components");
     const trail = categoryTrail(leaf, [
       category("electronics:components", "Components", null),
       leaf,
     ]);
     expect(trail).toEqual([
-      { label: "Electronics", href: "/trades/electronics" },
-      { label: "Components", href: "/trades/electronics/components" },
-      { label: "ICs", href: "/trades/electronics/ics" },
+      { label: "Electronics", href: "/departments/electronics" },
+      { label: "Components", href: "/departments/electronics/components" },
+      { label: "ICs", href: "/departments/electronics/ics" },
     ]);
   });
 

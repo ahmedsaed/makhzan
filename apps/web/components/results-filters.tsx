@@ -3,7 +3,7 @@ import { Link } from "@/components/link";
 import { formatCount } from "@/lib/format";
 import { withParams } from "@/lib/routes";
 import { flatParams, type RawParams, type ResultsQuery } from "@/lib/results-query";
-import { tradeLabel } from "@/lib/trades";
+import { departmentLabel } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 
 export type CategoryGroup = {
@@ -20,7 +20,7 @@ const OWN = ["category", "min_price", "max_price", "offset"];
  * in the phone sheet and in the desktop rail — which is why nothing here has
  * an id: each input sits inside its own label.
  *
- * Categories are radios grouped under their trade, with the counts of the
+ * Categories are radios grouped under their department, with the counts of the
  * results as they would be with that category picked.
  */
 export function ResultsFilters({
@@ -80,7 +80,7 @@ export function ResultsFilters({
         </label>
         {groups.map((group) => (
           <div key={group.domain} className="flex flex-col">
-            <span className="pt-2 pb-0.5 text-xs text-ink-3">{tradeLabel(group.domain)}</span>
+            <span className="pt-2 pb-0.5 text-xs text-ink-3">{departmentLabel(group.domain)}</span>
             {group.categories.map((category) => (
               <label key={category.ref} className={cn(row, "ps-3")}>
                 <input

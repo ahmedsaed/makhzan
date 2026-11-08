@@ -24,10 +24,10 @@ import {
   type RawParams,
   type ResultsQuery,
 } from "@/lib/results-query";
-import { formatDay, hostOf, isStale, tradeShares } from "@/lib/shops";
+import { formatDay, hostOf, isStale, departmentShares } from "@/lib/shops";
 import { cn } from "@/lib/utils";
 
-import { TradeBar } from "../_components/trade-bar";
+import { DepartmentBar } from "../_components/department-bar";
 
 /**
  * One shop and what makhzan has seen of it.
@@ -149,7 +149,7 @@ export default async function ShopPage({
  * The band at the top. Phones: one column — name, figures, the stale note,
  * "Visit", search, what they carry. From `lg` it uses the width: the name and
  * search on the left, the figures and "Visit" on the right, and the note and
- * the trade bar each across the whole band.
+ * the department bar each across the whole band.
  */
 function ShopHeader({
   supplier,
@@ -261,8 +261,8 @@ function Stat({
 }
 
 /**
- * What the shop carries: a bar by trade, and the same numbers in words. The
- * bar is decoration; the words are what a screen reader gets. Each trade
+ * What the shop carries: a bar by department, and the same numbers in words. The
+ * bar is decoration; the words are what a screen reader gets. Each department
  * narrows the products below to it.
  */
 function Carries({
@@ -274,13 +274,13 @@ function Carries({
   narrow: (key: "category" | "domain", value: string) => string;
   className?: string;
 }) {
-  const shares = tradeShares(supplier.domains);
+  const shares = departmentShares(supplier.domains);
   return (
     <section className={className}>
       <SectionHeading className="lg:mb-2 lg:font-sans lg:text-[13px] lg:font-semibold lg:text-ink-2">
         What they carry
       </SectionHeading>
-      <TradeBar shares={shares} />
+      <DepartmentBar shares={shares} />
       <p className="mt-2 text-[13px] text-ink-2">
         {shares.map((share, index) => (
           <span key={share.domain ?? "other"}>

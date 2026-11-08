@@ -5,8 +5,8 @@ import { SITE_DESCRIPTION, SITE_NAME, TAGLINE } from "@/lib/brand";
 import { absoluteUrl } from "@/lib/site";
 import { formatCount, formatPriceRange, plural } from "@/lib/format";
 import { summarizeOffers } from "@/lib/product";
-import { tradesInWords } from "@/lib/shops";
-import { asPhrase, insideOf, leavesOf, tradeLabel } from "@/lib/trades";
+import { departmentsInWords } from "@/lib/shops";
+import { asPhrase, insideOf, leavesOf, departmentLabel } from "@/lib/departments";
 
 /**
  * The site's own card (app/opengraph-image.tsx), for pages without one.
@@ -32,7 +32,7 @@ const SITE_CARD = {
  * and the preview card.
  */
 /**
- * The canonical path of a results page (trade, category, shop): the page
+ * The canonical path of a results page (department, category, shop): the page
  * itself with every filter dropped, so a sorted, price-ranged or "show out of
  * stock" view counts as the page and not as thousands of near-copies; but its
  * paging kept, so page 3 is its own page. Pointing page 3 at page 1 would tell
@@ -189,24 +189,24 @@ export function productDescription(product: Product): string {
   return `${productTitle(product)}: ${productPrice(product)} ${productWhere(product)} in Egypt${gone}. ${CHECKED}`;
 }
 
-/** A trade's product count and its biggest categories, or nothing to say. */
-export function tradeDescription(domain: string, categories: Category[]): string | undefined {
+/** A department's product count and its biggest categories, or nothing to say. */
+export function departmentDescription(domain: string, categories: Category[]): string | undefined {
   const own = categories.filter((category) => category.domain === domain);
   const count = own.reduce((sum, category) => sum + category.count, 0);
   if (count === 0) return undefined;
   const inside = insideOf(domain, own);
   const leaves = leavesOf(own).filter((category) => category.count > 0).length;
   return (
-    `${formatCount(count)} products in ${tradeLabel(domain)} from Egypt's suppliers` +
+    `${formatCount(count)} products in ${departmentLabel(domain)} from Egypt's suppliers` +
     (inside.length > 0 ? `: ${asPhrase(inside)}` : "") +
     `. ${plural(leaves, "category", "categories")}, compared across shops.`
   );
 }
 
-/** A category's count, in its trade. */
+/** A category's count, in its department. */
 export function categoryDescription(category: Category, total: number): string {
   return (
-    `${plural(total, "product")} in ${category.name_en} (${tradeLabel(category.domain)}) ` +
+    `${plural(total, "product")} in ${category.name_en} (${departmentLabel(category.domain)}) ` +
     `from Egypt's suppliers, with prices compared across shops. ${CHECKED}`
   );
 }
@@ -231,12 +231,12 @@ export function shopCardLines(shop: SupplierProfile): {
   return {
     title: shop.name,
     detail: `${plural(shop.listing_count, "product")} · ${formatCount(shop.in_stock_count)} in stock`,
-    carries: top.length > 0 ? `${asPhrase(top)} and more` : tradesInWords(shop.domains) || null,
+    carries: top.length > 0 ? `${asPhrase(top)} and more` : departmentsInWords(shop.domains) || null,
   };
 }
 
-/** A trade's card: its name, "1,580 products · 12 categories", what is inside. */
-export function tradeCardLines(
+/** A department's card: its name, "1,580 products · 12 categories", what is inside. */
+export function departmentCardLines(
   domain: string,
   categories: Category[],
 ): { title: string; detail: string | null; inside: string[] } {
@@ -244,7 +244,7 @@ export function tradeCardLines(
   const count = own.reduce((sum, category) => sum + category.count, 0);
   const leaves = leavesOf(own).filter((category) => category.count > 0).length;
   return {
-    title: tradeLabel(domain),
+    title: departmentLabel(domain),
     detail:
       count > 0
         ? `${plural(count, "product")} · ${plural(leaves, "category", "categories")}`

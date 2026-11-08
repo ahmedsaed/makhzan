@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  *
  * Phones get two rows — logo and nav, then search full width — and from
  * `md` it is one row. Search stays visible at every width: collapsing it behind
- * a magnifier to save 44px is the wrong trade on a site whose job is search.
+ * a magnifier to save 44px is the wrong exchange on a site whose job is search.
  *
  * `search={false}` is for the home page, which leads with its own large field;
  * two search boxes on one screen ask the visitor to choose between them.
@@ -48,7 +48,7 @@ export function SiteHeader({ search = true }: { search?: boolean }) {
         )}
 
         <nav aria-label="Site" className="ms-auto flex items-center gap-1 text-sm">
-          <NavLink href={routes.trades()}>Trades</NavLink>
+          <NavLink href={routes.departments()}>Departments</NavLink>
           <NavLink href={routes.shops()}>Shops</NavLink>
           <NavLink href={routes.howWeCrawl()} className="hidden md:flex">
             How we crawl

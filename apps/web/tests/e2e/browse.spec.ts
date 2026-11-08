@@ -102,7 +102,7 @@ test("on a phone the filters open as a sheet", async ({ page }) => {
 
 test("nothing scrolls sideways at 320px", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
-  for (const path of ["/", "/search?q=ESP32", "/products/prod-1", "/trades/electronics"]) {
+  for (const path of ["/", "/search?q=ESP32", "/products/prod-1", "/departments/electronics"]) {
     await page.goto(path);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -116,17 +116,17 @@ test("empty results say so instead of showing an empty list", async ({ page }) =
   await expect(page.getByText("Nothing matched")).toBeVisible();
 });
 
-test("a category is addressed through its trade, never a bare slug", async ({ page }) => {
-  await page.goto("/trades/electronics");
+test("a category is addressed through its department, never a bare slug", async ({ page }) => {
+  await page.goto("/departments/electronics");
   await page
     .getByRole("navigation", { name: "Categories" })
     .getByRole("link", { name: /Integrated Circuits/ })
     .click();
-  await expect(page).toHaveURL("/trades/electronics/ics");
+  await expect(page).toHaveURL("/departments/electronics/ics");
 });
 
-test("an unknown trade is a 404, not an empty page", async ({ page }) => {
-  const response = await page.goto("/trades/not-a-trade");
+test("an unknown department is a 404, not an empty page", async ({ page }) => {
+  const response = await page.goto("/departments/not-a-department");
   expect(response?.status()).toBe(404);
 });
 

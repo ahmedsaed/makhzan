@@ -28,7 +28,7 @@ Measured on 60.9k active listings (November 2026).
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
-| 16 trades, very uneven (three hold 88% of products) | Trades are listed by size and each says what's inside; never equal tiles of names. |
+| 16 departments, very uneven (three hold 88% of products) | Departments are listed by size and each says what's inside; never equal tiles of names. |
 | Supplier profiles have no location, phone or logo | The shop page is thin until shops add details (see `docs/PRODUCT.md`). |
 | Offers per product exceed shops per product | One shop can list several variants of one product. |
 
@@ -42,56 +42,61 @@ Measured on 60.9k active listings (November 2026).
   headers can wrap them later.
 - Geizhals opens results with "Top categories" for the query. makhzan does too.
 - McMaster-Carr names categories by what they do and shows each as a photo of one
-  iconic object. makhzan's trade and category tiles follow it.
+  iconic object. makhzan's department and category tiles follow it.
 - "Last checked" is the timestamp that matters; show it relative, and tell people to
   confirm on the shop's site.
 
 ## Pages
 
 ```
-/                               Home: search and examples, trades, sold by several shops, the shops, how it works
+/                               Home: search and examples, departments, sold by several shops, the shops, how it works
 ├── /search?q=…                 Results (list or grid), top categories, filters
 │   └── /products/{id}-{slug}   Product: one shop, or several (offers list)
 │       └── shop's own page ↗   the only exit
-├── /trades                     All 16 trades as a directory: each with its categories as links
-│   └── /trades/{trade}         Group tiles, category tiles, results underneath
-│       └── /trades/{trade}/{category}   the same page, narrowed
+├── /departments                All 16 departments as a directory: each with its categories as links
+│   └── /departments/{department}         Group tiles, category tiles, results underneath
+│       └── /departments/{department}/{category}   the same page, narrowed
 ├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
 │   └── /shops/{shop}           Freshness, what they carry, its products as scoped results
 ├── /how-we-crawl               The crawling policy, written for suppliers
 └── /for-suppliers              Remove, add or correct a shop (requests, by email)
 
-Everywhere: header (logo, search, Trades, Shops), footer (For suppliers,
+Everywhere: header (logo, search, Departments, Shops), footer (For suppliers,
 How we crawl, theme toggle, Made by Merope), 404 and error pages.
 ```
 
 - **No language in URLs.** `/en/…` and `/ar/…` redirect permanently to the same path
   without the prefix.
-- **Categories are addressed through their trade**, because category slugs are unique
-  per trade only: `/trades/tools/calipers`.
+- **Categories are addressed through their department**, because category slugs are
+  unique per department only: `/departments/tools/calipers`.
+- **"Trades" became "departments"** (November 2026): "trade" names a profession, not a
+  kind of product, and "departments" is what people expect of a hardware store. The
+  backend still calls the same thing a `domain`.
 - **No listing pages.** `/listings/{id}` redirects to its product.
 - **Product URLs read:** `/products/{id}-{words-of-the-title}`. The id is a UUID at the
   front, so the page always finds it; a bare id, an old title's words or a typo
   redirect permanently (308) to the current form. An id a regroup replaced redirects
   to its successor's readable URL in the same single hop.
-- Old routes redirect: `/{lang}/browse/{trade}` → `/trades/{trade}`,
-  `/{lang}/browse/{trade}/{category}` → `/trades/{trade}/{category}`,
+- Old routes redirect permanently (308, query string kept), each in one hop:
+  `/{lang}/browse/{department}[/{category}]` → `/departments/{department}[/{category}]`,
+  `/{lang}/trades[/{department}[/{category}]]` → `/departments[/…]` (the same path),
   `/{lang}/suppliers/{slug}` → `/shops/{slug}`, and every other `/{lang}/x` → `/x`.
+  `/en/browse/x` goes straight to `/departments/x`, never by way of `/trades/x`.
 
 ## Layout, page by page (direction D)
 
 **Home.** A headline, one large search field, a line of totals (products, shops,
-"rechecked about weekly"; figures for products, shops, trades and categories on desktop)
-and a row of example searches, each checked to return results. Then the trades: on
-phones as rows (an object photo, the trade, its count, its top categories in words),
-the top 8 then "All 16 trades"; from `md` as cards, four across on desktop, whose
-biggest categories are links, with the remaining trades named underneath. Then "Sold
+"rechecked about weekly"; figures for products, shops, departments and categories on desktop)
+and a row of example searches, each checked to return results. Then the departments: on
+phones as rows (an object photo, the department, its count, its top categories in words),
+the top 8 then "All 16 departments"; from `md` as cards, four across on desktop, whose
+biggest categories are links, with the remaining departments named underneath. Then "Sold
 by several shops" (a row of products with 2+ shops and their price ranges), the shops
 (products, in stock, last checked), "How makhzan works" in three steps (beside the
 search on desktop, lower down on phones) and a note for shop owners. Every block spans
 the page container on desktop; each section is left out when its fetch fails.
 
-**Results (search, trade, category, shop search).**
+**Results (search, department, category, shop search).**
 - A chip bar with the two everyday filters, **In stock** (on by default) and
   **2+ shops**, plus a "Category, price" chip that opens a sheet (a side rail on
   desktop) for the rest.
@@ -102,7 +107,7 @@ the page container on desktop; each section is left out when its fetch fails.
   Grid cards: the same facts. The toggle is remembered per visitor.
 
 **Product.**
-- Breadcrumb (trade › group › category), photo (contained, white frame), title, part
+- Breadcrumb (department › group › category), photo (contained, white frame), title, part
   number when known.
 - **makhzan's facts first.** The title, description and specs are copied from the
   shops (on 98.6% of pages from one shop), so what makhzan adds leads, under the title:
@@ -143,26 +148,26 @@ the page container on desktop; each section is left out when its fetch fails.
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
   under "Show N out of stock offers". The bottom bar points to the cheapest.
 
-**Trade and category.** Header (name, count, "Search in {trade}"); groups as object
+**Department and category.** Header (name, count, "Search in {department}"); groups as object
 tiles; the selected group's categories as smaller object tiles; then results with the
 chip bar. No page is a dead-end list of links. From `lg` the search sits beside the
 name and the tiles lie on their side (a small frame, the name, its count and, for a
 group, its top three categories) in balanced rows across the full width: a row of
 large squares holding the same stand-in icon said nothing and left half the screen
-empty. Phones keep the square tiles. All trades (`/trades`) is a directory, full width, largest trade first. A trade
-with 10% or more of all products (three today) is a full-width block listing every
+empty. Phones keep the square tiles. All departments (`/departments`) is a directory, full width, largest department
+first. A department with 10% or more of all products (three today) is a full-width block listing every
 group with up to six of its categories, as links with counts, in columns. The rest
 share a grid of cards (2, 3, then 4 across), each listing its biggest categories:
-4, 6 or 10 links depending on size, so a bigger trade gets more links. Cards for
-trades with 1,000 or more products span two cells on wide screens. "Other …"
+4, 6 or 10 links depending on size, so a bigger department gets more links. Cards
+for departments with 1,000 or more products span two cells on wide screens. "Other …"
 buckets are listed last. On a phone it is the home page's list of rows, with each
-trade's links folded under a chevron.
+department's links folded under a chevron.
 
 **All shops and a shop.** Each shop with products, in stock and last checked: rows in
 one card on phones; from `md` a grid of cards (2 across, 4 from `xl`), each adding a bar
 of what the shop carries and its two counts as figures. A shop page: a header band with
 name, stat tiles (products, in stock, last checked), a plain-language note when its data
-is stale, "Visit {site}", search within the shop and what it carries (a bar by trade).
+is stale, "Visit {site}", search within the shop and what it carries (a bar by department).
 On desktop the band uses the full width: name and search on the left, tiles and "Visit"
 on the right, the note and the bar across. Below it the page is search scoped to the
 shop, on the same URL (`/shops/{shop}?category=…`): chips, rail, toolbar, list/grid,
@@ -253,7 +258,7 @@ logo top left, an Archivo 800 headline, Archivo 700 for the key figure, Inter fo
 rest, the site's domain at the foot and a 6px `brand` bar along the bottom. The site's
 card has the headline and the live totals ("N products · N shops · rechecked weekly");
 a product's has its title, price range, "at N shops" or the shop's name, and its photo
-on the right in a white frame (none if the shop's photo fails, never no card); trades,
+on the right in a white frame (none if the shop's photo fails, never no card); departments,
 categories and shops have their name and counts. Fonts are committed under
 `apps/web/assets/fonts` (OFL). Colours come from `lib/brand.ts`, which a test holds
 equal to the tokens.
