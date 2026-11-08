@@ -30,6 +30,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from makhzan_schemas.domains import get_profile
@@ -321,13 +322,18 @@ async def rebuild_products(session: AsyncSession) -> dict:
 
     existing = {p.group_key: p for p in (await session.execute(select(Product))).scalars().all()}
 
+    now = datetime.now(UTC)
     seen: set[str] = set()
+    changed = 0
     for key, items in groups.items():
         seen.add(key)
         product = existing.get(key)
         if product is None:
             product = Product(group_key=key)
             session.add(product)
+            before = None
+        else:
+            before = _visible(product)
 
         rep = _representative(items)
         prices = [i.price for i in items if i.price is not None]
@@ -348,6 +354,9 @@ async def rebuild_products(session: AsyncSession) -> dict:
         product.in_stock = any(i.stock_signal == StockSignal.IN_STOCK for i in items)
         verified = [i.last_verified_at for i in items if i.last_verified_at]
         product.last_verified_at = max(verified) if verified else None
+        if before is None or _visible(product) != before:
+            product.content_changed_at = now
+            changed += 1
 
     await session.flush()  # assign ids to newly-added products
 
@@ -380,7 +389,26 @@ async def rebuild_products(session: AsyncSession) -> dict:
         ),
         "removed": removed,
         "redirected": redirected,
+        "changed": changed,
     }
+
+
+def _visible(product: Product) -> tuple:
+    """What a reader sees of a product, as far as `content_changed_at` goes.
+
+    Deliberately not `last_verified_at`: a recheck that found everything as it
+    was is not a change, and the sitemap's lastmod is only worth anything to a
+    search engine while it is accurate.
+    """
+    return (
+        product.title_en,
+        product.min_price,
+        product.max_price,
+        product.in_stock,
+        product.offer_count,
+        product.supplier_count,
+        product.image,
+    )
 
 
 def _successors(
