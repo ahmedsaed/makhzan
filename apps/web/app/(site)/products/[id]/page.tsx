@@ -14,7 +14,6 @@ import { StockBadge } from "@/components/stock-badge";
 import {
   fetchCategories,
   fetchListing,
-  fetchPriceCounts,
   fetchProduct,
   fetchProductRedirect,
   fetchSimilar,
@@ -23,7 +22,6 @@ import {
   titleOf,
   type Offer,
   type Product,
-  type ProductSummary,
 } from "@/lib/api";
 import { formatCount, formatPrice } from "@/lib/format";
 import { freshnessTier, parseVerified } from "@/lib/freshness";
@@ -36,7 +34,6 @@ import {
   jsonLdText,
   MAX_DETAIL_SOURCES,
   orderOffers,
-  pricePosition,
   primaryOffer,
   productJsonLd,
   splitOffers,
@@ -48,8 +45,9 @@ import { absoluteUrl } from "@/lib/site";
 import { tradeLabel } from "@/lib/trades";
 import { cn } from "@/lib/utils";
 
+import { Carousel } from "./carousel";
 import { Details } from "./details";
-import { type CategoryFact, Facts } from "./facts";
+import { Facts } from "./facts";
 import { Gallery } from "./gallery";
 import { Offers } from "./offers";
 
@@ -60,22 +58,17 @@ import { Offers } from "./offers";
  * that: price, stock, who sells it, their description. With two or more offers
  * the comparison appears (rule P2): a summary, then every offer in one list.
  *
- * makhzan's own facts lead, and the shops' text follows. The title, specs and
- * description are copied from the shops; what the page adds is how many shops
- * sell it and when it was checked, where its price sits in its category, and
- * similar products. Those go first, under the title, so a reader (or a
- * crawler) meets what no shop's own page has before it meets what every shop's
- * page has.
+ * Under the title, makhzan's own facts (Facts): how many shops sell it, when
+ * it was checked, and how many similar products are at the end. The rest of
+ * the text is copied from the shops; these lines are what no shop's page has,
+ * so they come first.
  *
  * On a phone a fixed bar keeps the price, its age and the way out on screen.
- * On a wide screen the page goes two columns — photo and the way to the shop
- * in the narrow one; title, facts and what the shops wrote in the wide one —
- * and the bar goes away.
+ * On a wide screen the page goes two columns — photo and description left;
+ * title, summary, primary action and offers right — and the bar goes away.
  *
- * DOM order is the phone order: photo, title and facts, price or offers (and
- * the shop), then on a one-shop page similar products, then what the shop
- * wrote; on a several-shop page similar products stay last. The price and
- * offers must never sit below shop prose.
+ * DOM order is the phone order: photo, title and price, offers (or the shop),
+ * description, similar products. The offers must never sit below shop prose.
  */
 
 /** The page title: the product's, or its part number when it has no title. */
@@ -149,22 +142,12 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
   // Everything but the product itself is garnish: a failure there must not
   // take the page down with it.
-  const [similar, categories, listings, shop, priceCounts] = await Promise.all([
+  const [similar, categories, listings, shop] = await Promise.all([
     fetchSimilar(id, 8).catch(() => []),
     product.category ? fetchCategories().catch(() => []) : Promise.resolve([]),
     Promise.all(described.map((offer) => fetchListing(offer.id).catch(() => null))),
     soleShop ? fetchSupplier(soleShop).catch(() => null) : Promise.resolve(null),
-    product.category && product.min_price !== null
-      ? fetchPriceCounts(product.category.ref, product.min_price).catch(() => null)
-      : Promise.resolve(null),
   ]);
-  const categoryFact: CategoryFact | null = product.category
-    ? {
-        category: product.category,
-        count: categories.find((c) => c.ref === product.category?.ref)?.count ?? null,
-        position: priceCounts ? pricePosition(priceCounts) : null,
-      }
-    : null;
   const descriptions = new Map(
     described.map((offer, i) => [
       offer.id,
@@ -172,14 +155,9 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
     ]),
   );
   const sources = detailSources(product.offers, descriptions);
-  // One shop: similar products come before that shop's text, since they are
-  // makhzan's and the text is not. Several: the offers are makhzan's
-  // comparison already, and similar products keep their place at the end.
-  const similarFirst = !several && similar.length > 0;
-  // The wide column holds the title and, under it, what the shops wrote (and
-  // on a one-shop page the similar products). With none of that, it would
-  // hold only the title; the price or offers go there instead.
-  const split = sources.length > 0 || similarFirst;
+  // With nothing written by any shop, the wide column would hold only the
+  // title; the offers go there instead, as before.
+  const split = sources.length > 0;
   const images = galleryImages(product);
   const crumbs: Crumb[] | null = !product.category
     ? null
@@ -286,13 +264,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               )}
             </div>
           </div>
-          <Facts
-            offers={product.offers}
-            currency={product.currency}
-            now={now}
-            category={categoryFact}
-            similar={similar}
-          />
+          <Facts offers={product.offers} currency={product.currency} now={now} similar={similar} />
         </div>
 
         <div
@@ -316,59 +288,39 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
         {split && (
           <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-2">
-            {similarFirst && <Similar items={similar} now={now} strip />}
             <Details sources={sources} single={!several} />
           </div>
         )}
       </div>
 
-      {similar.length > 0 && !similarFirst && <Similar items={similar} now={now} />}
+      {similar.length > 0 && (
+        <section
+          id="similar"
+          data-similar
+          aria-labelledby="similar-heading"
+          className="mt-8 scroll-mt-20"
+        >
+          <h2 id="similar-heading" className="mb-2.5 text-[15px] lg:text-lg">
+            Similar products
+          </h2>
+          {/* A swipeable row on a phone, with arrows; a grid from `sm`. */}
+          <Carousel previous="Previous products" next="Next products" buttonClassName="sm:hidden">
+            <ul
+              data-carousel-track
+              // The scroll padding matches the side padding, so the first card
+              // snaps where it starts and the strip opens at its start.
+              className="-mx-4 flex snap-x scroll-px-4 gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8"
+            >
+              {similar.map((item) => (
+                <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
+              ))}
+            </ul>
+          </Carousel>
+        </section>
+      )}
 
       {primary && <BottomBar offer={primary} now={now} />}
     </Container>
-  );
-}
-
-/**
- * Similar products. At the end of the page, a swipeable row on a phone and a
- * grid from `sm`. As a `strip` in the wide column above a shop's text, one
- * swipeable row at every width, so it costs that text one row of height.
- */
-function Similar({
-  items,
-  now,
-  strip = false,
-}: {
-  items: ProductSummary[];
-  now: Date;
-  strip?: boolean;
-}) {
-  return (
-    <section
-      id="similar"
-      data-similar
-      aria-labelledby="similar-heading"
-      className={cn("scroll-mt-20", strip ? "mt-6 lg:mt-5" : "mt-8")}
-    >
-      <h2
-        id="similar-heading"
-        className={cn("mb-2.5", strip ? "text-[15px]" : "text-[15px] lg:text-lg")}
-      >
-        Similar products
-      </h2>
-      <ul
-        className={cn(
-          "-mx-4 flex snap-x gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start",
-          strip
-            ? "sm:mx-0 sm:px-0 lg:*:w-40"
-            : "sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8",
-        )}
-      >
-        {items.map((item) => (
-          <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
-        ))}
-      </ul>
-    </section>
   );
 }
 
