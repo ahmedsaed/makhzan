@@ -185,6 +185,37 @@ async def test_partition_budget_spreads_a_sweep_across_runs():
 
 
 @pytest.mark.asyncio
+async def test_the_next_partition_waits_its_turn(monkeypatch):
+    """Partitions share a host. The pause between pages used to stop at a
+    partition's last page, so the next partition's first request went out at
+    once — half the requests of a source of two-page categories, unpaced."""
+    from worker import pipeline
+
+    events: list = []
+
+    async def fake_sleep(seconds):
+        events.append(("pause", seconds))
+
+    class Paced(StubAdapter):
+        polite_delay = 15.0
+
+        async def fetch_page(self, partition: str, page: int) -> Page:
+            events.append(("fetch", partition, page))
+            return await super().fetch_page(partition, page)
+
+    monkeypatch.setattr(pipeline.asyncio, "sleep", fake_sleep)
+    await run_source(SRC, Paced(pages={1: ["x"]}, parts=["a", "b", "c"]))
+
+    assert events == [
+        ("fetch", "a", 1),
+        ("pause", 15.0),
+        ("fetch", "b", 1),
+        ("pause", 15.0),
+        ("fetch", "c", 1),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_cycle_only_closes_once_every_partition_is_swept():
     """Archiving must wait for the whole catalogue, however many runs that takes."""
 

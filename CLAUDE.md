@@ -282,6 +282,18 @@ makes already-fetched URLs keep returning 200 while never-fetched ones fail, whi
 looks exactly like a pagination cap. Test with URLs you have never successfully
 fetched, or you will measure your own cache.
 
+**`Retry-After` binds the host, not the retry.** A survey once sent six more
+requests 12 s apart after a 429 asking for 60. `worker/http.py` now waits at least
+what was asked before retrying, records it per host so the next partition waits
+too, and gives up for the run (cursor kept) when asked for more than
+`RETRY_AFTER_CAP`. Never shorten that wait to make a sweep finish.
+
+**robots.txt is matched by `worker/robots.py`, not `urllib.robotparser`.** On the
+Python the worker runs (3.12) the standard parser ignores `*` and `$` and lets the
+first matching line win, so `Disallow: /collections/*sort_by*` matched nothing.
+Every request is checked against its full URL, query included — which matters most
+for paths the crawler discovers at runtime, like a shop's collection handles.
+
 **WooCommerce prices are minor units** (÷ 10^`currency_minor_unit`); Shopify's are
 major units. Getting this wrong is silent — prices are just 100x off.
 
