@@ -83,6 +83,120 @@ test.describe("one offer", () => {
   });
 });
 
+test.describe("makhzan's own facts, under the title", () => {
+  // The stub's Integrated Circuits hold 43 priced products, 10 to 2,450
+  // (tests/e2e/fixtures/product.mjs, IC_PRICES).
+  test("one shop: who sells it and when, its place in the category, similar ones", async ({
+    page,
+  }) => {
+    await page.goto("/products/p-single");
+    const facts = page.locator("[data-facts]");
+    await expect(facts.locator("[data-fact]")).toHaveText([
+      "Sold by 1 shop · checked 74 days ago",
+      "Pricier than 97% of the 42 other products in Integrated Circuits",
+      "2 similar products, from EGP 40",
+    ]);
+    // The age keeps its F2 colour here too.
+    await expect(facts.locator("[data-freshness]")).toHaveAttribute("data-freshness", "warn");
+    await expect(facts.getByRole("link", { name: "Integrated Circuits" })).toHaveAttribute(
+      "href",
+      "/trades/electronics/ics",
+    );
+    await facts.getByRole("link", { name: "2 similar products" }).click();
+    await expect(page).toHaveURL(/#similar$/);
+    await expect(page.getByRole("heading", { name: "Similar products" })).toBeInViewport();
+  });
+
+  test("several shops: how many, where in stock, the range", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    await expect(page.locator("[data-fact=shops]")).toHaveText(
+      "Sold by 3 shops · 7 listings · in stock at 2 · EGP 260 – 295",
+    );
+    await expect(page.locator("[data-fact=category]")).toHaveText(
+      "Pricier than 57% of the 42 other products in Integrated Circuits",
+    );
+
+    await page.goto("/products/p-oos");
+    await expect(page.locator("[data-fact=shops]")).toHaveText(
+      "Sold by 3 shops · none in stock · EGP 40 – 50",
+    );
+    await expect(page.locator("[data-fact=category]")).toHaveText(
+      "Cheaper than 92% of the 42 other products in Integrated Circuits",
+    );
+
+    await page.goto("/products/p-specs");
+    await expect(page.locator("[data-fact=category]")).toHaveText(
+      "The priciest of the 43 products in Integrated Circuits",
+    );
+  });
+
+  test("a fact with nothing behind it is left out, never shown empty", async ({ page }) => {
+    await page.goto("/products/p-bare");
+    const facts = page.locator("[data-fact]");
+    await expect(facts).toHaveCount(1);
+    await expect(facts).toHaveText("Sold by 1 shop · checked 2 days ago");
+    await expect(page.locator("[data-similar]")).toHaveCount(0);
+  });
+});
+
+test.describe("what comes first", () => {
+  /** Top edges, in the order given: each must start below the one before. */
+  async function expectOrder(page: import("@playwright/test").Page, selectors: string[]) {
+    const tops: number[] = [];
+    for (const selector of selectors) {
+      tops.push((await page.locator(selector).first().boundingBox())!.y);
+    }
+    for (let i = 1; i < tops.length; i++) {
+      expect(tops[i], `${selectors[i]} below ${selectors[i - 1]}`).toBeGreaterThan(tops[i - 1]);
+    }
+  }
+
+  test("a phone, one shop: photo, title, facts, price, similar, then the shop's text", async ({
+    page,
+  }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-single");
+    await expectOrder(page, [
+      "[data-gallery]",
+      "h1",
+      "[data-facts]",
+      "[data-buy] [data-price]",
+      "[data-similar]",
+      "[data-description]",
+    ]);
+  });
+
+  test("a phone, several shops: the offers, then the shops' text, similar last", async ({
+    page,
+  }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p-multi");
+    await expectOrder(page, [
+      "h1",
+      "[data-facts]",
+      "[data-summary]",
+      "[data-offer]",
+      "[data-details]",
+      "[data-similar]",
+    ]);
+  });
+
+  test("a wide screen, one shop: similar sits in the wide column, above the text", async ({
+    page,
+  }) => {
+    await page.goto("/products/p-single");
+    const photo = (await page.locator("[data-gallery]").boundingBox())!;
+    const similar = (await page.locator("[data-similar]").boundingBox())!;
+    const description = (await page.locator("[data-description]").boundingBox())!;
+    const buy = (await page.locator("[data-buy]").boundingBox())!;
+    expect(similar.x).toBeGreaterThan(photo.x + photo.width);
+    expect(description.y).toBeGreaterThan(similar.y + similar.height - 1);
+    // The price stays under the photo, not pushed down by the strip.
+    expect(buy.x).toBeCloseTo(photo.x, 0);
+    expect(buy.y).toBeLessThan(similar.y + similar.height);
+  });
+});
+
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false, viewport: PHONE });
 

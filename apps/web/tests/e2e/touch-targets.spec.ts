@@ -88,6 +88,8 @@ test("the product page's controls", async ({ page }) => {
     "bottom bar button": page.locator("[data-bottom-bar]").getByRole("link", { name: /View at/ }),
     "first breadcrumb": crumbs.first(),
     "sold by card": page.locator("[data-sold-by]"),
+    "category fact": page.locator("[data-fact=category] a"),
+    "similar fact": page.locator("[data-fact=similar] a"),
   });
 
   await page.goto("/products/p-specs");

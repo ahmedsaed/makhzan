@@ -149,7 +149,36 @@ const PRODUCTS = {
     offer("o-x2", NILE, "LM2596 Step Down Converter", 40, "out_of_stock", 2),
     offer("o-x3", DELTA, "LM2596 Adjustable Buck", 50, "out_of_stock", 12),
   ]),
+  // As little as a product gets: one shop, a title, no category, no
+  // description and nothing similar. Its facts are one line, not empty ones.
+  "p-bare": product(
+    "p-bare",
+    "Jumper Wire Kit",
+    [offer("o-bare", VOLT, "Jumper Wire Kit", 30, "in_stock", 2)],
+    { category: null },
+  ),
 };
+
+/**
+ * The priced products of "Integrated Circuits" as the search index holds them:
+ * 10 to 400 in steps of 10, plus the fixtures priced outside that run. The
+ * product page asks how many sit at or below a price (`max_price`) and how many
+ * are priced at all (`min_price=0`), one `limit=1` query each.
+ */
+const IC_PRICES = [...Array.from({ length: 40 }, (_, i) => (i + 1) * 10), 185, 850, 2450];
+
+/** `[status, body]` for a price-count query on Integrated Circuits, or null. */
+export function priceCountFixture(url) {
+  const params = url.searchParams;
+  if (params.get("category") !== "electronics:ics" || params.get("limit") !== "1") return null;
+  const min = params.get("min_price");
+  const max = params.get("max_price");
+  if (min === null && max === null) return null;
+  const total = IC_PRICES.filter(
+    (price) => (min === null || price >= Number(min)) && (max === null || price <= Number(max)),
+  ).length;
+  return [200, { query: "", identifier_query: false, total, limit: 1, offset: 0, hits: [] }];
+}
 
 const DESCRIPTION =
   "Range 0–150mm, reading 0.01mm, IP54 housing against dust and splashes. " +
@@ -172,6 +201,7 @@ const SUPPLIERS = {
 /** `[status, body]` for a path this fixture owns, or null. */
 export function productFixture(path) {
   const similar = path.match(/^\/products\/([^/]+)\/similar$/);
+  if (similar && similar[1] === "p-bare") return [200, []];
   if (similar && PRODUCTS[similar[1]]) {
     const summary = { ...PRODUCTS["p-oos"], id: "p-oos" };
     delete summary.offers;
