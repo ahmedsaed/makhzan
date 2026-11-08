@@ -15,12 +15,15 @@ import { cn } from "@/lib/utils";
  * `scopeToggle` is a scope the visitor can drop: a checked box beside the
  * field ("This shop only"). Unticked, the parameter is simply not submitted,
  * so searching everything needs no JavaScript either.
+ *
+ * Never autofocused, on any page or width: focus pulls up the keyboard on a
+ * phone every time the home page is revisited, and moves a screen reader past
+ * everything above the field. It takes focus when someone taps or clicks it.
  */
 export function SearchField({
   defaultValue = "",
   placeholder = "Part number or name",
   compact = false,
-  autoFocus = false,
   label = "Search",
   scope,
   scopeToggle,
@@ -29,7 +32,6 @@ export function SearchField({
   defaultValue?: string;
   placeholder?: string;
   compact?: boolean;
-  autoFocus?: boolean;
   /** The field's accessible name: "Search in Tools" for a scoped field. */
   label?: string;
   /** Parameters submitted with the query, e.g. `{ domain: "tools" }` for
@@ -58,7 +60,6 @@ export function SearchField({
           // `auto`: an Arabic query (they still work) types right to left.
           dir="auto"
           defaultValue={defaultValue}
-          autoFocus={autoFocus}
           placeholder={placeholder}
           // 16px keeps iOS from zooming the page when the field takes focus.
           className="h-full min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-ink-3"
