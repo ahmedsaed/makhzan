@@ -12,14 +12,17 @@ from getting sources blocked.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import time
-from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections import Counter, defaultdict
+from collections.abc import Awaitable, Callable, Iterator
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 import httpx
+from makhzan_schemas.crawl import pacing_stats
 
 # A contact address lives in the header set so we're identifiable without tripping
 # WAFs. Everything else here exists to look like a current browser. This set is
@@ -80,6 +83,48 @@ RETRY_AFTER_CAP = 600.0
 #: the next partition and the next adapter call — not only the retry loop that
 #: received it.
 _NOT_BEFORE: dict[str, float] = {}
+
+
+#: When a request goes out, for the request log. Looked up at call time.
+_now: Callable[[], float] = time.monotonic
+
+
+class RequestLog:
+    """When each request of one run went out, by host — the evidence for `stats.pacing`.
+
+    Recorded in `_request`, the one door every adapter request goes through
+    (pages, a Shopify shop's collection lists, the once-a-cycle reference data),
+    at the moment each is sent, retries included. So the gaps it reports are the
+    ones the shop's server saw, not the ones the pacing code meant to leave.
+    robots.txt is fetched outside it (see robots.py) and is not counted.
+    """
+
+    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock
+        self.times: dict[str, list[float]] = defaultdict(list)
+
+    def record(self, host: str) -> None:
+        self.times[host].append((self._clock or _now)())
+
+    def pacing(self) -> dict:
+        """`stats.pacing` (see makhzan_schemas.crawl)."""
+        return pacing_stats(self.times)
+
+
+#: The log of the run in progress in this task, if any. A context variable, not
+#: a global: the daily refresh runs sources concurrently, one task each.
+_REQUEST_LOG: ContextVar[RequestLog | None] = ContextVar("request_log", default=None)
+
+
+@contextlib.contextmanager
+def logging_requests(log: RequestLog | None = None) -> Iterator[RequestLog]:
+    """Record every request sent inside the block (and tasks it starts) into `log`."""
+    log = log or RequestLog()
+    token = _REQUEST_LOG.set(log)
+    try:
+        yield log
+    finally:
+        _REQUEST_LOG.reset(token)
 
 
 class HostBackingOff(Exception):
@@ -168,6 +213,9 @@ async def _request(
     resp = None
     for attempt in range(retries + 1):
         await _wait_for_host(host)
+        log = _REQUEST_LOG.get()
+        if log is not None:
+            log.record(host)
         resp = await client.request(method, url, params=params, **kwargs)
         if resp.status_code in _RETRYABLE:
             asked = retry_after_seconds(resp.headers.get("Retry-After"))

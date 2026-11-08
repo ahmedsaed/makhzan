@@ -42,7 +42,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
-from worker.http import CycleFetcher
+from worker.http import CycleFetcher, RequestLog, logging_requests
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
 
@@ -607,7 +607,24 @@ async def _run(
     *,
     limit: int | None,
 ) -> IngestionRun:
-    """Shared body for whole-source and single-partition runs."""
+    """Shared body for whole-source and single-partition runs.
+
+    Every request the run sends — cycle data, every partition's pages, whatever
+    the adapter fetches to build a page — is logged with when it went out, so
+    the run's `stats.pacing` is the pace the shop actually saw.
+    """
+    with logging_requests() as log:
+        return await _logged_run(source_id, adapter, partitions, limit=limit, log=log)
+
+
+async def _logged_run(
+    source_id: str,
+    adapter: SourceAdapter,
+    partitions: list[str],
+    *,
+    limit: int | None,
+    log: RequestLog,
+) -> IngestionRun:
     errors: list[str] = []
 
     async with SessionLocal() as session:
@@ -681,6 +698,11 @@ async def _run(
         requests.update(adapter.extra_requests())
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}
+        # What the shop's server saw: requests sent (a retry is one more) and the
+        # gaps between them, which is what /how-we-crawl publishes. `requests`
+        # above counts by purpose, and a page refused before sending (robots.txt,
+        # a host still backing off) is in it but not here.
+        stats["pacing"] = log.pacing()
         if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:
             # Kept as out of stock rather than archived; "unknown" ones were
             # never stored, and a route with no price or photo creates nothing.
