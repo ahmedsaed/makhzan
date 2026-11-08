@@ -12,14 +12,17 @@ from getting sources blocked.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import time
-from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections import Counter, defaultdict
+from collections.abc import Awaitable, Callable, Iterator
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 import httpx
+from makhzan_schemas.crawl import pacing_stats
 
 # A contact address lives in the header set so we're identifiable without tripping
 # WAFs. Everything else here exists to look like a current browser. This set is
@@ -82,6 +85,53 @@ RETRY_AFTER_CAP = 600.0
 _NOT_BEFORE: dict[str, float] = {}
 
 
+#: When a request goes out, for the request log. Looked up at call time.
+_now: Callable[[], float] = time.monotonic
+
+
+class RequestLog:
+    """When each request of one run went out, by host — the evidence for `stats.pacing`.
+
+    Recorded in `_request`, the one door every adapter request goes through
+    (pages, a Shopify shop's collection lists, the once-a-cycle reference data),
+    at the moment each is sent, retries included. So the gaps it reports are the
+    ones the shop's server saw, not the ones the pacing code meant to leave.
+    robots.txt fetches (worker/robots.py) are recorded too, as `robots`: the shop
+    sees them like any other request.
+    """
+
+    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock
+        self.times: dict[str, list[float]] = defaultdict(list)
+        #: robots.txt fetches among `times`, by host.
+        self.robots: Counter[str] = Counter()
+
+    def record(self, host: str, *, robots: bool = False) -> None:
+        self.times[host].append((self._clock or _now)())
+        if robots:
+            self.robots[host] += 1
+
+    def pacing(self) -> dict:
+        """`stats.pacing` (see makhzan_schemas.crawl)."""
+        return pacing_stats(self.times, robots=self.robots)
+
+
+#: The log of the run in progress in this task, if any. A context variable, not
+#: a global: the daily refresh runs sources concurrently, one task each.
+_REQUEST_LOG: ContextVar[RequestLog | None] = ContextVar("request_log", default=None)
+
+
+@contextlib.contextmanager
+def logging_requests(log: RequestLog | None = None) -> Iterator[RequestLog]:
+    """Record every request sent inside the block (and tasks it starts) into `log`."""
+    log = log or RequestLog()
+    token = _REQUEST_LOG.set(log)
+    try:
+        yield log
+    finally:
+        _REQUEST_LOG.reset(token)
+
+
 class HostBackingOff(Exception):
     """Raised instead of sending a request the host asked us to hold back."""
 
@@ -113,6 +163,65 @@ def retry_after_seconds(value: str | None, now: datetime | None = None) -> float
 
 def _host(url: httpx.URL) -> str:
     return f"{url.scheme}://{url.netloc.decode()}"
+
+
+#: Per host, the pace the source running against it asked for (its
+#: `polite_delay`), set by the pipeline at the start of a run. `Crawl-Delay` is a
+#: floor on it (see `_pace_of`). A host nobody registered has no gate: only an
+#: adapter called directly, outside a run, sends to one.
+_HOST_PACE: dict[str, float] = {}
+
+#: Per host, when the last request to it went out (`_now` time).
+_LAST_SENT: dict[str, float] = {}
+
+#: Per host, held while a request waits its turn, so two tasks sharing a host
+#: cannot both decide the gap is long enough.
+_TURN_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def host_of(url: str) -> str:
+    """`scheme://netloc` of a URL, the key every per-host table here uses."""
+    return _host(httpx.URL(url))
+
+
+def set_host_pace(base_url: str | None, seconds: float) -> None:
+    """Make `seconds` the least gap between any two requests to `base_url`'s host."""
+    if base_url:
+        _HOST_PACE[host_of(base_url)] = float(seconds)
+
+
+def _pace_of(host: str, *, default: float = 0.0) -> float:
+    """The host's pace: its registered polite delay, with its Crawl-Delay as a floor.
+
+    Reads robots.txt only from the cache: fetching it from here would wait on
+    the very gate this computes.
+    """
+    from worker.robots import ROBOTS
+
+    cached = getattr(ROBOTS, "cached_crawl_delay", None)
+    asked = cached(host, BROWSER_HEADERS["User-Agent"]) if cached else None
+    return max(_HOST_PACE.get(host, default), asked or 0.0)
+
+
+async def take_turn(host: str, *, robots: bool = False) -> None:
+    """Wait until `host` may be sent its next request, then claim the slot.
+
+    The one gate every request to a shop passes — pages, cycle data, a retry,
+    a robots.txt fetch — so none goes out closer than the host's pace to the
+    one before it, whichever code path sent either. Logged for `stats.pacing`.
+    """
+    lock = _TURN_LOCKS.setdefault(host, asyncio.Lock())
+    async with lock:
+        await _wait_for_host(host)
+        last = _LAST_SENT.get(host)
+        if last is not None:
+            remaining = last + _pace_of(host) - _now()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+        _LAST_SENT[host] = _now()
+        log = _REQUEST_LOG.get()
+        if log is not None:
+            log.record(host, robots=robots)
 
 
 async def _wait_for_host(host: str) -> None:
@@ -167,15 +276,20 @@ async def _request(
 
     resp = None
     for attempt in range(retries + 1):
-        await _wait_for_host(host)
+        await take_turn(host)
         resp = await client.request(method, url, params=params, **kwargs)
         if resp.status_code in _RETRYABLE:
             asked = retry_after_seconds(resp.headers.get("Retry-After"))
             if asked is not None:
                 _NOT_BEFORE[host] = time.monotonic() + asked
             if attempt < retries and (asked is None or asked <= RETRY_AFTER_CAP):
+                # The published pace is a floor here too: a retry is a request
+                # like any other. Above it the backoff still grows, and a
+                # Retry-After longer than both wins. `take_turn` then holds the
+                # same floor against every other request to the host.
                 backoff = base_delay * (2**attempt) + random.uniform(0, 0.5)
-                await asyncio.sleep(max(backoff, asked or 0.0))
+                floor = _pace_of(host, default=POLITE_DELAY)
+                await asyncio.sleep(max(floor, backoff, asked or 0.0))
                 continue
         resp.raise_for_status()
         return resp

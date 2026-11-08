@@ -10,10 +10,13 @@ import { ShopLink } from "@/components/shop-link";
 import {
   categoryNameOf,
   fetchCategories,
+  fetchCrawlerActivity,
   fetchSupplier,
   type Category,
+  type CrawlerActivity,
   type SupplierProfile,
 } from "@/lib/api";
+import { absoluteTime, parseTime, shopActivityLine } from "@/lib/crawler-activity";
 import { formatCount } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
 import { pageMetadata, shopDescription, pagedPath } from "@/lib/metadata";
@@ -74,10 +77,12 @@ export default async function ShopPage({
   const { shop: _ignored, ...raw } = await searchParams;
   void _ignored;
   const query: ResultsQuery = { ...parseResultsQuery(raw), shop };
-  const [supplier, data, categories] = await Promise.all([
+  const [supplier, data, categories, activity] = await Promise.all([
     fetchSupplier(shop),
     fetchResults(query),
     fetchCategories().catch((): Category[] => []),
+    // Fails soft (null): the page is about the shop, and renders without it.
+    fetchCrawlerActivity(),
   ]);
   if (!supplier) notFound();
 
@@ -88,7 +93,7 @@ export default async function ShopPage({
 
   return (
     <>
-      <ShopHeader supplier={supplier} narrow={narrow} />
+      <ShopHeader supplier={supplier} narrow={narrow} activity={activity} />
 
       <Container className="flex flex-col gap-6 py-6 lg:gap-4">
         {supplier.top_categories.length > 0 && (
@@ -154,9 +159,11 @@ export default async function ShopPage({
 function ShopHeader({
   supplier,
   narrow,
+  activity,
 }: {
   supplier: SupplierProfile;
   narrow: (key: "category" | "domain", value: string) => string;
+  activity: CrawlerActivity | null;
 }) {
   const now = new Date();
   const verified = parseVerified(supplier.last_verified_at);
@@ -165,7 +172,7 @@ function ShopHeader({
 
   return (
     <section className="border-b border-line bg-surface">
-      <Container className="flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7 lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'carries_carries']">
+      <Container className="flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7 lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'carries_carries'_'crawl_crawl']">
         <div className="lg:self-center lg:[grid-area:name]">
           <h1 className="text-2xl leading-tight sm:text-3xl lg:text-4xl">{supplier.name}</h1>
           {location && <p className="mt-1 text-sm text-ink-2">{location}</p>}
@@ -221,8 +228,51 @@ function ShopHeader({
             className="mt-2 lg:mt-1 lg:[grid-area:carries]"
           />
         )}
+
+        <CrawlLine activity={activity} slug={supplier.slug} now={now} />
       </Container>
     </section>
+  );
+}
+
+/**
+ * What makhzan's crawler did on this shop's site, in one calm line, with the way
+ * to the full record: "makhzan read this site 3 hours ago · 412 requests in the
+ * last 7 days · at least 15 s apart · How we crawl". Nothing at all when the
+ * activity could not be fetched, or the shop is not one we crawl.
+ */
+function CrawlLine({
+  activity,
+  slug,
+  now,
+}: {
+  activity: CrawlerActivity | null;
+  slug: string;
+  now: Date;
+}) {
+  const shop = activity?.shops.find((s) => s.slug === slug);
+  if (!activity || !shop) return null;
+  const text = shopActivityLine(shop, activity.window_days, now).join(" · ");
+  const lastRead = parseTime(shop.last_read_at);
+  return (
+    <p
+      data-crawl-activity={shop.status}
+      title={
+        lastRead && shop.status === "active" ? `Last read ${absoluteTime(lastRead)}` : undefined
+      }
+      className="text-[13px] leading-relaxed text-ink-2 lg:[grid-area:crawl]"
+    >
+      {text}
+      {/* A sentence ends with its full stop; figures run on with a dot. */}
+      {text.endsWith(".") ? " " : " · "}
+      <Link
+        href={`${routes.howWeCrawl()}#activity`}
+        // 44px to tap on phones (S4), though it reads as a line of text.
+        className="inline-flex min-h-11 items-center font-semibold text-link hover:underline lg:min-h-0"
+      >
+        How we crawl
+      </Link>
+    </p>
   );
 }
 

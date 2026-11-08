@@ -3,14 +3,18 @@ import type { Metadata } from "next";
 
 import { Link } from "@/components/link";
 import { Container } from "@/components/section";
+import { fetchCrawlerActivity } from "@/lib/api";
 import { crawlingContent as content } from "@/lib/content/crawling";
 import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 
+import { CrawlerActivitySection } from "./activity";
+
 /**
  * The page to point a supplier at when they ask what we are doing. Indexable,
- * and readable even when the catalogue is not: it fetches nothing, and neither
- * does the chrome around it, so it is prerendered at build time.
+ * and readable even when the catalogue is not: its one fetch, the crawler's
+ * activity, fails soft — the policy renders without it, and the section says
+ * the figures can't be shown.
  */
 export const metadata: Metadata = pageMetadata({
   title: content.title,
@@ -18,7 +22,8 @@ export const metadata: Metadata = pageMetadata({
   path: routes.howWeCrawl(),
 });
 
-export default function HowWeCrawlPage() {
+export default async function HowWeCrawlPage() {
+  const activity = await fetchCrawlerActivity();
   return (
     <Container className="max-w-2xl py-10">
       <h1 className="text-2xl sm:text-3xl">{content.title}</h1>
@@ -36,6 +41,8 @@ export default function HowWeCrawlPage() {
           </section>
         ))}
       </div>
+
+      <CrawlerActivitySection activity={activity} content={content.activity} now={new Date()} />
 
       <section className="mt-8 flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
         <div>
