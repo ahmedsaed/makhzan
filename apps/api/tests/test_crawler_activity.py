@@ -205,6 +205,22 @@ async def test_a_completed_run_from_before_any_counting_still_read_the_site(clie
     assert body["totals"]["shops_read_7d"] == 1
 
 
+async def test_shops_read_this_week_follow_last_read_not_the_request_count(client, db):
+    """Three shops read two days ago by runs that never counted their requests
+    are three shops read this week, as the table beside the total says."""
+    for slug in ("read-1", "read-2", "read-3"):
+        await make_supplier(db, slug=slug, name=slug)
+        await _source(db, f"src-{slug}", slug)
+        await _run(db, f"src-{slug}", ago=timedelta(days=2), stats={})
+    await make_supplier(db, slug="read-long-ago", name="read-long-ago")
+    await _source(db, "src-long-ago", "read-long-ago")
+    await _run(db, "src-long-ago", ago=timedelta(days=13), stats={"pacing": _paced(15)})
+
+    totals = (await _activity(client))["totals"]
+    assert (totals["shops_read_7d"], totals["shops"]) == (3, 4)
+    assert totals["requests_7d"] == 0 and totals["requests_7d_partial"] is True
+
+
 async def test_a_run_that_sent_nothing_is_not_a_read(client, db):
     await make_supplier(db, slug="shop-c", name="Shop C")
     await _source(db, "src-c", "shop-c")
