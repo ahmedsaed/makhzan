@@ -328,15 +328,25 @@ async def test_a_full_run(shop):
     assert "crosswalk" not in run.stats or "New Arrival" not in str(run.stats["crosswalk"])
 
 
-async def test_a_new_arrival_pass_does_not_clear_a_category(shop):
-    """The second run sweeps only New Arrival, where the title gives inference
-    nothing to go on: the category PLA+ set stays."""
+@pytest.mark.parametrize(
+    ("name", "alt"),
+    [
+        # Inference finds nothing in the title: the pass must not clear.
+        ("Black Spool", "Acme Black Spool"),
+        # Inference finds the wrong thing ("raspberry" is a dev board): the pass
+        # must not replace the type gallery's fact with that guess either.
+        ("Raspberry Red PLA+", "Acme Raspberry Red PLA+ 3D printer filament"),
+    ],
+)
+async def test_a_new_arrival_pass_keeps_the_category_a_type_gallery_set(shop, name, alt):
+    """The second run sweeps only New Arrival, on which the product's title has
+    changed: the category PLA+ set stays."""
     adapter = _wix()
     await run_source(adapter.source_id, adapter)
     shop.routes[("/shop", None)] = (
         shop.routes[("/shop", None)]
-        .replace('"name":"Black PLA +"', '"name":"Black Spool"')
-        .replace("Acme Black PLA+ 3D printer filament", "Acme Black Spool")
+        .replace('"name":"Black PLA +"', f'"name":"{name}"')
+        .replace("Acme Black PLA+ 3D printer filament", alt)
     )
     later = _wix()
     later.partitions = lambda: ["/shop"]  # only the merchandising pass
@@ -345,7 +355,11 @@ async def test_a_new_arrival_pass_does_not_clear_a_category(shop):
         black = (
             await session.execute(select(Listing).where(Listing.external_id == BLACK))
         ).scalar_one()
-    assert black.category_id is not None
+        filament = (
+            await session.execute(select(Category).where(Category.slug == "filament"))
+        ).scalar_one()
+    assert black.title_en == alt, "the pass did update the listing"
+    assert black.category_id == filament.id
 
 
 async def test_the_sitemap_is_not_compared_against_galleries_another_run_swept(shop):
