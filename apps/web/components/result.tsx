@@ -63,7 +63,7 @@ export function ResultRow({ hit, now, priority = false, hideShop = false }: Resu
       {/* Grid areas rather than two copies of the markup: each fact exists
           once in the DOM and only its position changes with the width. */}
       <Link
-        href={routes.product(hit.id)}
+        href={routes.product(hit.id, titleOf(hit) || hit.part_number)}
         className="grid grid-cols-[72px_minmax(0,1fr)] grid-rows-[auto_auto_1fr] gap-x-3 gap-y-1 px-4 py-3 [grid-template-areas:'photo_title'_'photo_price'_'photo_meta'] hover:bg-ground md:grid-cols-[72px_minmax(0,1fr)_16rem_9rem] md:grid-rows-1 md:items-center md:gap-x-5 md:[grid-template-areas:'photo_title_meta_price']"
       >
         <PhotoFrame
@@ -121,7 +121,10 @@ export function ResultCard({ hit, now, priority = false, hideShop = false }: Res
       data-result="card"
       className="overflow-hidden rounded-card border border-line bg-surface hover:border-line-strong"
     >
-      <Link href={routes.product(hit.id)} className="flex h-full flex-col">
+      <Link
+        href={routes.product(hit.id, titleOf(hit) || hit.part_number)}
+        className="flex h-full flex-col"
+      >
         <PhotoFrame
           src={hit.image}
           alt={title}

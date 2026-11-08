@@ -8,6 +8,17 @@ import { expect, test } from "@playwright/test";
 
 const PHONE = { width: 390, height: 844 };
 
+/** The page's JSON-LD block of one `@type`. A page has several (product,
+ *  breadcrumbs), and Playwright's text filters skip `<script>` elements. */
+async function jsonLd(page: import("@playwright/test").Page, type: string) {
+  const blocks = await page
+    .locator('script[type="application/ld+json"]')
+    .evaluateAll((nodes) => nodes.map((node) => JSON.parse(node.textContent ?? "{}")));
+  const found = blocks.find((block) => block["@type"] === type);
+  expect(found, `a ${type} block`).toBeTruthy();
+  return found;
+}
+
 test.describe("one offer", () => {
   test.use({ viewport: PHONE });
 
@@ -167,9 +178,7 @@ test("the head names the product and describes it to search engines", async ({ p
     "content",
     /EGP 260 – 295 at 2 shops/,
   );
-  const data = JSON.parse(
-    (await page.locator('script[type="application/ld+json"]').textContent()) ?? "{}",
-  );
+  const data = await jsonLd(page, "Product");
   expect(data["@type"]).toBe("Product");
   expect(data.offers).toMatchObject({
     "@type": "AggregateOffer",
@@ -465,5 +474,39 @@ test.describe("a product id a regroup replaced", () => {
   test("an id with nowhere to go is still a 404", async ({ page }) => {
     const response = await page.goto("/products/p-never-existed");
     expect(response?.status()).toBe(404);
+  });
+});
+
+test.describe("readable product URLs", () => {
+  const ID = "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f";
+  const READABLE = `/products/${ID}-servo-motor-metal-gear-mg90s-180`;
+
+  test("the bare id redirects permanently to the readable URL", async ({ page }) => {
+    const response = await page.request.get(`/products/${ID}`, { maxRedirects: 0 });
+    expect(response.status()).toBe(308);
+    expect(response.headers()["location"]).toMatch(new RegExp(`${READABLE}$`));
+  });
+
+  test("a wrong or stale slug redirects too", async ({ page }) => {
+    const response = await page.request.get(`/products/${ID}-old-title`, { maxRedirects: 0 });
+    expect(response.status()).toBe(308);
+    expect(response.headers()["location"]).toMatch(new RegExp(`${READABLE}$`));
+  });
+
+  test("the readable URL is the page, and its canonical", async ({ page }) => {
+    const response = await page.goto(READABLE);
+    expect(response?.status()).toBe(200);
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      `https://makhzan.test${READABLE}`,
+    );
+  });
+
+  test("breadcrumbs are marked up, ending on the product", async ({ page }) => {
+    await page.goto(READABLE);
+    const crumbs = await jsonLd(page, "BreadcrumbList");
+    const names = crumbs.itemListElement.map((item: { name: string }) => item.name);
+    expect(names.at(-1)).toBe("Servo Motor Metal Gear MG90S (180°)");
+    expect(crumbs.itemListElement[0].item).toMatch(/^https:\/\/makhzan\.test\/trades\//);
   });
 });

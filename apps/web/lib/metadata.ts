@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import type { Category, Product, Stats, SupplierProfile } from "@/lib/api";
 import { SITE_DESCRIPTION, SITE_NAME, TAGLINE } from "@/lib/brand";
+import { absoluteUrl } from "@/lib/site";
 import { formatCount, formatPriceRange, plural } from "@/lib/format";
 import { summarizeOffers } from "@/lib/product";
 import { tradesInWords } from "@/lib/shops";
@@ -77,6 +78,26 @@ export function pageMetadata({
  * search engine can offer a search box for it. `home` is the absolute URL of
  * `/`, on SITE_URL.
  */
+/**
+ * schema.org BreadcrumbList for a page's trail (Google shows it in results in
+ * place of the URL). Crumbs are what the page shows; the page itself closes
+ * the list, named and without a link of its own, as Google allows.
+ */
+export function breadcrumbJsonLd(crumbs: { label: string; href?: string }[], current?: string) {
+  const items = [...crumbs.map((crumb) => ({ name: crumb.label, href: crumb.href }))];
+  if (current) items.push({ name: current, href: undefined });
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: items.map((item, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: item.name,
+      ...(item.href && { item: absoluteUrl(item.href) }),
+    })),
+  };
+}
+
 export function homeJsonLd(home: string) {
   const url = new URL(home);
   const search = new URL("/search", url);

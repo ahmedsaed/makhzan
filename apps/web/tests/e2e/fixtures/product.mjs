@@ -90,6 +90,12 @@ const PRODUCTS = {
     ],
     { part_number: "DC-150" },
   ),
+  // A real UUID: only those get a readable slug after the id.
+  "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f": product(
+    "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f",
+    "Servo Motor Metal Gear MG90S (180°)",
+    [offer("o-uuid", VOLT, "Servo Motor Metal Gear MG90S (180°)", 150, "in_stock", 3, [])],
+  ),
   "p-multi": product("p-multi", "ESP32 Development Board 30 pin", [
     // Deliberately not in price order: the page sorts.
     // Two shops publish specs; the page opens on the richer one (o-m1, two
