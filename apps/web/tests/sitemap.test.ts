@@ -110,6 +110,19 @@ describe("productEntries", () => {
       },
     ]);
   });
+
+  // The page slugs from titleOf(product) || part_number; the sitemap must
+  // list that same URL, or Google is handed one that redirects.
+  it("slugs as the product page does: the Arabic title's Latin words, then the part number", () => {
+    vi.stubEnv("SITE_URL", "https://makhzan.example");
+    const id = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
+    const [arabic, partOnly] = productEntries([
+      { id, title_en: null, title_ar: "معجون لحام Soldering Paste", changed_at: "2026-10-02" },
+      { id, title_en: null, title_ar: null, part_number: "LM7805", changed_at: "2026-10-02" },
+    ]);
+    expect(arabic.url).toBe(`https://makhzan.example/products/${id}-soldering-paste`);
+    expect(partOnly.url).toBe(`https://makhzan.example/products/${id}-lm7805`);
+  });
 });
 
 describe("sitemapIndexXml", () => {

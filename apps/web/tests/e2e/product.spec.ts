@@ -833,6 +833,14 @@ test.describe("readable product URLs", () => {
     expect(response.headers()["location"]).toMatch(new RegExp(`${READABLE}$`));
   });
 
+  test("an uppercase id redirects to the one lowercase URL", async ({ page }) => {
+    const response = await page.request.get(`/products/${ID.toUpperCase()}`, {
+      maxRedirects: 0,
+    });
+    expect(response.status()).toBe(308);
+    expect(response.headers()["location"]).toMatch(new RegExp(`${READABLE}$`));
+  });
+
   test("a wrong or stale slug redirects too", async ({ page }) => {
     const response = await page.request.get(`/products/${ID}-old-title`, { maxRedirects: 0 });
     expect(response.status()).toBe(308);

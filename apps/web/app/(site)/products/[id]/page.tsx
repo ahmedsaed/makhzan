@@ -79,7 +79,9 @@ function displayTitle(product: Product): string {
 
 /** The readable path: `/products/{id}-{words-of-the-title}`. */
 function productPath(id: string, product: Product): string {
-  return routes.product(id, titleOf(product) || product.part_number);
+  // The product's own id, as the API spells it (lowercase), not the URL's: an
+  // uppercase id in a link is the same product and redirects to one URL.
+  return routes.product(product.id || id, titleOf(product) || product.part_number);
 }
 
 /**
