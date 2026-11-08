@@ -1,0 +1,142 @@
+[
+ {
+  "id": 33501,
+  "class_list": [
+   "post-33501",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-elegoo",
+   "product_cat-resin-3d-printer-elegoo",
+   "product_cat-elegoo",
+   "first",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-simple"
+  ]
+ },
+ {
+  "id": 33440,
+  "class_list": [
+   "post-33440",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-norton",
+   "product_cat-3d-filament",
+   "product_cat-materials",
+   "product_cat-3d-printing",
+   "",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 33429,
+  "class_list": [
+   "post-33429",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-norton",
+   "product_cat-3d-printing",
+   "product_cat-3d-filament",
+   "product_cat-materials",
+   "",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 33280,
+  "class_list": [
+   "post-33280",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_cat-spare-parts-and-accessories-bambulab",
+   "last",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 33049,
+  "class_list": [
+   "post-33049",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-norton",
+   "product_cat-materials",
+   "product_cat-3d-resin",
+   "first",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 32815,
+  "class_list": [
+   "post-32815",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-elegoo",
+   "product_cat-elegoo",
+   "product_cat-spare-parts-and-accessories-elegoo",
+   "",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 32647,
+  "class_list": [
+   "post-32647",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-anycjybic",
+   "product_cat-anycubic",
+   "product_cat-spare-parts-and-accessories-anycubic",
+   "",
+   "outofstock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-simple"
+  ]
+ }
+]

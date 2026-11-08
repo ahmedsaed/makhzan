@@ -33,6 +33,7 @@ async def make_supplier(
     governorate: str | None = None,
     website_url: str | None = None,
     domain: str = "electronics",
+    contact: dict | None = None,
 ) -> Supplier:
     supplier = Supplier(
         slug=slug or f"supplier-{next(_seq)}",
@@ -43,6 +44,7 @@ async def make_supplier(
         website_url=website_url,
         domain=domain,
         source_type=SourceType.SCRAPED,
+        contact=contact,
     )
     session.add(supplier)
     await session.commit()

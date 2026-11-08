@@ -1,0 +1,66 @@
+[
+ {
+  "id": 380186,
+  "name": "Chip Resistor SMD 560Ω ±5% 250mW 1206",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://shop-a.test/product/chip-resistor-smd-560%cf%89-%c2%b15-250mw-1206/",
+  "sku": "SKU-380186",
+  "on_sale": false,
+  "prices": {
+   "price": "25",
+   "regular_price": "25",
+   "sale_price": "25",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 2,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "",
+   "currency_suffix": " EGP"
+  },
+  "description": "<table>\n<tbody>\n<tr>\n<td width=\"130\"><strong><b>Manufacturer</b></strong></td>\n<td>FOJAN</td>\n</tr>\n<tr>\n<td width=\"130\"><strong><b>Mfr. Part #</b></strong></td>\n<td>FRC1206J561 TS</td>\n</tr>\n<tr>\n<td width=\"130\"><strong><b>Package</b></strong></td>\n<td>1206</td>\n</tr>\n<tr>\n<td width=\"130\"><strong><b>Datasheet</b></strong></td>\n<td><strong><span style=\"color: #0000ff\"><a style=\"color: #0000ff\" href=\"https://lcsc.com/datasheet/lcsc_datasheet_2308241947_FOJAN-FRC1206J561-TS_C3013270.pdf\">FOJAN FRC1206J561 TS</a></span></strong></td>\n</tr>\n<tr>\n<td width=\"130\"><strong><b>Description</b></strong></td>\n<td>250mW Thick Film Resistors ±100ppm/℃ ±5% 560Ω 1206 Chip Resistor &#8211; Surface Mount ROHS</td>\n</tr>\n</tbody>\n</table>\n<h5><strong><b>Specifications</b></strong></h5>\n<table>\n<tbody>\n<tr>\n<td width=\"360\"><strong><b>Attribute</b></strong></td>\n<td><strong><b>Value</b></strong></td>\n</tr>\n<tr>\n<td>Category</td>\n<td>Resistors/Chip Resistor &#8211; Surface Mount</td>\n</tr>\n<tr>\n<td>Datasheet</td>\n<td><span style=\"color: #0000ff\"><strong><a style=\"color: #0000ff\" href=\"https://lcsc.com/datasheet/lcsc_datasheet_2308241947_FOJAN-FRC1206J561-TS_C3013270.pdf\"> FOJAN FRC1206J561 TS</a></strong></span></td>\n</tr>\n<tr>\n<td>RoHS</td>\n<td>&nbsp;</td>\n</tr>\n<tr>\n<td>Power(Watts)</td>\n<td>250mW</td>\n</tr>\n<tr>\n<td>Type</td>\n<td>Thick Film Resistors</td>\n</tr>\n<tr>\n<td>Temperature Coefficient</td>\n<td>±100ppm/℃</td>\n</tr>\n<tr>\n<td>Tolerance</td>\n<td>±5%</td>\n</tr>\n<tr>\n<td>Resistance</td>\n<td>560Ω</td>\n</tr>\n</tbody>\n</table>\n<p>&nbsp;</p>",
+  "short_description": "",
+  "categories": [
+   {
+    "id": 15820,
+    "name": "1206 Resistor"
+   },
+   {
+    "id": 846,
+    "name": "SMD Resistor"
+   }
+  ],
+  "tags": [
+   {
+    "name": "SMD 1206 Package"
+   }
+  ],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "",
+   "class": "in-stock"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 10,
+   "maximum": 9990,
+   "multiple_of": 10
+  },
+  "images": [
+   {
+    "src": "https://shop-a.test/wp-content/uploads/2023/09/20230121_FOJAN-FRC1206F2001TS_C2907379_front1-900x900.jpg"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ }
+]

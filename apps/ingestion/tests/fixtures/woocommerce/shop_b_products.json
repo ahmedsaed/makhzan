@@ -1,0 +1,66 @@
+[
+ {
+  "id": 46825,
+  "name": "PC817 Optocoupler",
+  "parent": 0,
+  "type": "simple",
+  "variation": "",
+  "permalink": "https://shop-b.test/shop/components/integrated-circuits-ics/optoisolators-real-time-clock-rtc-ics/pc817-optocoupler/",
+  "sku": "SKU-46825",
+  "on_sale": true,
+  "prices": {
+   "price": "175",
+   "regular_price": "200",
+   "sale_price": "175",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 2,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "",
+   "currency_suffix": " EGP"
+  },
+  "description": "<p>The <strong>PC817 Optocoupler</strong> is a general-purpose optocoupler with an infrared LED and a phototransistor in a 4-pin DIP package. It passes a signal across an isolation barrier, protecting low-voltage logic from high voltages and noise, and it is the standard feedback part in most switch-mode power supplies.</p>\n<h2>PC817 Optocoupler – Key Features</h2>\n<ul>\n<li>Type: phototransistor output optocoupler</li>\n<li>Package: DIP-4, through-hole</li>\n<li>Isolation voltage: 5000V RMS</li>\n<li>Collector-emitter voltage: up to 35V (80V in some versions)</li>\n<li>Current transfer ratio: 50–600% depending on grade</li>\n</ul>\n<h2>Applications</h2>\n<p>Makers, students and technicians use it in many kinds of projects, for example:</p>\n<ul>\n<li>Feedback loop in SMPS and chargers</li>\n<li>Isolating Arduino inputs and outputs</li>\n<li>PLC and industrial I/O</li>\n<li>Level shifting between voltage domains</li>\n<li>Power-supply repair</li>\n</ul>\n<h3>Usage Tips</h3>\n<p>Pin 1 (dot) is the LED anode and pin 2 the cathode; pins 3 and 4 are the emitter and collector. Use a series resistor for the LED, for example about 330–470 ohm from 5V.</p>\n<h2>Why Buy from Widget Works?</h2>\n<p>Widget Works is an electronics components store in Cairo serving engineers, students, makers and repair shops across Egypt. Every order is checked before it ships, prices are clear, and our team can help you choose compatible parts for your project.</p>\n<ul>\n<li>Original and tested stock</li>\n<li>Cash on delivery and fast shipping to all governorates</li>\n<li>Pickup available from our Cairo branch</li>\n<li>Technical support on WhatsApp before and after purchase</li>\n</ul>\n<h3>Ordering, Delivery and Support</h3>\n<p>Ordering from Widget Works is simple. Add the item to your cart, choose home delivery or pickup from our Cairo branch, and pay cash on delivery or by the available online methods. Orders inside Cairo and Giza usually arrive within one to two working days, and shipments to other governorates normally take two to four working days depending on the courier.</p>\n<p>Every product is inspected before packing, and sensitive parts are packed in protective bags to prevent damage during shipping. If anything arrives faulty or different from what you ordered, contact our support team on WhatsApp and we will arrange a replacement according to our return policy.</p>\n<p>Not sure which part fits your project? Send us a message with your circuit or project idea and our engineers will help you choose compatible modules, power supplies, cables and accessories, so you can order everything you need in one go and start building right away.</p>\n<h2>Package Includes</h2>\n<p>1 piece. Order the quantity you need for your circuit.</p>\n<h3>PC817 Optocoupler – Frequently Asked Questions</h3>\n<p><strong>Where can I buy it in Egypt?</strong><br />You can order it online from Widget Works and pay on delivery, or collect it from our store in Cairo.</p>\n<p><strong>Can I order more than one piece?</strong><br />Yes. Set the quantity you need in the cart; quantity discounts may apply on selected items.</p>",
+  "short_description": "<p>PC817 4-pin DIP optocoupler (phototransistor output). Isolates microcontroller signals from high-voltage or noisy circuits; used in SMPS feedback and I/O isolation.</p>",
+  "categories": [
+   {
+    "id": 79,
+    "name": "Components"
+   },
+   {
+    "id": 168,
+    "name": "Integrated Circuits (ICs)"
+   },
+   {
+    "id": 184,
+    "name": "Optoisolators Real Time Clock (RTC) ICs"
+   }
+  ],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "",
+   "class": "in-stock"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 9999,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-b.test/wp-content/uploads/2026/11/Screenshot-2026-11-08-183331.png"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ }
+]

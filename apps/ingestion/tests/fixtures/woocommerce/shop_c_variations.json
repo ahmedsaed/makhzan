@@ -1,0 +1,308 @@
+[
+ {
+  "id": 31312,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 31298,
+  "type": "variation",
+  "variation": "Compatibility: A1 mini, Texture: Starry",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Starry",
+  "sku": "SKU-31312",
+  "on_sale": false,
+  "prices": {
+   "price": "1250",
+   "regular_price": "1250",
+   "sale_price": "1250",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 1,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifuefy022y01gn9pwm0crw_mini_614a70a7-c860-4663-94ca-2ce1c280eb77.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 31311,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 31298,
+  "type": "variation",
+  "variation": "Compatibility: A1 mini, Texture: Galaxy",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Galaxy",
+  "sku": "SKU-31311",
+  "on_sale": false,
+  "prices": {
+   "price": "1250",
+   "regular_price": "1250",
+   "sale_price": "1250",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 2,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifufvq022z01gn0ohia48u_mini_69e256cc-c72f-4910-be0b-974fc01928c4.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 31309,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 31298,
+  "type": "variation",
+  "variation": "Compatibility: A1 mini, Texture: Carbon Fiber",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=A1+mini&attribute_texture=Carbon+Fiber",
+  "sku": "SKU-31309",
+  "on_sale": false,
+  "prices": {
+   "price": "1250",
+   "regular_price": "1250",
+   "sale_price": "1250",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 1,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifuh70023001gndprwc583_mini_4fb205ee-21a9-4142-8053-4daf4082e228.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 31308,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 31298,
+  "type": "variation",
+  "variation": "Compatibility: X1 Series/P1 Series/A1, Texture: Starry",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Starry",
+  "sku": "SKU-31308",
+  "on_sale": true,
+  "prices": {
+   "price": "2350",
+   "regular_price": "2500",
+   "sale_price": "2350",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 2,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifuefy022y01gn9pwm0crw_mini_614a70a7-c860-4663-94ca-2ce1c280eb77.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 31307,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 31298,
+  "type": "variation",
+  "variation": "Compatibility: X1 Series/P1 Series/A1, Texture: Galaxy",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Galaxy",
+  "sku": "SKU-31307",
+  "on_sale": true,
+  "prices": {
+   "price": "2350",
+   "regular_price": "2500",
+   "sale_price": "2350",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 2,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifufvq022z01gn0ohia48u_mini_69e256cc-c72f-4910-be0b-974fc01928c4.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ },
+ {
+  "id": 31306,
+  "name": "Bambu Lab 3D Effect Plate",
+  "parent": 31298,
+  "type": "variation",
+  "variation": "Compatibility: X1 Series/P1 Series/A1, Texture: Diamond",
+  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/?attribute_compatibility=X1+Series%2FP1+Series%2FA1&attribute_texture=Diamond",
+  "sku": "SKU-31306",
+  "on_sale": true,
+  "prices": {
+   "price": "2350",
+   "regular_price": "2500",
+   "sale_price": "2350",
+   "price_range": null,
+   "currency_code": "EGP",
+   "currency_symbol": "EGP",
+   "currency_minor_unit": 0,
+   "currency_decimal_separator": ".",
+   "currency_thousand_separator": ",",
+   "currency_prefix": "EGP",
+   "currency_suffix": ""
+  },
+  "description": "",
+  "short_description": "",
+  "categories": [],
+  "tags": [],
+  "brands": [],
+  "attributes": [],
+  "variations": [],
+  "is_purchasable": true,
+  "is_in_stock": true,
+  "is_on_backorder": false,
+  "low_stock_remaining": null,
+  "stock_availability": {
+   "text": "<span>In Stock</span>",
+   "class": "in-stock in_stock_color woo-custom-stock-status wd-style-bordered"
+  },
+  "sold_individually": false,
+  "add_to_cart": {
+   "minimum": 1,
+   "maximum": 2,
+   "multiple_of": 1
+  },
+  "images": [
+   {
+    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifvso7023501gnfwqa2mxm_mini_e341a6bc-6f37-4577-a2fb-38cf2181f7e3__1_.webp"
+   }
+  ],
+  "formatted_weight": "N/A",
+  "formatted_dimensions": "N/A"
+ }
+]
