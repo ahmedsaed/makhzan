@@ -35,6 +35,7 @@ async def test_returns_the_supplier_profile(client, db):
         "area": "Bab El Louk",
         "governorate": "Cairo",
         "website_url": "https://shop-b.test",
+        "contact": None,
         "listing_count": 1,
         "in_stock_count": 1,
         "last_verified_at": "2026-06-01T12:00:00Z",

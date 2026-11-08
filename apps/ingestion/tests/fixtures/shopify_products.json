@@ -1,0 +1,179 @@
+{
+ "products": [
+  {
+   "id": 1576276721773,
+   "title": "74HC07 IC",
+   "handle": "74hc07-ic",
+   "body_html": "<blockquote>74HC07 is an high speed CMOS HEX OPEN DRAIN BUFFER fabricated with silicon gate C2MOS technology. The internal circuit is composed of 2 stages including buffer output, which enables high noise immunity and stable output.</blockquote>\n<blockquote>For 74HC07 datasheet <strong><span style=\"color: #38761d;\"><a href=\"http://www.alldatasheet.com/datasheet-pdf/pdf/23210/STMICROELECTRONICS/74HC07.html?\" title=\"74HC07 datasheet\" style=\"color: #38761d;\" target=\"_blank\" rel=\"noopener noreferrer\">Click Here</a></span></strong>\n</blockquote>",
+   "published_at": "2020-09-14T17:24:11+02:00",
+   "created_at": "2019-03-14T07:19:27+02:00",
+   "updated_at": "2026-11-08T22:12:12+02:00",
+   "vendor": "Volta Parts Egypt",
+   "product_type": "",
+   "options": [
+    {
+     "name": "Title",
+     "position": 1,
+     "values": [
+      "Default Title"
+     ]
+    }
+   ],
+   "variants": [
+    {
+     "id": 14996740341869,
+     "title": "Default Title",
+     "price": "15.00",
+     "sku": "Z50",
+     "available": true,
+     "compare_at_price": null
+    }
+   ],
+   "images": [
+    {
+     "src": "https://cdn.shopify.com/s/files/1/0000/0001/products/74HC-IC-14pin-2_88c7c6c6-a80b-4c5a-a694-b898d035f007.jpg?v=1600096977"
+    }
+   ]
+  },
+  {
+   "id": 4434650857581,
+   "title": "GT2 Closed Timing Belt (11cm Length- 6mm Width)",
+   "handle": "gt2-timing-belt-110cm-closed",
+   "body_html": "<p><span style=\"color: #000000;\"><span style=\"font-size: 14px;\">Timing belts are a fantastic way to transfer rotational motion (from a stepper motor) into linear motion (along a rail) and these GT2 belts are excellent for the task. They have a special profile with rounded teeth which reduces slippage. Often used for precision 3D printers and CNC machines. <br></span></span></p>\n<ul>\n<li>\n<strong>length: </strong>110mm</li>\n<li>\n<strong>GT2 Pitch : </strong>2mm</li>\n<li>\n<strong>Width: </strong>6mm</li>\n<li>\n<strong>Teeth Number: </strong>55 Teeth</li>\n</ul>\n<p><iframe height=\"281\" width=\"500\" src=\"//player.vimeo.com/video/40914530\"></iframe></p>",
+   "published_at": "2019-12-08T14:57:58+02:00",
+   "created_at": "2019-12-08T14:57:44+02:00",
+   "updated_at": "2026-11-08T22:12:12+02:00",
+   "vendor": "Volta Parts Egypt",
+   "product_type": "timing belt",
+   "options": [
+    {
+     "name": "Title",
+     "position": 1,
+     "values": [
+      "Default Title"
+     ]
+    }
+   ],
+   "variants": [
+    {
+     "id": 31584384974957,
+     "title": "Default Title",
+     "price": "60.00",
+     "sku": "103-2",
+     "available": true,
+     "compare_at_price": null
+    }
+   ],
+   "images": [
+    {
+     "src": "https://cdn.shopify.com/s/files/1/0000/0001/products/images---2019-12-08T144932.690.jpg?v=1575809864"
+    }
+   ]
+  },
+  {
+   "id": 423868063,
+   "title": "L293D DUAL Motor Driver With Thermal Shutdown",
+   "handle": "l293d-dual-motor-driver-with-thermal-shutdown",
+   "body_html": "<p> L293D ia a PUSH-PULL FOUR CHANNEL DRIVER WITH DIODES  <span style=\"font-size: 14px; font-family: Verdana, Arial, sans-serif;\"></span></p>\n<ul>\n<li><span><strong>Driving Current:</strong>   600 A continuos and 1.2 A peak</span></li>\n<li>\n<span> </span><strong>Voltage ranges:</strong><span> 7 </span>to 36 Volts.</li>\n</ul>\n<p class=\"p1\"><span style=\"color: #38761d;\"><span style=\"color: #000000;\">For L293D  Data sheet</span>,</span><span style=\"font-size: 14px; color: #38761d;\"><strong><a href=\"https://cdn.shopify.com/s/files/1/0000/0001/files/l293d.pdf?575\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color: #38761d;\"> <span class=\"s1\">please click here</span></a></strong></span></p>\n<p class=\"p1\"> </p>\n<p><iframe allowfullscreen=\"\" src=\"//www.youtube.com/embed/zKq0ebA3C04?rel=0\" width=\"560\" height=\"315\" frameborder=\"0\"></iframe></p>",
+   "published_at": "2014-12-23T14:17:00+02:00",
+   "created_at": "2014-12-23T14:17:15+02:00",
+   "updated_at": "2026-11-08T22:12:38+02:00",
+   "vendor": "Volta Parts Egypt",
+   "product_type": "Motor Driver",
+   "options": [
+    {
+     "name": "Title",
+     "position": 1,
+     "values": [
+      "Default Title"
+     ]
+    }
+   ],
+   "variants": [
+    {
+     "id": 1057098923,
+     "title": "Default Title",
+     "price": "30.00",
+     "sku": "151-l293D",
+     "available": true,
+     "compare_at_price": null
+    }
+   ],
+   "images": [
+    {
+     "src": "https://cdn.shopify.com/s/files/1/0000/0001/products/L293D.jpg?v=1439231328"
+    }
+   ]
+  },
+  {
+   "id": 7527276675181,
+   "title": "R20C USB Reader   IC 13.56 MHz proximity similar to a mouse and keyboard.",
+   "handle": "rfid-usb-reader-125khz-id-copy",
+   "body_html": "<p><span>R20C  it works as an emulator, similar to a mouse and keyboard and read all type of card IC 13.56 MHz , can read 8,10,12 digit .<strong><span style=\"text-decoration: underline;\"> read on Excel sheet </span></strong></span></p>\n<h3>\n<span style=\"color: #38761d;\">Features</span><span style=\"color: #38761d;\"></span>\n</h3>\n<ul>\n<li>RFID 13.56 IC , ID UID <br>\n</li>\n<li><span>R20C (HF-IC Reader)</span></li>\n<li>USB  interface</li>\n<li>No external power source needed</li>\n<li>No  need USB driver installation</li>\n<li>Built-in LED and buzzer</li>\n<li>Built-in transceiver antenna</li>\n<li>Read distance :  IOS card (~2-2.2 cm)<br>\n</li>\n<li>Reader size : about (105x70x10) mm</li>\n<li><span> it works as an emulator, similar to a mouse and keyboard.</span></li>\n</ul>\n<p><br></p>\n<p><iframe width=\"560\" height=\"315\" src=\"https://www.youtube.com/embed/Asa48p0D1aI?si=8Z3nIfc_zL85Sdhr\" title=\"YouTube video player\"></iframe></p>",
+   "published_at": "2024-08-30T16:34:12+03:00",
+   "created_at": "2024-08-30T15:07:26+03:00",
+   "updated_at": "2026-11-08T22:11:26+02:00",
+   "vendor": "Volta Parts Egypt",
+   "product_type": "rfid",
+   "options": [
+    {
+     "name": "Title",
+     "position": 1,
+     "values": [
+      "Default Title"
+     ]
+    }
+   ],
+   "variants": [
+    {
+     "id": 41801918611565,
+     "title": "Default Title",
+     "price": "490.00",
+     "sku": "2G",
+     "available": true,
+     "compare_at_price": null
+    }
+   ],
+   "images": [
+    {
+     "src": "https://cdn.shopify.com/s/files/1/0000/0001/files/r20c.jpg?v=1742817240"
+    }
+   ]
+  },
+  {
+   "id": 4802129231981,
+   "title": "TMC2208 V1.2 Stepper Motor Driver for 3D Printer",
+   "handle": "tmc2208-v1-2-stepper-motor-for-3d-printer",
+   "body_html": "<p><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">The TMC2208 is an advanced and powerful stepper driver. It is mostly used in 3D printers’ driver motors with continuous drive current 1.2A, peak current 2A, voltage range 4.75V-36V. The TMC2208 stepper driver supports 256 micro steps (very smooth stepper motor motion) and also supports stealthChop mode of operation. StealthChop enable completely silences stepper motors by eliminating the noise caused by unsynchronized motor coil chopper operation, PWM jitter, and regulation noise. In addition, The TMC2208 has much better thermal dissipation and cooling performance which means more heavy duty and longer life of the driver </span></span></p>\n<p><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">The TMC2208 can be used as an upgrade of stepper driver such as <a href=\"https://shop.volta-parts.test/products/a4988-stepper-motor-driver-2a\" target=\"_blank\" rel=\"noopener noreferrer\">A4988</a> or <a href=\"https://shop.volta-parts.test/products/drv8825-stepper-motor-driver\" target=\"_blank\" rel=\"noopener noreferrer\">DRV8825</a> on <a href=\"https://shop.volta-parts.test/products/3d-printer-arduino-mega-shield-ramps\" target=\"_blank\" rel=\"noopener noreferrer\">Ramps style board </a>or MKS GEN L board (this is called legacy mode). It can be used also in standalone mode or in UART mode where the stepper motor setting and tuning can be done through simple serial UART interface with your micro-controller. This make the TMC2208 driver flexible to use with any 3d printing board or technology without the need to redesign or make software or hardware changes. </span></span></p>\n<p><span style=\"font-size: 14px; color: #2b00ff;\">This TMC2208 stepper driver is provided with heat sink to protect the board from overheating.</span></p>\n<p><strong><span style=\"font-size: 16px;\"><span style=\"color: #008000;\">Features</span></span></strong></p>\n<ul>\n<li><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">Configuration: Step/DIR or UART</span></span></li>\n<li><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">Micro-steps: 1/256</span></span></li>\n<li><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">Current Loading: 1.2A continuous, 2A peak</span></span></li>\n<li><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">Supply Voltage: 4.75 : 36V</span></span></li>\n<li><span style=\"font-size: 14px;\"><span style=\"color: #000000;\">Single Wire UART: for advanced configuration options</span></span></li>\n</ul>\n<p><iframe src=\"https://www.youtube.com/embed/FEgirEyEUbo\" height=\"315\" width=\"560\" allowfullscreen=\"\" allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture\" frameborder=\"0\"></iframe></p>\n<p> <iframe width=\"560\" height=\"315\" src=\"https://www.youtube.com/embed/RhlTdTLfaQ0?start=10\" frameborder=\"0\" allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture\" allowfullscreen=\"\"></iframe></p>\n<p> </p>\n<p><span style=\"font-size: 14px;\"><a href=\"https://cdn.shopify.com/s/files/1/0000/0001/files/TMC2208_datasheet.pdf?v=1600546227\" target=\"_blank\" rel=\"noopener noreferrer\"><span style=\"color: #ff2a00;\"> TMC2208 datasheet</span></a></span></p>\n<p><span style=\"font-size: 14px;\"><a href=\"https://www.instructables.com/id/UART-This-Serial-Control-of-Stepper-Motors-With-th/\" target=\"_blank\" rel=\"noopener noreferrer\"><span style=\"color: #ff2a00;\">Excellent intrsstuctable showing UART Serial Control of Stepper Motors With the TMC2208, Ramps 1.4 and Marlin</span></a></span></p>\n<p><span style=\"font-size: 14px;\"><a href=\"https://www.youtube.com/watch?v=TubpTMFkbVs\" target=\"_blank\" rel=\"noopener noreferrer\"><span style=\"color: #ff2a00;\">TMC2208 Three way of control, part one: legacy mode</span></a></span></p>\n<p><span style=\"font-size: 14px;\"><a href=\"https://www.youtube.com/watch?v=9V8iEEAB15g\" target=\"_blank\" rel=\"noopener noreferrer\"><span style=\"color: #ff2a00;\">TMC2208 Three way of control, part two: standalone mode</span></a></span></p>\n<p><span style=\"font-size: 14px;\"><a href=\"https://www.youtube.com/watch?v=SyMNwmO5Nxo\" target=\"_blank\" rel=\"noopener noreferrer\"><span style=\"color: #ff2a00;\">TMC2208 Three way of control, part three: UART mode</span></a></span></p>",
+   "published_at": "2020-09-20T01:21:27+02:00",
+   "created_at": "2020-09-20T01:00:08+02:00",
+   "updated_at": "2026-11-08T22:12:12+02:00",
+   "vendor": "Volta Parts Egypt",
+   "product_type": "Motor Driver",
+   "options": [
+    {
+     "name": "Title",
+     "position": 1,
+     "values": [
+      "Default Title"
+     ]
+    }
+   ],
+   "variants": [
+    {
+     "id": 33032961327213,
+     "title": "Default Title",
+     "price": "290.00",
+     "sku": "211-tmc2088v12",
+     "available": true,
+     "compare_at_price": null
+    }
+   ],
+   "images": [
+    {
+     "src": "https://cdn.shopify.com/s/files/1/0000/0001/products/tmc2208-v12.jpg?v=1600557090"
+    }
+   ]
+  }
+ ]
+}

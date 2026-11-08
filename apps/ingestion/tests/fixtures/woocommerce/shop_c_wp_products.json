@@ -1,0 +1,142 @@
+[
+ {
+  "id": 7103,
+  "class_list": [
+   "post-7103",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-brand-e",
+   "product_cat-resin-printers-brand-e",
+   "product_cat-brand-e",
+   "first",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-simple"
+  ]
+ },
+ {
+  "id": 7109,
+  "class_list": [
+   "post-7109",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-brand-n",
+   "product_cat-filament",
+   "product_cat-materials",
+   "product_cat-printing",
+   "",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 7108,
+  "class_list": [
+   "post-7108",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-brand-n",
+   "product_cat-printing",
+   "product_cat-filament",
+   "product_cat-materials",
+   "",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 7107,
+  "class_list": [
+   "post-7107",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_cat-spare-parts-brand-b",
+   "last",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 7106,
+  "class_list": [
+   "post-7106",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-brand-n",
+   "product_cat-materials",
+   "product_cat-resin",
+   "first",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 7105,
+  "class_list": [
+   "post-7105",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-brand-e",
+   "product_cat-brand-e",
+   "product_cat-spare-parts-brand-e",
+   "",
+   "instock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-variable"
+  ]
+ },
+ {
+  "id": 7104,
+  "class_list": [
+   "post-7104",
+   "product",
+   "type-product",
+   "status-publish",
+   "has-post-thumbnail",
+   "product_brand-brand-a",
+   "product_cat-brand-a",
+   "product_cat-spare-parts-brand-a",
+   "",
+   "outofstock",
+   "sale",
+   "taxable",
+   "shipping-taxable",
+   "purchasable",
+   "product-type-simple"
+  ]
+ }
+]

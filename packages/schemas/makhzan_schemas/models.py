@@ -85,6 +85,13 @@ class Supplier(TimestampMixin, Base):
     logo_url: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
+    #: How to reach the shop, as the shop itself publishes it (its own
+    #: LocalBusiness JSON-LD): {address?, area?, governorate?, phone?, whatsapp?,
+    #: email?, opening_hours?: [str], source_url, fetched_at}. Kept apart from the
+    #: hand-entered columns above, which it never overwrites: this is what the
+    #: crawler read, refreshed once a cycle, and says where and when it read it.
+    contact: Mapped[dict | None] = mapped_column(JSONB)
+
     listings: Mapped[list[Listing]] = relationship(back_populates="supplier")
 
 
@@ -190,7 +197,15 @@ class Listing(TimestampMixin, Base):
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    #: When the listing's price and details were last read from the shop: what
+    #: the site shows as "checked". Only a sweep that returned the product moves it.
     last_verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: When the source last said the listing exists, by any route. Archiving keys
+    #: off this, not `last_verified_at`: a shop that lists an out-of-stock product
+    #: only by id still sells it, but has not re-stated its price.
+    last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
@@ -304,6 +319,13 @@ class Source(TimestampMixin, Base):
     supplier: Mapped[dict] = mapped_column(JSONB, nullable=False)
     #: Adapter keyword arguments — pacing, crosswalk name, platform options.
     config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    #: The source's per-cycle reference data (its category tree, every variant's
+    #: price, its quantity breaks, its address), by part:
+    #: {part: {"fetched_at": iso, "data": ...}}. Written by the pipeline at the
+    #: start of a cycle and read by every run of it, so a cycle spread over a
+    #: week of daily runs fetches it once rather than seven times. Runtime state,
+    #: not configuration: syncing sources.toml never touches it.
+    cycle_data: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class IngestionRun(Base):

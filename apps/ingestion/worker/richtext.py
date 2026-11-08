@@ -11,7 +11,7 @@ Everything here works on HTML an adapter already has. Nothing fetches.
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 from selectolax.parser import HTMLParser, Node
 
@@ -80,6 +80,50 @@ def html_to_text(html: str | None) -> str | None:
     lines = (_SPACES.sub(" ", line).strip() for line in "".join(out).split("\n"))
     text = "\n".join(line for line in lines if line and line != "•")
     return text or None
+
+
+_HEADING = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
+
+
+def _heading_key(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.casefold()).split())
+
+
+def without_sections(html: str | None, headings: list[str] | tuple[str, ...]) -> str | None:
+    """`html` without the sections under the named headings.
+
+    For a shop that appends the same boilerplate ("Why buy from us?", "Ordering
+    and delivery") to every description: identical on most of the catalogue, it
+    would otherwise dominate every text index and bury the product's own words.
+
+    A section is its heading and everything after it up to the next heading of
+    the same or a higher level, so a sub-heading inside it goes with it. Headings
+    match by their words, ignoring case and punctuation. Only top-level siblings
+    are removed: a template's sections are flat, and reaching into nested markup
+    risks taking the product's own text with it.
+    """
+    if not html or not headings:
+        return html
+    wanted = {_heading_key(h) for h in headings if h.strip()}
+    tree = HTMLParser(html)
+    root = tree.body or tree.root
+    if root is None:
+        return html
+    doomed: list[Node] = []
+    level = None  # the level of the section being removed, while inside one
+    for node in root.iter():
+        rank = _HEADING.get(node.tag)
+        if rank is not None and level is not None and rank <= level:
+            level = None
+        if level is None and rank is not None and _heading_key(node.text()) in wanted:
+            level = rank
+        if level is not None:
+            doomed.append(node)
+    if not doomed:
+        return html
+    for node in doomed:
+        node.decompose()
+    return "".join(child.html or "" for child in root.iter(include_text=True))
 
 
 # --------------------------------------------------------------------------- #
@@ -185,15 +229,34 @@ def merge_specs(first: dict[str, str], more: dict[str, str]) -> dict[str, str]:
     return merged
 
 
+#: Datasheet archives whose pages are datasheets without ending in ".pdf"
+#: ("…/datasheet-pdf/pdf/23210/…/74HC07.html"). Kept to hosts that serve nothing
+#: else: a link to a maker's product page or a wiki is a page, not a document.
+_DATASHEET_HOSTS = ("alldatasheet.com",)
+
+
+def _is_document(href: str) -> bool:
+    url = urlsplit(href.lower())
+    if url.path.endswith(".pdf"):
+        return True
+    host = url.hostname or ""
+    return "datasheet" in url.path and any(
+        host == h or host.endswith("." + h) for h in _DATASHEET_HOSTS
+    )
+
+
 def documents_from_html(html: str | None, base_url: str) -> list[dict[str, str]]:
-    """Links to PDFs (datasheets, manuals) in a description, as {label, url}."""
+    """Links to datasheets and manuals in a description, as {label, url}.
+
+    A document is a link to a PDF, or to a page of a datasheet archive.
+    """
     if not html:
         return []
     docs: list[dict[str, str]] = []
     seen: set[str] = set()
     for a in HTMLParser(html).css("a[href]"):
         href = (a.attributes.get("href") or "").strip()
-        if not re.split(r"[?#]", href.lower(), maxsplit=1)[0].endswith(".pdf"):
+        if not _is_document(href):
             continue
         url = urljoin(base_url + "/", href)
         # A "mailto:…?subject=x.pdf" or a script link is not a document.
@@ -203,3 +266,93 @@ def documents_from_html(html: str | None, base_url: str) -> list[dict[str, str]]
         label = _cell_text(a) or re.split(r"[?#]", url.rsplit("/", 1)[-1], maxsplit=1)[0]
         docs.append({"label": label, "url": url})
     return docs
+
+
+# --------------------------------------------------------------------------- #
+# Videos
+# --------------------------------------------------------------------------- #
+
+_YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_YOUTUBE_HOSTS = ("youtube.com", "youtube-nocookie.com")
+#: Labels that name the player, not the video: a shop pasting YouTube's embed
+#: code gets `title="YouTube video player"` on every one of them.
+_GENERIC_VIDEO_LABELS = {
+    "youtube video player", "youtube video", "youtube", "vimeo video player", "vimeo",
+    "video player", "video", "click here", "here", "watch", "watch video", "link",
+}  # fmt: skip
+_MAX_VIDEOS = 10
+
+
+def _on(host: str, domains: tuple[str, ...]) -> bool:
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def video_url(href: str | None) -> str | None:
+    """The canonical https address of a YouTube or Vimeo video, or None.
+
+    Embeds and links to one video come in many spellings ("//www.youtube.com/
+    embed/ID?si=…", "youtu.be/ID", "watch?v=ID&t=30", "player.vimeo.com/video/N");
+    they are reduced to one per video so the same video is not listed twice.
+    Anything else — a channel, a playlist, a shop's own mp4 — is not one.
+    """
+    href = (href or "").strip()
+    if href.startswith("//"):
+        href = "https:" + href
+    try:
+        url = urlsplit(href)
+        host = (url.hostname or "").lower()
+    except ValueError:
+        return None
+    if url.scheme not in ("http", "https"):
+        return None
+    segments = [s for s in url.path.split("/") if s]
+    video_id = None
+    if _on(host, _YOUTUBE_HOSTS):
+        if url.path == "/watch":
+            video_id = (parse_qs(url.query).get("v") or [None])[0]
+        elif len(segments) >= 2 and segments[0] in ("embed", "shorts", "live", "v"):
+            video_id = segments[1]
+        if video_id and _YOUTUBE_ID.fullmatch(video_id):
+            return f"https://www.youtube.com/watch?v={video_id}"
+    elif host == "youtu.be":
+        if segments and _YOUTUBE_ID.fullmatch(segments[0]):
+            return f"https://www.youtube.com/watch?v={segments[0]}"
+    elif _on(host, ("vimeo.com",)):
+        if host == "player.vimeo.com" and len(segments) >= 2 and segments[0] == "video":
+            video_id = segments[1]
+        elif host in ("vimeo.com", "www.vimeo.com") and len(segments) == 1:
+            video_id = segments[0]
+        if video_id and video_id.isascii() and video_id.isdigit():
+            return f"https://vimeo.com/{video_id}"
+    return None
+
+
+def videos_from_html(html: str | None) -> list[dict[str, str]]:
+    """YouTube and Vimeo videos a description embeds or links to, as {label, url}.
+
+    The label is the embed's title or the link's text, unless that only names
+    the player ("YouTube video player"), in which case it is "Video". URLs are
+    canonical https watch addresses, so an embed and a link to the same video
+    count once.
+    """
+    if not html:
+        return []
+    videos: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for node in HTMLParser(html).css("iframe, a[href]"):
+        attrs = node.attributes
+        if node.tag == "iframe":
+            url = video_url(attrs.get("src") or attrs.get("data-src"))
+            label = (attrs.get("title") or "").strip()
+        else:
+            url = video_url(attrs.get("href"))
+            label = _cell_text(node)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        if not label or label.lower() in _GENERIC_VIDEO_LABELS or video_url(label):
+            label = "Video"
+        videos.append({"label": label[:120], "url": url})
+        if len(videos) >= _MAX_VIDEOS:
+            break
+    return videos

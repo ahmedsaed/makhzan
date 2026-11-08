@@ -19,24 +19,32 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from makhzan_schemas.contracts import NormalizedListing
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.enums import IngestionStatus, ListingStatus, ReviewReason, SourceType
+from makhzan_schemas.enums import (
+    IngestionStatus,
+    ListingStatus,
+    ReviewReason,
+    SourceType,
+    StockSignal,
+)
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
     ReviewQueueItem,
+    Source,
     SourceCursor,
     Supplier,
 )
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
+from worker.http import CycleFetcher
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
-from worker.sources.base import SourceAdapter, SupplierInfo
+from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
 
 
 async def _upsert_listing(
@@ -60,6 +68,9 @@ async def _upsert_listing(
         ).scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
+    attributes = norm.attributes
+    if norm.stock_signal == StockSignal.OUT_OF_STOCK:
+        attributes = _without_stock_counts(attributes)
     fields = dict(
         title_en=norm.title_en,
         title_ar=norm.title_ar,
@@ -72,11 +83,12 @@ async def _upsert_listing(
         unit=norm.unit,
         stock_signal=norm.stock_signal,
         images=norm.images,
-        attributes=norm.attributes,
+        attributes=attributes,
         source_url=norm.source_url,
         confidence=norm.confidence,
         status=ListingStatus.ACTIVE,
         last_verified_at=now,
+        last_seen_at=now,
     )
 
     if existing:
@@ -216,6 +228,169 @@ async def _ingest_item(
     return None
 
 
+def _without_stock_counts(attributes: dict) -> dict:
+    """A listing's attributes once it is out of stock: no count says otherwise.
+
+    A stored "68 in stock", or a variant still marked in stock with its own
+    count, would contradict the badge; neither is true of a product the shop
+    says it has none of.
+    """
+    if not isinstance(attributes, dict):
+        return attributes
+    out = {k: v for k, v in attributes.items() if k != "stock_quantity"}
+    variants = out.get("variants")
+    if isinstance(variants, list):
+        out["variants"] = [
+            {**{k: x for k, x in v.items() if k != "stock_quantity"}, "in_stock": False}
+            if isinstance(v, dict)
+            else v
+            for v in variants
+        ]
+    return out
+
+
+async def _mark_out_of_stock(
+    session: AsyncSession, supplier_id: uuid.UUID, external_ids: list[str]
+) -> int:
+    """Keep listings the source says it still sells but has out of stock.
+
+    For a shop whose catalogue feed leaves out-of-stock products out, a second
+    route still lists them by id. Without this they would go unseen for the
+    cycle and be archived as if discontinued. That route carries no price or
+    details, so what was stored stays as last read, and so does
+    `last_verified_at`: the site shows it as when the price was checked, and it
+    was not. Only `last_seen_at` moves, which is what archiving reads. Any stock
+    count is dropped, since the shop has just said there is none. One the cycle
+    had archived is restored, since the shop has just said it exists; one hidden
+    or awaiting review is left alone. Returns how many listings were kept.
+    """
+    listings = (
+        (
+            await session.execute(
+                select(Listing).where(
+                    Listing.supplier_id == supplier_id,
+                    Listing.external_id.in_(set(external_ids)),
+                    Listing.status.in_([ListingStatus.ACTIVE, ListingStatus.ARCHIVED]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    for listing in listings:
+        listing.stock_signal = StockSignal.OUT_OF_STOCK
+        listing.status = ListingStatus.ACTIVE
+        listing.last_seen_at = now
+        listing.attributes = _without_stock_counts(listing.attributes)
+    return len(listings)
+
+
+#: Refetch a source's reference data at least this often, even mid-cycle: a cycle
+#: that never completes (a source failing every day) must not pin it forever.
+#: Above the longest real cycle (about four weeks for the slowest shop), so in a
+#: healthy sweep the data is refreshed once a cycle, when the next one starts.
+CYCLE_DATA_MAX_AGE = timedelta(days=45)
+
+
+def _when(entry: dict, key: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(entry[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+async def _load_cycle_data(
+    session: AsyncSession,
+    adapter: SourceAdapter,
+    supplier_id: uuid.UUID,
+    *,
+    ephemeral: bool,
+    errors: list[str],
+) -> Counter:
+    """Hand the adapter its per-cycle reference data, fetching what is due.
+
+    A part is due when it has never been tried, when a new cycle is starting —
+    no partition of this source has a cycle in flight — or when its last try is
+    older than `CYCLE_DATA_MAX_AGE`. So a cycle spread over weeks of daily runs
+    pays for it once, at its first run, and every later run reads the copy on
+    the source's row.
+
+    A part that fails is reported and marked tried (`attempted_at`), keeping its
+    previous copy: the sweep goes on without the new one, and the next try is at
+    the next cycle. Retrying every run would re-fetch a many-page part from its
+    first page every day, failing in the same place; and a part that stopped
+    partway is never stored, since a partial variations list would hide variants.
+
+    An ephemeral (`limit=`) run fetches nothing and stores nothing: like its
+    cursors, the source's state is not its to change, and a quick test run must
+    not cost a shop a cycle's worth of extra requests. It reads what is stored.
+    Returns the requests made, by part.
+    """
+    parts = adapter.cycle_data_parts()
+    if not parts:
+        return Counter()
+    source = (
+        await session.execute(select(Source).where(Source.source_id == adapter.source_id))
+    ).scalar_one_or_none()
+    stored: dict = dict((source.cycle_data if source else None) or {})
+
+    now = datetime.now(timezone.utc)
+    in_flight = (
+        await session.execute(
+            select(func.count())
+            .select_from(SourceCursor)
+            .where(
+                SourceCursor.source == adapter.source_id,
+                SourceCursor.cycle_started_at.is_not(None),
+            )
+        )
+    ).scalar_one()
+
+    def due(part: str) -> bool:
+        if ephemeral:
+            return False
+        entry = stored.get(part)
+        if not isinstance(entry, dict):
+            return True
+        tries = [t for t in (_when(entry, "fetched_at"), _when(entry, "attempted_at")) if t]
+        if not tries:
+            return True
+        return not in_flight or now - max(tries) > CYCLE_DATA_MAX_AGE
+
+    fetcher = CycleFetcher(lambda: _pace(adapter))
+    changed = False
+    for part in [p for p in parts if due(p)]:
+        changed = True
+        try:
+            data = await adapter.fetch_cycle_part(fetcher, part)
+        except Exception as exc:  # noqa: BLE001 — reference data must not stop the sweep
+            errors.append(f"cycle data {part}: {type(exc).__name__}: {exc}")
+            previous = stored.get(part) if isinstance(stored.get(part), dict) else {}
+            stored[part] = {**previous, "attempted_at": datetime.now(timezone.utc).isoformat()}
+            continue
+        stored[part] = {"fetched_at": datetime.now(timezone.utc).isoformat(), "data": data}
+        if part == CONTACT_PART and data:
+            supplier = await session.get(Supplier, supplier_id)
+            if supplier is not None:
+                supplier.contact = data
+
+    adapter.use_cycle_data(
+        {part: entry.get("data") for part, entry in stored.items() if isinstance(entry, dict)},
+        fetched_at={
+            part: entry["fetched_at"]
+            for part, entry in stored.items()
+            if isinstance(entry, dict) and entry.get("fetched_at")
+        },
+    )
+    if changed and source is not None:
+        source.cycle_data = stored
+    if fetcher.requests:
+        # The next request to this host is a product page: it waits its turn too.
+        await asyncio.sleep(await _pace(adapter))
+    return fetcher.requests
+
+
 async def _sweep_partition(
     session: AsyncSession,
     run: IngestionRun,
@@ -229,6 +404,7 @@ async def _sweep_partition(
     observed: Counter | None = None,
     resumed: list[bool] | None = None,
     not_products: Counter | None = None,
+    tally: Counter | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
 
@@ -257,12 +433,20 @@ async def _sweep_partition(
         if adapter.max_pages_per_run and pages_this_run >= adapter.max_pages_per_run:
             return False  # budget spent; the cursor resumes here next run
 
+        if tally is not None:
+            tally["pages"] += 1
         try:
             result = await adapter.fetch_page(partition, page)
         except Exception as exc:  # noqa: BLE001 — a dead host must not discard the run
             errors.append(f"{partition or 'default'} p{page}: {exc}")
             return True
         pages_this_run += 1
+
+        if result.out_of_stock_ids:
+            marked = await _mark_out_of_stock(session, supplier_id, result.out_of_stock_ids)
+            if tally is not None:
+                tally["out_of_stock_kept"] += marked
+                tally["out_of_stock_unknown"] += len(set(result.out_of_stock_ids)) - marked
 
         for raw in result.items:
             if limit is not None and run.items_seen >= limit:
@@ -330,7 +514,9 @@ async def _finish_cycle_if_swept(
         .where(
             Listing.supplier_id == supplier_id,
             Listing.status == ListingStatus.ACTIVE,
-            Listing.last_verified_at < cycle_started,
+            # Seen, not verified: a listing kept alive by id alone was not
+            # re-priced, but the shop still says it sells it.
+            Listing.last_seen_at < cycle_started,
         )
         .values(status=ListingStatus.ARCHIVED)
     )
@@ -435,10 +621,19 @@ async def _run(
             # Bounded dev runs always sweep what they were asked for.
             partitions = await _partitions_for_this_run(session, adapter, partitions)
 
+        # Before any page: the adapter reads it while turning pages into listings.
+        cycle_requests = await _load_cycle_data(
+            session, adapter, supplier_id, ephemeral=limit is not None, errors=errors
+        )
+        # Durable before the sweep: a run that dies on page 1 still keeps it, and
+        # a part that failed stays marked as tried.
+        await session.commit()
+
         fetch_failed = False
         observed: Counter = Counter()
         resumed: list[bool] = []
         not_products: Counter = Counter()
+        tally: Counter = Counter()
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
                 break
@@ -460,6 +655,7 @@ async def _run(
                 observed=observed,
                 resumed=resumed,
                 not_products=not_products,
+                tally=tally,
             )
             fetch_failed = fetch_failed or failed
 
@@ -477,6 +673,21 @@ async def _run(
         if not_products:
             # Named, so a wrongly skipped real product is visible in the run.
             stats["not_products"] = dict(not_products.most_common(25))
+        # Every request this run made to the source's host: its pages, and the
+        # reference data fetched once a cycle, by part, and whatever else the
+        # adapter asked for while building its pages.
+        requests: Counter = Counter({"pages": tally["pages"]})
+        requests.update(cycle_requests)
+        requests.update(adapter.extra_requests())
+        if any(requests.values()):
+            stats["requests"] = {k: v for k, v in requests.items() if v}
+        if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:
+            # Kept as out of stock rather than archived; "unknown" ones were
+            # never stored, and a route with no price or photo creates nothing.
+            stats["out_of_stock_unlisted"] = {
+                "kept": tally["out_of_stock_kept"],
+                "unknown": tally["out_of_stock_unknown"],
+            }
         # "Never matched" only means "retired" when this run swept the whole
         # catalogue itself. Two ways it might not have: it resumed mid-partition
         # (so it never saw the earlier pages), or — for a paced source — it only

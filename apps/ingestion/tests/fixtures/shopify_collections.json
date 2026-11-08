@@ -1,0 +1,54 @@
+{
+ "collections": [
+  {
+   "id": 29431875,
+   "title": "Frontpage",
+   "handle": "frontpage",
+   "description": "",
+   "published_at": "2014-10-18T01:07:00+02:00",
+   "updated_at": "2026-11-08T14:00:47+02:00",
+   "image": null,
+   "products_count": 174
+  },
+  {
+   "id": 30981823,
+   "title": "ICs",
+   "handle": "ics",
+   "description": "",
+   "published_at": "2014-11-29T14:40:00+02:00",
+   "updated_at": "2026-11-08T14:00:47+02:00",
+   "image": null,
+   "products_count": 47
+  },
+  {
+   "id": 33200115,
+   "title": "New Products",
+   "handle": "new-products",
+   "description": "",
+   "published_at": "2015-04-20T16:11:00+02:00",
+   "updated_at": "2026-11-08T14:00:47+02:00",
+   "image": null,
+   "products_count": 150
+  },
+  {
+   "id": 29712703,
+   "title": "Object Detection",
+   "handle": "object-detection",
+   "description": "",
+   "published_at": "2014-10-21T20:41:00+02:00",
+   "updated_at": "2026-11-08T14:00:47+02:00",
+   "image": null,
+   "products_count": 39
+  },
+  {
+   "id": 30980239,
+   "title": "Zigbee",
+   "handle": "zigbee",
+   "description": "",
+   "published_at": "2014-11-29T09:02:00+02:00",
+   "updated_at": "2026-04-20T17:25:16+02:00",
+   "image": null,
+   "products_count": 0
+  }
+ ]
+}
