@@ -203,6 +203,15 @@ class SourceAdapter(ABC):
         """
         return {}
 
+    def run_report(self) -> dict:
+        """What this run found that is worth a look, kept in `stats.source_report`.
+
+        For checks only the adapter can make, such as a Wix shop's sitemap
+        listing a product none of its configured galleries showed. A `warnings`
+        list in it is printed by `make status`. Empty by default.
+        """
+        return {}
+
     @abstractmethod
     async def fetch_page(self, partition: str, page: int) -> Page:
         """Fetch one 1-based page of one partition.

@@ -32,6 +32,7 @@ BUILTIN_ADAPTERS = {
     "fixture": "worker.sources.fixture:FixtureAdapter",
     "odoo": "worker.sources.odoo:OdooAdapter",
     "shopify": "worker.sources.shopify:ShopifyAdapter",
+    "wix": "worker.sources.wix:WixStoresAdapter",
     "woocommerce": "worker.sources.woocommerce:WooCommerceAdapter",
 }
 
