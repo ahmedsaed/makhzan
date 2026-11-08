@@ -310,6 +310,36 @@ export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
   });
 }
 
+/** One sitemap entry's worth of a product. `changed_at` is when what a reader
+ *  sees last changed, not the last recheck. */
+export type SitemapProduct = {
+  id: string;
+  title_en: string | null;
+  title_ar?: string | null;
+  part_number?: string | null;
+  changed_at: string;
+};
+
+export type SitemapPage = {
+  items: SitemapProduct[];
+  /** The `after` for the next page; null on the last. */
+  next: string | null;
+  /** Every listed product; on the first page (no `after`) only. */
+  total: number | null;
+};
+
+/**
+ * Products with an active offer, keyset-paged by id. Not cached: a full page
+ * is 50,000 rows, several megabytes, over what Next's data cache keeps per
+ * entry; a crawler reads a sitemap seldom enough that each read can ask.
+ * The small first page that only counts (`limit=1`) is cached like the taxonomy.
+ */
+export function fetchSitemapProducts(after: string | null, limit: number): Promise<SitemapPage> {
+  return get<SitemapPage>(`/sitemap/products${query({ after: after ?? undefined, limit })}`, {
+    revalidate: limit === 1 ? TAXONOMY_TTL : false,
+  });
+}
+
 /** A shop's listings, in stock first. */
 export function fetchSupplierListings(
   slug: string,

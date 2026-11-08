@@ -90,6 +90,12 @@ const PRODUCTS = {
     ],
     { part_number: "DC-150" },
   ),
+  // A real UUID: only those get a readable slug after the id.
+  "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f": product(
+    "5f0c1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f",
+    "Servo Motor Metal Gear MG90S (180°)",
+    [offer("o-uuid", VOLT, "Servo Motor Metal Gear MG90S (180°)", 150, "in_stock", 3, [])],
+  ),
   "p-multi": product("p-multi", "ESP32 Development Board 30 pin", [
     // Deliberately not in price order: the page sorts.
     // Two shops publish specs; the page opens on the richer one (o-m1, two
@@ -143,14 +149,45 @@ const PRODUCTS = {
     offer("o-x2", NILE, "LM2596 Step Down Converter", 40, "out_of_stock", 2),
     offer("o-x3", DELTA, "LM2596 Adjustable Buck", 50, "out_of_stock", 12),
   ]),
+  // As little as a product gets: one shop, one photo, a title, no category,
+  // no description and nothing similar. Its facts are one line, not empty ones.
+  "p-bare": product(
+    "p-bare",
+    "Jumper Wire Kit",
+    [
+      offer("o-bare", VOLT, "Jumper Wire Kit", 30, "in_stock", 2, [
+        "https://volt-corner.test/img/jumper.jpg",
+      ]),
+    ],
+    { category: null },
+  ),
 };
 
-const DESCRIPTION =
-  "Range 0–150mm, reading 0.01mm, IP54 housing against dust and splashes. " +
-  "Metric and inch conversion at any position, zero setting anywhere along the beam. " +
-  "Runs on one CR2032 cell, with automatic power-off after five minutes idle. " +
+/** Four similar products: more than a phone's row shows at once, so it scrolls. */
+function similarTo() {
+  const summary = { ...PRODUCTS["p-oos"], id: "p-oos" };
+  delete summary.offers;
+  return [
+    summary,
+    { ...summary, id: "p-similar-2", title_en: "Mini Buck Module" },
+    { ...summary, id: "p-similar-3", title_en: "XL4015 Buck Module", min_price: 95 },
+    { ...summary, id: "p-similar-4", title_en: "MP1584 Buck Module", min_price: 35 },
+  ];
+}
+
+/** Long, like the median shop description and then some: far taller than
+ *  three quarters of a phone screen, so the page caps it behind Read more. */
+const DESCRIPTION = [
+  ...Array.from(
+    { length: 8 },
+    (_, i) =>
+      `Part ${i + 1}. Range 0–150mm, reading 0.01mm, IP54 housing against dust and splashes. ` +
+      "Metric and inch conversion at any position, zero setting anywhere along the beam. " +
+      "Runs on one CR2032 cell, with automatic power-off after five minutes idle.",
+  ),
   "Packed in a hard plastic case with a spare battery. Hardened stainless steel jaws " +
-  "for outside, inside, depth and step measurements. This sentence is the end of it.";
+    "for outside, inside, depth and step measurements. This sentence is the end of it.",
+].join("\n\n");
 
 const DESCRIPTIONS = {
   "o-single": DESCRIPTION,
@@ -166,17 +203,16 @@ const SUPPLIERS = {
 /** `[status, body]` for a path this fixture owns, or null. */
 export function productFixture(path) {
   const similar = path.match(/^\/products\/([^/]+)\/similar$/);
-  if (similar && PRODUCTS[similar[1]]) {
-    const summary = { ...PRODUCTS["p-oos"], id: "p-oos" };
-    delete summary.offers;
-    return [200, [summary, { ...summary, id: "p-similar-2", title_en: "Mini Buck Module" }]];
-  }
+  if (similar && similar[1] === "p-bare") return [200, []];
+  if (similar && PRODUCTS[similar[1]]) return [200, similarTo()];
   // A product a regroup replaced: its offers moved to p-multi.
   if (path === "/products/p-replaced/redirect") return [200, { id: "p-multi" }];
   if (/^\/products\/[^/]+\/redirect$/.test(path)) return [404, { detail: "no redirect" }];
 
+  // Case-insensitive, as the real API is: a UUID parses either way.
   const productId = path.match(/^\/products\/([^/]+)$/)?.[1];
-  if (productId && PRODUCTS[productId]) return [200, PRODUCTS[productId]];
+  const found = productId && (PRODUCTS[productId] ?? PRODUCTS[productId.toLowerCase()]);
+  if (found) return [200, found];
 
   const listingId = path.match(/^\/listings\/([^/]+)$/)?.[1];
   for (const item of Object.values(PRODUCTS)) {

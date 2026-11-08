@@ -9,6 +9,8 @@ import { tradeIcon } from "@/components/trade-icon";
 import { categoryNameOf, type Category } from "@/lib/api";
 import { objectImage } from "@/lib/content/category-images";
 import { formatCount } from "@/lib/format";
+import { breadcrumbJsonLd } from "@/lib/metadata";
+import { jsonLdText } from "@/lib/product";
 import { routes } from "@/lib/routes";
 import {
   fetchResults,
@@ -114,6 +116,11 @@ export async function TradeBrowse({
 
   return (
     <>
+      {/* Trades › trade › group › category, for search results. */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: jsonLdText(breadcrumbJsonLd(crumbs)) }}
+      />
       <TradeHeader
         trade={trade}
         heading={heading}

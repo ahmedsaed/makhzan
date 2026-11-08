@@ -1,8 +1,9 @@
 import { ChevronRight, ExternalLink } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
+import { preconnect } from "react-dom";
 
-import { Breadcrumb } from "@/components/breadcrumb";
+import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
 import { Freshness, StaleNote } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { PhotoFrame } from "@/components/photo-frame";
@@ -25,7 +26,7 @@ import {
 } from "@/lib/api";
 import { formatCount, formatPrice } from "@/lib/format";
 import { freshnessTier, parseVerified } from "@/lib/freshness";
-import { pageMetadata, productDescription } from "@/lib/metadata";
+import { breadcrumbJsonLd, pageMetadata, productDescription } from "@/lib/metadata";
 import {
   brandOf,
   categoryTrail,
@@ -40,12 +41,14 @@ import {
   summarizeOffers,
   summaryText,
 } from "@/lib/product";
-import { routes } from "@/lib/routes";
+import { productIdFrom, routes } from "@/lib/routes";
 import { absoluteUrl } from "@/lib/site";
 import { tradeLabel } from "@/lib/trades";
 import { cn } from "@/lib/utils";
 
+import { Carousel } from "./carousel";
 import { Details } from "./details";
+import { Facts } from "./facts";
 import { Gallery } from "./gallery";
 import { Offers } from "./offers";
 
@@ -55,6 +58,11 @@ import { Offers } from "./offers";
  * Two forms. 98.6% of products have one offer, and the page is designed for
  * that: price, stock, who sells it, their description. With two or more offers
  * the comparison appears (rule P2): a summary, then every offer in one list.
+ *
+ * Under the title, makhzan's own facts (Facts): how many shops sell it, when
+ * it was checked, and how many similar products are at the end. The rest of
+ * the text is copied from the shops; these lines are what no shop's page has,
+ * so they come first.
  *
  * On a phone a fixed bar keeps the price, its age and the way out on screen.
  * On a wide screen the page goes two columns — photo and description left;
@@ -67,6 +75,13 @@ import { Offers } from "./offers";
 /** The page title: the product's, or its part number when it has no title. */
 function displayTitle(product: Product): string {
   return titleOf(product) || product.part_number || "Untitled product";
+}
+
+/** The readable path: `/products/{id}-{words-of-the-title}`. */
+function productPath(id: string, product: Product): string {
+  // The product's own id, as the API spells it (lowercase), not the URL's: an
+  // uppercase id in a link is the same product and redirects to one URL.
+  return routes.product(product.id || id, titleOf(product) || product.part_number);
 }
 
 /**
@@ -83,7 +98,11 @@ async function loadProduct(id: string): Promise<Product> {
   const product = await fetchProduct(id);
   if (!product) {
     const moved = await fetchProductRedirect(id).catch(() => null);
-    if (moved && moved !== id) permanentRedirect(routes.product(moved));
+    if (moved && moved !== id) {
+      // Straight to the readable URL: one hop, not two.
+      const successor = await fetchProduct(moved).catch(() => null);
+      permanentRedirect(successor ? productPath(moved, successor) : routes.product(moved));
+    }
     notFound();
   }
   if (product.offers.length === 0) notFound();
@@ -95,20 +114,25 @@ export async function generateMetadata({
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  const { id } = await params;
+  const id = productIdFrom((await params).id);
   const product = await loadProduct(id);
   return pageMetadata({
     // The root layout's template appends " · makhzan".
     title: displayTitle(product),
     description: productDescription(product),
-    path: routes.product(id),
+    path: productPath(id, product),
     ownCard: true,
   });
 }
 
 export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  const param = (await params).id;
+  const id = productIdFrom(param);
   const product = await loadProduct(id);
+  // A bare id, an old title's slug or a mistyped one: one permanent redirect
+  // to the readable URL, so links and search engines settle on it.
+  const path = productPath(id, product);
+  if (`/products/${param}` !== path) permanentRedirect(path);
   const now = new Date();
   const title = displayTitle(product);
   const several = product.offers.length >= 2;
@@ -138,34 +162,50 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   // title; the offers go there instead, as before.
   const split = sources.length > 0;
   const images = galleryImages(product);
+  // The main photo is the page's largest element (its LCP) and comes from the
+  // shop's server, not ours (decision 0003). Opening that connection while the
+  // rest of the page streams saves the DNS, TCP and TLS round trips before the
+  // photo can even be requested: 100–300 ms on a phone.
+  const photoOrigin = originOf(images[0]);
+  if (photoOrigin) preconnect(photoOrigin);
+  const crumbs: Crumb[] | null = !product.category
+    ? null
+    : categories.length > 0
+      ? categoryTrail(product.category, categories)
+      : [
+          {
+            label: tradeLabel(product.category.domain),
+            href: routes.trade(product.category.domain),
+          },
+          { label: product.category.name_en, href: routes.category(product.category.ref) },
+        ];
 
   return (
     <Container className="pt-3 pb-8 lg:pt-4 lg:pb-12">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: jsonLdText(productJsonLd(product, absoluteUrl(routes.product(id)), title)),
+          __html: jsonLdText(
+            productJsonLd(
+              product,
+              absoluteUrl(path),
+              title,
+              // The richest shop's own words, else the same summary the meta
+              // description uses: Google asks for a description either way.
+              sources.find((source) => source.description)?.description ??
+                productDescription(product),
+            ),
+          ),
         }}
       />
-      {product.category && (
-        <Breadcrumb
-          trail
-          className="mb-3 lg:mb-4"
-          items={
-            categories.length > 0
-              ? categoryTrail(product.category, categories)
-              : [
-                  {
-                    label: tradeLabel(product.category.domain),
-                    href: routes.trade(product.category.domain),
-                  },
-                  {
-                    label: product.category.name_en,
-                    href: routes.category(product.category.ref),
-                  },
-                ]
-          }
-        />
+      {crumbs && (
+        <>
+          <Breadcrumb trail className="mb-3 lg:mb-4" items={crumbs} />
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: jsonLdText(breadcrumbJsonLd(crumbs, title)) }}
+          />
+        </>
       )}
 
       {/* Phones read top to bottom in DOM order: photo, title, price or
@@ -191,7 +231,9 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           <Gallery
             images={images}
             alt={title}
-            priority={!several}
+            // High priority whether or not a phone hides it: the phone shows
+            // the same first photo as a thumbnail, so it is one download.
+            priority
             frameClassName="aspect-[4/3] lg:aspect-square"
           />
         </div>
@@ -233,6 +275,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               )}
             </div>
           </div>
+          <Facts offers={product.offers} currency={product.currency} now={now} similar={similar} />
         </div>
 
         <div
@@ -256,22 +299,34 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
         {split && (
           <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-2">
-            <Details sources={sources} single={!several} />
+            <Details sources={sources} />
           </div>
         )}
       </div>
 
       {similar.length > 0 && (
-        <section aria-labelledby="similar-heading" className="mt-8">
+        <section
+          id="similar"
+          data-similar
+          aria-labelledby="similar-heading"
+          className="mt-8 scroll-mt-20"
+        >
           <h2 id="similar-heading" className="mb-2.5 text-[15px] lg:text-lg">
             Similar products
           </h2>
-          {/* A swipeable row on a phone, a grid from `sm`. */}
-          <ul className="-mx-4 flex snap-x gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-            {similar.map((item) => (
-              <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
-            ))}
-          </ul>
+          {/* A swipeable row on a phone, with arrows; a grid from `sm`. */}
+          <Carousel previous="Previous products" next="Next products" buttonClassName="sm:hidden">
+            <ul
+              data-carousel-track
+              // The scroll padding matches the side padding, so the first card
+              // snaps where it starts and the strip opens at its start.
+              className="-mx-4 flex snap-x scroll-px-4 gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8"
+            >
+              {similar.map((item) => (
+                <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
+              ))}
+            </ul>
+          </Carousel>
         </section>
       )}
 
@@ -433,3 +488,14 @@ function BottomBar({ offer, now }: { offer: Offer; now: Date }) {
  * build has no access to. SSR still gives crawlers complete HTML.
  */
 export const dynamic = "force-dynamic";
+
+/** `https://shop.example` for a photo URL, or null for anything unparseable. */
+function originOf(src: string | undefined): string | null {
+  if (!src) return null;
+  try {
+    const url = new URL(src);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}

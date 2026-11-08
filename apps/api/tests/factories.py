@@ -142,6 +142,7 @@ async def make_product(
     currency: str = "EGP",
     in_stock: bool = True,
     last_verified_at: datetime | None = BASE_TIME,
+    content_changed_at: datetime = BASE_TIME,
 ) -> Product:
     product = Product(
         group_key=group_key or f"single:test:{next(_seq)}",
@@ -160,6 +161,7 @@ async def make_product(
         currency=currency,
         in_stock=in_stock,
         last_verified_at=last_verified_at,
+        content_changed_at=content_changed_at,
     )
     session.add(product)
     await session.commit()

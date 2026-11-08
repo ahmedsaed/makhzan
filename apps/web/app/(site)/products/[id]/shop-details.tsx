@@ -4,21 +4,19 @@ import { ShopLink } from "@/components/shop-link";
 import type { ShopDetails as Details } from "@/lib/product";
 
 /**
- * The specs and datasheets one shop published (rule C4): each section
- * only when there is something in it, and labelled with whose listing it came
- * from, because a spec row is the shop's statement, not ours.
+ * The specs and datasheets one shop published: each section
+ * only when there is something in it. Whose listing they came from (rule C4)
+ * is said once, at the top of the shop's panel (Details).
  */
 export function ShopDetails({ details, idSuffix = "" }: { details: Details; idSuffix?: string }) {
-  const { offer, shopName, specs, datasheets } = details;
-  const source = `From ${shopName}'s listing`;
+  const { offer, specs, datasheets } = details;
   return (
     <>
       {specs.length > 0 && (
         <section data-specs aria-labelledby={`specs-heading${idSuffix}`} className="mt-6 lg:mt-5">
-          <h2 id={`specs-heading${idSuffix}`} className="text-[15px]">
+          <h3 id={`specs-heading${idSuffix}`} className="text-[15px]">
             Specifications
-          </h2>
-          <p className="mt-0.5 text-[13px] text-ink-2">{source}</p>
+          </h3>
           <dl className="mt-2 divide-y divide-line rounded-card border border-line bg-surface text-sm">
             {specs.map((row) => (
               <div
@@ -44,10 +42,9 @@ export function ShopDetails({ details, idSuffix = "" }: { details: Details; idSu
           aria-labelledby={`datasheets-heading${idSuffix}`}
           className="mt-6 lg:mt-5"
         >
-          <h2 id={`datasheets-heading${idSuffix}`} className="text-[15px]">
+          <h3 id={`datasheets-heading${idSuffix}`} className="text-[15px]">
             {datasheets.length === 1 ? "Datasheet" : "Datasheets"}
-          </h2>
-          <p className="mt-0.5 text-[13px] text-ink-2">{source}</p>
+          </h3>
           <ul className="mt-1">
             {datasheets.map((doc) => (
               <li key={doc.url}>

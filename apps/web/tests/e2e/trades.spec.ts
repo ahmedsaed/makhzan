@@ -57,7 +57,14 @@ test("on a phone each trade is a row, its categories behind a chevron", async ({
     "href",
     "/trades/seals-bearings",
   );
-  await expect(seals).toContainText("O-Rings, bearings, oil seals, gaskets");
+  const phrase = seals.getByText("O-Rings, bearings, oil seals, gaskets", { exact: true });
+  await expect(phrase).toBeVisible();
+  // Wrapped, never cut off with an ellipsis.
+  expect(
+    await phrase.evaluate(
+      (el) => el.scrollWidth <= el.clientWidth && getComputedStyle(el).textOverflow !== "ellipsis",
+    ),
+  ).toBe(true);
   const oRings = seals.getByRole("link", { name: "O-Rings 400" });
   await expect(oRings).toBeHidden();
 
@@ -261,4 +268,22 @@ test("an unknown category is a 404", async ({ page }) => {
 test("an unknown trade is a 404 on its category pages too", async ({ page }) => {
   const response = await page.goto("/trades/not-a-trade/bearings");
   expect(response?.status()).toBe(404);
+});
+
+test.describe("canonical URLs of results pages", () => {
+  test("filters drop out, so a filtered view counts as the page", async ({ page }) => {
+    await page.goto("/trades/seals-bearings?sort=price_asc&in_stock=all&min_price=50");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://makhzan.test/trades/seals-bearings",
+    );
+  });
+
+  test("paging stays, so page 2 is its own page", async ({ page }) => {
+    await page.goto("/trades/seals-bearings?sort=price_asc&offset=24");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://makhzan.test/trades/seals-bearings?offset=24",
+    );
+  });
 });

@@ -53,19 +53,21 @@ export function totalOf(ref: string, categories: Category[]): number {
 }
 
 /**
- * "Resistors, batteries, connectors, ICs": the names read as one phrase, so
- * only the first keeps its capital. A word is lowered only when it is plainly
- * an ordinary capitalised word; "PLCs", "3D", "O-Rings" and "PTFE" keep theirs.
+ * "Resistors, batteries & chargers, connectors, ICs": the names read as one
+ * phrase, so only its first word keeps its capital. The rest of the first name
+ * is lowered like any other, or the list reads in two styles ("Batteries &
+ * Chargers, power supplies"). A word is lowered only when it is plainly an
+ * ordinary capitalised word; "PLCs", "3D", "O-Rings" and "PTFE" keep theirs.
  */
 export function asPhrase(names: string[]): string {
   return names
     .map((name, index) =>
-      index === 0
-        ? name
-        : name
-            .split(" ")
-            .map((word) => (/^[A-Z][a-z]+$/.test(word) ? word.toLowerCase() : word))
-            .join(" "),
+      name
+        .split(" ")
+        .map((word, at) =>
+          (index > 0 || at > 0) && /^[A-Z][a-z]+$/.test(word) ? word.toLowerCase() : word,
+        )
+        .join(" "),
     )
     .join(", ");
 }
