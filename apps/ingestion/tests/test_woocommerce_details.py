@@ -95,7 +95,8 @@ def test_keeps_what_the_store_api_already_carries():
     assert attrs["specs"] == {"Range": "0–75%", "Display": "LCD / LED"}
     # A variation attribute is a choice on the listing, not a fact about it.
     assert attrs["options"] == {"Color": ["Black", "White"]}
-    assert attrs["variants"] == 2
+    assert attrs["variant_count"] == 2
+    assert "variants" not in attrs  # the variations themselves are fetched once a cycle
     assert attrs["price_range"] == {"min": "110.00", "max": "150.00"}
     assert attrs["regular_price"] == "130.00"
     assert attrs["stock_quantity"] == 12
@@ -240,3 +241,24 @@ def test_a_feature_bullet_is_not_a_spec():
     long = "Excellent rejection: provides better than 99 percent rejection across the whole band"
     raw = _woo()._to_raw(_rich_product(description=f"<ul><li>{long}</li></ul>"), "in stock")
     assert raw.raw["specs"] == {"Range": "0–75%", "Display": "LCD / LED"}
+
+
+def test_videos_in_the_description_are_kept_once_each():
+    """An embed and a link to the same video count once, in the shared form
+    the Shopify adapter writes (canonical YouTube/Vimeo URLs)."""
+    product = _rich_product(
+        description=(
+            '<iframe title="Wiring demo" src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>'
+            '<p><a href="https://youtu.be/dQw4w9WgXcQ">watch</a> and '
+            '<a href="https://vimeo.com/76979871">the teardown</a></p>'
+        )
+    )
+    raw = _woo()._to_raw(product, "in stock")
+    assert [video["url"] for video in raw.raw["videos"]] == [
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "https://vimeo.com/76979871",
+    ]
+
+
+def test_no_videos_no_key():
+    assert "videos" not in _woo()._to_raw(_plain_product(), "in stock").raw

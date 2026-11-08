@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
-from makhzan_schemas.contracts import ListingRead
+from makhzan_schemas.contracts import HEAVY_DETAILS, ListingRead, public_contact
 from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import Category, Listing, Supplier
 from makhzan_schemas.search import category_ref
@@ -29,6 +29,17 @@ _ACTIVE = Listing.status == ListingStatus.ACTIVE
 # IN_STOCK only, matching Product.in_stock: the two counts would otherwise
 # disagree about the same listings on adjacent pages.
 _IN_STOCK = Listing.stock_signal == StockSignal.IN_STOCK
+
+#: What a shop page's listing row leaves out. The shop page lists rows, not
+#: details: specs, datasheets, variants and the like are the product page's, and
+#: would multiply the payload by up to fifty fields a row. The shop's contact is
+#: on its profile, once, not repeated on every row.
+_ROW_EXCLUDE: dict = {**{field: True for field in HEAVY_DETAILS}, "supplier": {"contact"}}
+
+
+def _contact_json(supplier: Supplier) -> dict | None:
+    contact = public_contact(supplier.contact)
+    return contact.model_dump(mode="json") if contact else None
 
 
 async def _get_supplier(session: AsyncSession, slug: str) -> Supplier:
@@ -141,6 +152,8 @@ async def get_supplier(slug: str, session: AsyncSession = Depends(get_session)) 
         "area": supplier.area,
         "governorate": supplier.governorate,
         "website_url": supplier.website_url,
+        # As the shop publishes it, read from its own pages once a cycle.
+        "contact": _contact_json(supplier),
         **_summary(supplier, activity, domains),
         "top_categories": [
             {
@@ -191,10 +204,8 @@ async def supplier_listings(
         "total": total,
         "limit": limit,
         "offset": offset,
-        # The shop page lists rows, not details: specs and datasheets are the
-        # product page's, and would multiply the payload by up to fifty fields a row.
         "items": [
-            ListingRead.model_validate(row).model_dump(mode="json", exclude={"specs", "documents"})
+            ListingRead.model_validate(row).model_dump(mode="json", exclude=_ROW_EXCLUDE)
             for row in rows
         ],
     }

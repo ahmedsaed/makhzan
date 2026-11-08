@@ -1,0 +1,40 @@
+[
+ {
+  "id": 7315,
+  "tiered_pricing_type": "fixed",
+  "tiered_pricing_fixed_rules": [],
+  "tiered_pricing_percentage_rules": []
+ },
+ {
+  "id": 7314,
+  "tiered_pricing_type": "fixed",
+  "tiered_pricing_fixed_rules": [],
+  "tiered_pricing_percentage_rules": []
+ },
+ {
+  "id": 7313,
+  "tiered_pricing_type": "fixed",
+  "tiered_pricing_fixed_rules": [],
+  "tiered_pricing_percentage_rules": []
+ },
+ {
+  "id": 7311,
+  "tiered_pricing_type": "fixed",
+  "tiered_pricing_fixed_rules": {
+   "20": 9,
+   "100": 8
+  },
+  "tiered_pricing_percentage_rules": []
+ },
+ {
+  "id": 7312,
+  "tiered_pricing_type": "fixed",
+  "tiered_pricing_fixed_rules": {
+   "20": 80,
+   "50": 75,
+   "100": 70,
+   "200": 65
+  },
+  "tiered_pricing_percentage_rules": []
+ }
+]

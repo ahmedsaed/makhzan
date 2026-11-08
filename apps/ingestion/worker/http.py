@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from collections import Counter
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -195,6 +197,29 @@ async def get_json(
     return (await _request(client, url, params, retries, base_delay, method, **kwargs)).json()
 
 
+async def get_response(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict | None = None,
+    *,
+    retries: int = 5,
+    base_delay: float = 2.0,
+) -> httpx.Response:
+    """GET returning the whole response, for a caller that needs its headers too.
+
+    WordPress says how many pages a collection has (`X-WP-TotalPages`) and
+    answers the page after the last with a 400, so paging one to the end needs
+    the header rather than "stop at the first empty page".
+    """
+    return await _request(client, url, params, retries, base_delay)
+
+
+def total_pages(response: httpx.Response) -> int | None:
+    """WordPress's `X-WP-TotalPages`, if the response carries a usable one."""
+    value = response.headers.get("X-WP-TotalPages", "")
+    return int(value) if value.isdigit() else None
+
+
 async def get_text(
     client: httpx.AsyncClient,
     url: str,
@@ -205,3 +230,29 @@ async def get_text(
 ) -> str:
     """GET returning response text (for HTML-scraped sources)."""
     return (await _request(client, url, params, retries, base_delay)).text
+
+
+class CycleFetcher:
+    """Paced, counted GETs for a source's once-a-cycle reference data.
+
+    Some of what a shop publishes is not per page of products but per shop: its
+    category tree, the price of every variant, its quantity breaks, its address.
+    Fetching that a handful of requests at a time once a cycle is cheap; fetching
+    it on every run of a week-long cycle is not. This is the one door those
+    requests go through, so each waits the host's pace (its `Crawl-Delay` as a
+    floor) like a product page does, honours robots.txt and `Retry-After` through
+    `_request`, and is counted by label for the run's stats.
+    """
+
+    def __init__(self, pace: Callable[[], Awaitable[float]]) -> None:
+        self._pace = pace
+        #: Requests made, by what they were for ("variations", "contact", ...).
+        self.requests: Counter[str] = Counter()
+
+    async def get(self, label: str, url: str, params: dict | None = None) -> httpx.Response:
+        if self.requests.total():
+            await asyncio.sleep(await self._pace())
+        # Counted before it is sent: a request that failed still reached the host.
+        self.requests[label] += 1
+        async with make_client() as client:
+            return await get_response(client, url, params)
