@@ -68,6 +68,9 @@ async def _upsert_listing(
         ).scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
+    attributes = norm.attributes
+    if norm.stock_signal == StockSignal.OUT_OF_STOCK:
+        attributes = _without_stock_counts(attributes)
     fields = dict(
         title_en=norm.title_en,
         title_ar=norm.title_ar,
@@ -80,11 +83,12 @@ async def _upsert_listing(
         unit=norm.unit,
         stock_signal=norm.stock_signal,
         images=norm.images,
-        attributes=norm.attributes,
+        attributes=attributes,
         source_url=norm.source_url,
         confidence=norm.confidence,
         status=ListingStatus.ACTIVE,
         last_verified_at=now,
+        last_seen_at=now,
     )
 
     if existing:
@@ -224,6 +228,27 @@ async def _ingest_item(
     return None
 
 
+def _without_stock_counts(attributes: dict) -> dict:
+    """A listing's attributes once it is out of stock: no count says otherwise.
+
+    A stored "68 in stock", or a variant still marked in stock with its own
+    count, would contradict the badge; neither is true of a product the shop
+    says it has none of.
+    """
+    if not isinstance(attributes, dict):
+        return attributes
+    out = {k: v for k, v in attributes.items() if k != "stock_quantity"}
+    variants = out.get("variants")
+    if isinstance(variants, list):
+        out["variants"] = [
+            {**{k: x for k, x in v.items() if k != "stock_quantity"}, "in_stock": False}
+            if isinstance(v, dict)
+            else v
+            for v in variants
+        ]
+    return out
+
+
 async def _mark_out_of_stock(
     session: AsyncSession, supplier_id: uuid.UUID, external_ids: list[str]
 ) -> int:
@@ -231,31 +256,48 @@ async def _mark_out_of_stock(
 
     For a shop whose catalogue feed leaves out-of-stock products out, a second
     route still lists them by id. Without this they would go unseen for the
-    cycle and be archived as if discontinued. Their stored details stay as last
-    seen — that route carries none — and only the stock and the verification
-    time change. One the cycle had archived is restored, since the shop has just
-    said it exists; one hidden or awaiting review is left alone. Returns how
-    many listings were kept.
+    cycle and be archived as if discontinued. That route carries no price or
+    details, so what was stored stays as last read, and so does
+    `last_verified_at`: the site shows it as when the price was checked, and it
+    was not. Only `last_seen_at` moves, which is what archiving reads. Any stock
+    count is dropped, since the shop has just said there is none. One the cycle
+    had archived is restored, since the shop has just said it exists; one hidden
+    or awaiting review is left alone. Returns how many listings were kept.
     """
-    result = await session.execute(
-        update(Listing)
-        .where(
-            Listing.supplier_id == supplier_id,
-            Listing.external_id.in_(set(external_ids)),
-            Listing.status.in_([ListingStatus.ACTIVE, ListingStatus.ARCHIVED]),
+    listings = (
+        (
+            await session.execute(
+                select(Listing).where(
+                    Listing.supplier_id == supplier_id,
+                    Listing.external_id.in_(set(external_ids)),
+                    Listing.status.in_([ListingStatus.ACTIVE, ListingStatus.ARCHIVED]),
+                )
+            )
         )
-        .values(
-            stock_signal=StockSignal.OUT_OF_STOCK,
-            status=ListingStatus.ACTIVE,
-            last_verified_at=datetime.now(timezone.utc),
-        )
+        .scalars()
+        .all()
     )
-    return result.rowcount or 0
+    now = datetime.now(timezone.utc)
+    for listing in listings:
+        listing.stock_signal = StockSignal.OUT_OF_STOCK
+        listing.status = ListingStatus.ACTIVE
+        listing.last_seen_at = now
+        listing.attributes = _without_stock_counts(listing.attributes)
+    return len(listings)
 
 
 #: Refetch a source's reference data at least this often, even mid-cycle: a cycle
 #: that never completes (a source failing every day) must not pin it forever.
-CYCLE_DATA_MAX_AGE = timedelta(days=21)
+#: Above the longest real cycle (about four weeks for the slowest shop), so in a
+#: healthy sweep the data is refreshed once a cycle, when the next one starts.
+CYCLE_DATA_MAX_AGE = timedelta(days=45)
+
+
+def _when(entry: dict, key: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(entry[key])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 async def _load_cycle_data(
@@ -268,15 +310,21 @@ async def _load_cycle_data(
 ) -> Counter:
     """Hand the adapter its per-cycle reference data, fetching what is due.
 
-    A part is fetched when it has never been, when it is older than
-    `CYCLE_DATA_MAX_AGE`, or when a new cycle is starting — no partition of this
-    source has a cycle in flight. So a cycle spread over a week of daily runs
+    A part is due when it has never been tried, when a new cycle is starting —
+    no partition of this source has a cycle in flight — or when its last try is
+    older than `CYCLE_DATA_MAX_AGE`. So a cycle spread over weeks of daily runs
     pays for it once, at its first run, and every later run reads the copy on
-    the source's row. A part that fails keeps its previous copy and is reported;
-    the sweep goes on without it rather than not at all.
+    the source's row.
 
-    An ephemeral (`limit=`) run fetches only parts that were never fetched, and
-    stores nothing: like its cursors, the source's state is not its to change.
+    A part that fails is reported and marked tried (`attempted_at`), keeping its
+    previous copy: the sweep goes on without the new one, and the next try is at
+    the next cycle. Retrying every run would re-fetch a many-page part from its
+    first page every day, failing in the same place; and a part that stopped
+    partway is never stored, since a partial variations list would hide variants.
+
+    An ephemeral (`limit=`) run fetches nothing and stores nothing: like its
+    cursors, the source's state is not its to change, and a quick test run must
+    not cost a shop a cycle's worth of extra requests. It reads what is stored.
     Returns the requests made, by part.
     """
     parts = adapter.cycle_data_parts()
@@ -300,34 +348,44 @@ async def _load_cycle_data(
     ).scalar_one()
 
     def due(part: str) -> bool:
-        entry = stored.get(part)
-        if not isinstance(entry, dict) or "fetched_at" not in entry:
-            return True
         if ephemeral:
             return False
-        try:
-            fetched = datetime.fromisoformat(entry["fetched_at"])
-        except (TypeError, ValueError):
+        entry = stored.get(part)
+        if not isinstance(entry, dict):
             return True
-        return not in_flight or now - fetched > CYCLE_DATA_MAX_AGE
+        tries = [t for t in (_when(entry, "fetched_at"), _when(entry, "attempted_at")) if t]
+        if not tries:
+            return True
+        return not in_flight or now - max(tries) > CYCLE_DATA_MAX_AGE
 
     fetcher = CycleFetcher(lambda: _pace(adapter))
+    changed = False
     for part in [p for p in parts if due(p)]:
+        changed = True
         try:
             data = await adapter.fetch_cycle_part(fetcher, part)
         except Exception as exc:  # noqa: BLE001 — reference data must not stop the sweep
             errors.append(f"cycle data {part}: {type(exc).__name__}: {exc}")
+            previous = stored.get(part) if isinstance(stored.get(part), dict) else {}
+            stored[part] = {**previous, "attempted_at": datetime.now(timezone.utc).isoformat()}
             continue
         stored[part] = {"fetched_at": datetime.now(timezone.utc).isoformat(), "data": data}
-        if part == CONTACT_PART and data and not ephemeral:
+        if part == CONTACT_PART and data:
             supplier = await session.get(Supplier, supplier_id)
             if supplier is not None:
                 supplier.contact = data
 
-    adapter.use_cycle_data({part: entry.get("data") for part, entry in stored.items()})
+    adapter.use_cycle_data(
+        {part: entry.get("data") for part, entry in stored.items() if isinstance(entry, dict)},
+        fetched_at={
+            part: entry["fetched_at"]
+            for part, entry in stored.items()
+            if isinstance(entry, dict) and entry.get("fetched_at")
+        },
+    )
+    if changed and source is not None:
+        source.cycle_data = stored
     if fetcher.requests:
-        if source is not None and not ephemeral:
-            source.cycle_data = stored
         # The next request to this host is a product page: it waits its turn too.
         await asyncio.sleep(await _pace(adapter))
     return fetcher.requests
@@ -456,7 +514,9 @@ async def _finish_cycle_if_swept(
         .where(
             Listing.supplier_id == supplier_id,
             Listing.status == ListingStatus.ACTIVE,
-            Listing.last_verified_at < cycle_started,
+            # Seen, not verified: a listing kept alive by id alone was not
+            # re-priced, but the shop still says it sells it.
+            Listing.last_seen_at < cycle_started,
         )
         .values(status=ListingStatus.ARCHIVED)
     )
@@ -565,9 +625,9 @@ async def _run(
         cycle_requests = await _load_cycle_data(
             session, adapter, supplier_id, ephemeral=limit is not None, errors=errors
         )
-        if cycle_requests:
-            # Durable before the sweep: a run that dies on page 1 still keeps it.
-            await session.commit()
+        # Durable before the sweep: a run that dies on page 1 still keeps it, and
+        # a part that failed stays marked as tried.
+        await session.commit()
 
         fetch_failed = False
         observed: Counter = Counter()
@@ -614,8 +674,11 @@ async def _run(
             # Named, so a wrongly skipped real product is visible in the run.
             stats["not_products"] = dict(not_products.most_common(25))
         # Every request this run made to the source's host: its pages, and the
-        # reference data fetched once a cycle, by part.
-        requests = {"pages": tally["pages"], **cycle_requests}
+        # reference data fetched once a cycle, by part, and whatever else the
+        # adapter asked for while building its pages.
+        requests: Counter = Counter({"pages": tally["pages"]})
+        requests.update(cycle_requests)
+        requests.update(adapter.extra_requests())
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}
         if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:

@@ -283,6 +283,17 @@ async def test_merchandising_and_empty_collections_cost_nothing(shop):
     ], "frontpage (Shopify's), new-products (configured) and the empty Zigbee are skipped"
 
 
+async def test_collection_requests_are_counted_beside_the_page(shop):
+    """A run's `stats.requests` is every request the host got, not one per page."""
+    adapter = _adapter(collections=True, skip_collections=["new-products"])
+    assert adapter.extra_requests() == {}
+    await adapter.fetch_page("", 1)
+    await adapter.fetch_page("", 2)
+    # Three collection requests on the first page; the second reads the map it built.
+    assert adapter.extra_requests() == {"collections": 3}
+    assert _adapter().extra_requests() == {}
+
+
 async def test_collection_requests_are_paced_like_pages(shop):
     await _adapter(collections=True, polite_delay=15.0).fetch_page("", 1)
     # One pause before each request after the first.
@@ -373,11 +384,11 @@ def _odoo_card(html: str):
 
 def test_odoo_keeps_the_image_change_token():
     raw = _odoo_card((FIXTURES / "odoo_card.html").read_text())
-    assert raw.raw["change_token"] == "958e1a2"
-    assert raw.external_id == "9276"
+    assert raw.raw["change_token"] == "5a0c3e1"
+    assert raw.external_id == "1001"
 
 
 def test_a_card_without_a_product_image_has_no_token():
     html = (FIXTURES / "odoo_card.html").read_text()
-    html = html.replace("/web/image/product.template/9276/image_512/", "/web/static/placeholder/")
+    html = html.replace("/web/image/product.template/1001/image_512/", "/web/static/placeholder/")
     assert "change_token" not in _odoo_card(html).raw

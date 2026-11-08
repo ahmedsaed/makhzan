@@ -86,6 +86,27 @@ async def test_internal_detail_keys_never_leave(client, db):
         assert leaked not in raw
 
 
+async def test_variants_say_when_they_were_read(client, db):
+    """Variants come from once-a-cycle data, so can be older than the price."""
+    stamp = "2026-10-20T08:00:00+00:00"
+    offer = await _offer(client, db, {**DETAILS, "variants_checked_at": stamp})
+    assert offer["variants_checked_at"].startswith("2026-10-20T08:00:00")
+
+    product = await make_product(db)
+    for n, attributes in enumerate(
+        (
+            {**DETAILS, "variants_checked_at": "yesterday"},  # not a time
+            {**DETAILS, "variants_checked_at": "2026-10-20T08:00:00"},  # no zone
+            {"variants_checked_at": stamp},  # no variants for it to date
+        )
+    ):
+        supplier = await make_supplier(db, slug=f"shop-{n}")
+        await make_listing(db, supplier=supplier, product=product, attributes=attributes)
+    offers = (await client.get(f"/products/{product.id}")).json()["offers"]
+    assert len(offers) == 3
+    assert all(offer["variants_checked_at"] is None for offer in offers)
+
+
 async def test_a_listing_without_details_reads_as_empty(client, db):
     offer = await _offer(client, db, {})
 
@@ -94,6 +115,7 @@ async def test_a_listing_without_details_reads_as_empty(client, db):
     assert offer["price_on_request"] is False
     assert offer["stock_quantity"] is None
     assert offer["variants"] == []
+    assert offer["variants_checked_at"] is None
     assert offer["price_breaks"] == []
     assert offer["compatible_with"] == []
     assert offer["ships_from_abroad"] is None
@@ -211,11 +233,17 @@ async def test_an_offers_supplier_carries_its_contact(client, db):
 
 async def test_the_shop_pages_rows_stay_slim(client, db):
     supplier = await make_supplier(db, slug="shop-a", contact=CONTACT)
-    await make_listing(db, supplier=supplier, attributes={**DETAILS, "specs": {"A": "1"}})
+    await make_listing(
+        db,
+        supplier=supplier,
+        attributes={**DETAILS, "specs": {"A": "1"}, "variants_checked_at": "2026-10-20T08:00:00Z"},
+    )
 
     (row,) = (await client.get("/suppliers/shop-a/listings")).json()["items"]
 
-    for heavy in ("specs", "documents", "variants", "price_breaks", "compatible_with", "videos"):
+    heavy_fields = ("specs", "documents", "variants", "variants_checked_at", "price_breaks",
+                    "compatible_with", "videos")  # fmt: skip
+    for heavy in heavy_fields:
         assert heavy not in row
     assert "contact" not in row["supplier"]
     # The unit of sale is part of a row's price, so it stays.

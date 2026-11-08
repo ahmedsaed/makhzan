@@ -1,24 +1,24 @@
 [
  {
-  "id": 19247,
+  "id": 7315,
   "tiered_pricing_type": "fixed",
   "tiered_pricing_fixed_rules": [],
   "tiered_pricing_percentage_rules": []
  },
  {
-  "id": 19242,
+  "id": 7314,
   "tiered_pricing_type": "fixed",
   "tiered_pricing_fixed_rules": [],
   "tiered_pricing_percentage_rules": []
  },
  {
-  "id": 19235,
+  "id": 7313,
   "tiered_pricing_type": "fixed",
   "tiered_pricing_fixed_rules": [],
   "tiered_pricing_percentage_rules": []
  },
  {
-  "id": 18721,
+  "id": 7311,
   "tiered_pricing_type": "fixed",
   "tiered_pricing_fixed_rules": {
    "20": 9,
@@ -27,7 +27,7 @@
   "tiered_pricing_percentage_rules": []
  },
  {
-  "id": 18770,
+  "id": 7312,
   "tiered_pricing_type": "fixed",
   "tiered_pricing_fixed_rules": {
    "20": 80,

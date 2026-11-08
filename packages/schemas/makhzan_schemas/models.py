@@ -197,7 +197,15 @@ class Listing(TimestampMixin, Base):
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    #: When the listing's price and details were last read from the shop: what
+    #: the site shows as "checked". Only a sweep that returned the product moves it.
     last_verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: When the source last said the listing exists, by any route. Archiving keys
+    #: off this, not `last_verified_at`: a shop that lists an out-of-stock product
+    #: only by id still sells it, but has not re-stated its price.
+    last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

@@ -1,12 +1,12 @@
 [
  {
-  "id": 31094,
+  "id": 7101,
   "name": "Assembled Extruder Kit for Neptune 4 Plus / 4 Max",
   "parent": 0,
   "type": "simple",
   "variation": "",
-  "permalink": "https://shop-c.test/product/assembled-extruder-kit-for-neptune-4-plus-4-max/",
-  "sku": "SKU-31094",
+  "permalink": "https://shop-c.test/product/extruder-kit/",
+  "sku": "SKU-7101",
   "on_sale": false,
   "prices": {
    "price": "0",
@@ -25,11 +25,11 @@
   "short_description": "",
   "categories": [
    {
-    "id": 1096,
+    "id": 901,
     "name": "ELEGOO"
    },
    {
-    "id": 1097,
+    "id": 902,
     "name": "Spare Parts &amp; Accessories"
    }
   ],
@@ -57,20 +57,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/03/Screenshot-2026-03-13-221458.png"
+    "src": "https://shop-c.test/wp-content/uploads/image-3.png"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 31298,
+  "id": 7102,
   "name": "Bambu Lab 3D Effect Plate",
   "parent": 0,
   "type": "variable",
   "variation": "",
-  "permalink": "https://shop-c.test/product/bambu-lab-3d-effect-plate/",
-  "sku": "SKU-31298",
+  "permalink": "https://shop-c.test/product/effect-plate/",
+  "sku": "SKU-7102",
   "on_sale": true,
   "prices": {
    "price": "1250",
@@ -92,11 +92,11 @@
   "short_description": "",
   "categories": [
    {
-    "id": 1111,
+    "id": 904,
     "name": "Spare Parts &amp; Accessories"
    },
    {
-    "id": 341,
+    "id": 905,
     "name": "3D Printing"
    }
   ],
@@ -152,22 +152,22 @@
   ],
   "variations": [
    {
-    "id": 31306
+    "id": 7111
    },
    {
-    "id": 31307
+    "id": 7112
    },
    {
-    "id": 31308
+    "id": 7113
    },
    {
-    "id": 31309
+    "id": 7114
    },
    {
-    "id": 31311
+    "id": 7115
    },
    {
-    "id": 31312
+    "id": 7116
    }
   ],
   "is_purchasable": true,
@@ -186,20 +186,20 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/04/cmlifvso7023501gnfwqa2mxm_mini_e341a6bc-6f37-4577-a2fb-38cf2181f7e3__1_.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-4.webp"
    }
   ],
   "formatted_weight": "N/A",
   "formatted_dimensions": "N/A"
  },
  {
-  "id": 33501,
+  "id": 7103,
   "name": "Jupiter 2 16K ELEGOO",
   "parent": 0,
   "type": "simple",
   "variation": "",
-  "permalink": "https://shop-c.test/product/jupiter-2-16k-elegoo-egypt/",
-  "sku": "SKU-33501",
+  "permalink": "https://shop-c.test/product/resin-printer-16k/",
+  "sku": "SKU-7103",
   "on_sale": true,
   "prices": {
    "price": "150000",
@@ -218,11 +218,11 @@
   "short_description": "",
   "categories": [
    {
-    "id": 1099,
+    "id": 903,
     "name": "3D Printer Resin"
    },
    {
-    "id": 1096,
+    "id": 901,
     "name": "ELEGOO"
    }
   ],
@@ -250,7 +250,7 @@
   },
   "images": [
    {
-    "src": "https://shop-c.test/wp-content/uploads/2026/11/JPT2-_1_ea574cd2-1fc4-4a47-b254-e72beb62f9fd.webp"
+    "src": "https://shop-c.test/wp-content/uploads/image-5.webp"
    }
   ],
   "formatted_weight": "N/A",

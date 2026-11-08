@@ -111,6 +111,8 @@ class ShopifyAdapter(SourceAdapter):
         self.skip_collections = {*_MERCHANDISING_COLLECTIONS, *skip_collections}
         #: product id -> collection titles, read once per adapter (i.e. per run).
         self._memberships: dict[str, list[str]] | None = None
+        #: Requests made for memberships, which happen inside `fetch_page`.
+        self._collection_requests = 0
         if polite_delay is not None:
             self.polite_delay = polite_delay
         if max_pages_per_run is not None:
@@ -176,6 +178,8 @@ class ShopifyAdapter(SourceAdapter):
         for page in range(1, MAX_PAGES + 1):
             if page > 1:
                 await asyncio.sleep(await polite_pause(self.base_url, self.polite_delay))
+            # Counted before it is sent: a request that failed still reached the host.
+            self._collection_requests += 1
             data = await get_json(
                 client, f"{self.base_url}{path}", {"limit": PER_PAGE, "page": page}
             )
@@ -185,6 +189,9 @@ class ShopifyAdapter(SourceAdapter):
             # A short page is the last: no need to ask for the empty one after it.
             if len(rows) < PER_PAGE:
                 return
+
+    def extra_requests(self) -> dict[str, int]:
+        return {"collections": self._collection_requests} if self._collection_requests else {}
 
     async def _read_memberships(self, client) -> dict[str, list[str]]:
         """product id -> titles of the collections it is in.

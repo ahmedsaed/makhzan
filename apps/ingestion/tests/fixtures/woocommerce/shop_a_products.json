@@ -1,12 +1,12 @@
 [
  {
-  "id": 380186,
+  "id": 7201,
   "name": "Chip Resistor SMD 560Ω ±5% 250mW 1206",
   "parent": 0,
   "type": "simple",
   "variation": "",
-  "permalink": "https://shop-a.test/product/chip-resistor-smd-560%cf%89-%c2%b15-250mw-1206/",
-  "sku": "SKU-380186",
+  "permalink": "https://shop-a.test/product/chip-resistor-1206/",
+  "sku": "SKU-7201",
   "on_sale": false,
   "prices": {
    "price": "25",
@@ -25,11 +25,11 @@
   "short_description": "",
   "categories": [
    {
-    "id": 15820,
+    "id": 912,
     "name": "1206 Resistor"
    },
    {
-    "id": 846,
+    "id": 911,
     "name": "SMD Resistor"
    }
   ],
@@ -57,7 +57,7 @@
   },
   "images": [
    {
-    "src": "https://shop-a.test/wp-content/uploads/2023/09/20230121_FOJAN-FRC1206F2001TS_C2907379_front1-900x900.jpg"
+    "src": "https://shop-a.test/wp-content/uploads/image-1.jpg"
    }
   ],
   "formatted_weight": "N/A",

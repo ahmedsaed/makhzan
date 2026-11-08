@@ -385,6 +385,9 @@ class _ShopDetails(BaseModel):
     #: A stock count the shop itself shows the public.
     stock_quantity: int | None = Field(default=None, validation_alias="attributes")
     variants: list[VariantRead] = Field(default_factory=list, validation_alias="attributes")
+    #: When `variants` were read from the shop. They are refreshed once a cycle,
+    #: so can be weeks older than `last_verified_at`, which dates the price.
+    variants_checked_at: datetime | None = Field(default=None, validation_alias="attributes")
     price_breaks: list[PriceBreakRead] = Field(default_factory=list, validation_alias="attributes")
     #: What the part fits, as the shop states it. Display only.
     compatible_with: list[str] = Field(default_factory=list, validation_alias="attributes")
@@ -436,6 +439,21 @@ class _ShopDetails(BaseModel):
     def _variants(cls, value: object) -> list[VariantRead]:
         return _items(value, "variants", _variant, _MAX_VARIANTS)
 
+    @field_validator("variants_checked_at", mode="before")
+    @classmethod
+    def _variants_checked_at(cls, value: object) -> datetime | None:
+        # Only beside variants: on its own it dates nothing.
+        if not _items(value, "variants", _variant, _MAX_VARIANTS):
+            return None
+        stamp = _attribute(value, "variants_checked_at")
+        if not isinstance(stamp, str):
+            return None
+        try:
+            when = datetime.fromisoformat(stamp)
+        except ValueError:
+            return None
+        return when if when.tzinfo is not None else None
+
     @field_validator("price_breaks", mode="before")
     @classmethod
     def _price_breaks(cls, value: object) -> list[PriceBreakRead]:
@@ -463,7 +481,15 @@ class _ShopDetails(BaseModel):
 #: The detail fields too heavy for a list row (a shop page of 24 listings).
 #: List endpoints exclude them; the product and listing pages show them.
 HEAVY_DETAILS = frozenset(
-    {"specs", "documents", "variants", "price_breaks", "compatible_with", "videos"}
+    {
+        "specs",
+        "documents",
+        "variants",
+        "variants_checked_at",
+        "price_breaks",
+        "compatible_with",
+        "videos",
+    }
 )
 
 
