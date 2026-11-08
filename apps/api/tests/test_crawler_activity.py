@@ -275,3 +275,13 @@ async def test_the_next_run_follows_the_refresh_hour(client, db, monkeypatch):
 async def test_no_next_run_while_the_sweep_is_switched_off(client, monkeypatch, value):
     monkeypatch.setenv("CRAWL_ENABLED", value)
     assert (await _activity(client))["schedule"]["next_run_at"] is None
+
+
+async def test_every_shop_reads_paused_while_the_whole_crawl_is_off(client, db, monkeypatch):
+    """CRAWL_ENABLED off stops every source; the page must not call them active."""
+    await make_supplier(db, slug="shop-a", name="Shop A")
+    await _source(db, "shop-a", "shop-a", enabled=True)
+    monkeypatch.setenv("CRAWL_ENABLED", "false")
+    body = await _activity(client)
+    assert [shop["status"] for shop in body["shops"]] == ["paused"]
+    assert body["totals"]["shops_active"] == 0

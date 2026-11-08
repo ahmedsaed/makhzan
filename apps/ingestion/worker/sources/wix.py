@@ -197,18 +197,26 @@ class WixStoresAdapter(SourceAdapter):
 
         # The list only ever grows as the page number does. One that did not
         # grow is not going to: stop rather than ask for the same list again.
+        # A gallery read short must FAIL, not end: an ended partition lets the
+        # cycle complete, and a completed cycle archives every product that was
+        # only on the pages we did not reach. A failed one keeps its cursor and
+        # is retried, so a change in Wix's paging shows up as errors, not as
+        # products quietly disappearing.
+        if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+            raise ValueError(f"{path}: the gallery states no product total ({total!r})")
         before = self._listed.get(path, 0)
         self._listed[path] = len(products)
-        short = isinstance(total, int) and len(products) < total
+        short = len(products) < total
         grew = page == 1 or len(products) > before
-        has_more = short and grew and page < MAX_PAGES
+        if short and not grew:
+            raise ValueError(
+                f"{path}: paging stopped growing at {len(products)} of {total} products"
+            )
+        if short and page >= MAX_PAGES:
+            raise ValueError(f"{path}: {total} products need more than {MAX_PAGES} pages")
         if not short:
             self._complete.add(path)
-        elif not has_more:
-            log.warning(
-                "%s: %s stopped at %d of %d products", self.source_id, path, len(products), total
-            )
-        return Page(items, has_more=has_more)
+        return Page(items, has_more=short)
 
     async def _check_sitemap(self) -> Page:
         """Compare the products sitemap with what the galleries showed this run.

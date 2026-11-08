@@ -111,6 +111,7 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
         if slug in suppliers:
             by_shop[slug].append(source)
 
+    crawling = crawl.crawl_enabled()
     shops = []
     every_pacing: list[dict] = []
     for slug, its_sources in by_shop.items():
@@ -126,7 +127,11 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
             {
                 "slug": supplier.slug,
                 "name": supplier.name,
-                "status": "active" if any(s.enabled for s in its_sources) else "paused",
+                # Paused when the shop's sources are switched off, and for every
+                # shop while the whole crawl is (CRAWL_ENABLED off).
+                "status": (
+                    "active" if crawling and any(s.enabled for s in its_sources) else "paused"
+                ),
                 "last_read_at": max(reads) if reads else None,
                 "requests_7d": sum(n for n in counts if n is not None),
                 # Some run in the window did not record its requests: the count
