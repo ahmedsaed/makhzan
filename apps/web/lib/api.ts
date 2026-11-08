@@ -21,6 +21,8 @@ const API_BASE =
 /** Seconds. Long enough to absorb a burst, short enough that a sweep shows up. */
 const TAXONOMY_TTL = 300;
 const DETAIL_TTL = 120;
+/** The crawler's activity moves once a day, but "read 3 hours ago" should not lag far. */
+const ACTIVITY_TTL = 600;
 
 export type StockSignal = "in_stock" | "low_stock" | "out_of_stock" | "made_to_order" | "unknown";
 
@@ -308,6 +310,58 @@ export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
   return getOrNull<SupplierProfile>(`/suppliers/${encodeURIComponent(slug)}`, {
     revalidate: TAXONOMY_TTL,
   });
+}
+
+/**
+ * One shop's row of `/crawler/activity`: what the crawler did on its site.
+ * Gaps are seconds between consecutive requests over the last 7 days, null
+ * when nothing was measured (runs from before pacing was recorded).
+ */
+export type ShopCrawlActivity = {
+  slug: string;
+  name: string;
+  /** "paused" never comes with a reason, and the page must not invent one. */
+  status: "active" | "paused";
+  last_read_at: string | null;
+  requests_7d: number;
+  /** Some run in the window did not record its count: `requests_7d` is a floor. */
+  requests_7d_partial: boolean;
+  min_gap_s: number | null;
+  median_gap_s: number | null;
+};
+
+export type CrawlerActivity = {
+  generated_at: string;
+  window_days: number;
+  shops: ShopCrawlActivity[];
+  totals: {
+    shops: number;
+    shops_active: number;
+    shops_read_7d: number;
+    requests_7d: number;
+    requests_7d_partial: boolean;
+    min_gap_s: number | null;
+    median_gap_s: number | null;
+    robots_txt_honoured: boolean;
+  };
+  schedule: {
+    refresh_hour_utc: number;
+    /** Null while the daily sweep is switched off. */
+    next_run_at: string | null;
+  };
+};
+
+/**
+ * The crawler's public record, or null when the API cannot give it. Every page
+ * that shows it renders without it: /how-we-crawl must stay readable when the
+ * catalogue is not, and a shop page is about the shop.
+ */
+export async function fetchCrawlerActivity(): Promise<CrawlerActivity | null> {
+  try {
+    return await get<CrawlerActivity>("/crawler/activity", { revalidate: ACTIVITY_TTL });
+  } catch {
+    return null;
+  }
 }
 
 /** One sitemap entry's worth of a product. `changed_at` is when what a reader
