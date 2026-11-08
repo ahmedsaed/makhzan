@@ -293,20 +293,10 @@ async def _sweep_partition(
 
 
 async def _pace(adapter: SourceAdapter) -> float:
-    """Seconds to wait before the next page of this source.
+    """Seconds to wait before this source's next request (see `robots.polite_pause`)."""
+    from worker.robots import polite_pause
 
-    `Crawl-Delay` is a floor, never a ceiling: a host asking for 20 seconds gets
-    20 even though the default is 15, and a host asking for 1 still gets the full
-    polite delay. One supplier does ask for 20, so this was a real if small
-    breach — the crawler was reading them faster than they had asked in writing.
-    """
-    if not adapter.base_url:
-        return adapter.polite_delay
-    from worker.robots import ROBOTS
-    from worker.http import BROWSER_HEADERS
-
-    requested = await ROBOTS.crawl_delay(adapter.base_url, BROWSER_HEADERS["User-Agent"])
-    return max(adapter.polite_delay, requested or 0.0)
+    return await polite_pause(adapter.base_url, adapter.polite_delay)
 
 
 async def _finish_cycle_if_swept(
@@ -449,7 +439,15 @@ async def _run(
         observed: Counter = Counter()
         resumed: list[bool] = []
         not_products: Counter = Counter()
-        for partition in partitions:
+        for i, partition in enumerate(partitions):
+            if limit is not None and run.items_seen >= limit:
+                break
+            if i:
+                # Partitions share one host. The pause between pages ends at a
+                # partition's last page, so without this the next partition's
+                # first request went out at once: for a source of many two-page
+                # categories, half of its requests were unpaced.
+                await asyncio.sleep(await _pace(adapter))
             failed = await _sweep_partition(
                 session,
                 run,
