@@ -1,4 +1,5 @@
 import { fetchProduct } from "@/lib/api";
+import { productIdFrom } from "@/lib/routes";
 import { TAGLINE } from "@/lib/brand";
 import { productPrice, productTitle, productWhere } from "@/lib/metadata";
 import { galleryImages } from "@/lib/product";
@@ -25,7 +26,7 @@ export const contentType = "image/png";
 export const revalidate = 86400;
 
 export default async function Image({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  const id = productIdFrom((await params).id);
   const product = await fetchProduct(id).catch(() => null);
   // An unknown or withdrawn product still gets a card: the site's own.
   if (!product || product.offers.length === 0) return renderCard({ title: TAGLINE });

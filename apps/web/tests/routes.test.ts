@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { redirectTarget } from "@/lib/redirects";
-import { joinRef, routes, splitRef, withParams } from "@/lib/routes";
+import {
+  joinRef,
+  productIdFrom,
+  productParam,
+  routes,
+  slugify,
+  splitRef,
+  withParams,
+} from "@/lib/routes";
 
 describe("category refs", () => {
   it("splits domain:slug", () => {
@@ -89,5 +97,36 @@ describe("old URLs", () => {
     // Starts with the letters, is not the prefix.
     expect(redirectTarget("/enclosures")).toBeNull();
     expect(redirectTarget("/browser")).toBeNull();
+  });
+});
+
+describe("readable product URLs", () => {
+  const ID = "6a1bc5c4-07fd-4995-a1f3-8d3380cf29c8";
+
+  it("slugs a title into lowercase Latin words", () => {
+    expect(slugify("MG90S Metal Gear Servo (180°)")).toBe("mg90s-metal-gear-servo-180");
+    expect(slugify("Résistance 10kΩ ±5%")).toBe("resistance-10k-5");
+    expect(slugify("فلتر زيت")).toBe("");
+    expect(slugify(null)).toBe("");
+  });
+
+  it("cuts a long title at a word, within 60 characters", () => {
+    const slug = slugify("word ".repeat(40));
+    expect(slug.length).toBeLessThanOrEqual(60);
+    expect(slug.endsWith("-word")).toBe(true);
+  });
+
+  it("puts the slug after a UUID, and only after a UUID", () => {
+    expect(routes.product(ID, "Transformer 3A")).toBe(`/products/${ID}-transformer-3a`);
+    expect(routes.product(ID, "فلتر")).toBe(`/products/${ID}`);
+    expect(routes.product(ID)).toBe(`/products/${ID}`);
+    expect(productParam("p-multi", "ESP32 Board")).toBe("p-multi");
+  });
+
+  it("splits the id back off, slug or not", () => {
+    expect(productIdFrom(`${ID}-transformer-3a`)).toBe(ID);
+    expect(productIdFrom(ID)).toBe(ID);
+    expect(productIdFrom(ID.toUpperCase())).toBe(ID.toUpperCase());
+    expect(productIdFrom("p-multi")).toBe("p-multi");
   });
 });

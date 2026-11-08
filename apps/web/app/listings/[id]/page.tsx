@@ -1,6 +1,6 @@
 import { notFound, permanentRedirect } from "next/navigation";
 
-import { fetchListing } from "@/lib/api";
+import { fetchListing, fetchProduct, titleOf } from "@/lib/api";
 import { routes } from "@/lib/routes";
 
 /**
@@ -18,7 +18,11 @@ export default async function ListingRedirect({ params }: { params: Promise<{ id
   const { id } = await params;
   const listing = await fetchListing(id);
   if (!listing?.product_id) notFound();
-  permanentRedirect(routes.product(listing.product_id));
+  // To the product's readable URL in one hop; the bare id would redirect again.
+  const product = await fetchProduct(listing.product_id).catch(() => null);
+  permanentRedirect(
+    routes.product(listing.product_id, product && (titleOf(product) || product.part_number)),
+  );
 }
 
 export const dynamic = "force-dynamic";

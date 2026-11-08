@@ -58,7 +58,10 @@ function TradeRow({ trade }: { trade: TradeSummary }) {
           <span className="text-[13px] text-ink-3 tabular">{formatCount(trade.count)}</span>
         </span>
         {trade.inside.length > 0 && (
-          <span className="truncate text-[13px] text-ink-2">{asPhrase(trade.inside)}</span>
+          // Wrapped, never cut: the phrase is the row's whole point.
+          <span className="text-[13px] leading-snug text-pretty text-ink-2">
+            {asPhrase(trade.inside)}
+          </span>
         )}
       </span>
     </Link>

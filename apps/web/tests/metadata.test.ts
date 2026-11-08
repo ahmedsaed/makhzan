@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Category, Offer, Product, StockSignal, SupplierProfile } from "@/lib/api";
 import {
+  breadcrumbJsonLd,
+  pagedPath,
   categoryDescription,
   homeDescription,
   homeJsonLd,
@@ -295,5 +297,35 @@ describe("clampText", () => {
     expect(clampText("Caliper 300mm stainless with knife points and a case", 30)).toBe(
       "Caliper 300mm stainless with…",
     );
+  });
+});
+
+describe("breadcrumbJsonLd", () => {
+  it("lists the trail in order, links absolute, the page itself last and unlinked", () => {
+    const data = breadcrumbJsonLd(
+      [
+        { label: "Electronics", href: "/trades/electronics" },
+        { label: "Resistors", href: "/trades/electronics/resistors" },
+      ],
+      "1k Resistor",
+    );
+    expect(data["@type"]).toBe("BreadcrumbList");
+    expect(data.itemListElement.map((i) => [i.position, i.name])).toEqual([
+      [1, "Electronics"],
+      [2, "Resistors"],
+      [3, "1k Resistor"],
+    ]);
+    expect(data.itemListElement[0].item).toMatch(/^https?:\/\/.+\/trades\/electronics$/);
+    expect(data.itemListElement[2]).not.toHaveProperty("item");
+  });
+});
+
+describe("pagedPath", () => {
+  it("keeps a positive offset and drops everything else", () => {
+    expect(pagedPath("/trades/x", { offset: "24", sort: "price_asc" })).toBe("/trades/x?offset=24");
+    expect(pagedPath("/trades/x", { sort: "price_asc", in_stock: "all" })).toBe("/trades/x");
+    expect(pagedPath("/trades/x", { offset: "0" })).toBe("/trades/x");
+    expect(pagedPath("/trades/x", { offset: "abc" })).toBe("/trades/x");
+    expect(pagedPath("/trades/x", { offset: ["48", "72"] })).toBe("/trades/x?offset=48");
   });
 });

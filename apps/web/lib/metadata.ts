@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import type { Category, Product, Stats, SupplierProfile } from "@/lib/api";
 import { SITE_DESCRIPTION, SITE_NAME, TAGLINE } from "@/lib/brand";
+import { absoluteUrl } from "@/lib/site";
 import { formatCount, formatPriceRange, plural } from "@/lib/format";
 import { summarizeOffers } from "@/lib/product";
 import { tradesInWords } from "@/lib/shops";
@@ -30,6 +31,22 @@ const SITE_CARD = {
  * path, and the three can never disagree between the tab, the canonical link
  * and the preview card.
  */
+/**
+ * The canonical path of a results page (trade, category, shop): the page
+ * itself with every filter dropped, so a sorted, price-ranged or "show out of
+ * stock" view counts as the page and not as thousands of near-copies; but its
+ * paging kept, so page 3 is its own page. Pointing page 3 at page 1 would tell
+ * Google to ignore the products only page 3 lists.
+ */
+export function pagedPath(
+  path: string,
+  searchParams: Record<string, string | string[] | undefined>,
+): string {
+  const raw = searchParams.offset;
+  const offset = Number.parseInt(Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? ""), 10);
+  return Number.isFinite(offset) && offset > 0 ? `${path}?offset=${offset}` : path;
+}
+
 export function pageMetadata({
   title,
   description,
@@ -77,6 +94,26 @@ export function pageMetadata({
  * search engine can offer a search box for it. `home` is the absolute URL of
  * `/`, on SITE_URL.
  */
+/**
+ * schema.org BreadcrumbList for a page's trail (Google shows it in results in
+ * place of the URL). Crumbs are what the page shows; the page itself closes
+ * the list, named and without a link of its own, as Google allows.
+ */
+export function breadcrumbJsonLd(crumbs: { label: string; href?: string }[], current?: string) {
+  const items = [...crumbs.map((crumb) => ({ name: crumb.label, href: crumb.href }))];
+  if (current) items.push({ name: current, href: undefined });
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: items.map((item, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: item.name,
+      ...(item.href && { item: absoluteUrl(item.href) }),
+    })),
+  };
+}
+
 export function homeJsonLd(home: string) {
   const url = new URL(home);
   const search = new URL("/search", url);
