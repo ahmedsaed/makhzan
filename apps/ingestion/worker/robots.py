@@ -17,10 +17,10 @@ supplier about access.
 
 from __future__ import annotations
 
+import re
 import time
-from dataclasses import dataclass
-from urllib.parse import urlsplit
-from urllib.robotparser import RobotFileParser
+from dataclasses import dataclass, field
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -36,8 +36,95 @@ TIMEOUT_SECONDS = 10.0
 
 
 @dataclass
+class _Group:
+    agents: list[str] = field(default_factory=list)
+    #: (compiled pattern, pattern length, allow)
+    rules: list[tuple[re.Pattern[str], int, bool]] = field(default_factory=list)
+    crawl_delay: float | None = None
+
+
+class Rules:
+    """A parsed robots.txt, matched the way RFC 9309 says.
+
+    Not `urllib.robotparser`: on the Python the worker runs (3.12) it ignores
+    `*` and `$` and lets the *first* matching line win. One supplier's file says
+    `Disallow: /collections/*sort_by*`, which that parser reads as a literal
+    path nobody requests, and an `Allow: /` above a `Disallow: /cart` would allow
+    the cart. Here the longest matching pattern wins, a tie goes to Allow,
+    `*` matches any run of characters and a trailing `$` anchors the end.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.groups: list[_Group] = []
+        group: _Group | None = None
+        in_rules = False
+        for line in text.splitlines():
+            key, sep, value = line.split("#", 1)[0].partition(":")
+            if not sep:
+                continue
+            key, value = key.strip().lower(), value.strip()
+            if key == "user-agent":
+                # Consecutive user-agent lines share one group; one after a rule
+                # starts the next.
+                if group is None or in_rules:
+                    group = _Group()
+                    self.groups.append(group)
+                    in_rules = False
+                group.agents.append(value.lower())
+            elif group is None:
+                continue  # a rule before any user-agent line belongs to nobody
+            elif key in ("allow", "disallow"):
+                in_rules = True
+                if value:  # an empty Disallow allows everything: no rule
+                    value = unquote(value)
+                    group.rules.append((_compile(value), len(value), key == "allow"))
+            elif key == "crawl-delay":
+                in_rules = True
+                try:
+                    delay = float(value)
+                except ValueError:
+                    continue  # a malformed directive is not a rule
+                if group.crawl_delay is None and delay >= 0:
+                    group.crawl_delay = delay
+
+    def _groups_for(self, user_agent: str) -> list[_Group]:
+        # Matched on the product token, as urllib.robotparser does: "Mozilla/5.0
+        # (...)" is "mozilla". Every group naming us applies; failing that, "*".
+        token = user_agent.split("/", 1)[0].strip().lower()
+        named = [g for g in self.groups if any(a != "*" and a in token for a in g.agents)]
+        return named or [g for g in self.groups if "*" in g.agents]
+
+    def allowed(self, url: str, user_agent: str) -> bool:
+        parts = urlsplit(url)
+        path = parts.path or "/"
+        if path == "/robots.txt":
+            return True
+        # Compared percent-decoded on both sides, so `/a+b` and `/a%2Bb` are one
+        # path: a rule must not be dodged by how a character happens to be spelled.
+        target = unquote(f"{path}?{parts.query}" if parts.query else path)
+        best: tuple[int, bool] | None = None
+        for group in self._groups_for(user_agent):
+            for pattern, length, allow in group.rules:
+                if pattern.match(target) and (
+                    best is None or length > best[0] or (length == best[0] and allow)
+                ):
+                    best = (length, allow)
+        return True if best is None else best[1]
+
+    def crawl_delay(self, user_agent: str) -> float | None:
+        delays = [g.crawl_delay for g in self._groups_for(user_agent) if g.crawl_delay is not None]
+        return max(delays) if delays else None
+
+
+def _compile(pattern: str) -> re.Pattern[str]:
+    anchored = pattern.endswith("$")
+    body = ".*".join(re.escape(part) for part in pattern.rstrip("$").split("*"))
+    return re.compile(body + (r"\Z" if anchored else ""), re.DOTALL)
+
+
+@dataclass
 class _Entry:
-    parser: RobotFileParser | None  # None when the host publishes no usable rules
+    rules: Rules | None  # None when the host publishes no usable rules
     fetched_at: float
 
 
@@ -63,7 +150,7 @@ class RobotsCache:
         if cached and (time.monotonic() - cached.fetched_at) < self._ttl:
             return cached
 
-        parser: RobotFileParser | None = None
+        rules: Rules | None = None
         try:
             # A bare client on purpose: routing this through the adapters' own
             # fetch helper would recurse straight back into this check.
@@ -72,8 +159,7 @@ class RobotsCache:
             ) as client:
                 response = await client.get(f"{host}/robots.txt")
             if response.status_code < 400:
-                parser = RobotFileParser()
-                parser.parse(response.text.splitlines())
+                rules = Rules(response.text)
                 self.failures.pop(host, None)
             elif response.status_code < 500:
                 # No rules published. Everything is allowed.
@@ -83,26 +169,22 @@ class RobotsCache:
         except Exception as exc:  # noqa: BLE001 — a probe must not break a sweep
             self.failures[host] = f"robots.txt unreachable: {type(exc).__name__}"
 
-        entry = _Entry(parser=parser, fetched_at=time.monotonic())
+        entry = _Entry(rules=rules, fetched_at=time.monotonic())
         self._hosts[host] = entry
         return entry
 
     async def allowed(self, url: str, user_agent: str) -> bool:
         entry = await self._entry(url)
-        if entry.parser is None:
+        if entry.rules is None:
             return True
-        return entry.parser.can_fetch(user_agent, url)
+        return entry.rules.allowed(url, user_agent)
 
     async def crawl_delay(self, url: str, user_agent: str) -> float | None:
         """Seconds the host asks between requests, if it says."""
         entry = await self._entry(url)
-        if entry.parser is None:
+        if entry.rules is None:
             return None
-        try:
-            value = entry.parser.crawl_delay(user_agent)
-        except Exception:  # noqa: BLE001 — a malformed directive is not a rule
-            return None
-        return float(value) if value is not None else None
+        return entry.rules.crawl_delay(user_agent)
 
 
 class DisallowedByRobots(Exception):
@@ -115,3 +197,20 @@ class DisallowedByRobots(Exception):
 
 #: Process-wide, so one sweep fetches a host's robots.txt once per TTL.
 ROBOTS = RobotsCache()
+
+
+async def polite_pause(base_url: str | None, polite_delay: float) -> float:
+    """Seconds to wait before the next request to a source's host.
+
+    `Crawl-Delay` is a floor, never a ceiling: a host asking for 20 seconds gets
+    20 even though the default is 15, and a host asking for 1 still gets the full
+    polite delay. One supplier does ask for 20, so this was a real if small
+    breach — the crawler was reading them faster than they had asked in writing.
+
+    Shared by the pipeline (between pages and partitions) and by an adapter that
+    makes more than one request for a page.
+    """
+    if not base_url:
+        return polite_delay
+    requested = await ROBOTS.crawl_delay(base_url, BROWSER_HEADERS["User-Agent"])
+    return max(polite_delay, requested or 0.0)
