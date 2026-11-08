@@ -132,8 +132,9 @@ def _client(statuses: list[int], sent: list[str]) -> httpx.AsyncClient:
 
 
 async def test_a_retry_is_a_request_and_its_wait_is_a_gap(clock):
-    """The shop sees the retry. If its backoff is shorter than the pace, the
-    published shortest gap says so — that is the point of measuring."""
+    """The shop sees the retry, so it keeps the published pace: a 2 s backoff
+    still waits the host's 15 s."""
+    http_mod.set_host_pace("https://shop.test", 15.0)
     sent: list[str] = []
     with http_mod.logging_requests(http_mod.RequestLog()) as log:
         async with _client([429, 200], sent) as client:
@@ -141,7 +142,115 @@ async def test_a_retry_is_a_request_and_its_wait_is_a_gap(clock):
 
     pacing = log.pacing()
     assert pacing["requests"] == len(sent) == 2
-    assert 2.0 <= pacing["min_gap_s"] <= 2.5  # base_delay plus jitter
+    assert pacing["min_gap_s"] >= 15.0
+
+
+async def test_the_backoff_still_grows_above_the_pace(clock):
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    sent: list[str] = []
+    with http_mod.logging_requests(http_mod.RequestLog()) as log:
+        async with _client([503, 503, 503, 200], sent) as client:
+            await http_mod.get_json(client, "https://shop.test/a", retries=3, base_delay=10.0)
+
+    times = log.times["https://shop.test"]
+    gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+    assert len(sent) == 4
+    # max(pace, 10·2^n + jitter): 15, then 20+, then 40+.
+    assert 15.0 <= gaps[0] < 16.0
+    assert 20.0 <= gaps[1] <= 20.5
+    assert 40.0 <= gaps[2] <= 40.5
+
+
+async def test_crawl_delay_raises_the_retry_floor(clock, monkeypatch):
+    class _Slow(_AllowAll):
+        def cached_crawl_delay(self, host, user_agent):
+            return 30.0
+
+    monkeypatch.setattr(robots_mod, "ROBOTS", _Slow())
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    with http_mod.logging_requests() as log:
+        async with _client([429, 200], []) as client:
+            await http_mod.get_json(client, "https://shop.test/a", retries=1, base_delay=2.0)
+    assert log.pacing()["min_gap_s"] >= 30.0
+
+
+async def test_no_two_requests_to_a_host_go_out_closer_than_its_pace(clock):
+    """Whatever code path sends them: here, two calls with no pause between."""
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    with http_mod.logging_requests() as log:
+        async with _client([200], []) as client:
+            await http_mod.get_json(client, "https://shop.test/a")
+            await http_mod.get_json(client, "https://shop.test/b")
+            await http_mod.get_json(client, "https://other.test/c")  # another host: no wait
+    pacing = log.pacing()
+    assert pacing["by_host"]["https://shop.test"]["min_gap_s"] == 15.0
+
+
+def _shop_with_robots(monkeypatch, sent: list[str], robots_txt: str = "User-agent: *\n"):
+    """Pages and robots.txt from one fake host, through the real RobotsCache."""
+    real = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text=robots_txt)
+        return httpx.Response(200, json={})
+
+    def client(**kwargs):
+        kwargs.pop("transport", None)
+        return real(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", client)
+    return client
+
+
+async def test_robots_txt_is_a_paced_and_counted_request(clock, monkeypatch):
+    """Fetched before the first page, it is logged, and the page waits the
+    full pace after it rather than going out on its heels."""
+    sent: list[str] = []
+    client = _shop_with_robots(monkeypatch, sent)
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache())
+    http_mod.set_host_pace("https://shop.test", 15.0)
+
+    with http_mod.logging_requests() as log:
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/a")
+
+    assert sent == ["/robots.txt", "/a"]
+    pacing = log.pacing()
+    assert (pacing["requests"], pacing["robots"]) == (2, 1)
+    assert pacing["min_gap_s"] == 15.0
+
+
+async def test_a_robots_txt_refetch_mid_run_keeps_the_pace_both_sides(clock, monkeypatch):
+    sent: list[str] = []
+    client = _shop_with_robots(monkeypatch, sent)
+    # Expired at once: every request re-reads it, the worst case of the hourly TTL.
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache(ttl=0))
+    http_mod.set_host_pace("https://shop.test", 15.0)
+
+    with http_mod.logging_requests() as log:
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/a")
+            await clock.sleep(15.0)  # the pipeline's own pause between pages
+            await http_mod.get_json(c, "https://shop.test/b")
+
+    assert sent == ["/robots.txt", "/a", "/robots.txt", "/b"]
+    pacing = log.pacing()
+    assert pacing["robots"] == 2
+    assert pacing["gaps"] == {"15": 3}
+
+
+async def test_a_crawl_delay_read_from_robots_txt_paces_the_next_page(clock, monkeypatch):
+    sent: list[str] = []
+    client = _shop_with_robots(monkeypatch, sent, "User-agent: *\nCrawl-delay: 20\n")
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache())
+    http_mod.set_host_pace("https://shop.test", 15.0)
+
+    with http_mod.logging_requests() as log:
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/a")
+    assert log.pacing()["min_gap_s"] == 20.0
 
 
 async def test_nothing_is_logged_outside_a_run(clock):

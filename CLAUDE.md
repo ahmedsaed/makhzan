@@ -47,7 +47,7 @@ it happened, so the run's `stats.cycle` records when it started, finished, how
 long it took and over how many partitions. That is what makes past sweeps
 comparable — the cycle in flight tells you nothing on its own.
 
-`stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries included, and the gaps between them per host, measured in `worker/http.py` — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint.
+`stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries and robots.txt included, and the gaps between them per host, measured at `worker/http.py`'s `take_turn`, the per-host gate that holds every request to the source's pace — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint.
 
 `make status` is the first thing to run when a sweep looks stuck or a catalog
 looks wrong: it reports per-source partition progress and resume points, recent
