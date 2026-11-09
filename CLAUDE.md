@@ -106,6 +106,20 @@ and there is none", which *does* clear it, so a supplier dropping a category is
 still visible. Without this the /shop pass would blank the category on all 2,867
 products the category pass had just set.
 
+**On an authoritative source, only a mapped category knows.** A product can sit
+in two categories, one the crosswalk maps and one it does not, and then whichever
+partition was swept later decided: the unmapped one cleared what the mapped one
+had just set (the Odoo shop's servos, SG90 and MG996R among them, lost their
+category this way). So when `authoritative_categories` is set and the listing's
+own category misses the crosswalk, the pipeline treats the sweep as not knowing:
+it leaves a stored category alone, and a listing with none stays uncategorized
+(never inferred). A mapped partition still sets the category, and the whole-shop
+pass still never clears one. The cost: a product the supplier *moves* from a
+mapped category to an unmapped one keeps the old category until a mapped one
+says otherwise. Tag-cloud sources (`authoritative_categories` False) are
+unchanged — a miss there falls through to inference, and "I was in a position to
+know, and there is none" still clears.
+
 Progress is **durable per page**: after each page the pipeline commits and advances
 a `SourceCursor`. A run that dies on page 40 of 43 keeps 39 pages, and the next
 run resumes at 40. This is not a nicety — without it, a host that rate-limits

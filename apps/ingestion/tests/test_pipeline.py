@@ -334,14 +334,31 @@ async def test_the_whole_shop_pass_does_not_erase_a_category(_clean_tables):
     assert await _category_slug_of() == "resistors", "the category survived a sweep that had none"
 
 
-async def test_an_authoritative_miss_still_clears_the_category(_clean_tables):
-    """The other half: a sweep that *does* browse by category and finds the item
-    under one we do not map has genuinely uncategorized it. That must show."""
+@pytest.mark.parametrize(
+    "order",
+    [["cat-resistors", "cat-unmapped"], ["cat-unmapped", "cat-resistors"]],
+)
+async def test_a_product_in_a_mapped_and_an_unmapped_category_keeps_the_mapped_one(
+    _clean_tables, order
+):
+    """A product filed under two categories, one mapped and one not, used to
+    take whatever the later partition said: the unmapped one cleared it. On
+    the Odoo shop that is how servos lost their category. Whichever order the
+    two are swept in, the mapped category stands."""
     await _seed_taxonomy()
     crosswalk = {"cat-resistors": ("electronics", "resistors")}
 
-    await run_source(SRC, CategoryAdapter(["cat-resistors"], crosswalk))
+    await run_source(SRC, CategoryAdapter(order, crosswalk))
     assert await _category_slug_of() == "resistors"
+    # And over the next cycle too, the unmapped partition swept on its own.
+    await run_source(SRC, CategoryAdapter(["cat-unmapped"], crosswalk))
+    assert await _category_slug_of() == "resistors"
+
+
+async def test_a_product_only_under_unmapped_categories_stays_uncategorized(_clean_tables):
+    """An authoritative miss still never guesses: no mapped category, no category."""
+    await _seed_taxonomy()
+    crosswalk = {"cat-resistors": ("electronics", "resistors")}
 
     await run_source(SRC, CategoryAdapter(["cat-unmapped"], crosswalk))
     assert await _category_slug_of() is None
