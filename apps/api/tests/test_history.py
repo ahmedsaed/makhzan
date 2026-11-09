@@ -14,7 +14,7 @@ from decimal import Decimal
 
 from app.routers import history
 from factories import make_listing, make_product, make_supplier
-from makhzan_schemas.enums import StockSignal
+from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import PriceObservation
 
 
@@ -161,3 +161,51 @@ async def test_product_history_has_one_entry_per_offer(client, db):
     assert set(offers) == {str(a.id), str(b.id)}
     assert [p["price"] for p in offers[str(a.id)]["points"]] == [50.0, 45.0]
     assert [p["in_stock"] for p in offers[str(b.id)]["points"]] == [False]
+
+
+async def test_product_history_follows_the_page_listed_withdrawn_and_merged(client, db):
+    """Ids are permanent: the history lists the offers the page lists. A listed
+    product's are its active listings; a withdrawn one's are the archived
+    listings it last had, ending on the point written when each was archived;
+    a merged-away id has no history of its own."""
+    listed = await make_product(db)
+    active = await make_listing(db, supplier=await make_supplier(db), product=listed)
+    gone = await make_listing(
+        db, supplier=await make_supplier(db), product=listed, status=ListingStatus.ARCHIVED
+    )
+    await _observe(db, active, 10, "50.00")
+    await _observe(db, gone, 10, "40.00")
+
+    body = (await client.get(f"/products/{listed.id}/history?days=30")).json()
+    assert [o["listing_id"] for o in body["offers"]] == [str(active.id)]
+
+    withdrawn = await make_product(db)
+    withdrawn.delisted_at = _ago(1)
+    last = await make_listing(
+        db, supplier=await make_supplier(db), product=withdrawn, status=ListingStatus.ARCHIVED
+    )
+    await _observe(db, last, 10, "70.00")
+    db.add(
+        PriceObservation(
+            listing_id=last.id,
+            observed_at=_ago(1),
+            price=Decimal("70.00"),
+            currency="EGP",
+            stock_signal=StockSignal.IN_STOCK,
+            in_stock=False,
+            available=False,
+        )
+    )
+    await db.commit()
+
+    response = await client.get(f"/products/{withdrawn.id}/history?days=30")
+    assert response.status_code == 200
+    (offer,) = response.json()["offers"]
+    assert offer["listing_id"] == str(last.id)
+    assert [p["available"] for p in offer["points"]] == [True, False]
+    assert [p["price"] for p in offer["points"]] == [70.0, 70.0]
+
+    merged = await make_product(db)
+    merged.merged_into = listed.id
+    await db.commit()
+    assert (await client.get(f"/products/{merged.id}/history")).status_code == 404
