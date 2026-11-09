@@ -90,6 +90,16 @@ Phase 2 shows it, decided 2026-11-09:
   the options table exists they stay separate products. With it, one product per
   material (for example a filament type and weight) can hold every colour from every
   shop, each with its own price.
+- **Group on manufacturer part numbers shops state.** Grouping already merges
+  listings that share a part number *extracted from their titles*, and only when the
+  titles agree, with three vetoes (same shop, different values, different form). Some
+  shops now state the manufacturer's part number outright (`attributes.mfr_part_number`,
+  e.g. one shop's "Mfr. Part #" field), which is stronger evidence than a title guess.
+  Use it as the listing's part number when the title gives none, and as corroboration
+  when both exist and agree; a disagreement keeps the title's and is logged. Title
+  agreement and the vetoes still apply: a shop can mistype or list a kit under the part
+  it contains. Measure first: how many groups form or change across the catalogue, read
+  a sample, as CLAUDE.md asks of every grouping change.
 - **Crawler activity** on `/how-we-crawl` and each shop page: when we last read the
   site, requests in the last 7 days, the measured gap between requests, and "Active" or
   "Paused" with no reason given.
