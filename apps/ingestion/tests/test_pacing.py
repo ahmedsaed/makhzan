@@ -253,6 +253,99 @@ async def test_a_crawl_delay_read_from_robots_txt_paces_the_next_page(clock, mon
     assert log.pacing()["min_gap_s"] == 20.0
 
 
+def _redirecting_shop(routes: dict[str, httpx.Response], sent: list[str]) -> httpx.AsyncClient:
+    """A client whose host answers each path from `routes` (200 for the rest)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(f"{request.method} {request.url.path}")
+        return routes.get(request.url.path, httpx.Response(200, json={}))
+
+    return http_mod.make_client(transport=httpx.MockTransport(handler))
+
+
+def _moved(status: int, to: str) -> httpx.Response:
+    return httpx.Response(status, headers={"Location": to})
+
+
+async def test_a_redirect_hop_waits_the_pace_and_is_counted(clock):
+    """httpx following it sent the hop at once: two requests ms apart in the
+    shop's logs, one of them missing from what /how-we-crawl publishes."""
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    sent: list[str] = []
+    routes = {"/a": _moved(301, "https://shop.test/a/"), "/a/": _moved(302, "/b")}
+    with http_mod.logging_requests() as log:
+        async with _redirecting_shop(routes, sent) as client:
+            assert await http_mod.get_json(client, "https://shop.test/a") == {}
+
+    assert sent == ["GET /a", "GET /a/", "GET /b"]
+    pacing = log.pacing()
+    assert pacing["requests"] == 3
+    assert pacing["min_gap_s"] == 15.0
+
+
+async def test_a_redirect_is_followed_the_way_httpx_would_have(clock):
+    """Only when a hop goes out changes, never what it is: 307/308 keep the
+    method and body, 303 turns into a GET."""
+    sent: list[str] = []
+    routes = {"/a": _moved(307, "/b"), "/b": _moved(303, "/c")}
+    async with _redirecting_shop(routes, sent) as client:
+        await http_mod.get_json(client, "https://shop.test/a", method="POST", json={"q": 1})
+    assert sent == ["POST /a", "POST /b", "GET /c"]
+
+
+async def test_a_redirect_robots_txt_disallows_is_not_followed(clock, monkeypatch):
+    class _DenyB(_AllowAll):
+        async def allowed(self, url, user_agent):
+            return not url.endswith("/b")
+
+    monkeypatch.setattr(robots_mod, "ROBOTS", _DenyB())
+    sent: list[str] = []
+    async with _redirecting_shop({"/a": _moved(301, "/b")}, sent) as client:
+        with pytest.raises(robots_mod.DisallowedByRobots):
+            await http_mod.get_json(client, "https://shop.test/a")
+    assert sent == ["GET /a"]
+
+
+async def test_a_redirect_loop_gives_up(clock):
+    sent: list[str] = []
+    async with _redirecting_shop({"/a": _moved(302, "/a")}, sent) as client:
+        with pytest.raises(httpx.TooManyRedirects):
+            await http_mod.get_json(client, "https://shop.test/a")
+    assert len(sent) == 1 + http_mod.MAX_REDIRECTS
+
+
+async def test_a_robots_txt_redirect_is_paced_and_counted_too(clock, monkeypatch):
+    sent: list[str] = []
+    real = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return _moved(301, "/robots-live.txt")
+        if request.url.path == "/robots-live.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /private\n")
+        return httpx.Response(200, json={})
+
+    def client(**kwargs):
+        kwargs.pop("transport", None)
+        return real(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", client)
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache())
+    http_mod.set_host_pace("https://shop.test", 15.0)
+
+    with http_mod.logging_requests() as log:
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/a")
+            with pytest.raises(robots_mod.DisallowedByRobots):
+                await http_mod.get_json(c, "https://shop.test/private")
+
+    assert sent == ["/robots.txt", "/robots-live.txt", "/a"]
+    pacing = log.pacing()
+    assert (pacing["requests"], pacing["robots"]) == (3, 2)
+    assert pacing["min_gap_s"] == 15.0
+
+
 @pytest.mark.parametrize(
     "spelled",
     ["HTTPS://Shop.TEST:443/x", "https://shop.test:443/x", "https://SHOP.test/x"],
