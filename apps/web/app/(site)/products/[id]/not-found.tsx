@@ -4,9 +4,10 @@ import { Container } from "@/components/section";
 import { routes } from "@/lib/routes";
 
 /**
- * An unknown product id, or one every shop has withdrawn (see `loadProduct` in
- * page.tsx). A 404 status, but not a dead end: someone who followed an old
- * link most likely still wants the part, so the search is right here.
+ * An unknown product id, or a redirect retired after a year unused (see
+ * `loadProduct` in page.tsx; a withdrawn product has a page of its own). A 404
+ * status, but not a dead end: someone who followed an old link most likely
+ * still wants the part, so the search is right here.
  */
 export default function ProductNotFound() {
   return (

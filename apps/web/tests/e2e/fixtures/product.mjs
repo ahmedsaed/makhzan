@@ -163,6 +163,30 @@ const PRODUCTS = {
   ),
 };
 
+/**
+ * Every shop has withdrawn it. Its id is permanent, so the API still serves it:
+ * "delisted", no offers, the last price range seen and when it was checked.
+ */
+PRODUCTS["p-gone"] = {
+  id: "p-gone",
+  part_number: "SG90",
+  title_en: "SG90 Micro Servo Motor 9g",
+  title_ar: null,
+  brand: null,
+  image: "https://volt-corner.test/img/sg90.jpg",
+  supplier_count: 0,
+  offer_count: 0,
+  min_price: 85,
+  max_price: 95,
+  currency: "EGP",
+  in_stock: false,
+  last_verified_at: daysAgo(40),
+  category: CATEGORY,
+  status: "delisted",
+  delisted_at: daysAgo(12),
+  offers: [],
+};
+
 /** Four similar products: more than a phone's row shows at once, so it scrolls. */
 function similarTo() {
   const summary = { ...PRODUCTS["p-oos"], id: "p-oos" };
@@ -205,9 +229,28 @@ export function productFixture(path) {
   const similar = path.match(/^\/products\/([^/]+)\/similar$/);
   if (similar && similar[1] === "p-bare") return [200, []];
   if (similar && PRODUCTS[similar[1]]) return [200, similarTo()];
-  // A product a regroup replaced: its offers moved to p-multi.
+  // A product merged into p-multi: the API has no page for it, only where it went.
+  if (path === "/products/p-merged/redirect") return [200, { id: "p-multi" }];
+  // An id deleted before ids were permanent, recorded as leading to p-multi.
   if (path === "/products/p-replaced/redirect") return [200, { id: "p-multi" }];
   if (/^\/products\/[^/]+\/redirect$/.test(path)) return [404, { detail: "no redirect" }];
+  // An archived offer whose product was merged away.
+  if (path === "/listings/o-merged") {
+    return [
+      200,
+      {
+        ...PRODUCTS["p-multi"].offers[0],
+        id: "o-merged",
+        product_id: "p-merged",
+        description_en: null,
+        description_ar: null,
+        part_number: null,
+        unit: null,
+        status: "archived",
+        category: CATEGORY,
+      },
+    ];
+  }
 
   // Case-insensitive, as the real API is: a UUID parses either way.
   const productId = path.match(/^\/products\/([^/]+)$/)?.[1];

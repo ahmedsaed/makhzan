@@ -760,7 +760,12 @@ test("every link out of makhzan carries ref=makhzan (P4)", async ({ page }) => {
 
 test("nothing scrolls sideways at 320px", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
-  for (const path of ["/products/p-single", "/products/p-multi", "/products/p-oos"]) {
+  for (const path of [
+    "/products/p-single",
+    "/products/p-multi",
+    "/products/p-oos",
+    "/products/p-gone",
+  ]) {
     await page.goto(path);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -806,20 +811,75 @@ test("the photo frame stays white in the dark theme (S5)", async ({ page }) => {
   );
 });
 
-test.describe("a product id a regroup replaced", () => {
-  test("redirects permanently to where its offers went", async ({ page }) => {
-    const response = await page.request.get("/products/p-replaced", { maxRedirects: 0 });
+test.describe("a merged product id", () => {
+  test("redirects permanently, in one hop, to the product it was merged into", async ({ page }) => {
+    const response = await page.request.get("/products/p-merged", { maxRedirects: 0 });
     expect(response.status()).toBe(308);
     expect(response.headers()["location"]).toMatch(/\/products\/p-multi$/);
 
-    await page.goto("/products/p-replaced");
+    await page.goto("/products/p-merged");
     await expect(page).toHaveURL(/\/products\/p-multi$/);
     await expect(page.locator("h1")).toHaveText("ESP32 Development Board 30 pin");
+  });
+
+  test("an id deleted before ids were permanent still redirects", async ({ page }) => {
+    const response = await page.request.get("/products/p-replaced", { maxRedirects: 0 });
+    expect(response.status()).toBe(308);
+    expect(response.headers()["location"]).toMatch(/\/products\/p-multi$/);
+  });
+
+  test("an old listing link whose product was merged goes straight to the survivor", async ({
+    page,
+  }) => {
+    const response = await page.request.get("/listings/o-merged", { maxRedirects: 0 });
+    expect(response.status()).toBe(308);
+    expect(response.headers()["location"]).toMatch(/\/products\/p-multi$/);
   });
 
   test("an id with nowhere to go is still a 404", async ({ page }) => {
     const response = await page.goto("/products/p-never-existed");
     expect(response?.status()).toBe(404);
+  });
+});
+
+test.describe("a product no shop lists any more", () => {
+  test("keeps its page: 200, the title, the last price and when, and a clear notice", async ({
+    page,
+  }) => {
+    const response = await page.goto("/products/p-gone");
+    expect(response?.status()).toBe(200);
+    await expect(page.locator("h1")).toHaveText("SG90 Micro Servo Motor 9g");
+    const notice = page.locator("[data-no-longer-listed]");
+    await expect(notice.getByRole("heading", { name: "No longer listed" })).toBeVisible();
+    await expect(notice).toContainText("No shop on makhzan sells this any more");
+    await expect(notice).toContainText("12 days ago");
+    await expect(notice.locator("[data-last-price]")).toContainText("85");
+    await expect(notice.locator("[data-last-price]")).toContainText("95");
+    await expect(notice.locator("[data-last-price]")).toContainText("checked 40 days ago");
+  });
+
+  test("is noindex, so search engines drop it, and follows links", async ({ page }) => {
+    await page.goto("/products/p-gone");
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+      "content",
+      /noindex.*follow|follow.*noindex/,
+    );
+  });
+
+  test("offers similar products and a search, and no way out to a shop", async ({ page }) => {
+    await page.goto("/products/p-gone");
+    await expect(page.locator("[data-similar] li")).toHaveCount(4);
+    await expect(page.getByRole("link", { name: "Search for SG90" })).toHaveAttribute(
+      "href",
+      "/search?q=SG90",
+    );
+    await expect(page.locator("[data-bottom-bar]")).toHaveCount(0);
+    await expect(page.locator('a[href*="ref=makhzan"]')).toHaveCount(0);
+  });
+
+  test("a listed product is not noindex", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
   });
 });
 
