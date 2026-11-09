@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Query
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Listing, Product
 from pydantic import BaseModel
-from sqlalchemy import exists, func, select
+from sqlalchemy import and_, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["sitemap"])
@@ -50,12 +50,14 @@ class SitemapPage(BaseModel):
     total: int | None = None
 
 
-# A product page 404s when it has no offers (apps/web, products/[id]/page.tsx).
-# Rebuilds delete products whose offers are all gone, but a listing archived
-# since the last rebuild still points at its product: ask for an active offer,
-# so the sitemap never lists a page that is about to disappear.
-_has_active_offer = exists().where(
-    Listing.product_id == Product.id, Listing.status == ListingStatus.ACTIVE
+# Listed products with an active offer. A merged-away id only redirects, and a
+# withdrawn product's page is "no longer listed" and noindex
+# (docs/decisions/0004-stable-product-ids.md): neither belongs in a sitemap.
+# The active-offer test covers a listing archived since the last regroup, whose
+# product the next regroup will mark withdrawn.
+_has_active_offer = and_(
+    Product.is_listed(),
+    exists().where(Listing.product_id == Product.id, Listing.status == ListingStatus.ACTIVE),
 )
 
 
