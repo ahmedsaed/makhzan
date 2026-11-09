@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-from worker.http import BROWSER_HEADERS, HostBackingOff, take_turn
+from worker.http import BROWSER_HEADERS, HostBackingOff, host_of, take_turn
 
 #: Re-read a host's robots.txt this often. A sweep of one source runs for hours,
 #: and a rule added mid-sweep should take effect within it.
@@ -144,8 +144,10 @@ class RobotsCache:
         self.failures: dict[str, str] = {}
 
     async def _entry(self, url: str) -> _Entry:
-        parts = urlsplit(url)
-        host = f"{parts.scheme}://{parts.netloc}"
+        # The pace gate's own key: built any other way, a mixed-case or
+        # explicit-port base URL took its robots.txt turn at a different gate
+        # than the pages, and the pages never saw its Crawl-delay.
+        host = host_of(url)
         cached = self._hosts.get(host)
         if cached and (time.monotonic() - cached.fetched_at) < self._ttl:
             return cached
@@ -202,7 +204,7 @@ class RobotsCache:
 
     def cached_crawl_delay(self, host: str, user_agent: str) -> float | None:
         """`crawl_delay` from what is already cached, never fetching (for the pace gate)."""
-        entry = self._hosts.get(host)
+        entry = self._hosts.get(host_of(host))
         if entry is None or entry.rules is None:
             return None
         return entry.rules.crawl_delay(user_agent)

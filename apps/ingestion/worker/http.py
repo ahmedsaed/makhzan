@@ -161,8 +161,25 @@ def retry_after_seconds(value: str | None, now: datetime | None = None) -> float
     return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 def _host(url: httpx.URL) -> str:
-    return f"{url.scheme}://{url.netloc.decode()}"
+    """`scheme://host[:port]`, normalised so one host has one key.
+
+    Lowercase scheme and host, and no default port: httpx keeps an explicit
+    `:443` when the scheme was typed in capitals, so `HTTPS://Shop.TEST:443` and
+    `https://shop.test` would otherwise be two hosts — two pace gates, and a
+    robots.txt whose Crawl-delay the pages never see.
+    """
+    scheme = url.scheme.lower()
+    host = url.host.lower()
+    if ":" in host:  # an IPv6 literal keeps its brackets
+        host = f"[{host}]"
+    port = url.port
+    if port is not None and port != _DEFAULT_PORTS.get(scheme):
+        host = f"{host}:{port}"
+    return f"{scheme}://{host}"
 
 
 #: Per host, the pace the source running against it asked for (its
@@ -179,9 +196,14 @@ _LAST_SENT: dict[str, float] = {}
 _TURN_LOCKS: dict[str, asyncio.Lock] = {}
 
 
-def host_of(url: str) -> str:
-    """`scheme://netloc` of a URL, the key every per-host table here uses."""
-    return _host(httpx.URL(url))
+def host_of(url: str | httpx.URL) -> str:
+    """`scheme://host[:port]` of a URL: the one key every per-host table uses.
+
+    The pace gate, the request log, `Retry-After` and robots.txt's cache
+    (worker/robots.py) all key on this, so a robots.txt fetch and the pages after
+    it always queue at the same gate and read the same Crawl-delay.
+    """
+    return _host(url if isinstance(url, httpx.URL) else httpx.URL(url))
 
 
 def set_host_pace(base_url: str | None, seconds: float) -> None:
