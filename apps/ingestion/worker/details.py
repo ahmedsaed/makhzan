@@ -78,7 +78,10 @@ REASONS = ("changed", "never_fetched", "stale")
 _ARABIC = re.compile(r"[؀-ۿ]")
 
 #: Status codes that say the host, not the page, is in trouble.
-_HOST_TROUBLE = {429, 500, 502, 503, 504}
+#: Answers that say "the host", not "this page": stop the stage for the run and
+#: mark no listing failed. 403 included: a shop that blocks the crawler blocks
+#: every page, and marking each one failed would back off real pages for weeks.
+_HOST_TROUBLE = {403, 429, 500, 502, 503, 504}
 
 
 # --------------------------------------------------------------------------- #
@@ -332,7 +335,7 @@ async def run_details(
     if not due:
         return Counter(), summary
 
-    fetcher = CycleFetcher(pace)
+    fetcher = CycleFetcher(pace, retries=1)
     fetched = failed = 0
     if already_sent:
         await asyncio.sleep(await pace())
