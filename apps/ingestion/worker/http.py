@@ -358,8 +358,12 @@ class CycleFetcher:
     `_request`, and is counted by label for the run's stats.
     """
 
-    def __init__(self, pace: Callable[[], Awaitable[float]]) -> None:
+    def __init__(self, pace: Callable[[], Awaitable[float]], *, retries: int = 5) -> None:
         self._pace = pace
+        #: Retries per request on 429/5xx. Product-page details pass 1: a page
+        #: that fails twice waits for tomorrow rather than costing the host five
+        #: more requests (each still paced, but requests all the same).
+        self._retries = retries
         #: Requests made, by what they were for ("variations", "contact", ...).
         self.requests: Counter[str] = Counter()
 
@@ -369,4 +373,4 @@ class CycleFetcher:
         # Counted before it is sent: a request that failed still reached the host.
         self.requests[label] += 1
         async with make_client() as client:
-            return await get_response(client, url, params)
+            return await get_response(client, url, params, retries=self._retries)

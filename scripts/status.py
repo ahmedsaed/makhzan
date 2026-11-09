@@ -23,6 +23,7 @@ from makhzan_schemas.enums import IngestionStatus, ListingStatus, ReviewStatus
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
+    PriceObservation,
     Product,
     ReviewQueueItem,
     Source,
@@ -323,6 +324,68 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
             print(f"      {DIM}{', '.join(unused[:6])}{RESET}")
 
 
+async def product_details(session, source_filter: str | None) -> None:
+    """Product-page details: how many listings are due, and why, per source that reads them.
+
+    Due by reason, in the order a run spends its budget: the change token moved,
+    the page was never read, or it was read longer ago than `max_age_days`. A
+    source still backfilling shows a large "never"; one past it should show a
+    trickle of "changed". Needs the adapters (the settings live in sources.toml).
+    """
+    _header("PRODUCT DETAILS")
+    try:
+        from worker.details import queue_counts
+        from worker.sources.registry import _REGISTRY
+    except Exception as exc:  # noqa: BLE001 — status still works without the worker
+        print(f"  {DIM}worker not importable ({type(exc).__name__}){RESET}")
+        return
+    sources = {
+        sid: a
+        for sid, a in _REGISTRY.items()
+        if a.details is not None and (not source_filter or sid == source_filter)
+    }
+    if not sources:
+        print(f"  {DIM}no source reads product pages{RESET}")
+        return
+    for source_id, adapter in sorted(sources.items()):
+        settings = adapter.details
+        counts = await queue_counts(session, source_id, settings)
+        last = (
+            await session.execute(
+                select(IngestionRun)
+                .where(
+                    IngestionRun.source == source_id,
+                    IngestionRun.stats["details"].is_not(None),
+                )
+                .order_by(IngestionRun.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        state = (
+            f"{GREEN}on{RESET}, {settings.per_run} a run"
+            if settings.enabled
+            else f"{DIM}off (details.enabled = false){RESET}"
+        )
+        print(
+            f"  {source_id:22s} {state}  token: {adapter.token_kind or 'none'},"
+            f" refresh after {settings.max_age_days}d"
+        )
+        print(
+            f"  {'':22s} have details {counts['fetched']:>6}   due: changed {counts['changed']}"
+            f", never fetched {counts['never_fetched']}, stale by age {counts['stale']}"
+            f"   backing off {counts['backing_off']}"
+        )
+        if last is not None:
+            summary = (last.stats or {}).get("details") or {}
+            line = (
+                f"last run {_age(last.started_at)}: fetched {summary.get('fetched', 0)},"
+                f" failed {summary.get('failed', 0)}"
+            )
+            if summary.get("stopped"):
+                line += f", stopped: {str(summary['stopped'])[:60]}"
+            print(f"  {DIM}{'':22s} {line}{RESET}")
+
+
 async def catalog(session, source_filter: str | None) -> None:
     """Listings per supplier, with the things that signal a broken crawl."""
     _header("CATALOG")
@@ -361,6 +424,21 @@ async def catalog(session, source_filter: str | None) -> None:
             f"  {slug:22s} {domain:12s} {total:>7} {archived:>9} {uncat} {noprice}"
             f"  {_age(verified)}"
         )
+    await price_history(session)
+
+
+async def price_history(session) -> None:
+    """Change points recorded lately. Zero for days while sweeps run means it broke."""
+    now = datetime.now(timezone.utc)
+    day, week = (
+        await session.execute(
+            select(
+                func.count().filter(PriceObservation.observed_at >= now - timedelta(days=1)),
+                func.count().filter(PriceObservation.observed_at >= now - timedelta(days=7)),
+            )
+        )
+    ).one()
+    print(f"  price observations recorded: {day} in the last 24 h, {week} in the last 7 d")
 
 
 async def review_queue(session) -> None:
@@ -429,6 +507,7 @@ async def main() -> None:
         await cycle_history(session, args.source)
         await recent_runs(session, args.source, args.runs)
         await crosswalk_drift(session, args.source)
+        await product_details(session, args.source)
         await catalog(session, args.source)
         await review_queue(session)
         await index_drift(session)

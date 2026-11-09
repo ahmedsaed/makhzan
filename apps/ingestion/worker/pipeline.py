@@ -20,6 +20,7 @@ import asyncio
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from makhzan_schemas.contracts import NormalizedListing
 from makhzan_schemas.db import SessionLocal
@@ -33,6 +34,7 @@ from makhzan_schemas.enums import (
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
+    PriceObservation,
     ReviewQueueItem,
     Source,
     SourceCursor,
@@ -42,6 +44,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
+from worker.details import apply_details, carry_details, run_details
 from worker.http import CycleFetcher, RequestLog, logging_requests, set_host_pace
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
@@ -52,8 +55,14 @@ async def _upsert_listing(
     adapter: SourceAdapter,
     supplier_id: uuid.UUID,
     norm: NormalizedListing,
+    *,
+    record_history: bool = True,
 ) -> tuple[Listing, bool]:
-    """Insert or update a listing by (source, external_id). Returns (row, created)."""
+    """Insert or update a listing by (source, external_id). Returns (row, created).
+
+    Records a price observation when the listing is new or its price or stock
+    moved (`_record_changes`), unless `record_history` is off, as in a `limit=` run.
+    """
     existing = None
     if norm.external_id:
         # Look up by (supplier_id, external_id) — backed by the unique index
@@ -71,6 +80,11 @@ async def _upsert_listing(
     attributes = norm.attributes
     if norm.stock_signal == StockSignal.OUT_OF_STOCK:
         attributes = _without_stock_counts(attributes)
+    if existing is not None:
+        # The card has none of what a product page gave (one request each, read
+        # rarely), so it is carried over from the stored row and laid back on
+        # top — or this sweep would wipe it. See worker/details.py.
+        attributes = carry_details(existing.attributes, attributes)
     fields = dict(
         title_en=norm.title_en,
         title_ar=norm.title_ar,
@@ -90,10 +104,13 @@ async def _upsert_listing(
         last_verified_at=now,
         last_seen_at=now,
     )
+    fields = apply_details(fields)
 
     if existing:
         for key, value in fields.items():
             setattr(existing, key, value)
+        if record_history:
+            await _record_changes(session, [existing], now)
         return existing, False
 
     listing = Listing(
@@ -104,7 +121,59 @@ async def _upsert_listing(
         **fields,
     )
     session.add(listing)
+    if record_history:
+        await _record_changes(session, [listing], now, new=True)
     return listing, True
+
+
+def _cents(price) -> Decimal | None:
+    """A price as `price_observations` stores it (Numeric(12, 2)), for comparing."""
+    return None if price is None else Decimal(str(price)).quantize(Decimal("0.01"))
+
+
+async def _record_changes(
+    session: AsyncSession, listings: list[Listing], now: datetime, *, new: bool = False
+) -> int:
+    """Add a `PriceObservation` for each listing whose price or stock changed.
+
+    Compared against the listing's latest observation, not the values the update
+    just overwrote: a `limit=` run updates listings without recording, and its
+    change must still be recorded by the next real run rather than lost. A listing
+    with no observation yet (new, or archived before history began) gets its
+    first. A recheck that changes nothing writes nothing. Returns rows added.
+    """
+    latest: dict = {}
+    if not new:
+        ids = [listing.id for listing in listings]
+        rows = await session.execute(
+            select(
+                PriceObservation.listing_id,
+                PriceObservation.price,
+                PriceObservation.currency,
+                PriceObservation.stock_signal,
+            )
+            .where(PriceObservation.listing_id.in_(ids))
+            .order_by(PriceObservation.listing_id, PriceObservation.observed_at.desc())
+            .distinct(PriceObservation.listing_id)
+        )
+        latest = {row[0]: tuple(row[1:]) for row in rows}
+    added = 0
+    for listing in listings:
+        current = (_cents(listing.price), listing.currency, listing.stock_signal)
+        if latest.get(listing.id) == current:
+            continue
+        session.add(
+            PriceObservation(
+                listing=listing,
+                observed_at=now,
+                price=current[0],
+                currency=listing.currency,
+                stock_signal=listing.stock_signal,
+                in_stock=listing.stock_signal == StockSignal.IN_STOCK,
+            )
+        )
+        added += 1
+    return added
 
 
 async def _get_or_create_supplier(
@@ -157,6 +226,8 @@ async def _ingest_item(
     cat_index: dict,
     raw,
     observed: Counter | None = None,
+    *,
+    record_history: bool = True,
 ) -> str | None:
     """Normalize and upsert one item, or route it to review. Raises on bad items.
 
@@ -184,6 +255,10 @@ async def _ingest_item(
     domain = mapped[0] if mapped else default_domain
     slug = mapped[1] if mapped else None
     norm = adapter.normalize(raw, domain)
+    if token := adapter.change_token(raw):
+        # Free: read off the list page. The details stage compares it with the
+        # one stored when the product page was last read.
+        norm.attributes = {**(norm.attributes or {}), "change_token": token}
 
     if norm.confidence < REVIEW_THRESHOLD or norm.review_reasons:
         session.add(
@@ -201,7 +276,9 @@ async def _ingest_item(
         run.items_for_review += 1
         return None
 
-    listing, created = await _upsert_listing(session, adapter, supplier_id, norm)
+    listing, created = await _upsert_listing(
+        session, adapter, supplier_id, norm, record_history=record_history
+    )
 
     knows = adapter.knows_category(raw)
     if (
@@ -259,7 +336,11 @@ def _without_stock_counts(attributes: dict) -> dict:
 
 
 async def _mark_out_of_stock(
-    session: AsyncSession, supplier_id: uuid.UUID, external_ids: list[str]
+    session: AsyncSession,
+    supplier_id: uuid.UUID,
+    external_ids: list[str],
+    *,
+    record_history: bool = True,
 ) -> int:
     """Keep listings the source says it still sells but has out of stock.
 
@@ -272,6 +353,9 @@ async def _mark_out_of_stock(
     count is dropped, since the shop has just said there is none. One the cycle
     had archived is restored, since the shop has just said it exists; one hidden
     or awaiting review is left alone. Returns how many listings were kept.
+
+    The flip to out of stock is a stock change, so it is recorded as one (at the
+    stored price, which is the last one read), unless `record_history` is off.
     """
     listings = (
         (
@@ -292,6 +376,8 @@ async def _mark_out_of_stock(
         listing.status = ListingStatus.ACTIVE
         listing.last_seen_at = now
         listing.attributes = _without_stock_counts(listing.attributes)
+    if record_history and listings:
+        await _record_changes(session, list(listings), now)
     return len(listings)
 
 
@@ -452,7 +538,9 @@ async def _sweep_partition(
         pages_this_run += 1
 
         if result.out_of_stock_ids:
-            marked = await _mark_out_of_stock(session, supplier_id, result.out_of_stock_ids)
+            marked = await _mark_out_of_stock(
+                session, supplier_id, result.out_of_stock_ids, record_history=not ephemeral
+            )
             if tally is not None:
                 tally["out_of_stock_kept"] += marked
                 tally["out_of_stock_unknown"] += len(set(result.out_of_stock_ids)) - marked
@@ -463,7 +551,14 @@ async def _sweep_partition(
             run.items_seen += 1
             try:
                 skipped = await _ingest_item(
-                    session, run, adapter, supplier_id, cat_index, raw, observed
+                    session,
+                    run,
+                    adapter,
+                    supplier_id,
+                    cat_index,
+                    raw,
+                    observed,
+                    record_history=not ephemeral,  # a `limit=` run leaves no history
                 )
                 if skipped and not_products is not None:
                     not_products[f"{raw.title} ({skipped})"] += 1
@@ -692,6 +787,28 @@ async def _logged_run(
         if limit is None:
             archived, cycle = await _finish_cycle_if_swept(session, adapter, supplier_id)
 
+        details_requests: Counter = Counter()
+        details: dict = {}
+        if limit is None and not fetch_failed:
+            # After the sweep and its archiving, so only listings the shop still
+            # sells are read. A `limit=` run is a quick test: it never costs a
+            # shop product-page requests. Nor does a run whose sweep failed: a
+            # host refusing list pages is not asked for product pages.
+            await session.commit()
+            try:
+                details_requests, details = await run_details(
+                    session,
+                    adapter,
+                    errors=errors,
+                    pace=lambda: _pace(adapter),
+                    already_sent=bool(tally["pages"] or cycle_requests),
+                )
+            except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
+                # Whatever went wrong reading details, the run's own record
+                # (requests, pacing, archiving) is what /how-we-crawl publishes.
+                await session.rollback()
+                errors.append(f"details: {exc}")
+
         stats: dict = {}
         if errors:
             stats["errors"] = errors
@@ -708,6 +825,9 @@ async def _logged_run(
         requests: Counter = Counter({"pages": tally["pages"]})
         requests.update(cycle_requests)
         requests.update(adapter.extra_requests())
+        requests.update(details_requests)
+        if details:
+            stats["details"] = details
         requests.update({"robots": sum(log.robots.values())})
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}

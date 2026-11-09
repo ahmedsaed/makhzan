@@ -20,14 +20,20 @@ which the pipeline uses to get-or-create the Supplier row.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from makhzan_schemas.contracts import NormalizedListing, RawItem
 from makhzan_schemas.domains.base import DEFAULT_DOMAIN
 from makhzan_schemas.enums import SourceType
 
 from worker.http import POLITE_DELAY, CycleFetcher
+
+if TYPE_CHECKING:
+    from makhzan_schemas.models import Listing
 
 
 #: Partition key used by sources that have no natural slicing.
@@ -55,6 +61,66 @@ class Page:
     #: as out of stock — instead of being archived at the end of the cycle as if
     #: they were discontinued. Only listings already stored are touched.
     out_of_stock_ids: list[str] = field(default_factory=list)
+
+
+#: What a change token is made of (`SourceAdapter.token_kind`). "modified" is the
+#: shop's own last-write signal, which moves on any edit, the description's
+#: included. "card_hash" is a hash of what the listing card shows, so it moves
+#: only when the card does: an edit to the description alone leaves it as it was,
+#: and only the age-based refresh (`DetailsSettings.max_age_days`) catches that.
+TOKEN_MODIFIED = "modified"
+TOKEN_CARD_HASH = "card_hash"
+
+
+def card_hash(fields: dict) -> str:
+    """A TOKEN_CARD_HASH change token: a short, stable hash of a card's own fields.
+
+    Only as good as the fields hashed: it moves when one of them does and on
+    nothing else, so a description edited without touching the card goes unseen.
+    """
+    text = json.dumps(fields, sort_keys=True, ensure_ascii=False, default=str)
+    return "h" + hashlib.sha256(text.encode()).hexdigest()[:15]
+
+
+@dataclass(frozen=True)
+class DetailsSettings:
+    """A source's `details = {...}` setting: whether, and how slowly, to read product pages.
+
+    The details stage fetches at most `per_run` product pages a run, after the
+    source's own pages, through the same paced client. A listing is due when its
+    change token moved since its page was read, when its page was never read, or
+    when it was read more than `max_age_days` ago — the safety net for an edit
+    no token shows. Off unless the shop has agreed to the requests.
+    """
+
+    enabled: bool = False
+    per_run: int = 20
+    max_age_days: int = 90
+
+    @classmethod
+    def from_config(cls, value: object) -> DetailsSettings:
+        """Read the setting from sources.toml, refusing anything it does not know.
+
+        An unknown key is an error, as everywhere in a source's configuration: a
+        misspelt `per_rn` silently ignored would leave the default in force.
+        """
+        if value is None:
+            return cls()
+        if isinstance(value, DetailsSettings):
+            return value
+        if not isinstance(value, dict):
+            raise TypeError(f"details: expected a table like {{ enabled = false }}, got {value!r}")
+        unknown = set(value) - {"enabled", "per_run", "max_age_days"}
+        if unknown:
+            raise TypeError(f"details: unknown key(s) {sorted(unknown)}")
+        settings = cls(**value)
+        if not isinstance(settings.enabled, bool):
+            raise TypeError("details.enabled must be true or false")
+        for name in ("per_run", "max_age_days"):
+            number = getattr(settings, name)
+            if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+                raise ValueError(f"details.{name} must be a whole number of at least 1")
+        return settings
 
 
 @dataclass(frozen=True)
@@ -193,6 +259,34 @@ class SourceAdapter(ABC):
         older than the page a listing comes from, and a listing showing it
         should say so.
         """
+
+    #: Product-page details (see `DetailsSettings`). None for an adapter that
+    #: cannot fetch them, and such a source never enters the details stage.
+    details: DetailsSettings | None = None
+    #: What `change_token` is made of: TOKEN_MODIFIED or TOKEN_CARD_HASH.
+    token_kind: str | None = None
+
+    def change_token(self, raw: RawItem) -> str | None:
+        """A value that moves when the product changes, from what the list page gave.
+
+        Stored on the listing (`attributes.change_token`) at every upsert, at no
+        extra request. The details stage compares it with the one stored when the
+        product page was last read, and reads the page again only if it moved.
+        None means the source has no such signal.
+        """
+        return None
+
+    async def fetch_details(self, listing: Listing, fetcher: CycleFetcher) -> dict:
+        """Read one listing's product page and return what to keep from it.
+
+        Every request goes through `fetcher` under the label "details" (paced,
+        counted, robots.txt checked on the full URL). Recognised keys:
+        `description`, `specs`, `documents`, `videos`, `images` (extra photos),
+        `brand` and `mfr_part_number`; anything else is kept as an attribute the
+        card does not already set. Raising marks the listing failed, and it is
+        retried after a backoff. Never return stock counts.
+        """
+        raise NotImplementedError
 
     def extra_requests(self) -> dict[str, int]:
         """Requests made inside `fetch_page` beyond the page itself, by label.

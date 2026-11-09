@@ -356,3 +356,82 @@ def videos_from_html(html: str | None) -> list[dict[str, str]]:
         if len(videos) >= _MAX_VIDEOS:
             break
     return videos
+
+
+# --------------------------------------------------------------------------- #
+# Product pages
+# --------------------------------------------------------------------------- #
+
+#: A heading that introduces a shop's links to datasheets, manuals and wikis.
+_DOCUMENTS_HEADING = re.compile(
+    r"^(?:documents?|documentation|downloads?|datasheets?|data sheets?|manuals?|resources?"
+    r"|files?|useful links?)\b",
+    re.I,
+)
+_MAX_LINK_LABEL = 120
+
+
+def _is_heading(node: Node) -> bool:
+    """A heading element, or a short bold or paragraph line standing as one."""
+    if node.tag in _HEADING:
+        return True
+    if node.tag not in ("p", "strong", "b") or node.css_first("a") is not None:
+        return False
+    text = _cell_text(node)
+    return 0 < len(text) <= 40 and not _KV_LINE.match(text)
+
+
+def section_links(html: str | None, base_url: str) -> list[dict[str, str]]:
+    """Every link under a "Documents" / "Downloads" / "Datasheet" heading, as {label, url}.
+
+    Shops that write their own descriptions link a datasheet as often to the
+    maker's product page or wiki as to a PDF, and `documents_from_html` takes
+    PDFs only. Under a heading that says "these are the documents", a link is a
+    document whatever it ends in. The section runs to the next heading.
+    """
+    if not html:
+        return []
+    tree = HTMLParser(html)
+    root = tree.body or tree.root
+    if root is None:
+        return []
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    inside = False
+    for node in root.traverse():
+        if _is_heading(node):
+            inside = bool(_DOCUMENTS_HEADING.match(_cell_text(node).rstrip(":：")))
+            continue
+        if not inside or node.tag != "a":
+            continue
+        url = urljoin(base_url + "/", (node.attributes.get("href") or "").strip())
+        if url in seen or not url.startswith(("http://", "https://")) or video_url(url):
+            continue
+        seen.add(url)
+        label = _cell_text(node) or url.rsplit("/", 1)[-1]
+        links.append({"label": label[:_MAX_LINK_LABEL], "url": url})
+    return links
+
+
+#: Spec names that state the maker, and its own part number, in so many words.
+#: Compared with everything but letters and "#" removed. A bare "Part Number" or
+#: "Model" is not here: on a shop's own page it is as likely its catalogue code.
+_MAKER_KEYS = {"brand", "manufacturer", "manufacturerbrand", "mfr", "mfg", "maker"}
+_MAKER_PART_KEYS = {
+    "mfrpart#", "mfrpartno", "mfrpartnumber", "manufacturerpart#", "manufacturerpartno",
+    "manufacturerpartnumber", "mpn",
+}  # fmt: skip
+_NOT_A_MAKER = {"generic", "no brand", "unbranded", "oem", "other", "others", "none", "n/a"}
+
+
+def maker_from_specs(specs: dict[str, str]) -> tuple[str | None, str | None]:
+    """(brand, manufacturer part number) a spec sheet states explicitly, if any."""
+    brand = part = None
+    for name, value in specs.items():
+        key = re.sub(r"[^a-z#]", "", name.lower())
+        value = value.strip()
+        if key in _MAKER_PART_KEYS and part is None and 0 < len(value) <= 60:
+            part = value
+        elif key in _MAKER_KEYS and brand is None and value.lower() not in _NOT_A_MAKER:
+            brand = value[:120] or None
+    return brand, part
