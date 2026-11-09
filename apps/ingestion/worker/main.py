@@ -25,9 +25,9 @@ from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
 from makhzan_schemas.grouping import rebuild_products
-from makhzan_schemas.models import IngestionRun, WorkerState
+from makhzan_schemas.models import IngestionRun, Source, WorkerState
 from sqlalchemy import func as sql_func
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from worker.indexer import get_client, reindex_all
@@ -166,6 +166,18 @@ async def request_rebuild(ctx: dict) -> None:
         log.exception("could not queue the rebuild; the next finishing run will")
 
 
+async def source_enabled(source_id: str) -> bool:
+    """Whether `sources` still has this source, enabled, as the job starts.
+
+    The job was queued hours earlier from adapters loaded then. A source retired
+    since (`worker.sources.retire`, run in another process, so `_SOURCE_LOCKS`
+    cannot see it) must not be crawled back into the database.
+    """
+    async with SessionLocal() as session:
+        enabled = await session.scalar(select(Source.enabled).where(Source.source_id == source_id))
+    return bool(enabled)
+
+
 async def crawl_source(ctx: dict, source_id: str) -> dict:
     """Arq task: one source's daily run, enqueued by `refresh_all`.
 
@@ -174,6 +186,8 @@ async def crawl_source(ctx: dict, source_id: str) -> dict:
     — it asks for the rebuild, so search catches up with whatever it committed.
     """
     try:
+        if not await source_enabled(source_id):
+            return {"source": source_id, "status": "skipped", "reason": "retired or disabled"}
         return await _exclusive(
             source_id, source_id, lambda: _run_source(source_id, get(source_id))
         )

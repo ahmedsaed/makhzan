@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.enums import ReviewReason, SourceType
+from makhzan_schemas.enums import IngestionStatus, ReviewReason, SourceType
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
@@ -17,7 +18,7 @@ from makhzan_schemas.models import (
 )
 from sqlalchemy import func, select
 
-from worker.sources.retire import plan, retire
+from worker.sources.retire import SourceRunning, plan, retire
 
 
 def _supplier(slug):
@@ -44,7 +45,9 @@ async def _seed():
     for source in ("old", "shop-a"):
         rows += [
             Source(source_id=source, adapter="fixture", supplier={"slug": source}, config={}),
-            IngestionRun(source=source, source_type=SourceType.SCRAPED),
+            IngestionRun(
+                source=source, source_type=SourceType.SCRAPED, status=IngestionStatus.SUCCESS
+            ),
             SourceCursor(source=source, partition_key=""),
             ReviewQueueItem(source=source, reason=ReviewReason.MISSING_PRICE, raw_payload={}),
         ]
@@ -129,3 +132,18 @@ async def test_retire_deletes_the_products_only_it_offered():
     assert await _count(Product, id=mine.id) == 0
     assert await _count(Product, id=merged.id) == 0
     assert await _count(Product, id=both.id) == 1
+
+
+async def test_retire_refuses_while_a_run_of_the_source_is_in_progress():
+    """Retiring runs in its own process, out of sight of the worker's per-source
+    lock: a run going on would write listings back as they are deleted."""
+    await _seed()
+    async with SessionLocal() as session:
+        session.add(IngestionRun(source="old", source_type=SourceType.SCRAPED))
+        await session.commit()
+
+    async with SessionLocal() as session:
+        with pytest.raises(SourceRunning):
+            await retire(session, "old")
+    assert await _count(Listing, source="old") == 2
+    assert await _count(Source, source_id="old") == 1
