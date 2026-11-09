@@ -17,9 +17,12 @@ any of these vetoes a merge outright —
     `DomainProfile.form_markers`;
   - their prices are implausibly far apart.
 
-Keys are derived from stable listing data, so a product's identity (and URL)
-survives re-scrapes. `rebuild_products` is a full, idempotent recompute — cheap
-at this scale; can be made incremental later.
+A group key says which listings form one product; it is not the product's
+identity. `plan_identity` matches each group to the product its listings already
+belong to, so a product's id (its URL) survives a second shop selling it, the
+listing that named its key going away, and a change to these rules
+(docs/decisions/0004-stable-product-ids.md). `rebuild_products` is a full,
+idempotent recompute — cheap at this scale; can be made incremental later.
 """
 
 from __future__ import annotations
@@ -28,17 +31,15 @@ import hashlib
 import re
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
 from makhzan_schemas.domains import get_profile
-from makhzan_schemas.enums import ListingStatus, StockSignal
-from makhzan_schemas.models import Listing, Product, ProductRedirect
+from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
+from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
 from makhzan_schemas.values import value_tokens, values_conflict
-from sqlalchemy import delete, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -297,8 +298,198 @@ def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
     return groups
 
 
-async def rebuild_products(session: AsyncSession) -> dict:
-    """Recompute all products + aggregates from active listings, link listings, prune empties."""
+# ---------------------------------------------------------------------------
+# Identity: which existing product each group is
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IdentityPlan:
+    """What a regroup does to product ids, decided before anything is written.
+
+    `_group_listings` says which listings form one product; this says which
+    existing product each of those groups *is*, so that ids survive the regroup
+    (docs/decisions/0004-stable-product-ids.md).
+    """
+
+    #: Group key → the existing product it keeps, or None for a new product.
+    assigned: dict[str, uuid.UUID | None]
+    #: Absorbed product → survivor. The absorbed id now redirects.
+    merges: dict[uuid.UUID, uuid.UUID]
+    #: (product, group key) for each part of a product's offers that left it for
+    #: another group. The product itself keeps its core.
+    splits: list[tuple[uuid.UUID, str]]
+    #: Products none of whose offers is active any more.
+    emptied: list[uuid.UUID]
+    #: Emptied products that have an active offer again, and keep their id.
+    revived: list[uuid.UUID]
+    #: Merged-away product → the survivor it is taken back from: the group it
+    #: last was has formed again, so the merge is undone and the id is live.
+    unmerged: dict[uuid.UUID, uuid.UUID]
+    #: Active offers each existing product carried into the regroup.
+    offers_before: dict[uuid.UUID, int]
+
+
+def _listing_order(listing: Listing) -> tuple:
+    """Earliest-seen first; the natural key breaks ties, so the order is total."""
+    seen = listing.first_seen_at
+    return (seen.timestamp() if seen else float("inf"), *_natural_order(listing), str(listing.id))
+
+
+def plan_identity(
+    groups: dict[str, list[Listing]],
+    current: dict[uuid.UUID, uuid.UUID | None],
+    created: dict[uuid.UUID, datetime],
+    delisted: set[uuid.UUID],
+    dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] | None = None,
+) -> IdentityPlan:
+    """Match target groups to the products their listings already belong to.
+
+    `current` is each listing's product before the regroup, already followed
+    through any merge; `created` is every product that can still be matched
+    (listed or emptied, not merged away), with when it was created; `delisted`
+    is the emptied ones among them; `dormant` is the merged-away products by
+    the group key they last had, as (id, merged into, created).
+
+    - **Undo** comes first: a group formed only of one product's offers that is
+      exactly the group a product merged into it last was gets that merged-away
+      id back, provided the product keeps another part.
+    - A product's **core** is, of what is left, the group holding most of its
+      active offers; ties go to the group holding its earliest-seen listing.
+      The product keeps its id there.
+    - A group that is the core of several products is a **merge**. The survivor
+      is the one that carried more active offers into the regroup, then the
+      older; the rest redirect to it.
+    - A product's offers that fall into groups other than its core are a
+      **split**: they go to whatever product that group is, a new one if it is
+      no one's core.
+    - A group that is no one's core is a new product.
+    - A product with no active offer left is **emptied**, never deleted.
+
+    Pure and deterministic: the same inputs give the same plan, whatever order
+    a query returned rows in.
+    """
+    tally: dict[uuid.UUID, Counter[str]] = defaultdict(Counter)
+    earliest: dict[uuid.UUID, dict[str, tuple]] = defaultdict(dict)
+    for key, items in groups.items():
+        for listing in items:
+            product_id = current.get(listing.id)
+            if product_id is None or product_id not in created:
+                continue
+            tally[product_id][key] += 1
+            order = _listing_order(listing)
+            if key not in earliest[product_id] or order < earliest[product_id][key]:
+                earliest[product_id][key] = order
+
+    offers_before = {product_id: sum(keys.values()) for product_id, keys in tally.items()}
+
+    # Undo first. A part of a product's offers that forms exactly the group a
+    # product merged into it last was goes back to that id: a rule tried and
+    # reverted, or an offer gone for a while and back, then leaves every id
+    # where it was instead of minting new ones beside redirects. Only while the
+    # product keeps another part, so a product people were sent to never turns
+    # into "no longer listed" because its offers moved back.
+    assigned: dict[str, uuid.UUID | None] = {}
+    unmerged: dict[uuid.UUID, uuid.UUID] = {}
+    remaining = {product_id: set(keys) for product_id, keys in tally.items()}
+    for key in sorted(groups):
+        sources = {current.get(listing.id) for listing in groups[key]} - {None}
+        if len(sources) != 1:
+            continue
+        (into,) = sources
+        if into not in remaining or len(remaining[into]) < 2:
+            continue
+        candidates = sorted(
+            (_when(when), str(product_id), product_id)
+            for product_id, merged_into, when in (dormant or {}).get(key, ())
+            if merged_into == into
+        )
+        if candidates:
+            product_id = candidates[0][2]
+            assigned[key] = product_id
+            unmerged[product_id] = into
+            remaining[into].discard(key)
+
+    core: dict[uuid.UUID, str] = {
+        product_id: min(
+            remaining[product_id],
+            key=lambda k, p=product_id, n=keys: (-n[k], earliest[p][k], k),
+        )
+        for product_id, keys in tally.items()
+    }
+
+    claimants: dict[str, list[uuid.UUID]] = defaultdict(list)
+    for product_id, key in core.items():
+        claimants[key].append(product_id)
+
+    merges: dict[uuid.UUID, uuid.UUID] = {}
+    for key in groups:
+        if key in assigned:
+            continue
+        claims = claimants.get(key)
+        if not claims:
+            assigned[key] = None
+            continue
+        survivor = min(claims, key=lambda p: (-offers_before[p], _when(created[p]), str(p)))
+        assigned[key] = survivor
+        for product_id in sorted(claims, key=str):
+            if product_id != survivor:
+                merges[product_id] = survivor
+
+    splits = sorted(
+        (
+            (product_id, key)
+            for product_id, keys in tally.items()
+            for key in keys
+            if key != core[product_id]
+        ),
+        key=lambda pair: (str(pair[0]), pair[1]),
+    )
+    emptied = sorted((p for p in created if p not in tally and p not in delisted), key=str)
+    revived = sorted((p for p in assigned.values() if p is not None and p in delisted), key=str)
+    return IdentityPlan(
+        assigned=assigned,
+        merges=merges,
+        splits=splits,
+        emptied=emptied,
+        revived=revived,
+        unmerged=unmerged,
+        offers_before=offers_before,
+    )
+
+
+def _when(moment: datetime | None) -> float:
+    """A sortable creation time; one not yet known sorts last (newest)."""
+    return moment.timestamp() if moment else float("inf")
+
+
+def _resolve(
+    product_id: uuid.UUID | None, merged_into: dict[uuid.UUID, uuid.UUID]
+) -> uuid.UUID | None:
+    """Follow a merged-away product to the one it became.
+
+    Normally one hop, since every merge repoints what led to the absorbed
+    product; bounded so that a corrupt chain cannot loop.
+    """
+    for _ in range(8):
+        if product_id is None or product_id not in merged_into:
+            return product_id
+        product_id = merged_into[product_id]
+    return product_id
+
+
+async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> dict:
+    """Regroup active listings into products, keeping every product's id.
+
+    Groups are computed exactly as before (`_group_listings`, every veto
+    intact); `plan_identity` then decides which existing product each group is.
+    Nothing is deleted: a product whose offers joined another is marked
+    `merged_into` it, and one whose offers are all gone is marked `delisted_at`.
+    Each merge, split, emptying and revival is recorded in `product_events`.
+
+    `dry_run` applies everything inside the transaction and then rolls it back:
+    the counts returned are what a real run would do, and nothing is kept.
+    """
     listings = (
         (
             await session.execute(
@@ -313,30 +504,46 @@ async def rebuild_products(session: AsyncSession) -> dict:
         .scalars()
         .all()
     )
-
-    # Each listing's product before this rebuild: where a replaced product's
-    # offers end up is where its URL should lead.
-    previous = {listing.id: listing.product_id for listing in listings}
-
     groups = _group_listings(listings)
 
-    existing = {p.group_key: p for p in (await session.execute(select(Product))).scalars().all()}
+    products = {p.id: p for p in (await session.execute(select(Product))).scalars().all()}
+    merged_into = {p.id: p.merged_into for p in products.values() if p.merged_into is not None}
+    matchable = {p.id: p.created_at for p in products.values() if p.merged_into is None}
+    delisted = {p.id for p in products.values() if p.merged_into is None and p.delisted_at}
+    current = {listing.id: _resolve(listing.product_id, merged_into) for listing in listings}
+    dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] = defaultdict(list)
+    for p in products.values():
+        if p.merged_into is not None:
+            dormant[p.group_key].append((p.id, p.merged_into, p.created_at))
+
+    plan = plan_identity(groups, current, matchable, delisted, dormant)
 
     now = datetime.now(UTC)
-    seen: set[str] = set()
-    changed = 0
+    changed = created = 0
+    group_product: dict[str, Product] = {}
     for key, items in groups.items():
-        seen.add(key)
-        product = existing.get(key)
-        if product is None:
-            product = Product(group_key=key)
+        existing = plan.assigned[key]
+        if existing is None:
+            # The id is set here rather than on flush, so the listings and the
+            # events below can point at it straight away.
+            product = Product(id=uuid.uuid4(), group_key=key)
             session.add(product)
             before = None
+            created += 1
         else:
-            before = _visible(product)
+            product = products[existing]
+            # A revived or un-merged product's page comes back, whatever its
+            # aggregates say.
+            hidden = product.delisted_at is not None or product.merged_into is not None
+            before = None if hidden else _visible(product)
+            product.delisted_at = None
+            product.merged_into = None
+            product.merged_at = None
+        group_product[key] = product
 
         rep = _representative(items)
         prices = [i.price for i in items if i.price is not None]
+        product.group_key = key
         product.part_number = items[0].part_number if key.startswith("mpn:") else None
         product.domain = rep.domain
         product.title_en = rep.title_en
@@ -357,40 +564,121 @@ async def rebuild_products(session: AsyncSession) -> dict:
         if before is None or _visible(product) != before:
             product.content_changed_at = now
             changed += 1
-
-    await session.flush()  # assign ids to newly-added products
-
-    all_products = {
-        p.group_key: p for p in (await session.execute(select(Product))).scalars().all()
-    }
-    for key, items in groups.items():
-        product_id = all_products[key].id
         for listing in items:
-            listing.product_id = product_id
-    # Persist the new links BEFORE deleting stale products, so the FK's
-    # ON DELETE SET NULL can't null a listing we just re-pointed.
+            listing.product_id = product.id
+
+    events = [
+        ProductEvent(
+            product_id=product_id,
+            kind=ProductEventKind.REVIVED,
+            detail={"group_key": products[product_id].group_key},
+        )
+        for product_id in plan.revived
+    ]
+    # Un-merged: the id was a redirect and is a product again.
+    events += [
+        ProductEvent(
+            product_id=product_id,
+            kind=ProductEventKind.REVIVED,
+            other_id=survivor_id,
+            detail={"group_key": products[product_id].group_key, "unmerged": True},
+        )
+        for product_id, survivor_id in sorted(plan.unmerged.items(), key=lambda kv: str(kv[0]))
+    ]
+    events += [
+        ProductEvent(
+            product_id=product_id,
+            kind=ProductEventKind.SPLIT,
+            other_id=group_product[key].id,
+            detail={"group_key": key, "offers": len(groups[key])},
+        )
+        for product_id, key in plan.splits
+    ]
+
+    for absorbed_id, survivor_id in plan.merges.items():
+        absorbed = products[absorbed_id]
+        absorbed.merged_into = survivor_id
+        absorbed.merged_at = now
+        _withdraw(absorbed)
+        events.append(
+            ProductEvent(
+                product_id=absorbed_id,
+                kind=ProductEventKind.MERGE,
+                other_id=survivor_id,
+                detail={
+                    "group_key": products[survivor_id].group_key,
+                    "offers_before": plan.offers_before.get(absorbed_id, 0),
+                    "survivor_offers_before": plan.offers_before.get(survivor_id, 0),
+                },
+            )
+        )
+    if plan.merges:
+        # One hop: whatever led to an absorbed product now leads to its survivor.
+        for product in products.values():
+            if product.merged_into in plan.merges:
+                product.merged_into = plan.merges[product.merged_into]
+        for absorbed_id, survivor_id in plan.merges.items():
+            await session.execute(
+                update(ProductRedirect)
+                .where(ProductRedirect.new_id == absorbed_id)
+                .values(new_id=survivor_id)
+            )
+
+    for product_id in plan.emptied:
+        product = products[product_id]
+        product.delisted_at = now
+        product.content_changed_at = now
+        _withdraw(product)
+        events.append(
+            ProductEvent(
+                product_id=product_id,
+                kind=ProductEventKind.EMPTIED,
+                detail={"group_key": product.group_key},
+            )
+        )
+
+    session.add_all(events)
     await session.flush()
-
-    stale_ids = [p.id for key, p in existing.items() if key not in seen]
-    redirected = 0
-    if stale_ids:
-        successors = _successors(set(stale_ids), listings, previous)
-        redirected = await _record_redirects(session, successors)
-        # Redirects whose target is going and has no successor go with it
-        # (ON DELETE CASCADE): a redirect must never lead to a 404.
-        await session.execute(delete(Product).where(Product.id.in_(stale_ids)))
-
-    await session.commit()
-    removed = len(stale_ids)
-    return {
+    stats = {
         "products": len(groups),
         "multi_supplier": sum(
             1 for items in groups.values() if len({i.supplier_id for i in items}) > 1
         ),
-        "removed": removed,
-        "redirected": redirected,
+        "kept": len(groups) - created,
+        "created": created,
+        "merged": len(plan.merges),
+        "split": len({product_id for product_id, _ in plan.splits}),
+        "emptied": len(plan.emptied),
+        "revived": len(plan.revived),
+        "unmerged": len(plan.unmerged),
         "changed": changed,
     }
+    if dry_run:
+        await session.rollback()
+    else:
+        await session.commit()
+    return stats
+
+
+def describe(stats: dict) -> str:
+    """One line for a command's output: what a regroup did to products."""
+    return (
+        f"products: {stats['products']} listed ({stats['multi_supplier']} multi-supplier); "
+        f"ids kept {stats['kept']}, new {stats['created']}, merged {stats['merged']}, "
+        f"split {stats['split']}, emptied {stats['emptied']}, revived {stats['revived']}, "
+        f"un-merged {stats['unmerged']}"
+    )
+
+
+def _withdraw(product: Product) -> None:
+    """Zero what counts a product's live offers.
+
+    The title, photo, category and last price range stay: they are what the
+    "no longer listed" page shows, and what similar products are found from.
+    """
+    product.offer_count = 0
+    product.supplier_count = 0
+    product.in_stock = False
 
 
 def _visible(product: Product) -> tuple:
@@ -409,47 +697,3 @@ def _visible(product: Product) -> tuple:
         product.supplier_count,
         product.image,
     )
-
-
-def _successors(
-    stale: set[uuid.UUID],
-    listings: Sequence[Listing],
-    previous: dict[uuid.UUID, uuid.UUID | None],
-) -> dict[uuid.UUID, uuid.UUID]:
-    """Each replaced product → the product most of its active offers moved to.
-
-    Ties go to the earliest listing in rebuild order, so the answer does not
-    change between two identical rebuilds. A product none of whose offers is
-    still active has no successor, and is simply gone.
-    """
-    votes: dict[uuid.UUID, Counter[uuid.UUID]] = defaultdict(Counter)
-    first_seen: dict[uuid.UUID, dict[uuid.UUID, int]] = defaultdict(dict)
-    for position, listing in enumerate(listings):
-        old = previous.get(listing.id)
-        if old in stale and listing.product_id is not None:
-            votes[old][listing.product_id] += 1
-            first_seen[old].setdefault(listing.product_id, position)
-    return {
-        old: min(counter, key=lambda new: (-counter[new], first_seen[old][new]))
-        for old, counter in votes.items()
-    }
-
-
-async def _record_redirects(session: AsyncSession, successors: dict[uuid.UUID, uuid.UUID]) -> int:
-    """Store old → new for this rebuild, and keep every redirect one hop long."""
-    if not successors:
-        return 0
-    # Earlier redirects into a product being replaced now lead to its successor.
-    for old, new in successors.items():
-        await session.execute(
-            update(ProductRedirect).where(ProductRedirect.new_id == old).values(new_id=new)
-        )
-    stmt = pg_insert(ProductRedirect).values(
-        [{"old_id": old, "new_id": new} for old, new in successors.items()]
-    )
-    await session.execute(
-        stmt.on_conflict_do_update(
-            index_elements=[ProductRedirect.old_id], set_={"new_id": stmt.excluded.new_id}
-        )
-    )
-    return len(successors)
