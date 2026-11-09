@@ -23,6 +23,7 @@ from makhzan_schemas.enums import IngestionStatus, ListingStatus, ReviewStatus
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
+    PriceObservation,
     Product,
     ReviewQueueItem,
     Source,
@@ -361,6 +362,21 @@ async def catalog(session, source_filter: str | None) -> None:
             f"  {slug:22s} {domain:12s} {total:>7} {archived:>9} {uncat} {noprice}"
             f"  {_age(verified)}"
         )
+    await price_history(session)
+
+
+async def price_history(session) -> None:
+    """Change points recorded lately. Zero for days while sweeps run means it broke."""
+    now = datetime.now(timezone.utc)
+    day, week = (
+        await session.execute(
+            select(
+                func.count().filter(PriceObservation.observed_at >= now - timedelta(days=1)),
+                func.count().filter(PriceObservation.observed_at >= now - timedelta(days=7)),
+            )
+        )
+    ).one()
+    print(f"  price observations recorded: {day} in the last 24 h, {week} in the last 7 d")
 
 
 async def review_queue(session) -> None:
