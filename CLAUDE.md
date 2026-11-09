@@ -402,6 +402,11 @@ are shared by two suppliers, and those are coincidences. Do not group on them.
   real database; only the Meilisearch client is faked, because a filter built on
   the wrong attribute returns a plausible result set rather than an error, and
   that is exactly what needs asserting.
+- **Say plainly when something is not fully done.** A first step, a stopgap, a config
+  workaround instead of a code fix, or a known remaining gap is named as such, up front,
+  in the commit, the PR description and any report, with what the full fix would be.
+  Never let a partial fix read as complete (product ids once looked "handled" when only
+  redirects had shipped).
 - Commits: conventional prefixes (`feat:`, `fix:`, `docs:`, `ci:`, `style:`).
   Explain *why* in the body, especially for anything that corrects a wrong
   earlier diagnosis.
