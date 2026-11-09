@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -302,6 +303,12 @@ class PriceObservation(Base):
     nothing new adds nothing and the table grows with change, not with crawling.
     A value holds from its `observed_at` until the next row's.
 
+    Archiving writes a row too, with `available` false: from then until a row
+    that says otherwise, the shop no longer offers the listing at all, and its
+    price and stock signal are only the last ones read. Without it a listing
+    archived for weeks read as "in stock" across them, and one coming back at
+    the same values added no row to say when it did.
+
     History starts at the migration that created this table, seeded with one row
     per active listing as of its `last_verified_at`.
     """
@@ -318,9 +325,13 @@ class PriceObservation(Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     stock_signal: Mapped[StockSignal] = mapped_column(nullable=False)
-    #: `stock_signal == IN_STOCK`, the definition `Product.in_stock` uses, stored
-    #: so "in stock N of the last 12 weeks" needs no enum logic in the query.
+    #: `available and stock_signal == IN_STOCK`: the definition `Product.in_stock`
+    #: uses, false while archived, stored so "in stock N of the last 12 weeks"
+    #: needs no enum logic in the query.
     in_stock: Mapped[bool] = mapped_column(nullable=False)
+    #: False from the moment the listing was archived (the shop stopped listing
+    #: it) until it is seen again. Clip "in stock N of 12 weeks" on it.
+    available: Mapped[bool] = mapped_column(default=True, server_default=true(), nullable=False)
 
     #: Many-to-one only: lets a row be added beside a listing not yet flushed.
     listing: Mapped[Listing] = relationship()

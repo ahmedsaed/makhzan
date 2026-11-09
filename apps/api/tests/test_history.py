@@ -60,6 +60,34 @@ async def test_listing_history_returns_change_points_oldest_first(client, db):
     assert times == sorted(times)
 
 
+async def test_an_archived_stretch_is_marked_unavailable(client, db):
+    """So "in stock N of 12 weeks" can clip the weeks the shop did not list it."""
+    supplier = await make_supplier(db)
+    listing = await make_listing(db, supplier=supplier)
+    await _observe(db, listing, 60, "120.00")
+    db.add(
+        PriceObservation(
+            listing_id=listing.id,
+            observed_at=_ago(40),
+            price=Decimal("120.00"),
+            currency="EGP",
+            stock_signal=StockSignal.IN_STOCK,
+            in_stock=False,
+            available=False,
+        )
+    )
+    await db.commit()
+    await _observe(db, listing, 10, "120.00")
+
+    body = (await client.get(f"/listings/{listing.id}/history")).json()
+
+    assert [(p["available"], p["in_stock"]) for p in body["points"]] == [
+        (True, True),
+        (False, False),
+        (True, True),
+    ]
+
+
 async def test_the_window_keeps_the_value_in_force_when_it_opened(client, db):
     """A price set 200 days ago and never changed is still the price in the last 90."""
     supplier = await make_supplier(db)
