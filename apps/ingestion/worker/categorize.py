@@ -7,18 +7,40 @@ ingestion) and the backfill script.
 
 from __future__ import annotations
 
+from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.domains import PROFILES, get_profile
 from makhzan_schemas.models import Category
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+#: Postgres advisory lock key held while the taxonomy is written.
+CATEGORIES_LOCK_KEY = 0x6D616B687A6374  # "makhzct"
+
+
 async def seed_categories(session: AsyncSession) -> dict[tuple[str, str], Category]:
-    """Idempotently upsert every domain's taxonomy into the Category table.
+    """Idempotently upsert every domain's taxonomy into the Category table, and
+    return (domain, slug) -> Category as loaded in `session`.
 
     Keyed by (domain, slug): slugs are only unique within a vertical, so two
     domains may legitimately both define "tools".
+
+    Written in a short transaction of its own, under an advisory lock, and
+    committed at once. Every source's run seeds as it starts, and the daily
+    jobs start together: in the run's own transaction, two runs meeting a
+    category neither had seen (a fresh database, or a deploy that grew the
+    taxonomy) both inserted it, and all but one failed on the unique key. The
+    lock is not held in the run's transaction because that stays open until the
+    run's first page commits, which a slow host can make minutes.
     """
+    async with SessionLocal() as own:
+        await own.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": CATEGORIES_LOCK_KEY})
+        await _write_taxonomy(own)
+        await own.commit()
+    return await load_category_index(session)
+
+
+async def _write_taxonomy(session: AsyncSession) -> None:
     existing = {(c.domain, c.slug): c for c in (await session.execute(select(Category))).scalars()}
 
     for profile in PROFILES.values():
@@ -43,7 +65,6 @@ async def seed_categories(session: AsyncSession) -> dict[tuple[str, str], Catego
                 cat.parent_id = None
                 cat.path = f"/{slug}"
     await session.flush()
-    return existing
 
 
 async def load_category_index(session: AsyncSession) -> dict[tuple[str, str], Category]:
