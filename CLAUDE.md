@@ -125,6 +125,31 @@ alive without re-pricing it, and the site shows `last_verified_at` as "checked".
 `limit=` makes a run ephemeral: cursors untouched, nothing archived. Use it for
 testing so you don't disturb a real sweep's resume point.
 
+### Product-page details
+
+Descriptions, specs, documents and gallery photos that only a product page has
+are read by a **details stage** (`worker/details.py`) after a run's sweep: at
+most `details.per_run` pages a run, through the same paced client, counted as
+`stats.requests.details`. Off unless `details = { enabled = true }` in the
+source's config; only adapters with `fetch_details` accept the key. A listing is
+due, in this order, when its change token moved since its page was read, when
+it was never read (newest first), or when it was read over `max_age_days` ago
+(oldest first). A failed page backs off 1, 2, 4… days; a host backing off, a
+429 or a network failure stops the stage and blames no listing. A `limit=` run
+reads none.
+
+The change token comes free from the list page (`change_token(raw)`), and its
+kind matters: Odoo's `?unique=` is the shop's own last-write stamp
+(`token_kind = "modified"`) and moves on any edit; Wix's and the marketplace's
+are hashes of the card (`"card_hash"`) and **cannot see an edit to the
+description alone** — only `max_age_days` catches that.
+
+**The list-page upsert rebuilds a listing from the card, so it must carry the
+details over.** What a page gave lives in `attributes.details` (plus
+`details_token`, `details_fetched_at` and the failure keys); `_upsert_listing`
+copies those keys from the stored row and re-applies them (`apply_details`).
+Drop that and every sweep silently erases what cost a request per product.
+
 ### Pacing
 
 The cron stays daily, but each run sweeps only a slice: `max_pages_per_run` for

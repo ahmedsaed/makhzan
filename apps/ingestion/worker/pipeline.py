@@ -42,6 +42,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
+from worker.details import apply_details, carry_details, run_details
 from worker.http import CycleFetcher, RequestLog, logging_requests, set_host_pace
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
@@ -71,6 +72,11 @@ async def _upsert_listing(
     attributes = norm.attributes
     if norm.stock_signal == StockSignal.OUT_OF_STOCK:
         attributes = _without_stock_counts(attributes)
+    if existing is not None:
+        # The card has none of what a product page gave (one request each, read
+        # rarely), so it is carried over from the stored row and laid back on
+        # top — or this sweep would wipe it. See worker/details.py.
+        attributes = carry_details(existing.attributes, attributes)
     fields = dict(
         title_en=norm.title_en,
         title_ar=norm.title_ar,
@@ -90,6 +96,7 @@ async def _upsert_listing(
         last_verified_at=now,
         last_seen_at=now,
     )
+    fields = apply_details(fields)
 
     if existing:
         for key, value in fields.items():
@@ -184,6 +191,10 @@ async def _ingest_item(
     domain = mapped[0] if mapped else default_domain
     slug = mapped[1] if mapped else None
     norm = adapter.normalize(raw, domain)
+    if token := adapter.change_token(raw):
+        # Free: read off the list page. The details stage compares it with the
+        # one stored when the product page was last read.
+        norm.attributes = {**(norm.attributes or {}), "change_token": token}
 
     if norm.confidence < REVIEW_THRESHOLD or norm.review_reasons:
         session.add(
@@ -692,6 +703,21 @@ async def _logged_run(
         if limit is None:
             archived, cycle = await _finish_cycle_if_swept(session, adapter, supplier_id)
 
+        details_requests: Counter = Counter()
+        details: dict = {}
+        if limit is None:
+            # After the sweep and its archiving, so only listings the shop still
+            # sells are read. A `limit=` run is a quick test: it never costs a
+            # shop product-page requests.
+            await session.commit()
+            details_requests, details = await run_details(
+                session,
+                adapter,
+                errors=errors,
+                pace=lambda: _pace(adapter),
+                already_sent=bool(tally["pages"] or cycle_requests),
+            )
+
         stats: dict = {}
         if errors:
             stats["errors"] = errors
@@ -708,6 +734,9 @@ async def _logged_run(
         requests: Counter = Counter({"pages": tally["pages"]})
         requests.update(cycle_requests)
         requests.update(adapter.extra_requests())
+        requests.update(details_requests)
+        if details:
+            stats["details"] = details
         requests.update({"robots": sum(log.robots.values())})
         if any(requests.values()):
             stats["requests"] = {k: v for k, v in requests.items() if v}
