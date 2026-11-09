@@ -149,7 +149,7 @@ async def test_stock_counts_and_options_are_not_kept(shop):
     """Counts read 0 or negative in a gallery while the product page says 38,
     and options promise sizes no variant exists for."""
     raw = (await _gallery_items(_wix()))[BLACK]
-    assert set(raw.raw) <= {"platform", "category", "sku", "compare_at_price"}
+    assert set(raw.raw) <= {"platform", "category", "sku", "compare_at_price", "change_token"}
 
 
 async def test_compare_price_is_the_sale_price(shop):
