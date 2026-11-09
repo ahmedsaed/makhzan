@@ -288,6 +288,14 @@ async def _ingest_item(
     )
 
     knows = adapter.knows_category(raw)
+    if knows and mapped is None and adapter.authoritative_categories:
+        # Browsed by category, under one the crosswalk does not map. A product
+        # can sit in two categories, one mapped and one not, and then whichever
+        # partition happened to be swept last decided: the unmapped one cleared
+        # what the mapped one had just set (servos such as the SG90 and MG996R
+        # lost theirs this way). Only a mapped category is in a position to
+        # say; an unmapped one leaves the listing's category as it is.
+        knows = False
     if (
         slug is None
         and not adapter.authoritative_categories
@@ -307,9 +315,10 @@ async def _ingest_item(
         # applies while a listing is uncategorized.
         listing.category_id = cat.id
         listing.domain = cat.domain
-    elif knows:
+    elif knows or listing.category_id is None:
         # This sweep was in a position to know, and there is no category: clear
         # whatever was there, so a supplier dropping a category is visible.
+        # (One with no category yet just gets the supplier's default domain.)
         listing.category_id = None
         listing.domain = default_domain
     # Otherwise this pass carries no category signal — leave the existing one

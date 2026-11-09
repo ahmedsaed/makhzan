@@ -203,6 +203,11 @@ class SourceAdapter(ABC):
         whole-catalogue pass that exists so products filed under nothing are
         still seen. Such a pass must not erase a category another partition
         established, which is what returning False buys.
+
+        On a source with `authoritative_categories`, the pipeline also treats
+        a True here as False when the item's category misses the crosswalk: a
+        product filed under a mapped and an unmapped category must keep the
+        mapped one whichever partition is swept last.
         """
         return True
 
