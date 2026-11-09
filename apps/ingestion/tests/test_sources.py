@@ -139,6 +139,23 @@ def test_a_crosswalk_with_partitions_drives_a_category_sweep(tmp_path, monkeypat
     assert adapter.authoritative_categories is True
 
 
+@pytest.mark.parametrize("adapter_type", ["woocommerce", "odoo", "shopify"])
+def test_a_crosswalk_ignore_list_reaches_any_adapter(tmp_path, monkeypatch, adapter_type):
+    """Read by the drift check only, so no adapter has to accept it as a keyword."""
+    _crosswalks(
+        tmp_path,
+        monkeypatch,
+        shop_a="""
+        ignore = ["Uni-T", "Accessories"]
+        [categories]
+        "Sensors" = "electronics:sensors"
+        """,
+    )
+    adapter = build_adapter(_row(adapter=adapter_type, config={"crosswalk": "shop_a"}))
+    assert adapter.ignored_categories == ("Uni-T", "Accessories")
+    assert build_adapter(_row()).ignored_categories == ()
+
+
 def test_a_crosswalk_preference_reaches_a_tag_cloud_adapter(tmp_path, monkeypatch):
     _crosswalks(
         tmp_path,

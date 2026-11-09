@@ -25,6 +25,7 @@ from decimal import Decimal
 
 from makhzan_schemas.contracts import NormalizedListing
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.domains.crosswalks import fold_names, normalize_category_name
 from makhzan_schemas.enums import (
     IngestionStatus,
     ListingStatus,
@@ -726,7 +727,14 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     if not adapter.categories or not observed:
         return None
 
-    unmapped = {name: n for name, n in observed.items() if name not in adapter.categories}
+    # Compared folded, as the lookup is (`crosswalks.normalize_category_name`):
+    # exact strings reported "LED" and "Raspberry Pi" as unmapped while every
+    # listing under them was being mapped.
+    mapped = fold_names(adapter.categories)
+    known = mapped | fold_names(adapter.ignored_categories)
+    unmapped = {
+        name: n for name, n in observed.items() if normalize_category_name(name) not in known
+    }
     drift: dict = {"observed": len(observed)}
     if unmapped:
         # Biggest first — a rename of a busy category matters more than a new
@@ -734,7 +742,10 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
         drift["unmapped"] = dict(Counter(unmapped).most_common(15))
         drift["unmapped_listings"] = sum(unmapped.values())
     if complete:
-        unused = sorted(set(adapter.categories) - set(observed))
+        seen = fold_names(observed)
+        unused = sorted(
+            name for name in adapter.categories if normalize_category_name(name) not in seen
+        )
         if unused:
             drift["unused"] = unused[:25]
             drift["unused_count"] = len(unused)

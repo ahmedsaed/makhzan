@@ -299,7 +299,16 @@ this way when the July crosswalks were diffed against the live shops. Lookups
 therefore go through `crosswalks.normalize_category_name`, which folds dashes,
 smart quotes, `×`, whitespace and case, and `fold_crosswalk` raises if two keys
 collide under it. It folds punctuation only — never words, so "Power Resistors"
-can never become "Resistors".
+can never become "Resistors". The drift check compares folded names too: it once
+compared exact strings, and reported "LED" and "Raspberry Pi" as unmapped while
+every listing under them was being mapped.
+
+**Deliberate skips are written down.** A crosswalk's optional top-level
+`ignore = [...]` lists source categories left unmapped on purpose — brand tags,
+generic buckets — so they stop reappearing under `unmapped` in `make status`.
+They are never mapped or guessed from; a name both mapped and ignored is refused
+at load. A crosswalk without the key ignores nothing, but an image older than it
+rejects the key outright, so publish the code before a crosswalk that uses it.
 
 **Re-scoping stays invisible.** If a supplier keeps a name but changes what goes
 under it, the mapping still matches and is now silently wrong. No diff can catch

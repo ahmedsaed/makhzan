@@ -185,6 +185,10 @@ class SourceAdapter(ABC):
     #: mapped. Named on the base class so drift checking can find it.
     categories: dict[str, tuple[str, str]] = {}
 
+    #: The crosswalk's `ignore` list: source categories left unmapped on
+    #: purpose, which the drift check does not report as new.
+    ignored_categories: tuple[str, ...] = ()
+
     def source_categories(self, raw: RawItem) -> list[str]:
         """The source's own category names for this item, normalised.
 

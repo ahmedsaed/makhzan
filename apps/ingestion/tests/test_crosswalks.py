@@ -152,6 +152,49 @@ def test_keys_that_collide_once_normalized_are_refused_at_load(tmp_path):
         load_crosswalk("shop", tmp_path)
 
 
+def test_a_crosswalk_can_list_names_left_unmapped_on_purpose(tmp_path):
+    _write(
+        tmp_path,
+        """
+        ignore = ["Uni-T", "Accessories"]
+        [categories]
+        "Sensors" = "electronics:sensors"
+        """,
+    )
+    crosswalk = load_crosswalk("shop", tmp_path)
+    assert crosswalk.ignore == ("Uni-T", "Accessories")
+    assert crosswalk.categories == {"Sensors": ("electronics", "sensors")}
+
+
+def test_a_crosswalk_without_an_ignore_list_ignores_nothing(tmp_path):
+    """Every crosswalk written before the key existed must keep loading."""
+    _write(tmp_path, '[categories]\n"Sensors" = "electronics:sensors"\n')
+    assert load_crosswalk("shop", tmp_path).ignore == ()
+
+
+@pytest.mark.parametrize("ignore", ['"Uni-T"', "[1, 2]"])
+def test_an_ignore_that_is_not_a_list_of_names_is_refused(tmp_path, ignore):
+    _write(tmp_path, f'ignore = {ignore}\n[categories]\n"Sensors" = "electronics:sensors"\n')
+    with pytest.raises(ValueError, match="ignore must be a list"):
+        load_crosswalk("shop", tmp_path)
+
+
+def test_ignoring_a_name_that_is_also_mapped_is_refused(tmp_path):
+    """Folded, as lookups are: "SENSORS" ignored is "Sensors" mapped."""
+    _write(
+        tmp_path,
+        """
+        ignore = ["SENSORS"]
+        [categories]
+        "Sensors" = "electronics:sensors"
+        """,
+    )
+    with pytest.raises(ValueError, match="both maps and ignores"):
+        load_crosswalk("shop", tmp_path)
+    with pytest.raises(ValueError, match="both maps and ignores"):
+        fold_crosswalk({"Sensors": ("electronics", "sensors")}, ["sensors"])
+
+
 def test_a_crosswalk_can_rank_the_tags_that_win_a_conflict(tmp_path):
     _write(
         tmp_path,

@@ -76,12 +76,17 @@ def build_adapter(source: Source) -> SourceAdapter:
             options["prefer"] = loaded.prefer
     if source.base_url is not None:
         options["base_url"] = source.base_url
-    return adapter_class(source.adapter)(
+    adapter = adapter_class(source.adapter)(
         source_id=source.source_id,
         supplier=SupplierInfo(**source.supplier),
         enabled=source.enabled,
         **options,
     )
+    if crosswalk is not None and loaded.ignore:
+        # Read only by the drift check, so set here rather than passed in:
+        # every adapter has it, a bespoke one kept elsewhere included.
+        adapter.ignored_categories = loaded.ignore
+    return adapter
 
 
 def register(adapter: SourceAdapter) -> SourceAdapter:
