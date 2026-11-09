@@ -107,8 +107,10 @@ From the last round of the discussion, recorded to resume later.
 - **Project authoring in an in-app editor**, rather than files in the repository:
   build guides have photos, steps and parts lists, and the editor Ahmed uses becomes
   the community's later.
-- **Stale offers ranked below fresh ones** in default results, rather than shown first
-  with a warning or hidden after a cutoff. Nothing disappears.
+- ~~**Stale offers ranked below fresh ones** in default results.~~ Replaced (November
+  2026) by a filter: stale products are hidden by default, like out of stock, with the
+  count shown and one click to include them (DESIGN.md rule C2b). Nothing disappears
+  for good, and ranking stays relevance.
 - **Report a problem without an account**: a reason, an optional email, rate limited,
   into the review queue (which needs an admin screen; it has none today).
 - **Parts-list import by parsing, not AI**: CSV, KiCad and spreadsheet parts lists and
@@ -139,7 +141,9 @@ From the last round of the discussion, recorded to resume later.
 1. Accounts: admin sign-in now and public accounts with community projects, or public
    accounts in the first release?
 2. Project authoring: in-app editor, or files in the repository?
-3. Stale offers: warn, hide after a cutoff, or rank below fresh ones?
+3. ~~Stale offers: warn, hide after a cutoff, or rank below fresh ones?~~ Decided:
+   warn after 45 days (F2), and hide by default after the same cutoff, counted and one
+   click away (C2b).
 4. Notifications for alerts, later: email, WhatsApp or browser push?
 5. Price history: a small chart, or "lowest in 30 days"?
 6. Reviews, ratings, questions and answers: wanted at all?
