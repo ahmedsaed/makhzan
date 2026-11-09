@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from makhzan_schemas.domains import get_profile
+from makhzan_schemas.freshness import fresh_since
 from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import Listing, Product, ProductRedirect
 from makhzan_schemas.values import value_tokens, values_conflict
@@ -349,8 +350,21 @@ async def rebuild_products(session: AsyncSession) -> dict:
         )
         product.offer_count = len(items)
         product.supplier_count = len({i.supplier_id for i in items})
-        product.min_price = min(prices) if prices else None
-        product.max_price = max(prices) if prices else None
+        # The price a result card shows, sorts and filters by: the fresh offers'
+        # when any has a price, so a card never quotes a stale shop's cheaper
+        # price while the product page leads with the fresh one. All offers'
+        # only when none is fresh (the page then warns that it is out of date).
+        cutoff = fresh_since(now)
+        fresh = [
+            i.price
+            for i in items
+            if i.price is not None
+            and i.last_verified_at is not None
+            and i.last_verified_at.timestamp() > cutoff
+        ]
+        shown = fresh or prices
+        product.min_price = min(shown) if shown else None
+        product.max_price = max(shown) if shown else None
         product.in_stock = any(i.stock_signal == StockSignal.IN_STOCK for i in items)
         verified = [i.last_verified_at for i in items if i.last_verified_at]
         product.last_verified_at = max(verified) if verified else None
