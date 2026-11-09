@@ -97,7 +97,7 @@ search on desktop, lower down on phones) and a note for shop owners. Every block
 the page container on desktop; each section is left out when its fetch fails.
 
 **Results (search, department, category, shop search).**
-- A chip bar with the everyday filters, **In stock** and **Recently checked** (both
+- A chip bar with the everyday filters, **In stock** and **Checked recently** (both
   on by default) and **2+ shops**, plus a "Category, price" chip that opens a sheet (a
   side rail on desktop) for the rest.
 - "Top categories for “query”" above the results.
@@ -181,7 +181,7 @@ on the right, the note and the bar across. Below it the page is search scoped to
 shop, on the same URL (`/shops/{shop}?category=…`): chips, rail, toolbar, list/grid,
 paging. A shop whose own data is stale shows its products anyway (C2b): the visitor
 asked for that shop and the note already says the data is old, while hiding them would
-empty the page, or leave only what a fresher shop also sells. The "Recently checked"
+empty the page, or leave only what a fresher shop also sells. The "Checked recently"
 chip still hides them (`?stale=hide`). A search within the shop follows the same rule.
 Rows leave out the shop's name, which would only repeat the heading (the one
 exception to C1's "shop name"); a product other shops sell keeps its "N shops" badge.
