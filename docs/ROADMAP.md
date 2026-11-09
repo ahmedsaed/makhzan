@@ -54,8 +54,9 @@ The frontend is being redesigned from the data up: English only, direction D,
 burnt orange on Archivo and Inter. `docs/DESIGN.md` is the specification (it
 replaces the September design below); `docs/PRODUCT.md` holds what comes after it
 (projects, blog, accounts, supplier pages) and the polish list to finish before the
-suppliers are contacted. Product ids becoming permanent is
-`docs/decisions/0004-stable-product-ids.md`.
+suppliers are contacted. Product ids are permanent as of 2026-11-09
+(`docs/decisions/0004-stable-product-ids.md`); old URLs and redirects retire per
+`docs/decisions/0005-url-retirement.md`, first review May 2027.
 
 ### 1. The `apps/web` rewrite — done (2026-09-07), superseded by 0
 Built to the September version of `docs/DESIGN.md`. Nine server-rendered surfaces under `/en` and `/ar`

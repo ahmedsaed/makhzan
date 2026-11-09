@@ -75,8 +75,12 @@ How we crawl, theme toggle, Made by Merope), 404 and error pages.
 - **No listing pages.** `/listings/{id}` redirects to its product.
 - **Product URLs read:** `/products/{id}-{words-of-the-title}`. The id is a UUID at the
   front, so the page always finds it; a bare id, an old title's words or a typo
-  redirect permanently (308) to the current form. An id a regroup replaced redirects
-  to its successor's readable URL in the same single hop.
+  redirect permanently (308) to the current form. Ids are permanent
+  (`docs/decisions/0004-stable-product-ids.md`): an id merged into another product
+  redirects to the survivor's readable URL in the same single hop, and a product every
+  shop has withdrawn keeps its URL as a "no longer listed" page (200, noindex): its
+  title, last price and when, and similar products. Which redirects exist and when
+  each retires: `docs/decisions/0005-url-retirement.md`.
 - Old routes redirect permanently (308, query string kept), each in one hop:
   `/{lang}/browse/{department}[/{category}]` → `/departments/{department}[/{category}]`,
   `/{lang}/trades[/{department}[/{category}]]` → `/departments[/…]` (the same path),
