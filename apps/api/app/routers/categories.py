@@ -22,10 +22,16 @@ router = APIRouter(tags=["categories"])
 
 @router.get("/stats")
 async def stats(session: AsyncSession = Depends(get_session)) -> dict:
-    products = await session.scalar(select(func.count()).select_from(Product))
+    # Listed products only: a merged-away or withdrawn one keeps its row (its id
+    # is permanent) but is not something anyone can find or buy.
+    products = await session.scalar(
+        select(func.count()).select_from(Product).where(Product.is_listed())
+    )
     suppliers = await session.scalar(select(func.count()).select_from(Supplier))
     categories = await session.scalar(
-        select(func.count(distinct(Product.category_id))).where(Product.category_id.is_not(None))
+        select(func.count(distinct(Product.category_id))).where(
+            Product.category_id.is_not(None), Product.is_listed()
+        )
     )
     return {"products": products, "suppliers": suppliers, "categories": categories}
 
@@ -40,7 +46,9 @@ async def list_categories(
     counts = dict(
         (
             await session.execute(
-                select(Product.category_id, func.count()).group_by(Product.category_id)
+                select(Product.category_id, func.count())
+                .where(Product.is_listed())
+                .group_by(Product.category_id)
             )
         ).all()
     )

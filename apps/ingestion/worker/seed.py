@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.grouping import describe, rebuild_products
 
 from worker.indexer import get_client, reindex_all
 from worker.pipeline import run_source
@@ -30,12 +30,7 @@ async def main() -> None:
             flush=True,
         )
     async with SessionLocal() as session:
-        result = await rebuild_products(session)
-        print(
-            f"products: {result['products']} "
-            f"({result['multi_supplier']} multi-supplier, removed {result['removed']})",
-            flush=True,
-        )
+        print(describe(await rebuild_products(session)), flush=True)
         count = await reindex_all(session, get_client())
         print(f"reindexed {count} documents", flush=True)
 

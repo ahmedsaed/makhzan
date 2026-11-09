@@ -7,7 +7,8 @@ Scheduling: a daily cron (`refresh_all`) enqueues one `crawl_source` job per
 enabled source, each with its own timeout, so prices/stock stay fresh and
 vanished products get archived. Every source job, however it ends, asks for a
 product rebuild and reindex (`rebuild_and_reindex`), deduplicated so sources
-finishing close together share one. Idempotent upserts mean re-runs update in
+finishing close together share one; the first rebuild of each day then retires
+redirects unused for a year. Idempotent upserts mean re-runs update in
 place. Run the worker:  arq worker.main.WorkerSettings
 """
 
@@ -24,12 +25,15 @@ from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
 from makhzan_schemas.grouping import rebuild_products
-from makhzan_schemas.models import IngestionRun
+from makhzan_schemas.models import IngestionRun, WorkerState
+from sqlalchemy import func as sql_func
 from sqlalchemy import update
+from sqlalchemy.dialects.postgresql import insert
 
 from worker.indexer import get_client, reindex_all
 from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
+from worker.retire_redirects import retire_unused_redirects
 from worker.sources.registry import all_enabled, get, load_adapters
 
 log = logging.getLogger(__name__)
@@ -70,6 +74,9 @@ REBUILD_TIMEOUT = int(os.getenv("REBUILD_TIMEOUT_SECONDS", str(3600)))
 #: cursors, cycle bookkeeping and the pace gate all assume one run at a time.
 #: In-process, which is where every job runs: the deployment has one worker.
 _SOURCE_LOCKS: dict[str, asyncio.Lock] = {}
+
+#: `worker_state` key holding the UTC day redirects were last retired, and the counts.
+RETIRED_STATE_KEY = "redirects_retired"
 
 #: Held while products are rebuilt, so two rebuilds never interleave.
 _REBUILD_LOCK = asyncio.Lock()
@@ -200,8 +207,34 @@ async def run_partition(
     )
 
 
+async def retire_redirects_daily(session, today: date) -> dict | None:
+    """Drop redirects unused for a year, unless that was already done `today`.
+
+    Redirects nobody has followed in a year (docs/decisions/0005-url-retirement.md).
+    Run after the regroup, under its lock: a regroup can revive a merged-away id
+    that this would otherwise be deleting at the same moment. Once a day is
+    plenty — the threshold is a year — and the day is kept in `worker_state`, so
+    a restart does not repeat it. Returns the counts, or None when skipped.
+    """
+    state = await session.get(WorkerState, RETIRED_STATE_KEY)
+    if state is not None and (state.value or {}).get("day") == today.isoformat():
+        return None
+    counts = await retire_unused_redirects(session)
+    value = {"day": today.isoformat(), **counts}
+    await session.execute(
+        insert(WorkerState)
+        .values(key=RETIRED_STATE_KEY, value=value)
+        .on_conflict_do_update(
+            index_elements=[WorkerState.key], set_={"value": value, "updated_at": sql_func.now()}
+        )
+    )
+    await session.commit()
+    return counts
+
+
 async def rebuild_and_reindex(ctx: dict) -> str:
-    """Arq task: regroup products and rebuild the search index from the database.
+    """Arq task: regroup products and rebuild the search index from the database,
+    then, once a day, retire redirects nobody uses any more.
 
     Without it the crawl updates the database but search goes stale.
     """
@@ -209,7 +242,18 @@ async def rebuild_and_reindex(ctx: dict) -> str:
         async with SessionLocal() as session:
             await rebuild_products(session)
             await reindex_all(session, get_client())
-    return "rebuilt"
+            try:
+                retired = await retire_redirects_daily(session, datetime.now(timezone.utc).date())
+            except Exception:  # noqa: BLE001 — search is rebuilt; retirement retries tomorrow
+                log.exception("retiring unused redirects failed")
+                await session.rollback()
+                return "rebuilt; retiring redirects failed"
+    if retired is None:
+        return "rebuilt"
+    return (
+        f"rebuilt; retired {retired['merged_products']} merged product ids and "
+        f"{retired['product_redirects']} older redirects"
+    )
 
 
 async def refresh_all(ctx: dict) -> list[dict]:

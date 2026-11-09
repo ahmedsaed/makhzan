@@ -61,6 +61,7 @@ def worker(monkeypatch):
     monkeypatch.setattr(main, "load_adapters", no_load)
     monkeypatch.setattr(main, "all_enabled", lambda: sources)
     monkeypatch.setattr(main, "get", lambda source_id: None)
+
     monkeypatch.setattr(main, "_run_source", run_source)
     monkeypatch.setattr(main, "_SOURCE_LOCKS", {})
     monkeypatch.setattr(main, "CRAWL_ENABLED", True)
@@ -173,13 +174,43 @@ async def test_rebuilds_never_interleave(monkeypatch):
     async def reindex(session, client):
         events.append("reindex")
 
+    async def retire(session, today):
+        events.append("retire")
+        return None
+
     monkeypatch.setattr(main, "rebuild_products", rebuild)
     monkeypatch.setattr(main, "reindex_all", reindex)
+    monkeypatch.setattr(main, "retire_redirects_daily", retire)
     monkeypatch.setattr(main, "get_client", lambda: None)
     monkeypatch.setattr(main, "_REBUILD_LOCK", asyncio.Lock())
 
     await asyncio.gather(main.rebuild_and_reindex({}), main.rebuild_and_reindex({}))
-    assert events == ["rebuild start", "rebuild end", "reindex"] * 2
+    assert events == ["rebuild start", "rebuild end", "reindex", "retire"] * 2
+
+
+async def test_redirects_are_retired_once_a_day(monkeypatch):
+    """The first rebuild of a day retires unused redirects; later ones that day do not."""
+    from makhzan_schemas.db import SessionLocal
+    from makhzan_schemas.models import WorkerState
+
+    calls: list[int] = []
+
+    async def retire(session, **kwargs):
+        calls.append(1)
+        return {"merged_products": 0, "product_redirects": 0}
+
+    monkeypatch.setattr(main, "retire_unused_redirects", retire)
+    day = datetime(2027, 11, 9, tzinfo=UTC).date()
+    async with SessionLocal() as session:
+        await session.execute(
+            WorkerState.__table__.delete().where(WorkerState.key == main.RETIRED_STATE_KEY)
+        )
+        await session.commit()
+        assert await main.retire_redirects_daily(session, day) is not None
+        assert await main.retire_redirects_daily(session, day) is None
+        next_day = datetime(2027, 11, 10, tzinfo=UTC).date()
+        assert await main.retire_redirects_daily(session, next_day) is not None
+    assert len(calls) == 2
 
 
 def test_the_worker_runs_every_source_at_once_and_still_has_room_to_rebuild():

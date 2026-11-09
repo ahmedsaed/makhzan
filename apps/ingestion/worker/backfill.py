@@ -17,7 +17,7 @@ import asyncio
 import sys
 
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.grouping import describe, rebuild_products
 from makhzan_schemas.models import Listing
 from makhzan_schemas.domains import get_profile
 from sqlalchemy import select
@@ -53,11 +53,7 @@ async def main() -> None:
         )
 
         # Group listings into canonical products (needs part numbers set above).
-        result = await rebuild_products(session)
-        print(
-            f"products: {result['products']} "
-            f"({result['multi_supplier']} multi-supplier, removed {result['removed']})"
-        )
+        print(describe(await rebuild_products(session)))
 
         count = await reindex_all(session, get_client())
         print(f"reindexed {count} documents")

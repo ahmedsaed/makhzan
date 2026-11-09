@@ -497,7 +497,11 @@ async def review_queue(session) -> None:
 async def index_drift(session) -> None:
     """The search index is a projection of the DB; a mismatch means it is stale."""
     _header("SEARCH INDEX")
-    product_count = (await session.execute(select(func.count(Product.id)))).scalar_one()
+    # Listed products: merged-away and withdrawn ones keep their rows (permanent
+    # ids) but are never indexed.
+    product_count = (
+        await session.execute(select(func.count(Product.id)).where(Product.is_listed()))
+    ).scalar_one()
     try:
         from worker.indexer import get_client
         from makhzan_schemas.search import INDEX_NAME
