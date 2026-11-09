@@ -247,6 +247,14 @@ function search(url) {
       hit.supplier_count === 1 ? { ...hit, supplier_name: shopName(shop) ?? shop } : hit,
     );
   }
+  // The stale shop's products are as old as the shop (80 days), and the one
+  // place these generic hits honour a filter: the stale filter (C2b), so its
+  // page can show that it lists them anyway, and that the chip hides them.
+  if (shop === "stale-shop") {
+    const old = Math.floor(Date.now() / 1000) - 80 * 86_400;
+    hits = hits.map((hit) => ({ ...hit, last_verified_at: old }));
+    if (url.searchParams.get("fresh") === "true") hits = [];
+  }
 
   const body = {
     query: q,
@@ -261,7 +269,8 @@ function search(url) {
     body.facets = {
       domain: { electronics: 2, tools: 1 },
       category_ref: { "electronics:ics": 2 },
-      in_stock: { true: 2 },
+      // Counted, so a filter that empties the hits empties this too.
+      in_stock: hits.length ? { true: hits.filter((hit) => hit.in_stock).length } : {},
     };
   }
   return body;

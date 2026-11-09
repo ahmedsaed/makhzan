@@ -12,13 +12,15 @@ import {
   countText,
   flatParams,
   groupCategoryFacet,
-  hiddenOutOfStock,
+  hiddenCounts,
   resultsLinks,
+  type HiddenCounts,
   type RawParams,
   type ResultsData,
   type ResultsQuery,
 } from "@/lib/results-query";
 import { departmentLabel } from "@/lib/departments";
+import { STALE_AFTER_DAYS } from "@/lib/freshness";
 import { cn } from "@/lib/utils";
 
 type Links = ReturnType<typeof resultsLinks>;
@@ -64,7 +66,7 @@ export function Results({
   const { result } = data;
   const links = resultsLinks(pathname, raw, query);
   const total = result.total ?? 0;
-  const hidden = query.inStockOnly ? hiddenOutOfStock(data.unfiltered?.facets) : 0;
+  const hidden = hiddenCounts(query, data);
   const now = new Date();
   const removable = (key: Locked[number]) => !locked.includes(key);
 
@@ -123,6 +125,9 @@ export function Results({
         <Chip href={links.inStock} active={query.inStockOnly}>
           In stock
         </Chip>
+        <Chip href={links.fresh} active={query.freshOnly}>
+          Recently checked
+        </Chip>
         <Chip href={links.twoShops} active={Boolean(query.minSuppliers)}>
           2+ shops
         </Chip>
@@ -175,8 +180,10 @@ export function Results({
 }
 
 /**
- * The count, "N more out of stock" (one click shows them, rule C2), the sort
- * and the list/grid toggle. A phone has no room for all of it on one line:
+ * The count, "N more out of stock" (one click shows them, rule C2), "N more
+ * out of date" (likewise, C2b), the sort and the list/grid toggle. Each count
+ * is exactly what its own click adds; results both out of stock and out of
+ * date are in neither (see `hiddenCounts`). A phone has no room for all of it on one line:
  * the count gets its own, sort and the view toggle share the next.
  */
 export function ResultsToolbar({
@@ -191,9 +198,13 @@ export function ResultsToolbar({
   raw: RawParams;
   query: ResultsQuery;
   total: number;
-  hidden: number;
+  hidden: HiddenCounts;
   links: Links;
 }) {
+  const more = [
+    { count: hidden.outOfStock, href: links.showOutOfStock, label: "out of stock", key: "stock" },
+    { count: hidden.stale, href: links.showStale, label: "out of date", key: "stale" },
+  ].filter((item) => item.count > 0);
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-y-2">
       <p
@@ -201,18 +212,24 @@ export function ResultsToolbar({
         className="basis-full text-[13px] text-ink-2 sm:me-auto sm:basis-auto lg:text-sm"
       >
         <span className="tabular">{countText(total, query.inStockOnly)}</span>
-        {hidden > 0 && (
-          <>
+        {more.map((item) => (
+          <span key={item.key}>
             {" · "}
             <Link
-              href={links.showOutOfStock}
+              href={item.href}
+              data-show-hidden={item.key}
+              title={
+                item.key === "stale"
+                  ? `Not checked in the last ${STALE_AFTER_DAYS} days: prices may be out of date`
+                  : undefined
+              }
               // 44px to tap on a phone (S4); the toolbar's own height from `sm`.
               className="inline-flex min-h-11 items-center text-link underline-offset-2 hover:underline sm:min-h-0"
             >
-              {formatCount(hidden)} more out of stock
+              {formatCount(item.count)} more {item.label}
             </Link>
-          </>
-        )}
+          </span>
+        ))}
       </p>
       {total > 0 && (
         <>
@@ -300,28 +317,74 @@ function NoResults({
 }: {
   query: ResultsQuery;
   links: Links;
-  hidden: number;
+  hidden: HiddenCounts;
   shopName?: string;
   removable: (key: Locked[number]) => boolean;
 }) {
-  // Everything that matched is out of stock: say so, one click shows it.
-  if (hidden > 0) {
+  // Everything that matched is hidden by a default: say which, one click
+  // shows them.
+  const { outOfStock, stale, both } = hidden;
+  if (outOfStock + stale + both > 0) {
+    const button =
+      "inline-flex h-11 items-center rounded-control px-4 text-sm font-semibold";
+    const matched = outOfStock + stale + both;
+    const state =
+      stale + both === 0 ? "only-out-of-stock" : outOfStock + both === 0 ? "only-stale" : "only-hidden";
     return (
-      <div
-        data-state="only-out-of-stock"
-        className="mt-4 rounded-card border border-line bg-surface px-5 py-8"
-      >
-        <p className="font-display text-base font-bold text-ink">Nothing in stock</p>
-        <p className="mt-1 text-sm text-ink-2">
-          {plural(hidden, "product")} {hidden === 1 ? "matches" : "match"}, but no shop has{" "}
-          {hidden === 1 ? "it" : "them"} in stock.
+      <div data-state={state} className="mt-4 rounded-card border border-line bg-surface px-5 py-8">
+        <p className="font-display text-base font-bold text-ink">
+          {state === "only-out-of-stock"
+            ? "Nothing in stock"
+            : state === "only-stale"
+              ? "Nothing checked recently"
+              : "Nothing in stock and recently checked"}
         </p>
-        <Link
-          href={links.showOutOfStock}
-          className="mt-4 inline-flex h-11 items-center rounded-control bg-action px-4 text-sm font-semibold text-action-ink"
-        >
-          Show {formatCount(hidden)} out of stock
-        </Link>
+        <p className="mt-1 text-sm text-ink-2">
+          {plural(matched, "product")} {matched === 1 ? "matches" : "match"},{" "}
+          {state === "only-out-of-stock"
+            ? `but no shop has ${matched === 1 ? "it" : "them"} in stock.`
+            : state === "only-stale"
+              ? `but none was checked in the last ${STALE_AFTER_DAYS} days, so prices may be out of date.`
+              : `but each is out of stock, or not checked in the last ${STALE_AFTER_DAYS} days.`}
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {outOfStock > 0 && (
+            <Link
+              href={links.showOutOfStock}
+              className={cn(button, "bg-action text-action-ink")}
+            >
+              Show {formatCount(outOfStock)} out of stock
+            </Link>
+          )}
+          {stale > 0 && (
+            <Link
+              href={links.showStale}
+              className={cn(
+                button,
+                outOfStock > 0
+                  ? "border border-line-strong bg-surface text-ink hover:border-ink-3"
+                  : "bg-action text-action-ink",
+              )}
+            >
+              Show {formatCount(stale)} out of date
+            </Link>
+          )}
+          {/* Only out of stock *and* out of date: neither link alone shows
+              these, so the way to them is both at once. */}
+          {both > 0 && (
+            <Link
+              href={links.showEverything}
+              className={cn(
+                button,
+                outOfStock + stale > 0
+                  ? "border border-line-strong bg-surface text-ink hover:border-ink-3"
+                  : "bg-action text-action-ink",
+              )}
+            >
+              Show all {formatCount(matched)}
+            </Link>
+          )}
+        </div>
       </div>
     );
   }
