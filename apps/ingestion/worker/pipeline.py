@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -500,8 +501,12 @@ async def _sweep_partition(
     resumed: list[bool] | None = None,
     not_products: Counter | None = None,
     tally: Counter | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
+
+    `checkpoint` puts what the run has sent so far on its row before each
+    commit, so a run cut off mid-sweep still says how many requests it made.
 
     Returns True if the fetch failed. The cursor is left pointing at the page
     that failed, so the next run retries exactly there instead of restarting at
@@ -572,12 +577,35 @@ async def _sweep_partition(
             if not result.has_more:
                 cursor.exhausted = True
                 cursor.next_page = 1
+            if checkpoint is not None:
+                checkpoint()
             await session.commit()
 
         if not result.has_more:
             return False
         page += 1
         await asyncio.sleep(await _pace(adapter))
+
+
+def _requests_sent(
+    tally: Counter,
+    cycle_requests: Counter,
+    adapter: SourceAdapter,
+    log: RequestLog,
+    details_requests: Counter,
+) -> dict[str, int]:
+    """`stats.requests`: every request this run made to the source's host, by purpose.
+
+    Its pages, the reference data fetched once a cycle (by part), whatever else
+    the adapter asked for while building its pages, product-page details and
+    robots.txt. Zero counts are left out.
+    """
+    requests: Counter = Counter({"pages": tally["pages"]})
+    requests.update(cycle_requests)
+    requests.update(adapter.extra_requests())
+    requests.update(details_requests)
+    requests.update({"robots": sum(log.robots.values())})
+    return {k: v for k, v in requests.items() if v}
 
 
 async def _pace(adapter: SourceAdapter) -> float:
@@ -749,15 +777,33 @@ async def _logged_run(
         cycle_requests = await _load_cycle_data(
             session, adapter, supplier_id, ephemeral=limit is not None, errors=errors
         )
-        # Durable before the sweep: a run that dies on page 1 still keeps it, and
-        # a part that failed stays marked as tried.
-        await session.commit()
-
         fetch_failed = False
         observed: Counter = Counter()
         resumed: list[bool] = []
         not_products: Counter = Counter()
         tally: Counter = Counter()
+
+        def checkpoint(more: Counter | None = None) -> None:
+            """Put what the run has sent so far on its row, for the next commit.
+
+            Called before every per-page commit. The full stats are written only
+            when the run ends, and a run cut off before that (a deploy recreates
+            the worker) used to be left with none: /how-we-crawl then published
+            its week as "at least N". This keeps the two published figures,
+            `requests` and `pacing`, current to the last page; they cost one
+            small JSONB update in a commit that happens anyway.
+            """
+            sent = _requests_sent(tally, cycle_requests, adapter, log, more or Counter())
+            stats = dict(run.stats or {})
+            if sent:
+                stats["requests"] = sent
+            stats["pacing"] = log.pacing()
+            run.stats = stats
+
+        # Durable before the sweep: a run that dies on page 1 still keeps it, and
+        # a part that failed stays marked as tried.
+        checkpoint()
+        await session.commit()
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
                 break
@@ -780,6 +826,7 @@ async def _logged_run(
                 resumed=resumed,
                 not_products=not_products,
                 tally=tally,
+                checkpoint=checkpoint,
             )
             fetch_failed = fetch_failed or failed
 
@@ -802,6 +849,7 @@ async def _logged_run(
                     errors=errors,
                     pace=lambda: _pace(adapter),
                     already_sent=bool(tally["pages"] or cycle_requests),
+                    checkpoint=checkpoint,
                 )
             except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
                 # Whatever went wrong reading details, the run's own record
@@ -819,18 +867,10 @@ async def _logged_run(
         if not_products:
             # Named, so a wrongly skipped real product is visible in the run.
             stats["not_products"] = dict(not_products.most_common(25))
-        # Every request this run made to the source's host: its pages, and the
-        # reference data fetched once a cycle, by part, and whatever else the
-        # adapter asked for while building its pages.
-        requests: Counter = Counter({"pages": tally["pages"]})
-        requests.update(cycle_requests)
-        requests.update(adapter.extra_requests())
-        requests.update(details_requests)
         if details:
             stats["details"] = details
-        requests.update({"robots": sum(log.robots.values())})
-        if any(requests.values()):
-            stats["requests"] = {k: v for k, v in requests.items() if v}
+        if requests := _requests_sent(tally, cycle_requests, adapter, log, details_requests):
+            stats["requests"] = requests
         # What the shop's server saw: requests sent (a retry is one more) and the
         # gaps between them, which is what /how-we-crawl publishes. `requests`
         # above counts by purpose, and a page refused before sending (robots.txt,
