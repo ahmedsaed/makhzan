@@ -285,3 +285,24 @@ async def test_every_shop_reads_paused_while_the_whole_crawl_is_off(client, db, 
     body = await _activity(client)
     assert [shop["status"] for shop in body["shops"]] == ["paused"]
     assert body["totals"]["shops_active"] == 0
+
+
+async def test_the_worker_saying_off_wins_over_the_apis_own_environment(client, db, monkeypatch):
+    """`./makhzan crawl off` recreates the worker alone, so the API's own
+    CRAWL_ENABLED still says on. The worker's word, stated at its startup, is
+    what the page reports."""
+    await make_supplier(db, slug="shop-a", name="Shop A")
+    await _source(db, "shop-a", "shop-a", enabled=True)
+    monkeypatch.setenv("CRAWL_ENABLED", "true")
+    await crawl.record_crawl_enabled(db, False)
+
+    body = await _activity(client)
+    assert body["schedule"]["next_run_at"] is None
+    assert [shop["status"] for shop in body["shops"]] == ["paused"]
+
+
+async def test_the_worker_saying_on_wins_too(client, db, monkeypatch):
+    monkeypatch.setenv("CRAWL_ENABLED", "false")
+    await crawl.record_crawl_enabled(db, False)
+    await crawl.record_crawl_enabled(db, True)  # `./makhzan crawl on`: stated again
+    assert (await _activity(client))["schedule"]["next_run_at"] is not None

@@ -27,6 +27,11 @@
 # tag_galleries (gallery paths; the second are merchandising pages that carry no
 # category), sitemap and brand (applied when a product names none).
 #
+# Any adapter also takes target_cycle_days (e.g. 7): each run's page budget is
+# then planned from the last cycle's size to keep cycles near that many days,
+# with max_pages_per_run as a hard ceiling on the whole run (see `make status`,
+# CYCLE TARGETS).
+#
 # Odoo and Wix (and an adapter that implements `fetch_details`) also take
 # `details = { enabled = false, per_run = 20, max_age_days = 90 }`: read up to
 # per_run product pages a run, after the sweep, for listings never read, whose

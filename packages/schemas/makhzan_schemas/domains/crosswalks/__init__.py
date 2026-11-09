@@ -77,12 +77,16 @@ def normalize_category_name(name: str | None) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
-def fold_crosswalk(table: dict[str, tuple[str, str]]) -> dict[str, tuple[str, str]]:
+def fold_crosswalk(
+    table: dict[str, tuple[str, str]], ignore: tuple[str, ...] | list[str] = ()
+) -> dict[str, tuple[str, str]]:
     """Index a crosswalk by normalized name, for lookup.
 
     Raises on a collision rather than letting one entry silently shadow another:
     two keys that normalize to the same string are a mistake in the table, and
-    which of them wins would otherwise depend on dict order.
+    which of them wins would otherwise depend on dict order. Likewise a name in
+    `ignore` (left unmapped on purpose) that is also mapped: the table cannot
+    both map a category and say it deliberately does not.
     """
     folded: dict[str, tuple[str, str]] = {}
     for name, target in table.items():
@@ -93,7 +97,15 @@ def fold_crosswalk(table: dict[str, tuple[str, str]]) -> dict[str, tuple[str, st
                 f"maps to both {folded[key]} and {target}"
             )
         folded[key] = target
+    both = sorted(name for name in ignore if normalize_category_name(name) in folded)
+    if both:
+        raise ValueError(f"crosswalk both maps and ignores {both}")
     return folded
+
+
+def fold_names(names) -> set[str]:
+    """Normalized forms of category names, for comparing what a sweep saw."""
+    return {normalize_category_name(name) for name in names}
 
 
 @dataclass(frozen=True)
@@ -121,6 +133,12 @@ class Crosswalk:
     #: first. A tag listed here beats any tag that is not; between unlisted tags
     #: the source's own order decides. Every name must also be mapped.
     prefer: tuple[str, ...] = ()
+    #: Source categories left unmapped on purpose: brand tags, generic buckets,
+    #: anything whose name says nothing about type. Not mapped, never guessed
+    #: from; listed only so the drift report (`make status`) stops raising them
+    #: as new on every sweep. Optional: a crosswalk without the key ignores
+    #: nothing. A crosswalk that uses it needs an image that reads it.
+    ignore: tuple[str, ...] = ()
 
 
 def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
@@ -135,7 +153,7 @@ def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
     with path.open("rb") as f:
         data = tomllib.load(f)
 
-    unknown = set(data) - {"categories", "partitions", "prefer"}
+    unknown = set(data) - {"categories", "partitions", "prefer", "ignore"}
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
 
@@ -145,7 +163,14 @@ def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
         if not (sep and domain and slug) or ":" in slug:
             raise ValueError(f"{path}: {source_name!r} must map to 'domain:slug', got {ref!r}")
         categories[source_name] = (domain, slug)
-    fold_crosswalk(categories)
+
+    ignore = data.get("ignore", [])
+    if not isinstance(ignore, list) or not all(isinstance(n, str) for n in ignore):
+        raise ValueError(f"{path}: ignore must be a list of strings")
+    try:
+        fold_crosswalk(categories, ignore)
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
 
     partitions = data.get("partitions", [])
     if not all(isinstance(p, str) for p in partitions):
@@ -164,7 +189,11 @@ def load_crosswalk(name: str, directory: Path | None = None) -> Crosswalk:
     if len(set(folded_prefer)) != len(folded_prefer):
         raise ValueError(f"{path}: prefer lists a category twice")
     return Crosswalk(
-        name=name, categories=categories, partitions=tuple(partitions), prefer=tuple(prefer)
+        name=name,
+        categories=categories,
+        partitions=tuple(partitions),
+        prefer=tuple(prefer),
+        ignore=tuple(ignore),
     )
 
 

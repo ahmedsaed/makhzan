@@ -9,12 +9,13 @@ to leave.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 from makhzan_schemas import crawl
-from makhzan_schemas.enums import SourceType
+from makhzan_schemas.enums import IngestionStatus, SourceType
 from makhzan_schemas.models import IngestionRun
 from sqlalchemy import select
 
@@ -253,6 +254,138 @@ async def test_a_crawl_delay_read_from_robots_txt_paces_the_next_page(clock, mon
     assert log.pacing()["min_gap_s"] == 20.0
 
 
+def _redirecting_shop(routes: dict[str, httpx.Response], sent: list[str]) -> httpx.AsyncClient:
+    """A client whose host answers each path from `routes` (200 for the rest)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(f"{request.method} {request.url.path}")
+        return routes.get(request.url.path, httpx.Response(200, json={}))
+
+    return http_mod.make_client(transport=httpx.MockTransport(handler))
+
+
+def _moved(status: int, to: str) -> httpx.Response:
+    return httpx.Response(status, headers={"Location": to})
+
+
+async def test_a_redirect_hop_waits_the_pace_and_is_counted(clock):
+    """httpx following it sent the hop at once: two requests ms apart in the
+    shop's logs, one of them missing from what /how-we-crawl publishes."""
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    sent: list[str] = []
+    routes = {"/a": _moved(301, "https://shop.test/a/"), "/a/": _moved(302, "/b")}
+    with http_mod.logging_requests() as log:
+        async with _redirecting_shop(routes, sent) as client:
+            assert await http_mod.get_json(client, "https://shop.test/a") == {}
+
+    assert sent == ["GET /a", "GET /a/", "GET /b"]
+    pacing = log.pacing()
+    assert pacing["requests"] == 3
+    assert pacing["min_gap_s"] == 15.0
+
+
+async def test_a_redirect_is_followed_the_way_httpx_would_have(clock):
+    """Only when a hop goes out changes, never what it is: 307/308 keep the
+    method and body, 303 turns into a GET."""
+    sent: list[str] = []
+    routes = {"/a": _moved(307, "/b"), "/b": _moved(303, "/c")}
+    async with _redirecting_shop(routes, sent) as client:
+        await http_mod.get_json(client, "https://shop.test/a", method="POST", json={"q": 1})
+    assert sent == ["POST /a", "POST /b", "GET /c"]
+
+
+async def test_a_redirect_robots_txt_disallows_is_not_followed(clock, monkeypatch):
+    class _DenyB(_AllowAll):
+        async def allowed(self, url, user_agent):
+            return not url.endswith("/b")
+
+    monkeypatch.setattr(robots_mod, "ROBOTS", _DenyB())
+    sent: list[str] = []
+    async with _redirecting_shop({"/a": _moved(301, "/b")}, sent) as client:
+        with pytest.raises(robots_mod.DisallowedByRobots):
+            await http_mod.get_json(client, "https://shop.test/a")
+    assert sent == ["GET /a"]
+
+
+async def test_a_redirect_loop_gives_up(clock):
+    sent: list[str] = []
+    async with _redirecting_shop({"/a": _moved(302, "/a")}, sent) as client:
+        with pytest.raises(httpx.TooManyRedirects):
+            await http_mod.get_json(client, "https://shop.test/a")
+    assert len(sent) == 1 + http_mod.MAX_REDIRECTS
+
+
+async def test_a_robots_txt_redirect_is_paced_and_counted_too(clock, monkeypatch):
+    sent: list[str] = []
+    real = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return _moved(301, "/robots-live.txt")
+        if request.url.path == "/robots-live.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /private\n")
+        return httpx.Response(200, json={})
+
+    def client(**kwargs):
+        kwargs.pop("transport", None)
+        return real(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", client)
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache())
+    http_mod.set_host_pace("https://shop.test", 15.0)
+
+    with http_mod.logging_requests() as log:
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/a")
+            with pytest.raises(robots_mod.DisallowedByRobots):
+                await http_mod.get_json(c, "https://shop.test/private")
+
+    assert sent == ["/robots.txt", "/robots-live.txt", "/a"]
+    pacing = log.pacing()
+    assert (pacing["requests"], pacing["robots"]) == (3, 2)
+    assert pacing["min_gap_s"] == 15.0
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    ["HTTPS://Shop.TEST:443/x", "https://shop.test:443/x", "https://SHOP.test/x"],
+)
+def test_one_host_has_one_key_however_its_url_is_spelled(spelled):
+    assert http_mod.host_of(spelled) == http_mod.host_of("https://shop.test/x")
+    assert http_mod.host_of(spelled) == "https://shop.test"
+
+
+def test_a_non_default_port_is_a_different_host():
+    assert http_mod.host_of("https://shop.test:8443/x") == "https://shop.test:8443"
+    assert http_mod.host_of("http://shop.test:443/x") == "http://shop.test:443"
+
+
+async def test_robots_txt_and_pages_queue_at_one_gate_however_the_base_url_is_spelled(
+    clock, monkeypatch
+):
+    """A source whose `base_url` is `HTTPS://Shop.TEST:443` reads robots.txt
+    through that spelling and its pages through the shop's own links. Keyed
+    apart, the page went out on robots.txt's heels and never saw its
+    Crawl-delay."""
+    sent: list[str] = []
+    client = _shop_with_robots(monkeypatch, sent, "User-agent: *\nCrawl-delay: 20\n")
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache())
+    http_mod.set_host_pace("HTTPS://Shop.TEST:443", 15.0)
+
+    with http_mod.logging_requests() as log:
+        # What the pipeline's pause does with the source's base_url.
+        await robots_mod.polite_pause("HTTPS://Shop.TEST:443/x", 15.0)
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/x")
+
+    assert sent == ["/robots.txt", "/x"]
+    pacing = log.pacing()
+    assert list(pacing["by_host"]) == ["https://shop.test"]
+    assert (pacing["requests"], pacing["robots"]) == (2, 1)
+    assert pacing["min_gap_s"] == 20.0
+
+
 async def test_nothing_is_logged_outside_a_run(clock):
     sent: list[str] = []
     async with _client([200], sent) as client:
@@ -345,3 +478,41 @@ async def test_a_run_records_every_request_and_every_gap(clock, monkeypatch):
     async with pipeline.SessionLocal() as session:
         stored = (await session.execute(select(IngestionRun))).scalar_one()
     assert stored.stats["pacing"] == pacing
+
+
+class _CutOffShop(_Shop):
+    """The worker is stopped (a deploy) while partition b's first page is in flight."""
+
+    async def fetch_page(self, partition: str, page: int) -> Page:
+        if partition == "b":
+            raise asyncio.CancelledError
+        return await super().fetch_page(partition, page)
+
+
+async def test_a_run_cut_off_mid_sweep_keeps_what_it_sent(clock, monkeypatch):
+    """Stats used to be written only when a run ended, so a run a deploy cut
+    short published no requests and no pacing: /how-we-crawl said "at least
+    N" for its week. They are on the row from the first committed page, and
+    closing the interrupted run keeps them."""
+    from worker.main import close_interrupted_runs
+
+    adapter = _CutOffShop()
+
+    def fetcher_client(**kwargs):
+        return httpx.AsyncClient(transport=adapter._transport(), **kwargs)
+
+    monkeypatch.setattr(http_mod, "make_client", fetcher_client)
+    with pytest.raises(asyncio.CancelledError):
+        await run_source(adapter.source_id, adapter)
+
+    async with pipeline.SessionLocal() as session:
+        assert await close_interrupted_runs(session) == 1
+        stored = (await session.execute(select(IngestionRun))).scalar_one()
+
+    assert stored.status == IngestionStatus.FAILED
+    # The cycle data's two requests and partition a's two pages: everything
+    # sent before the cut, counted both ways.
+    assert len(adapter.sent) == 4
+    assert stored.stats["requests"] == {"tree": 2, "pages": 2}
+    assert stored.stats["pacing"]["requests"] == 4
+    assert stored.stats["pacing"]["gaps"] == {"15": 3}

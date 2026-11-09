@@ -40,8 +40,51 @@ REFRESH_HOUR = int(os.getenv("REFRESH_HOUR", "3"))
 
 
 def crawl_enabled() -> bool:
-    """Whether the daily sweep is switched on (`CRAWL_ENABLED`, default on)."""
+    """Whether the daily sweep is switched on (`CRAWL_ENABLED`, default on).
+
+    The worker's own reading, from its environment. Anything else asking
+    whether the worker crawls reads `crawl_enabled_in` instead.
+    """
     return os.getenv("CRAWL_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+#: `WorkerState` key the worker states its crawl flag under.
+CRAWL_STATE_KEY = "crawl"
+
+
+async def record_crawl_enabled(session, enabled: bool) -> None:
+    """The worker, at startup: say whether it will run the daily sweep. Commits."""
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from makhzan_schemas.models import WorkerState
+
+    value = {"enabled": bool(enabled)}
+    await session.execute(
+        insert(WorkerState)
+        .values(key=CRAWL_STATE_KEY, value=value)
+        .on_conflict_do_update(
+            index_elements=[WorkerState.key],
+            set_={"value": value, "updated_at": func.now()},
+        )
+    )
+    await session.commit()
+
+
+async def crawl_enabled_in(session) -> bool:
+    """Whether the worker runs the daily sweep, as the worker last said.
+
+    `./makhzan crawl off` recreates the worker alone, so the API's own
+    `CRAWL_ENABLED` is whatever it was when the API was last created; the
+    worker's word is in the database. Before any worker has said (a fresh
+    database), the environment is the best guess there is.
+    """
+    from makhzan_schemas.models import WorkerState
+
+    state = await session.get(WorkerState, CRAWL_STATE_KEY)
+    if state is None or not isinstance(state.value, dict) or "enabled" not in state.value:
+        return crawl_enabled()
+    return bool(state.value["enabled"])
 
 
 def next_refresh(now: datetime, hour: int = REFRESH_HOUR) -> datetime:
