@@ -24,6 +24,7 @@ from sqlalchemy import update
 from worker.indexer import get_client, reindex_all
 from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
+from worker.retire_redirects import retire_unused_redirects
 from worker.sources.registry import all_enabled, get, load_adapters
 
 #: Hour of day (UTC) for the daily full refresh. Defined beside the API's reading
@@ -147,6 +148,9 @@ async def refresh_all(ctx: dict) -> list[dict]:
         # Reindex so search reflects the fresh catalog — without this the daily
         # scrape updates the DB but the search index goes stale.
         await reindex_all(session, get_client())
+        # Redirects nobody has followed in a year (docs/decisions/
+        # 0005-url-retirement.md). Cheap, and a no-op until one is that old.
+        await retire_unused_redirects(session)
     return results
 
 
