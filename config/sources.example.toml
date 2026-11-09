@@ -26,6 +26,12 @@
 # takes sweep_whole_shop; Shopify takes currency. Wix takes galleries and
 # tag_galleries (gallery paths; the second are merchandising pages that carry no
 # category), sitemap and brand (applied when a product names none).
+#
+# Odoo and Wix (and an adapter that implements `fetch_details`) also take
+# `details = { enabled = false, per_run = 20, max_age_days = 90 }`: read up to
+# per_run product pages a run, after the sweep, for listings never read, whose
+# change token moved, or read over max_age_days ago (worker/details.py). Off by
+# default; every other adapter refuses the key.
 
 [[source]]
 id = "fixture"
