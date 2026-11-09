@@ -411,6 +411,59 @@ async def test_unused_is_reported_when_one_run_swept_everything(_clean_tables):
     assert run.stats["crosswalk"]["unused"] == ["cat-retired"]
 
 
+class _Drift(SourceAdapter):
+    """Only what `_crosswalk_drift` reads: the crosswalk and its ignore list."""
+
+    source_id = "drift"
+    source_type = SourceType.SCRAPED
+    supplier = SupplierInfo(slug="drift", name="Drift")
+
+    def __init__(self, categories, ignored=()):
+        self.categories = categories
+        self.ignored_categories = tuple(ignored)
+
+    async def fetch_page(self, partition, page):
+        raise NotImplementedError
+
+
+def test_drift_compares_names_folded_as_the_lookup_does():
+    """The lookup folds case and punctuation, so the drift check must too:
+    comparing exact strings reported "LED" and "Raspberry Pi" as unmapped while
+    every listing under them was being mapped."""
+    from collections import Counter
+
+    from worker.pipeline import _crosswalk_drift
+
+    adapter = _Drift(
+        {
+            "LEDs": ("electronics", "leds"),
+            "Raspberry Pi": ("electronics", "dev-boards"),
+            "Diodes - General Purpose": ("electronics", "diodes"),
+        }
+    )
+    observed = Counter({"leds": 5, "RASPBERRY  PI": 3, "Diodes – General Purpose": 2})
+
+    assert _crosswalk_drift(adapter, observed, complete=True) is None
+
+    observed["Teensy Board"] = 4
+    drift = _crosswalk_drift(adapter, observed, complete=True)
+    assert drift["unmapped"] == {"Teensy Board": 4}
+    assert "unused" not in drift
+
+
+def test_names_left_unmapped_on_purpose_are_not_drift():
+    from collections import Counter
+
+    from worker.pipeline import _crosswalk_drift
+
+    adapter = _Drift({"Sensors": ("electronics", "sensors")}, ignored=["Uni-T", "Accessories"])
+    observed = Counter({"Sensors": 9, "uni-t": 4, "Accessories": 2, "Cooling Solutions": 401})
+
+    drift = _crosswalk_drift(adapter, observed, complete=True)
+    assert drift["unmapped"] == {"Cooling Solutions": 401}
+    assert drift["unmapped_listings"] == 401
+
+
 # --------------------------------------------------------------------------- #
 # Authoritative categories, across verticals
 # --------------------------------------------------------------------------- #
