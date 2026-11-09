@@ -179,6 +179,12 @@ big partition left at the end is not started until the small ones are nearly
 done and then needs several runs of its own — 15 daily runs instead of 7, for
 exactly the same 497 pages. Sweep the big one first.
 
+A partition finished this cycle is not swept again until the next one starts,
+whatever the caps (`_partitions_for_this_run`, and `_sweep_partition` refuses an
+exhausted cursor). It used to be skipped only under `max_partitions_per_run`:
+without it, a finished partition's cursor sat at page 1 and every later run of
+the cycle re-read it, so shop 1 read its 49 out-of-stock pages 90 times a cycle.
+
 Prefer this over a weekly cron. Same freshness, but the load is a steady trickle
 instead of one heavy day, and a daily run means a breakage surfaces in a day
 rather than a week. Archiving is unaffected — it is cycle-gated, so it fires once
