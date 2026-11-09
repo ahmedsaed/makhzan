@@ -6,6 +6,7 @@ import { Container } from "@/components/section";
 import { categoryNameOf, fetchCategories, fetchSupplier, type Category } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { pageMetadata } from "@/lib/metadata";
+import { isStale } from "@/lib/shops";
 import { routes } from "@/lib/routes";
 import {
   fetchResults,
@@ -42,16 +43,22 @@ export async function generateMetadata({
  */
 export default async function SearchPage({ searchParams }: { searchParams: Promise<RawParams> }) {
   const raw = await searchParams;
-  const query = parseResultsQuery(raw);
+  const parsed = parseResultsQuery(raw);
 
-  if (!query.q && !query.category && !query.domain && !query.shop) {
+  if (!parsed.q && !parsed.category && !parsed.domain && !parsed.shop) {
     return <Landing />;
   }
 
-  const [data, categories, shop] = await Promise.all([
+  // Searching within one shop follows that shop's page: a stale shop's
+  // products are shown by default rather than all hidden (C2b).
+  const shop = parsed.shop ? await fetchSupplier(parsed.shop).catch(() => null) : null;
+  const query =
+    shop && isStale(shop.last_verified_at)
+      ? parseResultsQuery(raw, { freshByDefault: false })
+      : parsed;
+  const [data, categories] = await Promise.all([
     fetchResults(query),
     fetchCategories().catch((): Category[] => []),
-    query.shop ? fetchSupplier(query.shop).catch(() => null) : null,
   ]);
   const { result } = data;
 

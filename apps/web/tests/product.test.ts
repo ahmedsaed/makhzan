@@ -290,3 +290,62 @@ describe("makhzan's facts", () => {
     ).toEqual({ shops: 3, listings: 4, inStockAt: 2 });
   });
 });
+
+describe("stale offers (C2b)", () => {
+  const now = new Date(NOW);
+  const old = { age: 76 };
+
+  it("folds stale offers apart, whatever their stock, when any offer is fresh", () => {
+    const { listed, outOfStock, stale } = splitOffers(
+      [
+        offer("old-cheap", 1, "in_stock", old),
+        offer("b", 20),
+        offer("gone", 5, "out_of_stock"),
+        offer("old-gone", 2, "out_of_stock", old),
+      ],
+      now,
+    );
+    expect(ids(listed)).toEqual(["b"]);
+    expect(ids(outOfStock)).toEqual(["gone"]);
+    expect(ids(stale)).toEqual(["old-cheap", "old-gone"]);
+  });
+
+  it("folds nothing for age when every offer is stale: the page still lists them", () => {
+    const { listed, outOfStock, stale } = splitOffers(
+      [offer("a", 10, "in_stock", old), offer("b", 5, "out_of_stock", old)],
+      now,
+    );
+    expect(ids(listed)).toEqual(["a"]);
+    expect(ids(outOfStock)).toEqual(["b"]);
+    expect(stale).toEqual([]);
+  });
+
+  it("draws the line after 45 whole days, like the warning", () => {
+    const { stale } = splitOffers(
+      [offer("a", 10, "in_stock", { age: 45 }), offer("b", 5, "in_stock", { age: 46 })],
+      now,
+    );
+    expect(ids(stale)).toEqual(["b"]);
+  });
+
+  it("the summary counts the fresh offers when there are any", () => {
+    const summary = summarizeOffers(
+      [offer("old", 1, "in_stock", { ...old, shop: "shop-b" }), offer("a", 20)],
+      now,
+    );
+    expect(summary).toMatchObject({ state: "in_stock", offerCount: 1, shopCount: 1, min: 20 });
+  });
+
+  it("the summary counts every offer when all are stale", () => {
+    const summary = summarizeOffers(
+      [offer("a", 1, "in_stock", old), offer("b", 20, "in_stock", { ...old, shop: "shop-b" })],
+      now,
+    );
+    expect(summary).toMatchObject({ offerCount: 2, min: 1, max: 20 });
+  });
+
+  it("the primary button prefers a fresh offer to a cheaper stale one", () => {
+    expect(primaryOffer([offer("old", 1, "in_stock", old), offer("a", 20)], now)?.id).toBe("a");
+    expect(primaryOffer([offer("old", 1, "in_stock", old)], now)?.id).toBe("old");
+  });
+});

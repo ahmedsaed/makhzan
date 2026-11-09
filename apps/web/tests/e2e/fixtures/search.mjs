@@ -9,6 +9,11 @@
  *   relay      36 products: 30 in stock, 6 not; three categories; some sold
  *              by 2+ shops; some at Shop A
  *   obsolete   2 products, neither in stock
+ *   capacitor  12 products, out of stock and out of date in every mix (C2b):
+ *              4 in stock and fresh, 4 in stock and stale, 2 out of stock and
+ *              fresh, 2 out of stock and stale
+ *   dusty      3 products in stock, all stale
+ *   ancient    3 products, all out of stock and stale
  *   searchfail the API failing
  */
 
@@ -43,15 +48,38 @@ function relay(index) {
     currency: "EGP",
     in_stock: index < 30,
     image: null,
-    // A spread of ages, so freshness shows in all three of its states.
-    last_verified_at: NOW - (index % 3) * 25 * DAY,
+    // Quiet and muted ages; none stale, which "capacitor" covers (C2b).
+    last_verified_at: NOW - (index % 3) * 20 * DAY,
+  };
+}
+
+/** Stale is more than 45 whole days; 76 is what the unreachable shops are. */
+const STALE_AGE = 76 * DAY;
+
+function capacitor(index) {
+  return {
+    ...relay(index),
+    id: `capacitor-${index}`,
+    title_en: `Capacitor ${index} ${index < 8 ? "in stock" : "gone"} ${index % 2 ? "old" : "new"}`,
+    in_stock: index < 8,
+    last_verified_at: index % 2 ? NOW - STALE_AGE : NOW - 2 * DAY,
   };
 }
 
 const CATALOGUE = {
   relay: Array.from({ length: 36 }, (_, index) => relay(index)),
   obsolete: [relay(31), relay(32)].map((hit) => ({ ...hit, title_en: `Obsolete ${hit.title_en}` })),
+  capacitor: Array.from({ length: 12 }, (_, index) => capacitor(index)),
+  dusty: [1, 3, 5].map((index) => ({ ...capacitor(index), title_en: `Dusty ${index}` })),
+  ancient: [9, 11, 13].map((index) => ({
+    ...capacitor(index),
+    in_stock: false,
+    title_en: `Ancient ${index}`,
+  })),
 };
+
+/** What the API's `fresh` filter keeps: checked within 45 whole days. */
+const fresh = (hit) => Math.floor(Date.now() / 1000) - hit.last_verified_at < 46 * DAY;
 
 function count(hits, key) {
   const out = {};
@@ -72,6 +100,7 @@ export function searchFixture(url) {
   let hits = all.filter(
     (hit) =>
       (params.get("in_stock") !== "true" || hit.in_stock) &&
+      (params.get("fresh") !== "true" || fresh(hit)) &&
       (!params.get("category") || hit.category_ref === params.get("category")) &&
       (!params.get("domain") || hit.domain === params.get("domain")) &&
       (!params.get("shop") || hit.supplier_slugs.includes(params.get("shop"))) &&

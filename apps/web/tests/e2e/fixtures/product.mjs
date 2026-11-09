@@ -1,7 +1,8 @@
 /**
  * Stub payloads for the product page (tests/e2e/product.spec.ts): one offer
  * with a stale price, several offers with out-of-stock ones to fold, every
- * offer out of stock, and one whose shop published specs and datasheets.
+ * offer out of stock, and one whose shop published specs and datasheets;
+ * several offers some of which are stale, and several all of which are (C2b).
  * Shops are fictional; check dates are relative to when
  * the stub starts, so the freshness tiers hold whatever day the suite runs.
  */
@@ -116,7 +117,7 @@ const PRODUCTS = {
     offer("o-oos1", VOLT, "ESP32 DevKit 30 pin, old stock", 240, "out_of_stock", 9),
     offer("o-m5", NILE, "ESP32 Development Board 38-Pin – Micro USB", 295, "in_stock", 28),
     offer("o-m2", NILE, "ESP32 Development Board 30-Pin with CP2102 Type-C", 270, "in_stock", 29),
-    offer("o-oos2", DELTA, "ESP32 38 pin board", 300, "out_of_stock", 60),
+    offer("o-oos2", DELTA, "ESP32 38 pin board", 300, "out_of_stock", 40),
     offer("o-m4", DELTA, "ESP32S ESP-WROOM-32 38-Pin CP2102", 290, "in_stock", 16),
   ]),
   // What the shop published (rule C4): brand, spec rows and datasheets, and
@@ -148,6 +149,18 @@ const PRODUCTS = {
     offer("o-x1", VOLT, "LM2596 DC-DC Buck Module", 45, "out_of_stock", 30),
     offer("o-x2", NILE, "LM2596 Step Down Converter", 40, "out_of_stock", 2),
     offer("o-x3", DELTA, "LM2596 Adjustable Buck", 50, "out_of_stock", 12),
+  ]),
+  // Fresh and stale offers (C2b): the stale ones, the cheapest among them,
+  // fold away, and the summary and the button lead with the fresh one.
+  "p-stale-mix": product("p-stale-mix", "INA219 Current Sensor Module", [
+    offer("o-sm-fresh", NILE, "INA219 Current Sensor Module", 120, "in_stock", 5),
+    offer("o-sm-old", VOLT, "INA219 I2C Current Sensor", 90, "in_stock", 76),
+    offer("o-sm-old-gone", DELTA, "INA219 Bi-directional Sensor", 100, "out_of_stock", 80),
+  ]),
+  // Every offer stale: the page still renders, and says so once.
+  "p-all-stale": product("p-all-stale", "TP4056 Charger Module", [
+    offer("o-as1", VOLT, "TP4056 Charger Module Type-C", 15, "in_stock", 76),
+    offer("o-as2", DELTA, "TP4056 1A Li-ion Charger", 18, "in_stock", 90),
   ]),
   // As little as a product gets: one shop, one photo, a title, no category,
   // no description and nothing similar. Its facts are one line, not empty ones.

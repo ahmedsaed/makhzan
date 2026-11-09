@@ -83,10 +83,13 @@ services:
       - -c
       - >-
         cd /workspace/packages/schemas && alembic upgrade head &&
-        cd /workspace/apps/ingestion && python -m worker.sources.sync
+        cd /workspace/apps/ingestion && python -m worker.sources.sync &&
+        python -m worker.ensure_index
     depends_on:
       db:
         condition: service_healthy
+      search:
+        condition: service_started
     restart: "no"
 
   api:

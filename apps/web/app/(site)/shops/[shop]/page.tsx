@@ -45,6 +45,14 @@ import { DepartmentBar } from "../_components/department-bar";
  * category and price rail on desktop, sort, list or grid, paging. The shop is
  * fixed by the path, and its name is left off every row, where it would only
  * repeat the heading.
+ *
+ * Stale products are hidden by default everywhere else (C2b), but not here
+ * when the shop's own data is stale: the visitor asked for this shop, the note
+ * in the header already says its data is old (F3), and the filter would
+ * otherwise hide nearly everything, or show only the few products a fresher
+ * shop also sells, which reads as the shop's catalogue having shrunk. The
+ * "Checked recently" chip still turns it on. A shop that is up to date gets
+ * the usual default; its products are fresh through its own offers anyway.
  */
 export async function generateMetadata({
   params,
@@ -76,15 +84,19 @@ export default async function ShopPage({
   // The path decides the shop; a `?shop=` would only contradict it.
   const { shop: _ignored, ...raw } = await searchParams;
   void _ignored;
-  const query: ResultsQuery = { ...parseResultsQuery(raw), shop };
-  const [supplier, data, categories, activity] = await Promise.all([
+  // The shop first: whether its products hide when stale depends on it.
+  const [supplier, categories, activity] = await Promise.all([
     fetchSupplier(shop),
-    fetchResults(query),
     fetchCategories().catch((): Category[] => []),
     // Fails soft (null): the page is about the shop, and renders without it.
     fetchCrawlerActivity(),
   ]);
   if (!supplier) notFound();
+  const query: ResultsQuery = {
+    ...parseResultsQuery(raw, { freshByDefault: !isStale(supplier.last_verified_at) }),
+    shop,
+  };
+  const data = await fetchResults(query);
 
   const pathname = routes.shop(supplier.slug);
   const names = new Map(categories.map((c) => [c.ref, categoryNameOf(c)]));
