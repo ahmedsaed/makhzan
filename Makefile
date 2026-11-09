@@ -55,8 +55,8 @@ test: test-ingestion test-api  ## Run every Python test suite
 test-ingestion:  ## Run the ingestion test suite, and the private configuration's tests
 	cd apps/ingestion && poetry run pytest -c pyproject.toml tests $(PRIVATE_TESTS)
 
-# Its own database, so the two suites can run side by side without one
-# truncating the other's tables mid-test.
+# Every test session creates and drops its own database (see the conftests),
+# so the suites, and several checkouts at once, can run side by side.
 test-api:  ## Run the API test suite
 	cd apps/api && poetry run pytest
 

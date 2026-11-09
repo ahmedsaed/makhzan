@@ -149,7 +149,7 @@ DATABASE_URL="postgresql+asyncpg://makhzan:makhzan@localhost:5432/makhzan" \
 MEILI_URL="http://localhost:7700" MEILI_MASTER_KEY="dev-master-key-change-me" \
   poetry run uvicorn app.main:app --reload   # http://localhost:8000
 ```
-Tests (needs Postgres running; creates its own `makhzan_api_test` database):
+Tests (needs Postgres running; each run creates its own `makhzan_api_test_p<pid>` database and drops it after):
 ```bash
 make test-api            # or: cd apps/api && poetry run pytest
 ```

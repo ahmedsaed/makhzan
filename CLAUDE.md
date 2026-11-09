@@ -395,9 +395,14 @@ are shared by two suppliers, and those are coincidences. Do not group on them.
   before committing.
 - Tests live in `apps/ingestion/tests` and `apps/api/tests`, and run against a
   real Postgres (the schema needs JSONB/UUID). Each `conftest.py` forces
-  `DATABASE_URL` to a separate test database so it can never truncate your dev
-  data, and the two suites use *different* test databases so they can run side
-  by side. `make test-ingestion` / `make test-api` run one on its own.
+  `DATABASE_URL` to a database of its **own test session**: the base name
+  (`makhzan_test`, `makhzan_api_test`, or `TEST_DATABASE_URL`'s) suffixed with
+  the process id or `TEST_DB_SUFFIX`, created at the start and dropped at the
+  end. So it can never truncate your dev data, and any number of runs (both
+  suites, two worktrees, two agents) can go at once; one shared database used to
+  fail them with `StaleDataError` and "cache lookup failed for type". A session
+  killed outright leaves its database behind; drop it by hand.
+  `make test-ingestion` / `make test-api` run one suite on its own.
 - The API suite drives the real app in-process over an ASGI transport and hits a
   real database; only the Meilisearch client is faked, because a filter built on
   the wrong attribute returns a plausible result set rather than an error, and
