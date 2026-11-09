@@ -23,9 +23,10 @@ import {
   titleOf,
   type Offer,
   type Product,
+  type ProductSummary,
 } from "@/lib/api";
 import { formatCount, formatPrice } from "@/lib/format";
-import { freshnessTier, parseVerified } from "@/lib/freshness";
+import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
 import { breadcrumbJsonLd, pageMetadata, productDescription } from "@/lib/metadata";
 import {
   brandOf,
@@ -85,14 +86,14 @@ function productPath(id: string, product: Product): string {
 }
 
 /**
- * An id a regroup replaced redirects, permanently, to the product its offers
- * moved to: the old URL may be shared or indexed. 308 rather than a page under
- * the old URL, so links and search engines move over.
+ * Product ids are permanent (docs/decisions/0004-stable-product-ids.md). An id
+ * merged into another product, or one deleted before ids were permanent,
+ * redirects permanently to the product its offers went to: the old URL may be
+ * shared or indexed. 308 rather than a page under the old URL, so links and
+ * search engines move over.
  *
- * A product with no offers left is one every shop has withdrawn. For now that
- * is a 404, the same as an id that never existed. When products get stable ids
- * across regrouping, this is where a "no longer listed" page goes instead:
- * the title, the last price seen and when, and similar products.
+ * A product with no offers left is one every shop has withdrawn. It keeps its
+ * page, as "no longer listed" (`isGone`).
  */
 async function loadProduct(id: string): Promise<Product> {
   const product = await fetchProduct(id);
@@ -105,8 +106,15 @@ async function loadProduct(id: string): Promise<Product> {
     }
     notFound();
   }
-  if (product.offers.length === 0) notFound();
   return product;
+}
+
+/**
+ * Every shop has withdrawn it: the API says "delisted", or (between a sweep
+ * and the regroup after it) it has no offer left.
+ */
+function isGone(product: Product): boolean {
+  return product.status === "delisted" || product.offers.length === 0;
 }
 
 export async function generateMetadata({
@@ -122,6 +130,11 @@ export async function generateMetadata({
     description: productDescription(product),
     path: productPath(id, product),
     ownCard: true,
+    // A withdrawn product's page is 200 and noindex: useful to someone who
+    // followed a link (what it was, what it cost, what is like it), but not a
+    // page a search should send anyone to. It drops out of the index the way a
+    // 410 would, and comes back by itself if a shop lists it again.
+    noindex: isGone(product),
   });
 }
 
@@ -135,6 +148,10 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   if (`/products/${param}` !== path) permanentRedirect(path);
   const now = new Date();
   const title = displayTitle(product);
+  if (isGone(product)) {
+    const similar = await fetchSimilar(id, 8).catch(() => []);
+    return <NoLongerListed product={product} title={title} similar={similar} now={now} />;
+  }
   const several = product.offers.length >= 2;
   const primary = primaryOffer(product.offers);
   const brand = brandOf(product);
@@ -304,33 +321,122 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
         )}
       </div>
 
-      {similar.length > 0 && (
-        <section
-          id="similar"
-          data-similar
-          aria-labelledby="similar-heading"
-          className="mt-8 scroll-mt-20"
-        >
-          <h2 id="similar-heading" className="mb-2.5 text-[15px] lg:text-lg">
-            Similar products
-          </h2>
-          {/* A swipeable row on a phone, with arrows; a grid from `sm`. */}
-          <Carousel previous="Previous products" next="Next products" buttonClassName="sm:hidden">
-            <ul
-              data-carousel-track
-              // The scroll padding matches the side padding, so the first card
-              // snaps where it starts and the strip opens at its start.
-              className="-mx-4 flex snap-x scroll-px-4 gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8"
-            >
-              {similar.map((item) => (
-                <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
-              ))}
-            </ul>
-          </Carousel>
-        </section>
-      )}
+      <SimilarProducts similar={similar} now={now} />
 
       {primary && <BottomBar offer={primary} now={now} />}
+    </Container>
+  );
+}
+
+/** The row of similar products that ends every product page. */
+function SimilarProducts({ similar, now }: { similar: ProductSummary[]; now: Date }) {
+  if (similar.length === 0) return null;
+  return (
+    <section
+      id="similar"
+      data-similar
+      aria-labelledby="similar-heading"
+      className="mt-8 scroll-mt-20"
+    >
+      <h2 id="similar-heading" className="mb-2.5 text-[15px] lg:text-lg">
+        Similar products
+      </h2>
+      {/* A swipeable row on a phone, with arrows; a grid from `sm`. */}
+      <Carousel previous="Previous products" next="Next products" buttonClassName="sm:hidden">
+        <ul
+          data-carousel-track
+          // The scroll padding matches the side padding, so the first card
+          // snaps where it starts and the strip opens at its start.
+          className="-mx-4 flex snap-x scroll-px-4 gap-2.5 overflow-x-auto px-4 pb-1 *:w-36 *:shrink-0 *:snap-start sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:*:w-auto md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8"
+        >
+          {similar.map((item) => (
+            <ResultCard key={item.id} hit={hitFromSummary(item)} now={now} />
+          ))}
+        </ul>
+      </Carousel>
+    </section>
+  );
+}
+
+/**
+ * A product every shop has withdrawn. Its id is permanent, so its page stays:
+ * what it was, what it last cost and when, and what is like it, so whoever
+ * followed a link here can carry on. No offers, no way out to a shop (none
+ * sells it), and noindex (see generateMetadata). If a shop lists it again the
+ * same URL becomes the full page again.
+ */
+function NoLongerListed({
+  product,
+  title,
+  similar,
+  now,
+}: {
+  product: Product;
+  title: string;
+  similar: ProductSummary[];
+  now: Date;
+}) {
+  const checked = parseVerified(product.last_verified_at);
+  const gone = parseVerified(product.delisted_at ?? null);
+  const query = product.part_number || titleOf(product);
+  return (
+    <Container className="pt-3 pb-8 lg:pt-4 lg:pb-12">
+      <div className="flex gap-3 lg:gap-5">
+        <PhotoFrame src={product.image} alt={title} size={104} />
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <h1 dir="auto" className="text-xl leading-tight lg:text-[26px]">
+            {title}
+          </h1>
+          {product.part_number && (
+            <p className="text-[13px] text-ink-2 lg:text-sm">
+              Part number{" "}
+              <span data-identifier className="text-ink">
+                {product.part_number}
+              </span>
+            </p>
+          )}
+        </div>
+      </div>
+
+      <section
+        data-no-longer-listed
+        aria-labelledby="gone-heading"
+        className="mt-4 flex flex-col gap-2 rounded-card border border-line bg-surface p-3.5 lg:max-w-2xl lg:p-4.5"
+      >
+        <h2 id="gone-heading" className="text-base font-semibold">
+          No longer listed
+        </h2>
+        <p className="text-sm text-ink-2">
+          No shop on makhzan sells this any more
+          {gone ? `; the last one stopped listing it ${agoText(daysSince(gone, now))}` : ""}.
+        </p>
+        {(product.min_price !== null || checked) && (
+          <p data-last-price className="flex flex-wrap items-baseline gap-x-1.5 text-sm text-ink-2">
+            {product.min_price !== null && (
+              <>
+                Last price seen
+                <PriceRange
+                  min={product.min_price}
+                  max={product.max_price}
+                  currency={product.currency}
+                  className="text-base text-ink"
+                />
+              </>
+            )}
+            {checked && <span>checked {agoText(daysSince(checked, now))}</span>}
+          </p>
+        )}
+        {query && (
+          <Link
+            href={`/search?${new URLSearchParams({ q: query })}`}
+            className="mt-1 inline-flex min-h-11 items-center self-start text-sm font-medium text-link underline"
+          >
+            Search for {query}
+          </Link>
+        )}
+      </section>
+
+      <SimilarProducts similar={similar} now={now} />
     </Container>
   );
 }
