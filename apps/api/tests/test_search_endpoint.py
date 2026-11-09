@@ -65,7 +65,7 @@ async def test_a_result_without_the_optional_keys_does_not_break_the_envelope(cl
 
 async def test_filters_are_forwarded_verbatim(client, backend):
     await client.get(
-        "/search?q=multimeter&category=tools:measurement&domain=tools&in_stock=true"
+        "/search?q=multimeter&category=tools:measurement&domain=tools&in_stock=true&fresh=true"
         "&min_price=50&max_price=500&sort=price:asc&limit=10&offset=20"
     )
 
@@ -74,6 +74,7 @@ async def test_filters_are_forwarded_verbatim(client, backend):
         "category": "tools:measurement",
         "domain": "tools",
         "in_stock": True,
+        "fresh": True,
         "min_price": 50.0,
         "max_price": 500.0,
         "min_suppliers": None,
@@ -95,6 +96,9 @@ async def test_defaults_when_nothing_is_supplied(client, backend):
         "category": None,
         "domain": None,
         "in_stock": False,
+        # Everything, like in_stock: the API is a plain filter, and the site
+        # sends fresh=true itself for its hidden-by-default stale products.
+        "fresh": False,
         "min_price": None,
         "max_price": None,
         "min_suppliers": None,
