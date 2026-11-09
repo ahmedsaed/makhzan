@@ -25,8 +25,9 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
   the API is never exposed. Expose the API port yourself only if you need direct
   external access.
 - **db / search / redis** are internal-only; state lives in named Docker volumes.
-- **ingestion** runs the Arq worker; a daily cron (`REFRESH_HOUR`, UTC) re-scrapes
-  all suppliers, regroups products, and reindexes search.
+- **ingestion** runs the Arq worker; a daily cron (`REFRESH_HOUR`, UTC) queues one
+  job per enabled supplier, each with its own timeout, and every supplier job
+  queues a shared regroup-and-reindex when it ends.
 - **migrate** is a one-shot service that runs `alembic upgrade head` on every
   deploy before api/ingestion start.
 
@@ -136,7 +137,7 @@ crawler report from `scripts/status.py`, read from the live database.
 | Re-seed from a dump | `./scripts/restore-seed.sh [path]` |
 | Full re-scrape + reindex now | `./scripts/seed.sh` |
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
-| Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker |
+| Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
 | Back up the DB | `./scripts/backup-db.sh` → `backups/*.sql.gz` |
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
 | Status | `docker compose -f docker-compose.prod.yml --env-file .env.prod ps` |

@@ -65,6 +65,13 @@ def build_adapter(source: Source) -> SourceAdapter:
     """
     options = dict(source.config or {})
     crosswalk = options.pop("crosswalk", None)
+    target_cycle_days = options.pop("target_cycle_days", None)
+    if target_cycle_days is not None and (
+        isinstance(target_cycle_days, bool)
+        or not isinstance(target_cycle_days, int | float)
+        or target_cycle_days <= 0
+    ):
+        raise ValueError(f"target_cycle_days must be a positive number, got {target_cycle_days!r}")
     if crosswalk is not None:
         loaded = load_crosswalk(crosswalk)
         options["categories"] = loaded.categories
@@ -76,12 +83,20 @@ def build_adapter(source: Source) -> SourceAdapter:
             options["prefer"] = loaded.prefer
     if source.base_url is not None:
         options["base_url"] = source.base_url
-    return adapter_class(source.adapter)(
+    adapter = adapter_class(source.adapter)(
         source_id=source.source_id,
         supplier=SupplierInfo(**source.supplier),
         enabled=source.enabled,
         **options,
     )
+    if crosswalk is not None and loaded.ignore:
+        # Read only by the drift check, so set here rather than passed in:
+        # every adapter has it, a bespoke one kept elsewhere included.
+        adapter.ignored_categories = loaded.ignore
+    if target_cycle_days is not None:
+        # Read by the pipeline, never by the adapter: set rather than passed in.
+        adapter.target_cycle_days = float(target_cycle_days)
+    return adapter
 
 
 def register(adapter: SourceAdapter) -> SourceAdapter:

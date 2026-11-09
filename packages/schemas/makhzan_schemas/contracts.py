@@ -586,7 +586,12 @@ class PricePoint(BaseModel):
     price: float | None = None
     currency: str
     stock_signal: StockSignal
+    #: False while the listing was archived, as well as while it was out of stock.
     in_stock: bool
+    #: False from when the listing was archived (the shop stopped listing it)
+    #: until it was seen again. Its price and stock signal are then only the
+    #: last ones read, not an offer.
+    available: bool = True
 
 
 class ListingHistory(BaseModel):

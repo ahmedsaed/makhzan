@@ -334,17 +334,85 @@ async def test_the_whole_shop_pass_does_not_erase_a_category(_clean_tables):
     assert await _category_slug_of() == "resistors", "the category survived a sweep that had none"
 
 
-async def test_an_authoritative_miss_still_clears_the_category(_clean_tables):
-    """The other half: a sweep that *does* browse by category and finds the item
-    under one we do not map has genuinely uncategorized it. That must show."""
+@pytest.mark.parametrize(
+    "order",
+    [["cat-resistors", "cat-unmapped"], ["cat-unmapped", "cat-resistors"]],
+)
+async def test_a_product_in_a_mapped_and_an_unmapped_category_keeps_the_mapped_one(
+    _clean_tables, order
+):
+    """A product filed under two categories, one mapped and one not, used to
+    take whatever the later partition said: the unmapped one cleared it. On
+    the Odoo shop that is how servos lost their category. Whichever order the
+    two are swept in, the mapped category stands."""
     await _seed_taxonomy()
     crosswalk = {"cat-resistors": ("electronics", "resistors")}
 
-    await run_source(SRC, CategoryAdapter(["cat-resistors"], crosswalk))
+    await run_source(SRC, CategoryAdapter(order, crosswalk))
     assert await _category_slug_of() == "resistors"
+    # And over the next cycle too, the unmapped partition swept on its own.
+    await run_source(SRC, CategoryAdapter(["cat-unmapped"], crosswalk))
+    assert await _category_slug_of() == "resistors"
+
+
+async def test_a_product_only_under_unmapped_categories_stays_uncategorized(_clean_tables):
+    """An authoritative miss still never guesses: no mapped category, no category."""
+    await _seed_taxonomy()
+    crosswalk = {"cat-resistors": ("electronics", "resistors")}
 
     await run_source(SRC, CategoryAdapter(["cat-unmapped"], crosswalk))
     assert await _category_slug_of() is None
+
+
+# --------------------------------------------------------------------------- #
+# A finished partition waits for the next cycle
+# --------------------------------------------------------------------------- #
+
+
+class SizedPartitions(SourceAdapter):
+    """Partitions of different sizes, one item per page, paced by pages alone."""
+
+    source_id = SRC
+    source_type = SourceType.SCRAPED
+    supplier = SupplierInfo(slug=SRC, name="Test Shop")
+    polite_delay = 0
+
+    def __init__(self, sizes: dict[str, int], max_pages_per_run: int):
+        self.sizes = sizes
+        self.max_pages_per_run = max_pages_per_run
+        self.fetched: list[tuple[str, int]] = []
+
+    def partitions(self):
+        return list(self.sizes)
+
+    async def fetch_page(self, partition, page):
+        self.fetched.append((partition, page))
+        item = RawItem(
+            source=SRC,
+            external_id=f"{partition}-{page}",
+            title=f"Item {partition} {page}",
+            price_text="10 EGP",
+            availability_text="In stock",
+        )
+        return Page([item], has_more=page < self.sizes[partition])
+
+
+async def test_a_partition_finished_this_cycle_is_not_swept_again(_clean_tables):
+    """Without `max_partitions_per_run`, a partition finished earlier in the
+    cycle (its cursor back at page 1) was read again from the start on every
+    later run: shop 1 re-read its 49 out-of-stock pages 90 times a cycle."""
+    adapter = SizedPartitions({"outofstock": 2, "instock": 7}, max_pages_per_run=3)
+
+    cycle = {}
+    for _ in range(10):
+        run = await run_source(SRC, adapter)
+        if cycle := (run.stats or {}).get("cycle"):
+            break
+
+    assert cycle, "the cycle closed"
+    expected = [("outofstock", p) for p in (1, 2)] + [("instock", p) for p in range(1, 8)]
+    assert sorted(adapter.fetched) == sorted(expected), "each page read once per cycle"
+    assert len(await _listings()) == 9
 
 
 # --------------------------------------------------------------------------- #
@@ -392,6 +460,59 @@ async def test_unused_is_reported_when_one_run_swept_everything(_clean_tables):
     run = await run_source(SRC, CategoryAdapter(["cat-resistors"], crosswalk))
 
     assert run.stats["crosswalk"]["unused"] == ["cat-retired"]
+
+
+class _Drift(SourceAdapter):
+    """Only what `_crosswalk_drift` reads: the crosswalk and its ignore list."""
+
+    source_id = "drift"
+    source_type = SourceType.SCRAPED
+    supplier = SupplierInfo(slug="drift", name="Drift")
+
+    def __init__(self, categories, ignored=()):
+        self.categories = categories
+        self.ignored_categories = tuple(ignored)
+
+    async def fetch_page(self, partition, page):
+        raise NotImplementedError
+
+
+def test_drift_compares_names_folded_as_the_lookup_does():
+    """The lookup folds case and punctuation, so the drift check must too:
+    comparing exact strings reported "LED" and "Raspberry Pi" as unmapped while
+    every listing under them was being mapped."""
+    from collections import Counter
+
+    from worker.pipeline import _crosswalk_drift
+
+    adapter = _Drift(
+        {
+            "LEDs": ("electronics", "leds"),
+            "Raspberry Pi": ("electronics", "dev-boards"),
+            "Diodes - General Purpose": ("electronics", "diodes"),
+        }
+    )
+    observed = Counter({"leds": 5, "RASPBERRY  PI": 3, "Diodes – General Purpose": 2})
+
+    assert _crosswalk_drift(adapter, observed, complete=True) is None
+
+    observed["Teensy Board"] = 4
+    drift = _crosswalk_drift(adapter, observed, complete=True)
+    assert drift["unmapped"] == {"Teensy Board": 4}
+    assert "unused" not in drift
+
+
+def test_names_left_unmapped_on_purpose_are_not_drift():
+    from collections import Counter
+
+    from worker.pipeline import _crosswalk_drift
+
+    adapter = _Drift({"Sensors": ("electronics", "sensors")}, ignored=["Uni-T", "Accessories"])
+    observed = Counter({"Sensors": 9, "uni-t": 4, "Accessories": 2, "Cooling Solutions": 401})
+
+    drift = _crosswalk_drift(adapter, observed, complete=True)
+    assert drift["unmapped"] == {"Cooling Solutions": 401}
+    assert drift["unmapped_listings"] == 401
 
 
 # --------------------------------------------------------------------------- #
@@ -644,14 +765,34 @@ async def test_a_worker_closes_runs_a_previous_worker_left_running():
     assert runs["done"].status == IngestionStatus.SUCCESS
 
 
-def test_the_daily_refresh_is_not_cut_off_at_arqs_five_minute_default():
-    """arq cancels a job after 300 s unless told otherwise. The daily refresh
-    crawls every source at a polite pace and then rebuilds products and the
-    search index; at 300 s it was killed mid-sweep every day and the rebuild
-    never ran. It must be allowed hours."""
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_a_starting_worker_states_its_crawl_flag_for_the_api(monkeypatch, enabled):
+    """The API reports the flag from the database: `./makhzan crawl off`
+    recreates only the worker, so the API's own environment goes stale."""
+    from makhzan_schemas import crawl
+    from makhzan_schemas.db import SessionLocal
+
+    from worker import main
+
+    async def no_adapters():
+        return None
+
+    monkeypatch.setattr(main, "load_adapters", no_adapters)
+    monkeypatch.setattr(main, "CRAWL_ENABLED", enabled)
+    monkeypatch.setenv("CRAWL_ENABLED", "false" if enabled else "true")  # the API's, stale
+    await main.startup({})
+
+    async with SessionLocal() as session:
+        assert await crawl.crawl_enabled_in(session) is enabled
+
+
+def test_a_source_run_is_not_cut_off_at_arqs_five_minute_default():
+    """arq cancels a job after 300 s unless told otherwise; at 300 s the old
+    all-sources refresh was killed mid-sweep every day. Each source's job, and
+    a run enqueued by hand, must be allowed hours."""
     from worker.main import JOB_TIMEOUT, WorkerSettings
 
     assert JOB_TIMEOUT >= 3600
     assert WorkerSettings.job_timeout == JOB_TIMEOUT
-    (job,) = WorkerSettings.cron_jobs
-    assert job.timeout_s == JOB_TIMEOUT
+    jobs = {f.name: f for f in WorkerSettings.functions if hasattr(f, "timeout_s")}
+    assert jobs["crawl_source"].timeout_s == JOB_TIMEOUT
