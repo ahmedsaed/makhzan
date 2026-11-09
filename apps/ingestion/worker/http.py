@@ -64,8 +64,8 @@ BROWSER_HEADERS = {
 #: a slice of the catalogue, so even the busiest source makes a few hundred
 #: requests a day and can afford a long pause between them.
 #: This is a per-HOST pace, not a global one: sources hit different origins with
-#: independent rate limits, so the worker scrapes them concurrently (see
-#: refresh_all) while each host still sees only one request per this interval.
+#: independent rate limits, so the worker scrapes them concurrently (one job
+#: per source, see worker.main) while each host still sees only one request per this interval.
 #: Touchier sources (e.g. behind Cloudflare) can raise it via SourceAdapter.polite_delay.
 POLITE_DELAY = 15.0
 

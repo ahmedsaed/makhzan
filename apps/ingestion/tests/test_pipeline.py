@@ -786,14 +786,13 @@ async def test_a_starting_worker_states_its_crawl_flag_for_the_api(monkeypatch, 
         assert await crawl.crawl_enabled_in(session) is enabled
 
 
-def test_the_daily_refresh_is_not_cut_off_at_arqs_five_minute_default():
-    """arq cancels a job after 300 s unless told otherwise. The daily refresh
-    crawls every source at a polite pace and then rebuilds products and the
-    search index; at 300 s it was killed mid-sweep every day and the rebuild
-    never ran. It must be allowed hours."""
+def test_a_source_run_is_not_cut_off_at_arqs_five_minute_default():
+    """arq cancels a job after 300 s unless told otherwise; at 300 s the old
+    all-sources refresh was killed mid-sweep every day. Each source's job, and
+    a run enqueued by hand, must be allowed hours."""
     from worker.main import JOB_TIMEOUT, WorkerSettings
 
     assert JOB_TIMEOUT >= 3600
     assert WorkerSettings.job_timeout == JOB_TIMEOUT
-    (job,) = WorkerSettings.cron_jobs
-    assert job.timeout_s == JOB_TIMEOUT
+    jobs = {f.name: f for f in WorkerSettings.functions if hasattr(f, "timeout_s")}
+    assert jobs["crawl_source"].timeout_s == JOB_TIMEOUT
