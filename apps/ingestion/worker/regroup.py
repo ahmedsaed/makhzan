@@ -5,36 +5,38 @@ reads listings as they are (categories, part numbers, prices untouched),
 recomputes which listings form one product, and reloads Meilisearch from the
 result. Re-runnable; the index is a disposable projection of the database.
 
-Product ids follow group keys (docs/decisions/0004-stable-product-ids.md), so a
-grouping change gives new ids to the products it splits or merges.
+Product ids are permanent (docs/decisions/0004-stable-product-ids.md): a
+grouping change merges or splits products, each recorded in `product_events`,
+and every existing id keeps working, as a product or as a redirect to one.
+`--dry-run` reports what a regroup would do and changes nothing, the search
+index included.
 
 Not to be confused with `worker.backfill`, which re-infers every category from
 titles first and so erases the categories crosswalks set.
 
-Run (inside the ingestion container):  python -m worker.regroup
+Run (inside the ingestion container):  python -m worker.regroup [--dry-run]
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.grouping import describe, rebuild_products
 
 from worker.indexer import get_client, reindex_all
 
 
-async def main() -> None:
+async def main(dry_run: bool = False) -> None:
     async with SessionLocal() as session:
-        grouped = await rebuild_products(session)
-        print(
-            f"products: {grouped['products']} "
-            f"({grouped['multi_supplier']} multi-supplier, removed {grouped['removed']})",
-            flush=True,
-        )
+        grouped = await rebuild_products(session, dry_run=dry_run)
+        print(("would regroup: " if dry_run else "") + describe(grouped), flush=True)
+        if dry_run:
+            return
         count = await reindex_all(session, get_client())
         print(f"reindexed {count} documents", flush=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(dry_run="--dry-run" in sys.argv[1:]))

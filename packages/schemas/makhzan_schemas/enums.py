@@ -60,3 +60,17 @@ class ReviewStatus(StrEnum):
 
 
 DEFAULT_CURRENCY = "EGP"
+
+
+class ProductEventKind(StrEnum):
+    """What a regroup did to a product's identity (`product_events`).
+
+    docs/decisions/0004-stable-product-ids.md: ids are permanent, so a regroup
+    never deletes or re-keys a product; it merges, splits, empties or revives
+    one, and records which.
+    """
+
+    MERGE = "merge"  # this product's offers joined another, which it now redirects to
+    SPLIT = "split"  # some of this product's offers left for a new product
+    EMPTIED = "emptied"  # its last active offer went: "no longer listed"
+    REVIVED = "revived"  # an emptied product has an active offer again

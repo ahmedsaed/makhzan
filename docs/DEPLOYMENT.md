@@ -27,7 +27,8 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
 - **db / search / redis** are internal-only; state lives in named Docker volumes.
 - **ingestion** runs the Arq worker; a daily cron (`REFRESH_HOUR`, UTC) queues one
   job per enabled supplier, each with its own timeout, and every supplier job
-  queues a shared regroup-and-reindex when it ends.
+  queues a shared regroup-and-reindex when it ends; the first of those each day
+  also retires product redirects unused for a year.
 - **migrate** is a one-shot service that runs `alembic upgrade head` on every
   deploy before api/ingestion start.
 
@@ -137,6 +138,8 @@ crawler report from `scripts/status.py`, read from the live database.
 | Re-seed from a dump | `./scripts/restore-seed.sh [path]` |
 | Full re-scrape + reindex now | `./scripts/seed.sh` |
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
+| What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
+| Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
 | Back up the DB | `./scripts/backup-db.sh` → `backups/*.sql.gz` |
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
@@ -180,7 +183,9 @@ Once, in this order, on the server from `~/Documents/Projects/makhzan`:
    offers went (`product_redirects`, created by this release's migration) and the
    product page answers an old id with a 308. That only holds if this release's
    images are what runs the regroup, which is why it comes after step 3. Never
-   `worker.backfill` here: it erases crosswalk categories.
+   `worker.backfill` here: it erases crosswalk categories. (From the permanent-ids
+   release on, below, a regroup keeps ids instead: merges redirect, nothing is
+   deleted.)
 5. **Check it:**
    - `./makhzan status`: containers healthy, the search index in step with the
      database ("drift" none), the regroup's product count.
@@ -191,6 +196,31 @@ Once, in this order, on the server from `~/Documents/Projects/makhzan`:
    enrichment, and the removal of non-products, land as each source is
    re-crawled: one cycle per source, about a week. Two sources still block the
    server's address and will not refresh until their shops allowlist it.
+
+### Permanent product ids (November 2026)
+
+`docs/decisions/0004-stable-product-ids.md`. Nothing to do by hand beyond the
+usual order:
+
+1. `./makhzan backup`.
+2. Merge, wait for `build.yml`, `make deploy`. The migration (`32ed14ef673e`, after
+   the crawler release's `afbb04810ff9`) adds
+   `products.merged_into`/`merged_at`/`delisted_at`/`redirect_used_at`,
+   `product_redirects.last_used_at` and `product_events`, and makes `group_key`
+   non-unique. It moves no data.
+3. Optionally, before the next regroup, see what it will do:
+   `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run`.
+   Expect almost every id kept (on the local snapshot: all of them) and no merges.
+4. The next product rebuild (the worker's `rebuild_and_reindex` job, queued when a
+   source's daily job ends) applies it; `python -m worker.regroup` does it now.
+   `./makhzan status`'s search drift compares the index with *listed* products.
+
+**Rollback** past this release is not image-only: an older image deletes products
+by group key and trips over `merged_into`. Run
+`alembic downgrade afbb04810ff9` first (it deletes merged-away and emptied rows so
+`group_key` can be unique again), then roll the image back. That is the revision
+just before this one; `96e50c11754e` would also undo the crawler release's
+`worker_state` and `price_observations.available`.
 
 ### Shop data release (November 2026)
 
