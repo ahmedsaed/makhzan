@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.search import search_products
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
+from makhzan_schemas.freshness import STALE_AFTER_DAYS
 from makhzan_schemas.search import looks_like_identifier
 
 router = APIRouter(tags=["search"])
@@ -20,6 +21,13 @@ async def search(
         None, description="Scope to one vertical, e.g. tools. Omit to search across all of them"
     ),
     in_stock: bool = Query(False, description="Only products with an in-stock offer"),
+    fresh: bool = Query(
+        False,
+        description=(
+            f"Only products with an offer checked within the last {STALE_AFTER_DAYS} days. "
+            "Off by default, like in_stock: the site asks for it explicitly"
+        ),
+    ),
     min_price: float | None = Query(None, ge=0),
     max_price: float | None = Query(None, ge=0),
     min_suppliers: int | None = Query(
@@ -48,6 +56,7 @@ async def search(
         category=category,
         domain=domain,
         in_stock=in_stock,
+        fresh=fresh,
         min_price=min_price,
         max_price=max_price,
         min_suppliers=min_suppliers,
