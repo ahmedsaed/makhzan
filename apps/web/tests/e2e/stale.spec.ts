@@ -22,7 +22,7 @@ test.describe("results hide stale products by default (C2b)", () => {
     await expect(count(page)).toHaveText("4 in stock · 2 more out of stock · 4 more out of date");
     await expect(rows(page)).toHaveCount(4);
     await expect(rows(page).filter({ hasText: "old" })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Recently checked" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "Checked recently" })).toHaveAttribute(
       "aria-current",
       "true",
     );
@@ -34,7 +34,7 @@ test.describe("results hide stale products by default (C2b)", () => {
     await expect(count(page)).toHaveText("8 in stock · 4 more out of stock");
     await expect(rows(page).filter({ hasText: "old" }).first()).toBeVisible();
     await expect(rows(page).locator('[data-freshness="warn"]').first()).toBeVisible();
-    await expect(page.getByRole("link", { name: "Recently checked" })).not.toHaveAttribute(
+    await expect(page.getByRole("link", { name: "Checked recently" })).not.toHaveAttribute(
       "aria-current",
     );
   });
@@ -51,9 +51,9 @@ test.describe("results hide stale products by default (C2b)", () => {
 
   test("the chip toggles the filter, and the parameter with it", async ({ page }) => {
     await page.goto("/search?q=capacitor");
-    await page.getByRole("link", { name: "Recently checked" }).click();
+    await page.getByRole("link", { name: "Checked recently" }).click();
     await expect(page).toHaveURL(/stale=all/);
-    await page.getByRole("link", { name: "Recently checked" }).click();
+    await page.getByRole("link", { name: "Checked recently" }).click();
     await expect(page).not.toHaveURL(/stale=/);
     await expect(count(page)).toHaveText("4 in stock · 2 more out of stock · 4 more out of date");
   });
@@ -143,7 +143,7 @@ test.describe("a shop's own page (C2b)", () => {
     await expect(page.locator("[data-stale-note]")).toBeVisible();
     const products = page.locator("[data-shop-products]");
     await expect(products.locator("[data-result]")).toHaveCount(2);
-    const chip = products.getByRole("link", { name: "Recently checked" });
+    const chip = products.getByRole("link", { name: "Checked recently" });
     await expect(chip).not.toHaveAttribute("aria-current");
 
     // The chip still hides them, and the page says what it hid.
@@ -158,7 +158,7 @@ test.describe("a shop's own page (C2b)", () => {
   test("a fresh shop keeps the usual default", async ({ page }) => {
     await page.goto("/shops/shop-a");
     await expect(
-      page.locator("[data-shop-products]").getByRole("link", { name: "Recently checked" }),
+      page.locator("[data-shop-products]").getByRole("link", { name: "Checked recently" }),
     ).toHaveAttribute("aria-current", "true");
   });
 });

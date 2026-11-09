@@ -126,7 +126,7 @@ export function Results({
           In stock
         </Chip>
         <Chip href={links.fresh} active={query.freshOnly}>
-          Recently checked
+          Checked recently
         </Chip>
         <Chip href={links.twoShops} active={Boolean(query.minSuppliers)}>
           2+ shops

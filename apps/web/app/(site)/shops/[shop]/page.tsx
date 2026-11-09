@@ -51,7 +51,7 @@ import { DepartmentBar } from "../_components/department-bar";
  * in the header already says its data is old (F3), and the filter would
  * otherwise hide nearly everything, or show only the few products a fresher
  * shop also sells, which reads as the shop's catalogue having shrunk. The
- * "Recently checked" chip still turns it on. A shop that is up to date gets
+ * "Checked recently" chip still turns it on. A shop that is up to date gets
  * the usual default; its products are fresh through its own offers anyway.
  */
 export async function generateMetadata({

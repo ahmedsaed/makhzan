@@ -47,7 +47,7 @@ export const SORTS = [
   { value: "", label: "Best match" },
   { value: "price:asc", label: "Price, low first" },
   { value: "supplier_count:desc", label: "Most shops" },
-  { value: "last_verified_at:desc", label: "Recently checked" },
+  { value: "last_verified_at:desc", label: "Checked recently" },
 ] as const;
 
 export type ResultsQuery = {
@@ -276,7 +276,7 @@ export function resultsLinks(pathname: string, raw: RawParams, query: ResultsQue
       in_stock: query.inStockOnly ? SHOW_ALL_STOCK : null,
     }),
     showOutOfStock: withParams(pathname, raw, { in_stock: SHOW_ALL_STOCK }),
-    /** The "Recently checked" chip: turns the freshness filter (C2b) off or on. */
+    /** The "Checked recently" chip: turns the freshness filter (C2b) off or on. */
     fresh: withParams(pathname, raw, {
       stale: query.freshOnly === query.freshByDefault
         ? query.freshByDefault
