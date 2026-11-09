@@ -1,7 +1,7 @@
 """Initial data load / full manual refresh (no Redis needed).
 
 Runs every enabled source once, regroups products, and rebuilds the search
-index — the same work as the daily `refresh_all` cron, but invokable directly so
+index — the work of the daily per-source jobs and their rebuild, invokable directly so
 a fresh deploy has data immediately instead of waiting for the first cron tick.
 
 Run (inside the ingestion container):  python -m worker.seed

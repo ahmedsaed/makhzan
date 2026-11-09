@@ -172,6 +172,20 @@ small ones (the marketplace has 608 categories of ~2 pages, so capping pages wou
 spread nothing). A cycle therefore takes about a week, which is how often a
 product gets re-checked.
 
+**Each source is its own job.** The cron (`refresh_all`) only queues one
+`crawl_source` job per enabled source, with the job id `crawl:<source>:<day>`, so
+a source is never queued twice a day; each has its own timeout
+(`REFRESH_TIMEOUT_SECONDS`), so a host stuck in a long `Retry-After` or a 429
+loop is cut off alone instead of holding every other source and the rebuild. A
+per-source lock in the worker (`_exclusive`) keeps a run enqueued by hand from
+overlapping the daily one: cursors and the pace gate assume one run per source.
+Every source job, however it ends — timeout included — queues
+`rebuild_and_reindex` for the end of the current 10-minute window, deduplicated
+by the window's job id, so sources finishing together share one rebuild and a
+straggler gets its own. All of this assumes **one worker process**: the pace
+gate is process-wide, and `close_interrupted_runs` on startup treats every
+RUNNING row as orphaned.
+
 The Odoo shop needs both: 170 small category partitions *and* one 96-page whole-shop pass.
 **Order matters when one partition is much bigger than the rest.** A run takes
 `max_partitions_per_run` of whatever is still outstanding, in list order, so a

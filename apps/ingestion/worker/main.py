@@ -3,17 +3,23 @@
 Runs source adapters (scrapers / manual imports / portal syncs), normalizes
 their output into Listings, and routes low-confidence items to a review queue.
 
-Scheduling: a daily cron (`refresh_all`) re-scrapes every enabled source so
-prices/stock stay fresh and vanished products get archived. Idempotent upserts
-mean re-runs update in place. Run the worker:  arq worker.main.WorkerSettings
+Scheduling: a daily cron (`refresh_all`) enqueues one `crawl_source` job per
+enabled source, each with its own timeout, so prices/stock stay fresh and
+vanished products get archived. Every source job, however it ends, asks for a
+product rebuild and reindex (`rebuild_and_reindex`), deduplicated so sources
+finishing close together share one. Idempotent upserts mean re-runs update in
+place. Run the worker:  arq worker.main.WorkerSettings
 """
 
 import asyncio
+import logging
 import os
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import date, datetime, timedelta, timezone
 
 from arq import cron
 from arq.connections import RedisSettings
+from arq.worker import func
 from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
@@ -25,6 +31,8 @@ from worker.indexer import get_client, reindex_all
 from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
 from worker.sources.registry import all_enabled, get, load_adapters
+
+log = logging.getLogger(__name__)
 
 #: Hour of day (UTC) for the daily full refresh. Defined beside the API's reading
 #: of it, which publishes when the next run starts.
@@ -41,16 +49,30 @@ CRAWL_ENABLED = crawl.crawl_enabled()
 #: supplier — this caps our total outbound load (and DB connections in use),
 #: not per-host politeness (that's SourceAdapter.polite_delay). Keep it below the
 #: DB pool ceiling (pool_size + max_overflow), since each run holds one session.
+#: It is the worker's `max_jobs`, less the one slot kept for the rebuild.
 MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "8"))
 
-#: How long the daily refresh may run before arq cancels it. arq's own default
-#: is 300 s, and the refresh was being killed at that mark every day: a source
-#: of many small categories needs longer than five minutes at a polite pace, so
-#: its run was cut off mid-sweep, and the product rebuild and reindex at the end
-#: of the job never ran. Pages are durable, so nothing was lost, but search went
-#: stale. Hours, not minutes: the slowest source decides, and a cycle's first
-#: run adds its once-a-cycle requests.
+#: How long one source's run may take before arq cancels it. arq's own default
+#: is 300 s, which once killed the whole daily refresh mid-sweep every day. Per
+#: source now, so a host stuck in a long Retry-After or a 429 loop is cut off
+#: on its own, without holding the other sources or the rebuild. Pages are
+#: durable, so a run cut off loses nothing; the next one resumes from its cursor.
 JOB_TIMEOUT = int(os.getenv("REFRESH_TIMEOUT_SECONDS", str(6 * 3600)))
+
+#: Sources finishing within one window of this many seconds share one rebuild,
+#: run at the end of that window. Short next to a crawl, long next to a rebuild.
+REBUILD_WINDOW = int(os.getenv("REBUILD_WINDOW_SECONDS", "600"))
+
+#: How long the rebuild and reindex may take.
+REBUILD_TIMEOUT = int(os.getenv("REBUILD_TIMEOUT_SECONDS", str(3600)))
+
+#: One lock per source, held for the whole of any run of it (daily or by hand):
+#: cursors, cycle bookkeeping and the pace gate all assume one run at a time.
+#: In-process, which is where every job runs: the deployment has one worker.
+_SOURCE_LOCKS: dict[str, asyncio.Lock] = {}
+
+#: Held while products are rebuilt, so two rebuilds never interleave.
+_REBUILD_LOCK = asyncio.Lock()
 
 
 async def startup(ctx: dict) -> None:
@@ -67,10 +89,13 @@ async def close_interrupted_runs(session) -> int:
 
     A run's row is closed by the run itself, so a worker stopped mid-run (a
     deploy, a pause, a crash) leaves it RUNNING forever, and `make status` then
-    reports a sweep as active for days when nothing is running. Nothing is
-    running when a worker starts, so every RUNNING row is one of those. The
-    work it did is kept: progress is durable per page, and the next run resumes
-    from the cursor.
+    reports a sweep as active for days when nothing is running. Called from
+    `startup`, which arq finishes before it takes its first job, so nothing of
+    this worker's is running yet and every RUNNING row is orphaned — however
+    many jobs it then runs at once. That holds while there is one worker
+    process; a second one starting would close the first one's live runs. The
+    work an orphaned run did is kept: progress is durable per page, and the
+    next run resumes from the cursor.
     """
     now = datetime.now(timezone.utc)
     result = await session.execute(
@@ -99,10 +124,64 @@ def _summarize(source_id: str, run) -> dict:
     }
 
 
+async def _exclusive(source_id: str, label: str, body: Callable[[], Awaitable]) -> dict:
+    """Run `body` unless a run of this source is already in progress."""
+    lock = _SOURCE_LOCKS.setdefault(source_id, asyncio.Lock())
+    if lock.locked():
+        return {"source": label, "status": "skipped", "reason": "a run of it is in progress"}
+    async with lock:
+        return _summarize(label, await body())
+
+
+def crawl_job_id(source_id: str, day: date) -> str:
+    """The daily job's id: arq enqueues one job per id, so one run per source a day."""
+    return f"crawl:{source_id}:{day.isoformat()}"
+
+
+def rebuild_job_id(now: datetime) -> tuple[str, datetime]:
+    """The rebuild job for `now`'s window, and when it runs: the window's end."""
+    window = int(now.timestamp()) // REBUILD_WINDOW
+    runs_at = datetime.fromtimestamp((window + 1) * REBUILD_WINDOW, timezone.utc)
+    return f"rebuild:{window}", runs_at
+
+
+async def request_rebuild(ctx: dict) -> None:
+    """Ask for a product rebuild and reindex at the end of this window.
+
+    Deduplicated by the window's job id: every source finishing in it shares one
+    rebuild, and one finishing later gets the next window's. Nothing is lost to
+    the dedup — a window's rebuild runs after everything that asked for it.
+    """
+    job_id, runs_at = rebuild_job_id(datetime.now(timezone.utc))
+    try:
+        await ctx["redis"].enqueue_job("rebuild_and_reindex", _job_id=job_id, _defer_until=runs_at)
+    except Exception:  # noqa: BLE001 — must not mask how the run itself ended
+        log.exception("could not queue the rebuild; the next finishing run will")
+
+
+async def crawl_source(ctx: dict, source_id: str) -> dict:
+    """Arq task: one source's daily run, enqueued by `refresh_all`.
+
+    Its own job, with its own timeout: one slow host no longer holds the others
+    or the rebuild. However it ends — done, failed, or cancelled at the timeout
+    — it asks for the rebuild, so search catches up with whatever it committed.
+    """
+    try:
+        return await _exclusive(
+            source_id, source_id, lambda: _run_source(source_id, get(source_id))
+        )
+    finally:
+        await request_rebuild(ctx)
+
+
 async def run_source(ctx: dict, source_id: str, limit: int | None = None) -> dict:
     """Arq task: run one source adapter end-to-end (enqueue manually)."""
-    run = await _run_source(source_id, get(source_id), limit=limit)
-    return _summarize(source_id, run)
+    summary = await _exclusive(
+        source_id, source_id, lambda: _run_source(source_id, get(source_id), limit=limit)
+    )
+    if limit is None:
+        await request_rebuild(ctx)
+    return summary
 
 
 async def run_partition(
@@ -114,49 +193,65 @@ async def run_partition(
     single worker sweeps them sequentially to respect polite_delay; enqueueing
     them separately only pays off across workers with distinct egress IPs.
     """
-    run = await _run_partition(source_id, get(source_id), partition, limit=limit)
-    return _summarize(f"{source_id}[{partition}]", run)
+    return await _exclusive(
+        source_id,
+        f"{source_id}[{partition}]",
+        lambda: _run_partition(source_id, get(source_id), partition, limit=limit),
+    )
+
+
+async def rebuild_and_reindex(ctx: dict) -> str:
+    """Arq task: regroup products and rebuild the search index from the database.
+
+    Without it the crawl updates the database but search goes stale.
+    """
+    async with _REBUILD_LOCK:
+        async with SessionLocal() as session:
+            await rebuild_products(session)
+            await reindex_all(session, get_client())
+    return "rebuilt"
 
 
 async def refresh_all(ctx: dict) -> list[dict]:
-    """Cron task: re-scrape every enabled source (full runs), regroup products, reindex.
+    """Cron task: enqueue one `crawl_source` job per enabled source.
 
-    Sources are scraped concurrently (bounded by MAX_CONCURRENT_SOURCES) because
-    each targets a different host with its own rate limit — wall-clock drops to
-    roughly the slowest single source instead of the sum. One source failing
-    outright doesn't abort the batch; it's recorded and the rest continue.
+    It returns as soon as they are queued. Each job runs on its own, bounded by
+    the worker's `max_jobs`, with its own timeout, and a failure in one is
+    recorded on its own run; the rest carry on. The job id names the source and
+    the day, so a source is never queued twice for one day, and `_exclusive`
+    keeps a run started by hand from overlapping it.
     """
     if not CRAWL_ENABLED:
         return [{"status": "skipped", "reason": "CRAWL_ENABLED is off"}]
 
     await load_adapters()
-    adapters = all_enabled()
-    sem = asyncio.Semaphore(MAX_CONCURRENT_SOURCES)
-
-    async def _guarded(adapter):
-        async with sem:
-            return await _run_source(adapter.source_id, adapter)
-
-    settled = await asyncio.gather(*(_guarded(a) for a in adapters), return_exceptions=True)
-    results = []
-    for adapter, outcome in zip(adapters, settled):
-        if isinstance(outcome, Exception):
-            results.append({"source": adapter.source_id, "status": "error", "error": str(outcome)})
-        else:
-            results.append(_summarize(adapter.source_id, outcome))
-
-    async with SessionLocal() as session:
-        await rebuild_products(session)
-        # Reindex so search reflects the fresh catalog — without this the daily
-        # scrape updates the DB but the search index goes stale.
-        await reindex_all(session, get_client())
-    return results
+    today = datetime.now(timezone.utc).date()
+    queued = []
+    for adapter in all_enabled():
+        job = await ctx["redis"].enqueue_job(
+            "crawl_source", adapter.source_id, _job_id=crawl_job_id(adapter.source_id, today)
+        )
+        queued.append(
+            {"source": adapter.source_id, "status": "queued" if job else "already queued"}
+        )
+    return queued
 
 
 class WorkerSettings:
-    functions = [run_source, run_partition]
-    cron_jobs = [cron(refresh_all, hour=REFRESH_HOUR, minute=0, timeout=JOB_TIMEOUT)]
+    functions = [
+        # Not retried: a run cut off (a deploy, the timeout) resumes from its
+        # cursor at the next daily run, rather than at once at an unplanned hour.
+        func(crawl_source, timeout=JOB_TIMEOUT, max_tries=1),
+        func(rebuild_and_reindex, timeout=REBUILD_TIMEOUT, max_tries=1),
+        run_source,
+        run_partition,
+    ]
+    cron_jobs = [cron(refresh_all, hour=REFRESH_HOUR, minute=0, timeout=timedelta(minutes=5))]
     # Also for run_source / run_partition jobs enqueued by hand.
     job_timeout = JOB_TIMEOUT
+    # Up to MAX_CONCURRENT_SOURCES sources at once, plus one slot so a rebuild
+    # can run while they do. arq does not reserve the slot: with more enabled
+    # sources than that, the extra ones and the rebuild queue for a free slot.
+    max_jobs = MAX_CONCURRENT_SOURCES + 1
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://localhost:6379"))

@@ -25,8 +25,9 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
   the API is never exposed. Expose the API port yourself only if you need direct
   external access.
 - **db / search / redis** are internal-only; state lives in named Docker volumes.
-- **ingestion** runs the Arq worker; a daily cron (`REFRESH_HOUR`, UTC) re-scrapes
-  all suppliers, regroups products, and reindexes search.
+- **ingestion** runs the Arq worker; a daily cron (`REFRESH_HOUR`, UTC) queues one
+  job per enabled supplier, each with its own timeout, and every supplier job
+  queues a shared regroup-and-reindex when it ends.
 - **migrate** is a one-shot service that runs `alembic upgrade head` on every
   deploy before api/ingestion start.
 
