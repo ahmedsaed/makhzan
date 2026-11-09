@@ -789,18 +789,25 @@ async def _logged_run(
 
         details_requests: Counter = Counter()
         details: dict = {}
-        if limit is None:
+        if limit is None and not fetch_failed:
             # After the sweep and its archiving, so only listings the shop still
             # sells are read. A `limit=` run is a quick test: it never costs a
-            # shop product-page requests.
+            # shop product-page requests. Nor does a run whose sweep failed: a
+            # host refusing list pages is not asked for product pages.
             await session.commit()
-            details_requests, details = await run_details(
-                session,
-                adapter,
-                errors=errors,
-                pace=lambda: _pace(adapter),
-                already_sent=bool(tally["pages"] or cycle_requests),
-            )
+            try:
+                details_requests, details = await run_details(
+                    session,
+                    adapter,
+                    errors=errors,
+                    pace=lambda: _pace(adapter),
+                    already_sent=bool(tally["pages"] or cycle_requests),
+                )
+            except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
+                # Whatever went wrong reading details, the run's own record
+                # (requests, pacing, archiving) is what /how-we-crawl publishes.
+                await session.rollback()
+                errors.append(f"details: {exc}")
 
         stats: dict = {}
         if errors:

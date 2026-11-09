@@ -324,6 +324,40 @@ async def test_a_429_that_outlasts_its_retries_stops_the_stage(clock, shop_clien
         assert "details_failed_at" not in listing.attributes
 
 
+async def test_a_403_stops_the_stage_and_blames_no_listing(clock, shop_client):
+    """A shop that blocks the crawler blocks every page: one 403 ends the stage,
+    and no listing is backed off for what was the host's answer."""
+    shop = shop_client["shop"] = _Shop({"1": "t1", "2": "t2"})
+    for pid in ("1", "2"):
+        shop.answers[f"/p/{pid}"] = (403, {})
+    run = await run_source(shop.source_id, shop)
+
+    assert len(shop.details_sent()) == 1
+    assert "403" in run.stats["details"]["stopped"]
+    for listing in (await _listings()).values():
+        assert "details_failed_at" not in listing.attributes
+
+
+async def test_a_run_whose_sweep_failed_reads_no_product_page(clock, shop_client):
+    """A host refusing list pages is not then asked for product pages."""
+    seeded = _Shop({"1": "t1"}, enabled=False)
+    await run_source(seeded.source_id, seeded)
+    shop = shop_client["shop"] = _Shop({"1": "t1"}, http_pages=True)
+    shop.answers["/list/1"] = (403, {})
+    run = await run_source(shop.source_id, shop)
+
+    assert shop.details_sent() == []
+    assert "details" not in run.stats.get("requests", {})
+
+
+async def test_a_detail_page_is_retried_once_not_five_times(clock, shop_client):
+    """Retries are requests too: a failing product page costs at most two."""
+    shop = shop_client["shop"] = _Shop({"1": "t1"})
+    shop.answers["/p/1"] = (503, {})
+    await run_source(shop.source_id, shop)
+    assert shop.details_sent().count("/p/1") == 2
+
+
 # --------------------------------------------------------------------------- #
 # The queue
 # --------------------------------------------------------------------------- #
