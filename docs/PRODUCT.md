@@ -57,10 +57,15 @@ and the referral numbers.
 - **Accounts matter**: they unlock most postponed features (Ahmed's view; how and when
   is still open, below).
 - **Enrichment without extra requests ships now** (brand, specs, datasheets, cleaner
-  descriptions and titles from what the crawler already downloads). **Anything that
-  costs a request per product waits until the shops have answered** the outreach
-  emails: a marketplace title backfill, the Odoo shop's product pages, the Shopify
-  shop's stock counts. Afterwards, details for new products only.
+  descriptions and titles from what the crawler already downloads).
+- **Product details that cost a request per product are fetched slowly and only on
+  change** (clarified 2026-11-09; this replaces "wait until the shops have answered",
+  which was meant for the shops that block the crawler, not for all of them). A small,
+  fixed number of product pages per shop per daily run, never a burst; a product's page
+  is fetched once, then again only when the shop's own listing data shows it changed.
+  Shops that block the crawler are not crawled at all until they reply. Stock counts
+  are not wanted. Each shop's details are switched on individually, after deploy, on
+  Ahmed's approval.
 - **Current price only.** The crawler keeps shops' "before" prices, but makhzan shows
   no discounts: one shop's before prices are a standing markup on most of its stock.
 - **Specs and datasheets are shown when the shop provides them** (DESIGN.md, C4).
@@ -71,8 +76,8 @@ Phase 1 (shipped) collects more of what shops already publish: units of sale, va
 quantity breaks, manufacturer part numbers, compatibility, "ships from abroad", videos,
 shop contact details; it also keeps hidden out-of-stock items and flags "price on
 request". The per-shop findings and costs are in the private configuration's
-`docs/qa/2026-11-discovery-summary.md`. Anything that costs a request per product stays
-switched off until the shop agrees.
+`docs/qa/2026-11-discovery-summary.md`. Per-product details are fetched slowly and only on
+change, switched on shop by shop (see "Decided" above).
 
 Phase 2 shows it, decided 2026-11-09:
 
