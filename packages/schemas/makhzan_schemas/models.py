@@ -292,6 +292,40 @@ class ProductRedirect(Base):
     )
 
 
+class PriceObservation(Base):
+    """A listing's price and stock as of `observed_at`: one change point of its history.
+
+    Each crawl overwrites a listing's price and stock, so without this what a
+    product cost last month is gone for good and can never be backfilled. A row is
+    written only when a listing is first stored or its price, currency or stock
+    signal differs from its latest row (`worker.pipeline`), so a recheck that finds
+    nothing new adds nothing and the table grows with change, not with crawling.
+    A value holds from its `observed_at` until the next row's.
+
+    History starts at the migration that created this table, seeded with one row
+    per active listing as of its `last_verified_at`.
+    """
+
+    __tablename__ = "price_observations"
+    __table_args__ = (Index("ix_price_observation_listing_time", "listing_id", "observed_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: NULL is "price on request", which is itself a change worth recording.
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    stock_signal: Mapped[StockSignal] = mapped_column(nullable=False)
+    #: `stock_signal == IN_STOCK`, the definition `Product.in_stock` uses, stored
+    #: so "in stock N of the last 12 weeks" needs no enum logic in the query.
+    in_stock: Mapped[bool] = mapped_column(nullable=False)
+
+    #: Many-to-one only: lets a row be added beside a listing not yet flushed.
+    listing: Mapped[Listing] = relationship()
+
+
 class Source(TimestampMixin, Base):
     """One configured data source: which adapter to run, against what, how paced.
 
