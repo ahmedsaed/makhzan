@@ -204,6 +204,18 @@ instead of one heavy day, and a daily run means a breakage surfaces in a day
 rather than a week. Archiving is unaffected — it is cycle-gated, so it fires once
 per completed sweep.
 
+**A cycle can be given a length instead of a slice.** `target_cycle_days` on a
+source (any adapter; the registry sets it) makes each run's page budget a plan:
+what the cycle still owes, from the last completed cycle's `stats.cycle.cycle_pages`,
+spread over the daily runs the target leaves (`pipeline._page_budget`). A shop
+that grows then gets more pages a run, rather than a cycle that stretches with
+its catalogue. `max_pages_per_run` stays the hard ceiling, read in this mode as
+the cap on the **whole run** across partitions, and a floor of half a day's even
+share keeps a cycle that is ahead moving. Each run records `stats.budget`;
+`make status` shows the target, the projected cycle length, and when the
+ceiling rather than the target is setting the pace. Without a completed cycle
+to plan from (the first after enabling it), the ceiling alone applies.
+
 ## Domains
 
 Every vertical-specific decision — category tree, identifier extraction, what

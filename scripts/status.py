@@ -275,6 +275,43 @@ async def cycle_history(session, source_filter: str | None, days: int = 30) -> N
             print(f"  {RED}x{count:<4}{RESET} {key}")
 
 
+async def cycle_budget(session, source_filter: str | None, days: int = 14) -> None:
+    """Sources with `target_cycle_days`: their latest run's page budget, and where it leads.
+
+    The budget is what the cycle still owes over the days the target leaves,
+    capped by `max_pages_per_run`. "ceiling-limited" means the cap, not the
+    target, is setting the pace: the cycle will run past the target unless the
+    ceiling is raised.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    query = (
+        select(IngestionRun.source, IngestionRun.stats["budget"])
+        .where(IngestionRun.started_at >= since, IngestionRun.stats.has_key("budget"))
+        .order_by(IngestionRun.started_at.desc())
+    )
+    if source_filter:
+        query = query.where(IngestionRun.source == source_filter)
+    latest: dict[str, dict] = {}
+    for source, budget in (await session.execute(query)).all():
+        latest.setdefault(source, budget or {})
+    if not latest:
+        return
+    _header("CYCLE TARGETS")
+    for source, b in sorted(latest.items()):
+        target = b.get("target_cycle_days")
+        line = f"  {source:22s} target {target:g}d  budget {b.get('pages')} pages/run"
+        line += f"  (ceiling {b.get('ceiling') or 'none'})"
+        if "projected_cycle_days" not in b:
+            print(f"{line}  {DIM}{b.get('basis', 'no plan yet')}{RESET}")
+            continue
+        projected = b["projected_cycle_days"]
+        colour = YELLOW if projected > target else GREEN
+        line += f"  projected {colour}{projected:g}d{RESET}"
+        if b.get("ceiling_limited"):
+            line += f"  {YELLOW}ceiling-limited (planned {b.get('planned')}){RESET}"
+        print(line)
+
+
 async def crosswalk_drift(session, source_filter: str | None, days: int = 30) -> None:
     """Categories a supplier has added, renamed or retired since the crosswalk was written.
 
@@ -505,6 +542,7 @@ async def main() -> None:
     async with SessionLocal() as session:
         await sweep_progress(session, args.source)
         await cycle_history(session, args.source)
+        await cycle_budget(session, args.source)
         await recent_runs(session, args.source, args.runs)
         await crosswalk_drift(session, args.source)
         await product_details(session, args.source)

@@ -17,6 +17,7 @@ individual run.
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
 from collections import Counter
 from collections.abc import Callable
@@ -42,7 +43,7 @@ from makhzan_schemas.models import (
     SourceCursor,
     Supplier,
 )
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import Integer, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
@@ -518,8 +519,12 @@ async def _sweep_partition(
     not_products: Counter | None = None,
     tally: Counter | None = None,
     checkpoint: Callable[[], None] | None = None,
+    run_page_budget: int | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
+
+    `run_page_budget` caps the pages of the whole run (`tally["pages"]`), across
+    partitions: the adaptive budget of a source with `target_cycle_days`.
 
     `checkpoint` puts what the run has sent so far on its row before each
     commit, so a run cut off mid-sweep still says how many requests it made.
@@ -552,6 +557,8 @@ async def _sweep_partition(
             return False
         if adapter.max_pages_per_run and pages_this_run >= adapter.max_pages_per_run:
             return False  # budget spent; the cursor resumes here next run
+        if run_page_budget is not None and tally is not None and tally["pages"] >= run_page_budget:
+            return False  # the run's adaptive budget is spent
 
         if tally is not None:
             tally["pages"] += 1
@@ -636,7 +643,12 @@ async def _pace(adapter: SourceAdapter) -> float:
 
 
 async def _finish_cycle_if_swept(
-    session: AsyncSession, adapter: SourceAdapter, supplier_id: uuid.UUID
+    session: AsyncSession,
+    adapter: SourceAdapter,
+    supplier_id: uuid.UUID,
+    *,
+    run: IngestionRun | None = None,
+    pages_this_run: int = 0,
 ) -> tuple[int, dict]:
     """Archive vanished listings, but only once every partition has been swept.
 
@@ -709,8 +721,115 @@ async def _finish_cycle_if_swept(
         "cycle_completed_at": finished.isoformat(),
         "cycle_seconds": round((finished - cycle_started).total_seconds()),
         "cycle_partitions": len(expected),
+        # Every page the cycle read, across its runs: the size the next cycle's
+        # adaptive budget (`target_cycle_days`) is planned from.
+        "cycle_pages": pages_this_run
+        + await _cycle_pages_since(
+            session, adapter.source_id, cycle_started, exclude=run.id if run else None
+        ),
     }
     return len(archived), cycle
+
+
+async def _cycle_pages_since(
+    session: AsyncSession, source_id: str, since: datetime, *, exclude: uuid.UUID | None = None
+) -> int:
+    """Pages read by this source's runs of the cycle that started at `since`.
+
+    A run belongs to the cycle when it was still going at `since` or later:
+    the previous cycle closed inside a run that finished before this cycle's
+    first cursor was stamped. `limit=` test runs are left out, and so is
+    `exclude` (the run asking, which counts its own). Read from
+    `stats.requests.pages`, which every run keeps current page by page.
+    """
+    pages = IngestionRun.stats["requests"]["pages"].astext.cast(Integer)
+    query = select(func.coalesce(func.sum(pages), 0)).where(
+        IngestionRun.source == source_id,
+        or_(IngestionRun.finished_at.is_(None), IngestionRun.finished_at >= since),
+        ~IngestionRun.stats.has_key("limit"),
+    )
+    if exclude is not None:
+        query = query.where(IngestionRun.id != exclude)
+    return int((await session.execute(query)).scalar_one())
+
+
+#: The adaptive budget never drops below this share of a day's even split of
+#: the last cycle: a cycle running ahead of schedule still makes steady progress.
+BUDGET_FLOOR_SHARE = 0.5
+
+
+async def _page_budget(session: AsyncSession, adapter: SourceAdapter) -> dict:
+    """This run's page budget, for a source with `target_cycle_days` (else {}).
+
+    Planned from the last completed cycle's size (`stats.cycle.cycle_pages`):
+    the pages it is still owed, spread over the days the target leaves, one run
+    a day. So a shop that grows gets more pages a run and its cycle stays near
+    the target, instead of stretching with the catalogue under a fixed cap.
+    `max_pages_per_run`, when set, is a hard ceiling on the run's total (a
+    stricter reading than its usual per-partition one): the budget never asks
+    a shop for more than the owner approved, and `ceiling_limited` says when it
+    would have. A floor of half a day's even share keeps a cycle that is ahead
+    moving. With no completed cycle yet, the ceiling alone applies.
+    """
+    target = adapter.target_cycle_days
+    if not target:
+        return {}
+    ceiling = adapter.max_pages_per_run or None
+    out: dict = {"target_cycle_days": target, "ceiling": ceiling}
+
+    previous = (
+        await session.execute(
+            select(IngestionRun.stats["cycle"]["cycle_pages"].astext.cast(Integer))
+            .where(
+                IngestionRun.source == adapter.source_id,
+                IngestionRun.stats["cycle"].has_key("cycle_pages"),
+            )
+            .order_by(IngestionRun.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not previous:
+        out.update(pages=ceiling, basis="no completed cycle with a page count yet")
+        return out
+
+    starts = (
+        (
+            await session.execute(
+                select(SourceCursor.cycle_started_at).where(
+                    SourceCursor.source == adapter.source_id,
+                    SourceCursor.cycle_started_at.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    started = min(starts) if starts else now
+    elapsed_days = (now - started).total_seconds() / 86400
+    read = await _cycle_pages_since(session, adapter.source_id, started) if starts else 0
+    remaining_pages = max(0, previous - read)
+    # Daily runs left before the target, this one included: a run 2.5 days in
+    # of 7 has 5 (at 2.5, 3.5 ... 6.5). Rounded first, so seconds of drift in
+    # when the cron fires do not buy a run.
+    remaining_days = max(1, math.ceil(round(target - elapsed_days, 3)))
+
+    planned = math.ceil(remaining_pages / remaining_days)
+    floor = max(1, math.ceil(BUDGET_FLOOR_SHARE * previous / target))
+    pages = max(planned, floor)
+    limited = ceiling is not None and pages > ceiling
+    if limited:
+        pages = ceiling
+    out.update(
+        pages=pages,
+        planned=planned,
+        ceiling_limited=limited,
+        previous_cycle_pages=previous,
+        cycle_pages_read=read,
+        # Runs are daily: the days so far plus a run per budget of what is left.
+        projected_cycle_days=round(elapsed_days + math.ceil(remaining_pages / pages), 1),
+    )
+    return out
 
 
 def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: bool) -> dict | None:
@@ -826,9 +945,12 @@ async def _logged_run(
         cat_index = await seed_categories(session)  # idempotent
         await session.flush()
 
+        budget: dict = {}
         if limit is None:
             # Bounded dev runs always sweep what they were asked for.
             partitions = await _partitions_for_this_run(session, adapter, partitions)
+            budget = await _page_budget(session, adapter)
+        run_page_budget = budget.get("pages")
 
         # Before any page: the adapter reads it while turning pages into listings.
         cycle_requests = await _load_cycle_data(
@@ -864,6 +986,8 @@ async def _logged_run(
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
                 break
+            if run_page_budget is not None and tally["pages"] >= run_page_budget:
+                break
             if i:
                 # Partitions share one host. The pause between pages ends at a
                 # partition's last page, so without this the next partition's
@@ -884,12 +1008,15 @@ async def _logged_run(
                 not_products=not_products,
                 tally=tally,
                 checkpoint=checkpoint,
+                run_page_budget=run_page_budget,
             )
             fetch_failed = fetch_failed or failed
 
         archived, cycle = 0, {}
         if limit is None:
-            archived, cycle = await _finish_cycle_if_swept(session, adapter, supplier_id)
+            archived, cycle = await _finish_cycle_if_swept(
+                session, adapter, supplier_id, run=run, pages_this_run=tally["pages"]
+            )
 
         details_requests: Counter = Counter()
         details: dict = {}
@@ -917,6 +1044,11 @@ async def _logged_run(
         stats: dict = {}
         if errors:
             stats["errors"] = errors
+        if limit is not None:
+            # A test run: its pages are not part of any cycle (`_cycle_pages_since`).
+            stats["limit"] = limit
+        if budget:
+            stats["budget"] = budget
         if archived:
             stats["archived"] = archived
         if cycle:

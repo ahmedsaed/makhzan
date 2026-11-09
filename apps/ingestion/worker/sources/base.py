@@ -185,6 +185,12 @@ class SourceAdapter(ABC):
     #: mapped. Named on the base class so drift checking can find it.
     categories: dict[str, tuple[str, str]] = {}
 
+    #: Days a cycle should take, when set: each run's page budget is planned
+    #: from the last cycle's size to keep the cycle near it, with
+    #: `max_pages_per_run` as a hard ceiling (see `pipeline._page_budget`).
+    #: Set from a source's config by the registry, so any adapter takes it.
+    target_cycle_days: float | None = None
+
     #: The crosswalk's `ignore` list: source categories left unmapped on
     #: purpose, which the drift check does not report as new.
     ignored_categories: tuple[str, ...] = ()
