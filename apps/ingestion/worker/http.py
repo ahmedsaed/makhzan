@@ -257,13 +257,57 @@ async def _wait_for_host(host: str) -> None:
     await asyncio.sleep(remaining)
 
 
+#: Most redirects followed for one request: what a shop does in practice is one
+#: hop (http to https, a trailing slash, a renamed path) or two.
+MAX_REDIRECTS = 5
+
+
 def make_client(**kwargs) -> httpx.AsyncClient:
+    # Redirects are followed by `_request`, one hop at a time: followed here,
+    # httpx sent each hop at once, past the pace gate and missing from the
+    # request log, so a shop's server could see two requests a few ms apart
+    # under a page that publishes "at least 15 seconds".
     return httpx.AsyncClient(
         headers=BROWSER_HEADERS,
         timeout=httpx.Timeout(30.0),
-        follow_redirects=True,
+        follow_redirects=False,
         **kwargs,
     )
+
+
+async def _send_following_redirects(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    params: dict | None,
+    **kwargs,
+) -> httpx.Response:
+    """Send a request whose turn is taken, then follow its redirects as requests of their own.
+
+    Each hop is checked against robots.txt, waits its host's turn and is logged,
+    exactly like a page: the shop's server cannot tell the two apart. httpx
+    builds each hop (`next_request`) the way it would have followed it — method
+    and body kept on 307/308, a GET after 303 or a POST's 301/302 — so what is
+    fetched is unchanged; only when.
+    """
+    from worker.robots import ROBOTS, DisallowedByRobots
+
+    resp = await client.request(method, url, params=params, follow_redirects=False, **kwargs)
+    for _ in range(MAX_REDIRECTS):
+        hop = resp.next_request
+        if hop is None:
+            return resp
+        await resp.aclose()
+        if not await ROBOTS.allowed(str(hop.url), BROWSER_HEADERS["User-Agent"]):
+            raise DisallowedByRobots(str(hop.url))
+        await take_turn(host_of(hop.url))
+        resp = await client.send(hop, follow_redirects=False)
+    if resp.next_request is not None:
+        await resp.aclose()
+        raise httpx.TooManyRedirects(
+            f"more than {MAX_REDIRECTS} redirects from {url}", request=resp.request
+        )
+    return resp
 
 
 async def _request(
@@ -299,11 +343,12 @@ async def _request(
     resp = None
     for attempt in range(retries + 1):
         await take_turn(host)
-        resp = await client.request(method, url, params=params, **kwargs)
+        resp = await _send_following_redirects(client, method, url, params, **kwargs)
         if resp.status_code in _RETRYABLE:
             asked = retry_after_seconds(resp.headers.get("Retry-After"))
             if asked is not None:
-                _NOT_BEFORE[host] = time.monotonic() + asked
+                # The host that asked: after a redirect, not necessarily the first.
+                _NOT_BEFORE[host_of(resp.url)] = time.monotonic() + asked
             if attempt < retries and (asked is None or asked <= RETRY_AFTER_CAP):
                 # The published pace is a floor here too: a retry is a request
                 # like any other. Above it the backoff still grows, and a
