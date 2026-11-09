@@ -96,6 +96,8 @@ cmd_crawl() {
 
   # The worker reads its environment at creation, so restarting is not enough.
   # A run in progress is cut short; progress is saved per page, so it resumes.
+  # The API need not be recreated: it reports the flag the worker states in the
+  # database at startup (worker_state), not its own copy of .env.prod.
   echo "==> CRAWL_ENABLED=${value}; recreating the ingestion worker"
   "${COMPOSE[@]}" up -d --force-recreate --no-deps ingestion
   echo "==> Worker now says: $(crawl_effective)"
