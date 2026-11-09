@@ -534,6 +534,10 @@ async def _sweep_partition(
     page = 1
     if not ephemeral:
         cursor = await _get_cursor(session, adapter.source_id, partition)
+        if cursor.exhausted:
+            # Finished this cycle: its next_page is back at 1, and sweeping it
+            # again would re-read the whole partition before the cycle closes.
+            return False
         if cursor.cycle_started_at is None:
             cursor.cycle_started_at = datetime.now(timezone.utc)
         page = cursor.next_page
@@ -762,10 +766,15 @@ async def _partitions_for_this_run(
     cycle closes when the last of them is done. That spreads a large catalogue
     into a steady trickle instead of a daily spike, without touching freshness —
     the cycle length is what sets how often a product is re-checked.
+
+    A partition already finished this cycle is skipped whatever the caps. It
+    used to be skipped only under `max_partitions_per_run`: without it every
+    run took every partition, and one exhausted earlier in the cycle (its
+    cursor back at page 1) was read again from the start, so a shop paced by
+    `max_pages_per_run` alone re-read its 49 out-of-stock pages 90 times a
+    cycle while the big partition crept forward.
     """
     budget = adapter.max_partitions_per_run
-    if not budget:
-        return partitions
     rows = (
         (
             await session.execute(
@@ -777,7 +786,7 @@ async def _partitions_for_this_run(
     )
     done = {c.partition_key for c in rows if c.exhausted}
     outstanding = [p for p in partitions if p not in done]
-    return outstanding[:budget]
+    return outstanding[:budget] if budget else outstanding
 
 
 async def _run(

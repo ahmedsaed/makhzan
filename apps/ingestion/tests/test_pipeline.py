@@ -365,6 +365,57 @@ async def test_a_product_only_under_unmapped_categories_stays_uncategorized(_cle
 
 
 # --------------------------------------------------------------------------- #
+# A finished partition waits for the next cycle
+# --------------------------------------------------------------------------- #
+
+
+class SizedPartitions(SourceAdapter):
+    """Partitions of different sizes, one item per page, paced by pages alone."""
+
+    source_id = SRC
+    source_type = SourceType.SCRAPED
+    supplier = SupplierInfo(slug=SRC, name="Test Shop")
+    polite_delay = 0
+
+    def __init__(self, sizes: dict[str, int], max_pages_per_run: int):
+        self.sizes = sizes
+        self.max_pages_per_run = max_pages_per_run
+        self.fetched: list[tuple[str, int]] = []
+
+    def partitions(self):
+        return list(self.sizes)
+
+    async def fetch_page(self, partition, page):
+        self.fetched.append((partition, page))
+        item = RawItem(
+            source=SRC,
+            external_id=f"{partition}-{page}",
+            title=f"Item {partition} {page}",
+            price_text="10 EGP",
+            availability_text="In stock",
+        )
+        return Page([item], has_more=page < self.sizes[partition])
+
+
+async def test_a_partition_finished_this_cycle_is_not_swept_again(_clean_tables):
+    """Without `max_partitions_per_run`, a partition finished earlier in the
+    cycle (its cursor back at page 1) was read again from the start on every
+    later run: shop 1 re-read its 49 out-of-stock pages 90 times a cycle."""
+    adapter = SizedPartitions({"outofstock": 2, "instock": 7}, max_pages_per_run=3)
+
+    cycle = {}
+    for _ in range(10):
+        run = await run_source(SRC, adapter)
+        if cycle := (run.stats or {}).get("cycle"):
+            break
+
+    assert cycle, "the cycle closed"
+    expected = [("outofstock", p) for p in (1, 2)] + [("instock", p) for p in range(1, 8)]
+    assert sorted(adapter.fetched) == sorted(expected), "each page read once per cycle"
+    assert len(await _listings()) == 9
+
+
+# --------------------------------------------------------------------------- #
 # Crosswalk drift on a paced source
 # --------------------------------------------------------------------------- #
 
