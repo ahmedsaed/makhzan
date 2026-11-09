@@ -644,6 +644,27 @@ async def test_a_worker_closes_runs_a_previous_worker_left_running():
     assert runs["done"].status == IngestionStatus.SUCCESS
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_a_starting_worker_states_its_crawl_flag_for_the_api(monkeypatch, enabled):
+    """The API reports the flag from the database: `./makhzan crawl off`
+    recreates only the worker, so the API's own environment goes stale."""
+    from makhzan_schemas import crawl
+    from makhzan_schemas.db import SessionLocal
+
+    from worker import main
+
+    async def no_adapters():
+        return None
+
+    monkeypatch.setattr(main, "load_adapters", no_adapters)
+    monkeypatch.setattr(main, "CRAWL_ENABLED", enabled)
+    monkeypatch.setenv("CRAWL_ENABLED", "false" if enabled else "true")  # the API's, stale
+    await main.startup({})
+
+    async with SessionLocal() as session:
+        assert await crawl.crawl_enabled_in(session) is enabled
+
+
 def test_the_daily_refresh_is_not_cut_off_at_arqs_five_minute_default():
     """arq cancels a job after 300 s unless told otherwise. The daily refresh
     crawls every source at a polite pace and then rebuilds products and the

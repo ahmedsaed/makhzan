@@ -449,3 +449,23 @@ class SourceCursor(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class WorkerState(Base):
+    """What the running worker believes, written by it, for the API to report.
+
+    The worker reads some settings from its environment when its container is
+    created, and the API runs in a container of its own. Asking the API's
+    environment what the worker is doing goes stale the moment one is recreated
+    without the other (`./makhzan crawl off` recreates only the worker), so the
+    worker states it here at startup instead. Keyed by name: `crawl` holds
+    `{"enabled": bool}` (see `makhzan_schemas.crawl`).
+    """
+
+    __tablename__ = "worker_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

@@ -57,6 +57,9 @@ async def startup(ctx: dict) -> None:
     await load_adapters()
     async with SessionLocal() as session:
         await close_interrupted_runs(session)
+        # The API reports the crawl flag from here, not from its own
+        # environment: `./makhzan crawl off` recreates this container alone.
+        await crawl.record_crawl_enabled(session, CRAWL_ENABLED)
 
 
 async def close_interrupted_runs(session) -> int:
