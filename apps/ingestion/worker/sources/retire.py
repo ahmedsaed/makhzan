@@ -24,7 +24,7 @@ import sys
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
-from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.grouping import lock_products, rebuild_products
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
@@ -86,6 +86,10 @@ async def retire(session: AsyncSession, source_id: str) -> None:
     behind is closed when it starts, so a RUNNING row is a live one.) Once the
     `sources` row is gone, a daily job queued earlier skips the source.
     """
+    # Held until this transaction ends: a regroup running now would otherwise
+    # mint a product for this source's listings just before they are deleted,
+    # leaving a "no longer listed" page for a shop that is gone.
+    await lock_products(session)
     running = await session.scalar(
         select(func.count())
         .select_from(IngestionRun)

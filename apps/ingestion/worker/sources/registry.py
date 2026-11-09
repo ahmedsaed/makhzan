@@ -72,6 +72,11 @@ def build_adapter(source: Source) -> SourceAdapter:
         or target_cycle_days <= 0
     ):
         raise ValueError(f"target_cycle_days must be a positive number, got {target_cycle_days!r}")
+    if target_cycle_days is not None and options.get("max_pages_per_run") is None:
+        # The target computes each run's budget; the ceiling is what keeps a
+        # source that fell behind from being asked for its whole remaining
+        # cycle in one run. Without one there is no upper bound at all.
+        raise ValueError("target_cycle_days needs max_pages_per_run as its ceiling")
     if crosswalk is not None:
         loaded = load_crosswalk(crosswalk)
         options["categories"] = loaded.categories
