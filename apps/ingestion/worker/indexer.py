@@ -32,14 +32,19 @@ def get_client() -> meilisearch.Client:
     )
 
 
-def ensure_index(client: meilisearch.Client) -> None:
+#: Where a full reindex is built before it is swapped in, so search never
+#: serves a half-filled index.
+STAGING_INDEX_NAME = f"{INDEX_NAME}_staging"
+
+
+def ensure_index(client: meilisearch.Client, name: str = INDEX_NAME) -> None:
     """Create the index (if absent) and apply its attribute configuration."""
     try:
-        task = client.create_index(INDEX_NAME, {"primaryKey": "id"})
+        task = client.create_index(name, {"primaryKey": "id"})
         client.wait_for_task(task.task_uid)
     except meilisearch.errors.MeilisearchApiError:
         pass  # already exists
-    index = client.index(INDEX_NAME)
+    index = client.index(name)
     task = index.update_settings(
         {
             "searchableAttributes": SEARCHABLE_ATTRIBUTES,
@@ -53,12 +58,17 @@ def ensure_index(client: meilisearch.Client) -> None:
 
 
 def index_documents(
-    client: meilisearch.Client, docs: list[dict], *, wait: bool = False, batch_size: int = 1000
+    client: meilisearch.Client,
+    docs: list[dict],
+    *,
+    wait: bool = False,
+    batch_size: int = 1000,
+    index_name: str = INDEX_NAME,
 ) -> None:
     """Add documents to the index, in batches to keep request payloads sane at volume."""
     if not docs:
         return
-    index = client.index(INDEX_NAME)
+    index = client.index(index_name)
     for start in range(0, len(docs), batch_size):
         task = index.add_documents(docs[start : start + batch_size])
         if wait:
@@ -94,14 +104,18 @@ def ancestry(category_id, tree: dict) -> list[str]:
 async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
     """Rebuild the whole product index from Postgres (full replace).
 
-    Clears first so a product that stopped being listed doesn't linger as a
-    stale doc. Listed products only: a merged-away id only redirects, and a
-    withdrawn product keeps its page (ids are permanent, docs/decisions/
-    0004-stable-product-ids.md) but nothing to buy, so search never shows it.
+    Built into a staging index, then swapped in atomically: search keeps
+    answering from the old index the whole time, and a product that stopped
+    being listed doesn't linger. (Emptying the live index and refilling it left
+    search blank for the length of a reindex, which with one rebuild per
+    source finishing happens several times a day.) Listed products only: a
+    merged-away id only redirects, and a withdrawn product keeps its page (ids
+    are permanent, docs/decisions/0004-stable-product-ids.md) but nothing to
+    buy, so search never shows it.
     """
     ensure_index(client)
-    clear = client.index(INDEX_NAME).delete_all_documents()
-    client.wait_for_task(clear.task_uid)
+    _drop_index(client, STAGING_INDEX_NAME)
+    ensure_index(client, STAGING_INDEX_NAME)
     rows = (
         await session.execute(
             select(Product, Category)
@@ -139,5 +153,17 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
         )
         for product, cat in rows
     ]
-    index_documents(client, docs, wait=True)
+    index_documents(client, docs, wait=True, index_name=STAGING_INDEX_NAME)
+    swap = client.swap_indexes([{"indexes": [INDEX_NAME, STAGING_INDEX_NAME]}])
+    client.wait_for_task(swap.task_uid)
+    # The staging name now holds the previous index.
+    _drop_index(client, STAGING_INDEX_NAME)
     return len(docs)
+
+
+def _drop_index(client: meilisearch.Client, name: str) -> None:
+    try:
+        task = client.delete_index(name)
+        client.wait_for_task(task.task_uid)
+    except meilisearch.errors.MeilisearchApiError:
+        pass  # not there

@@ -41,17 +41,37 @@ class FakeIndex:
 
 
 class FakeClient:
+    """Named indexes, with Meilisearch's create, delete and atomic swap."""
+
     def __init__(self) -> None:
-        self.products = FakeIndex()
+        self.indexes: dict[str, FakeIndex] = {}
+        #: The live index's documents at the moment of each swap request.
+        self.live_at_swap: list[int] = []
+
+    @property
+    def products(self) -> FakeIndex:
+        return self.indexes.setdefault("products", FakeIndex())
 
     def create_index(self, name: str, options: dict) -> _Task:
+        self.indexes.setdefault(name, FakeIndex())
+        return _Task()
+
+    def delete_index(self, name: str) -> _Task:
+        self.indexes.pop(name, None)
+        return _Task()
+
+    def swap_indexes(self, pairs: list[dict]) -> _Task:
+        for pair in pairs:
+            a, b = pair["indexes"]
+            self.live_at_swap.append(len(self.indexes.get("products", FakeIndex()).documents))
+            self.indexes[a], self.indexes[b] = self.indexes[b], self.indexes[a]
         return _Task()
 
     def wait_for_task(self, uid: int) -> None:
         pass
 
     def index(self, name: str) -> FakeIndex:
-        return self.products
+        return self.indexes.setdefault(name, FakeIndex())
 
 
 def _supplier(slug: str) -> Supplier:
@@ -227,3 +247,15 @@ async def test_only_listed_products_are_indexed():
     assert set(docs) == {"listed"}
     # The stale filter ranges over this; a listed product always carries the key.
     assert "last_verified_at" in docs["listed"]
+
+
+async def test_a_reindex_never_empties_the_live_index():
+    """Built in a staging index and swapped in: search keeps answering from the
+    old documents the whole time, then sees the new ones at once."""
+    client = FakeClient()
+    client.products.documents = [{"id": "old-1"}, {"id": "old-2"}]
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+    assert client.live_at_swap == [2], "the live index still held the old documents"
+    assert "products_staging" not in client.indexes, "the old index is dropped after the swap"
+    assert all(doc["id"] not in {"old-1", "old-2"} for doc in client.products.documents)

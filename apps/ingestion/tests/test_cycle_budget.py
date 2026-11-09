@@ -188,8 +188,25 @@ def test_the_target_is_read_from_a_source_config():
             config=config,
         )
 
-    assert build_adapter(row({"target_cycle_days": 7})).target_cycle_days == 7.0
+    ceiling = {"max_pages_per_run": 10}
+    assert build_adapter(row({"target_cycle_days": 7, **ceiling})).target_cycle_days == 7.0
     assert build_adapter(row({})).target_cycle_days is None
     for bad in (0, -1, "7", True):
         with pytest.raises(ValueError, match="target_cycle_days"):
-            build_adapter(row({"target_cycle_days": bad}))
+            build_adapter(row({"target_cycle_days": bad, **ceiling}))
+
+
+def test_a_target_without_a_ceiling_is_refused():
+    """The ceiling is what bounds a source that fell behind."""
+    import pytest
+    from makhzan_schemas.models import Source
+    from worker.sources.registry import build_adapter
+
+    source = Source(
+        source_id="t",
+        adapter="fixture",
+        supplier={"slug": "t", "name": "T"},
+        config={"target_cycle_days": 7},
+    )
+    with pytest.raises(ValueError, match="needs max_pages_per_run"):
+        build_adapter(source)

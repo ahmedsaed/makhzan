@@ -186,6 +186,10 @@ async def crawl_source(ctx: dict, source_id: str) -> dict:
     — it asks for the rebuild, so search catches up with whatever it committed.
     """
     try:
+        if not CRAWL_ENABLED:
+            # A job queued before `./makhzan crawl off` and still waiting for a
+            # slot must not run after the switch.
+            return {"source": source_id, "status": "skipped", "reason": "CRAWL_ENABLED is off"}
         if not await source_enabled(source_id):
             return {"source": source_id, "status": "skipped", "reason": "retired or disabled"}
         return await _exclusive(
