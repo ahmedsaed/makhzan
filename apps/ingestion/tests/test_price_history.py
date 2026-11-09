@@ -197,3 +197,55 @@ async def test_deleting_a_listing_deletes_its_history():
         await s.commit()
     async with SessionLocal() as s:
         assert (await s.execute(select(PriceObservation))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_archiving_writes_a_row_that_says_so():
+    """Without it a listing archived for weeks read as in stock across them."""
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock"), "a2": ("80 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))  # a2 gone: archived
+
+    first, archived = await _observations("a2")
+    assert (first.available, first.in_stock) == (True, True)
+    assert (archived.available, archived.in_stock) == (False, False)
+    # The last values read, kept so a chart has something to draw: not an offer.
+    assert (archived.price, archived.stock_signal) == (Decimal("80.00"), StockSignal.IN_STOCK)
+    assert archived.observed_at > first.observed_at
+    assert len(await _observations("a1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_staying_archived_writes_nothing_more():
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock"), "a2": ("80 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+
+    assert [r.available for r in await _observations("a2")] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_coming_back_at_the_same_values_writes_a_row():
+    """The price and stock did not change, but the listing came back: that is
+    when the gap ends, and nothing else would record it."""
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock"), "a2": ("80 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock"), "a2": ("80 EGP", "In stock")}))
+
+    rows = await _observations("a2")
+    assert [(r.available, r.in_stock) for r in rows] == [(True, True), (False, False), (True, True)]
+    assert rows[-1].price == Decimal("80.00")
+
+
+@pytest.mark.asyncio
+async def test_coming_back_by_id_alone_writes_a_row_too():
+    """The out-of-stock route restores an archived listing: available again, out of stock."""
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock"), "a2": ("80 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}, out_of_stock_ids=["a2"]))
+
+    last = (await _observations("a2"))[-1]
+    assert (last.available, last.in_stock, last.stock_signal) == (
+        True,
+        False,
+        StockSignal.OUT_OF_STOCK,
+    )

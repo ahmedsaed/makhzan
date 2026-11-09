@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-from worker.http import BROWSER_HEADERS, HostBackingOff, take_turn
+from worker.http import BROWSER_HEADERS, MAX_REDIRECTS, HostBackingOff, host_of, take_turn
 
 #: Re-read a host's robots.txt this often. A sweep of one source runs for hours,
 #: and a rule added mid-sweep should take effect within it.
@@ -144,8 +144,10 @@ class RobotsCache:
         self.failures: dict[str, str] = {}
 
     async def _entry(self, url: str) -> _Entry:
-        parts = urlsplit(url)
-        host = f"{parts.scheme}://{parts.netloc}"
+        # The pace gate's own key: built any other way, a mixed-case or
+        # explicit-port base URL took its robots.txt turn at a different gate
+        # than the pages, and the pages never saw its Crawl-delay.
+        host = host_of(url)
         cached = self._hosts.get(host)
         if cached and (time.monotonic() - cached.fetched_at) < self._ttl:
             return cached
@@ -165,11 +167,24 @@ class RobotsCache:
         try:
             # A bare client on purpose: routing this through the adapters' own
             # fetch helper would recurse straight back into this check.
+            # Redirects are followed by hand, each hop a paced and logged
+            # request (as worker/http.py does for pages): http to https is the
+            # common one, and httpx following it sent it unpaced and uncounted.
             async with httpx.AsyncClient(
-                timeout=TIMEOUT_SECONDS, follow_redirects=True, headers=BROWSER_HEADERS
+                timeout=TIMEOUT_SECONDS, follow_redirects=False, headers=BROWSER_HEADERS
             ) as client:
                 response = await client.get(f"{host}/robots.txt")
-            if response.status_code < 400:
+                for _ in range(MAX_REDIRECTS):
+                    hop = response.next_request
+                    if hop is None:
+                        break
+                    await take_turn(host_of(hop.url), robots=True)
+                    response = await client.get(str(hop.url))
+            if response.is_redirect:
+                # RFC 9309 §2.3.1.2: past five hops, robots.txt is unavailable,
+                # which is read like a 4xx below.
+                self.failures.pop(host, None)
+            elif response.status_code < 400:
                 rules = Rules(response.text)
                 self.failures.pop(host, None)
             elif response.status_code < 500:
@@ -202,7 +217,7 @@ class RobotsCache:
 
     def cached_crawl_delay(self, host: str, user_agent: str) -> float | None:
         """`crawl_delay` from what is already cached, never fetching (for the pace gate)."""
-        entry = self._hosts.get(host)
+        entry = self._hosts.get(host_of(host))
         if entry is None or entry.rules is None:
             return None
         return entry.rules.crawl_delay(user_agent)

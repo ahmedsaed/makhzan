@@ -38,8 +38,10 @@ and the referral numbers.
 ## Decided
 
 - **The redesign** (direction D) as specified in `docs/DESIGN.md`. English only.
-- **Product ids never change.** Regrouping must not reassign them; merges leave a
-  redirecting id behind. Needs a design pass: `docs/decisions/0004-stable-product-ids.md`.
+- **Product ids never change.** Done (November 2026): a regroup merges, splits and
+  empties products without deleting or re-keying any; a merge leaves a redirecting id
+  behind, and a withdrawn product's page says "no longer listed".
+  `docs/decisions/0004-stable-product-ids.md`; redirect retirement in `0005`.
 - **Projects.** A project is a full build guide: documentation plus a list of
   products. Projects reference products (by permanent id). When a part becomes
   unavailable, the project shows a note rather than dropping it. Ahmed writes them

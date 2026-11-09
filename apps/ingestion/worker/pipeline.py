@@ -17,13 +17,16 @@ individual run.
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from makhzan_schemas.contracts import NormalizedListing
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.domains.crosswalks import fold_names, normalize_category_name
 from makhzan_schemas.enums import (
     IngestionStatus,
     ListingStatus,
@@ -40,7 +43,7 @@ from makhzan_schemas.models import (
     SourceCursor,
     Supplier,
 )
-from sqlalchemy import func, select, update
+from sqlalchemy import Integer, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
@@ -141,6 +144,10 @@ async def _record_changes(
     change must still be recorded by the next real run rather than lost. A listing
     with no observation yet (new, or archived before history began) gets its
     first. A recheck that changes nothing writes nothing. Returns rows added.
+
+    Every listing passed here was just seen by its source, so it is available:
+    one whose latest row is its archiving (`available` false) gets a row on
+    coming back even at the same price and stock, which is what dates the gap.
     """
     latest: dict = {}
     if not new:
@@ -151,6 +158,7 @@ async def _record_changes(
                 PriceObservation.price,
                 PriceObservation.currency,
                 PriceObservation.stock_signal,
+                PriceObservation.available,
             )
             .where(PriceObservation.listing_id.in_(ids))
             .order_by(PriceObservation.listing_id, PriceObservation.observed_at.desc())
@@ -159,7 +167,7 @@ async def _record_changes(
         latest = {row[0]: tuple(row[1:]) for row in rows}
     added = 0
     for listing in listings:
-        current = (_cents(listing.price), listing.currency, listing.stock_signal)
+        current = (_cents(listing.price), listing.currency, listing.stock_signal, True)
         if latest.get(listing.id) == current:
             continue
         session.add(
@@ -170,6 +178,7 @@ async def _record_changes(
                 currency=listing.currency,
                 stock_signal=listing.stock_signal,
                 in_stock=listing.stock_signal == StockSignal.IN_STOCK,
+                available=True,
             )
         )
         added += 1
@@ -281,6 +290,14 @@ async def _ingest_item(
     )
 
     knows = adapter.knows_category(raw)
+    if knows and mapped is None and adapter.authoritative_categories:
+        # Browsed by category, under one the crosswalk does not map. A product
+        # can sit in two categories, one mapped and one not, and then whichever
+        # partition happened to be swept last decided: the unmapped one cleared
+        # what the mapped one had just set (servos such as the SG90 and MG996R
+        # lost theirs this way). Only a mapped category is in a position to
+        # say; an unmapped one leaves the listing's category as it is.
+        knows = False
     if (
         slug is None
         and not adapter.authoritative_categories
@@ -300,9 +317,10 @@ async def _ingest_item(
         # applies while a listing is uncategorized.
         listing.category_id = cat.id
         listing.domain = cat.domain
-    elif knows:
+    elif knows or listing.category_id is None:
         # This sweep was in a position to know, and there is no category: clear
         # whatever was there, so a supplier dropping a category is visible.
+        # (One with no category yet just gets the supplier's default domain.)
         listing.category_id = None
         listing.domain = default_domain
     # Otherwise this pass carries no category signal — leave the existing one
@@ -500,8 +518,16 @@ async def _sweep_partition(
     resumed: list[bool] | None = None,
     not_products: Counter | None = None,
     tally: Counter | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    run_page_budget: int | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
+
+    `run_page_budget` caps the pages of the whole run (`tally["pages"]`), across
+    partitions: the adaptive budget of a source with `target_cycle_days`.
+
+    `checkpoint` puts what the run has sent so far on its row before each
+    commit, so a run cut off mid-sweep still says how many requests it made.
 
     Returns True if the fetch failed. The cursor is left pointing at the page
     that failed, so the next run retries exactly there instead of restarting at
@@ -513,6 +539,10 @@ async def _sweep_partition(
     page = 1
     if not ephemeral:
         cursor = await _get_cursor(session, adapter.source_id, partition)
+        if cursor.exhausted:
+            # Finished this cycle: its next_page is back at 1, and sweeping it
+            # again would re-read the whole partition before the cycle closes.
+            return False
         if cursor.cycle_started_at is None:
             cursor.cycle_started_at = datetime.now(timezone.utc)
         page = cursor.next_page
@@ -527,6 +557,8 @@ async def _sweep_partition(
             return False
         if adapter.max_pages_per_run and pages_this_run >= adapter.max_pages_per_run:
             return False  # budget spent; the cursor resumes here next run
+        if run_page_budget is not None and tally is not None and tally["pages"] >= run_page_budget:
+            return False  # the run's adaptive budget is spent
 
         if tally is not None:
             tally["pages"] += 1
@@ -572,12 +604,35 @@ async def _sweep_partition(
             if not result.has_more:
                 cursor.exhausted = True
                 cursor.next_page = 1
+            if checkpoint is not None:
+                checkpoint()
             await session.commit()
 
         if not result.has_more:
             return False
         page += 1
         await asyncio.sleep(await _pace(adapter))
+
+
+def _requests_sent(
+    tally: Counter,
+    cycle_requests: Counter,
+    adapter: SourceAdapter,
+    log: RequestLog,
+    details_requests: Counter,
+) -> dict[str, int]:
+    """`stats.requests`: every request this run made to the source's host, by purpose.
+
+    Its pages, the reference data fetched once a cycle (by part), whatever else
+    the adapter asked for while building its pages, product-page details and
+    robots.txt. Zero counts are left out.
+    """
+    requests: Counter = Counter({"pages": tally["pages"]})
+    requests.update(cycle_requests)
+    requests.update(adapter.extra_requests())
+    requests.update(details_requests)
+    requests.update({"robots": sum(log.robots.values())})
+    return {k: v for k, v in requests.items() if v}
 
 
 async def _pace(adapter: SourceAdapter) -> float:
@@ -588,7 +643,12 @@ async def _pace(adapter: SourceAdapter) -> float:
 
 
 async def _finish_cycle_if_swept(
-    session: AsyncSession, adapter: SourceAdapter, supplier_id: uuid.UUID
+    session: AsyncSession,
+    adapter: SourceAdapter,
+    supplier_id: uuid.UUID,
+    *,
+    run: IngestionRun | None = None,
+    pages_this_run: int = 0,
 ) -> tuple[int, dict]:
     """Archive vanished listings, but only once every partition has been swept.
 
@@ -613,17 +673,39 @@ async def _finish_cycle_if_swept(
     starts = [c.cycle_started_at for c in cursors if c.cycle_started_at is not None]
     cycle_started = min(starts) if starts else datetime.now(timezone.utc)
 
-    result = await session.execute(
-        update(Listing)
-        .where(
-            Listing.supplier_id == supplier_id,
-            Listing.status == ListingStatus.ACTIVE,
-            # Seen, not verified: a listing kept alive by id alone was not
-            # re-priced, but the shop still says it sells it.
-            Listing.last_seen_at < cycle_started,
+    archived = (
+        await session.execute(
+            update(Listing)
+            .where(
+                Listing.supplier_id == supplier_id,
+                Listing.status == ListingStatus.ACTIVE,
+                # Seen, not verified: a listing kept alive by id alone was not
+                # re-priced, but the shop still says it sells it.
+                Listing.last_seen_at < cycle_started,
+            )
+            .values(status=ListingStatus.ARCHIVED)
+            .returning(Listing.id, Listing.price, Listing.currency, Listing.stock_signal)
         )
-        .values(status=ListingStatus.ARCHIVED)
-    )
+    ).all()
+    if archived:
+        # History marks the gap: from now until the listing is seen again it is
+        # not offered at all, whatever its last price and stock were.
+        now = datetime.now(timezone.utc)
+        await session.execute(
+            insert(PriceObservation),
+            [
+                {
+                    "listing_id": listing_id,
+                    "observed_at": now,
+                    "price": _cents(price),
+                    "currency": currency,
+                    "stock_signal": stock_signal,
+                    "in_stock": False,
+                    "available": False,
+                }
+                for listing_id, price, currency, stock_signal in archived
+            ],
+        )
     for cursor in cursors:
         cursor.exhausted = False
         cursor.next_page = 1
@@ -639,8 +721,115 @@ async def _finish_cycle_if_swept(
         "cycle_completed_at": finished.isoformat(),
         "cycle_seconds": round((finished - cycle_started).total_seconds()),
         "cycle_partitions": len(expected),
+        # Every page the cycle read, across its runs: the size the next cycle's
+        # adaptive budget (`target_cycle_days`) is planned from.
+        "cycle_pages": pages_this_run
+        + await _cycle_pages_since(
+            session, adapter.source_id, cycle_started, exclude=run.id if run else None
+        ),
     }
-    return result.rowcount or 0, cycle
+    return len(archived), cycle
+
+
+async def _cycle_pages_since(
+    session: AsyncSession, source_id: str, since: datetime, *, exclude: uuid.UUID | None = None
+) -> int:
+    """Pages read by this source's runs of the cycle that started at `since`.
+
+    A run belongs to the cycle when it was still going at `since` or later:
+    the previous cycle closed inside a run that finished before this cycle's
+    first cursor was stamped. `limit=` test runs are left out, and so is
+    `exclude` (the run asking, which counts its own). Read from
+    `stats.requests.pages`, which every run keeps current page by page.
+    """
+    pages = IngestionRun.stats["requests"]["pages"].astext.cast(Integer)
+    query = select(func.coalesce(func.sum(pages), 0)).where(
+        IngestionRun.source == source_id,
+        or_(IngestionRun.finished_at.is_(None), IngestionRun.finished_at >= since),
+        ~IngestionRun.stats.has_key("limit"),
+    )
+    if exclude is not None:
+        query = query.where(IngestionRun.id != exclude)
+    return int((await session.execute(query)).scalar_one())
+
+
+#: The adaptive budget never drops below this share of a day's even split of
+#: the last cycle: a cycle running ahead of schedule still makes steady progress.
+BUDGET_FLOOR_SHARE = 0.5
+
+
+async def _page_budget(session: AsyncSession, adapter: SourceAdapter) -> dict:
+    """This run's page budget, for a source with `target_cycle_days` (else {}).
+
+    Planned from the last completed cycle's size (`stats.cycle.cycle_pages`):
+    the pages it is still owed, spread over the days the target leaves, one run
+    a day. So a shop that grows gets more pages a run and its cycle stays near
+    the target, instead of stretching with the catalogue under a fixed cap.
+    `max_pages_per_run`, when set, is a hard ceiling on the run's total (a
+    stricter reading than its usual per-partition one): the budget never asks
+    a shop for more than the owner approved, and `ceiling_limited` says when it
+    would have. A floor of half a day's even share keeps a cycle that is ahead
+    moving. With no completed cycle yet, the ceiling alone applies.
+    """
+    target = adapter.target_cycle_days
+    if not target:
+        return {}
+    ceiling = adapter.max_pages_per_run or None
+    out: dict = {"target_cycle_days": target, "ceiling": ceiling}
+
+    previous = (
+        await session.execute(
+            select(IngestionRun.stats["cycle"]["cycle_pages"].astext.cast(Integer))
+            .where(
+                IngestionRun.source == adapter.source_id,
+                IngestionRun.stats["cycle"].has_key("cycle_pages"),
+            )
+            .order_by(IngestionRun.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not previous:
+        out.update(pages=ceiling, basis="no completed cycle with a page count yet")
+        return out
+
+    starts = (
+        (
+            await session.execute(
+                select(SourceCursor.cycle_started_at).where(
+                    SourceCursor.source == adapter.source_id,
+                    SourceCursor.cycle_started_at.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    started = min(starts) if starts else now
+    elapsed_days = (now - started).total_seconds() / 86400
+    read = await _cycle_pages_since(session, adapter.source_id, started) if starts else 0
+    remaining_pages = max(0, previous - read)
+    # Daily runs left before the target, this one included: a run 2.5 days in
+    # of 7 has 5 (at 2.5, 3.5 ... 6.5). Rounded first, so seconds of drift in
+    # when the cron fires do not buy a run.
+    remaining_days = max(1, math.ceil(round(target - elapsed_days, 3)))
+
+    planned = math.ceil(remaining_pages / remaining_days)
+    floor = max(1, math.ceil(BUDGET_FLOOR_SHARE * previous / target))
+    pages = max(planned, floor)
+    limited = ceiling is not None and pages > ceiling
+    if limited:
+        pages = ceiling
+    out.update(
+        pages=pages,
+        planned=planned,
+        ceiling_limited=limited,
+        previous_cycle_pages=previous,
+        cycle_pages_read=read,
+        # Runs are daily: the days so far plus a run per budget of what is left.
+        projected_cycle_days=round(elapsed_days + math.ceil(remaining_pages / pages), 1),
+    )
+    return out
 
 
 def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: bool) -> dict | None:
@@ -661,7 +850,14 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     if not adapter.categories or not observed:
         return None
 
-    unmapped = {name: n for name, n in observed.items() if name not in adapter.categories}
+    # Compared folded, as the lookup is (`crosswalks.normalize_category_name`):
+    # exact strings reported "LED" and "Raspberry Pi" as unmapped while every
+    # listing under them was being mapped.
+    mapped = fold_names(adapter.categories)
+    known = mapped | fold_names(adapter.ignored_categories)
+    unmapped = {
+        name: n for name, n in observed.items() if normalize_category_name(name) not in known
+    }
     drift: dict = {"observed": len(observed)}
     if unmapped:
         # Biggest first — a rename of a busy category matters more than a new
@@ -669,7 +865,10 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
         drift["unmapped"] = dict(Counter(unmapped).most_common(15))
         drift["unmapped_listings"] = sum(unmapped.values())
     if complete:
-        unused = sorted(set(adapter.categories) - set(observed))
+        seen = fold_names(observed)
+        unused = sorted(
+            name for name in adapter.categories if normalize_category_name(name) not in seen
+        )
         if unused:
             drift["unused"] = unused[:25]
             drift["unused_count"] = len(unused)
@@ -686,10 +885,15 @@ async def _partitions_for_this_run(
     cycle closes when the last of them is done. That spreads a large catalogue
     into a steady trickle instead of a daily spike, without touching freshness —
     the cycle length is what sets how often a product is re-checked.
+
+    A partition already finished this cycle is skipped whatever the caps. It
+    used to be skipped only under `max_partitions_per_run`: without it every
+    run took every partition, and one exhausted earlier in the cycle (its
+    cursor back at page 1) was read again from the start, so a shop paced by
+    `max_pages_per_run` alone re-read its 49 out-of-stock pages 90 times a
+    cycle while the big partition crept forward.
     """
     budget = adapter.max_partitions_per_run
-    if not budget:
-        return partitions
     rows = (
         (
             await session.execute(
@@ -701,7 +905,7 @@ async def _partitions_for_this_run(
     )
     done = {c.partition_key for c in rows if c.exhausted}
     outstanding = [p for p in partitions if p not in done]
-    return outstanding[:budget]
+    return outstanding[:budget] if budget else outstanding
 
 
 async def _run(
@@ -741,25 +945,48 @@ async def _logged_run(
         cat_index = await seed_categories(session)  # idempotent
         await session.flush()
 
+        budget: dict = {}
         if limit is None:
             # Bounded dev runs always sweep what they were asked for.
             partitions = await _partitions_for_this_run(session, adapter, partitions)
+            budget = await _page_budget(session, adapter)
+        run_page_budget = budget.get("pages")
 
         # Before any page: the adapter reads it while turning pages into listings.
         cycle_requests = await _load_cycle_data(
             session, adapter, supplier_id, ephemeral=limit is not None, errors=errors
         )
-        # Durable before the sweep: a run that dies on page 1 still keeps it, and
-        # a part that failed stays marked as tried.
-        await session.commit()
-
         fetch_failed = False
         observed: Counter = Counter()
         resumed: list[bool] = []
         not_products: Counter = Counter()
         tally: Counter = Counter()
+
+        def checkpoint(more: Counter | None = None) -> None:
+            """Put what the run has sent so far on its row, for the next commit.
+
+            Called before every per-page commit. The full stats are written only
+            when the run ends, and a run cut off before that (a deploy recreates
+            the worker) used to be left with none: /how-we-crawl then published
+            its week as "at least N". This keeps the two published figures,
+            `requests` and `pacing`, current to the last page; they cost one
+            small JSONB update in a commit that happens anyway.
+            """
+            sent = _requests_sent(tally, cycle_requests, adapter, log, more or Counter())
+            stats = dict(run.stats or {})
+            if sent:
+                stats["requests"] = sent
+            stats["pacing"] = log.pacing()
+            run.stats = stats
+
+        # Durable before the sweep: a run that dies on page 1 still keeps it, and
+        # a part that failed stays marked as tried.
+        checkpoint()
+        await session.commit()
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
+                break
+            if run_page_budget is not None and tally["pages"] >= run_page_budget:
                 break
             if i:
                 # Partitions share one host. The pause between pages ends at a
@@ -780,12 +1007,16 @@ async def _logged_run(
                 resumed=resumed,
                 not_products=not_products,
                 tally=tally,
+                checkpoint=checkpoint,
+                run_page_budget=run_page_budget,
             )
             fetch_failed = fetch_failed or failed
 
         archived, cycle = 0, {}
         if limit is None:
-            archived, cycle = await _finish_cycle_if_swept(session, adapter, supplier_id)
+            archived, cycle = await _finish_cycle_if_swept(
+                session, adapter, supplier_id, run=run, pages_this_run=tally["pages"]
+            )
 
         details_requests: Counter = Counter()
         details: dict = {}
@@ -802,6 +1033,7 @@ async def _logged_run(
                     errors=errors,
                     pace=lambda: _pace(adapter),
                     already_sent=bool(tally["pages"] or cycle_requests),
+                    checkpoint=checkpoint,
                 )
             except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
                 # Whatever went wrong reading details, the run's own record
@@ -812,6 +1044,11 @@ async def _logged_run(
         stats: dict = {}
         if errors:
             stats["errors"] = errors
+        if limit is not None:
+            # A test run: its pages are not part of any cycle (`_cycle_pages_since`).
+            stats["limit"] = limit
+        if budget:
+            stats["budget"] = budget
         if archived:
             stats["archived"] = archived
         if cycle:
@@ -819,18 +1056,10 @@ async def _logged_run(
         if not_products:
             # Named, so a wrongly skipped real product is visible in the run.
             stats["not_products"] = dict(not_products.most_common(25))
-        # Every request this run made to the source's host: its pages, and the
-        # reference data fetched once a cycle, by part, and whatever else the
-        # adapter asked for while building its pages.
-        requests: Counter = Counter({"pages": tally["pages"]})
-        requests.update(cycle_requests)
-        requests.update(adapter.extra_requests())
-        requests.update(details_requests)
         if details:
             stats["details"] = details
-        requests.update({"robots": sum(log.robots.values())})
-        if any(requests.values()):
-            stats["requests"] = {k: v for k, v in requests.items() if v}
+        if requests := _requests_sent(tally, cycle_requests, adapter, log, details_requests):
+            stats["requests"] = requests
         # What the shop's server saw: requests sent (a retry is one more) and the
         # gaps between them, which is what /how-we-crawl publishes. `requests`
         # above counts by purpose, and a page refused before sending (robots.txt,

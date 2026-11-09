@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.enums import ReviewReason, SourceType
+from makhzan_schemas.enums import IngestionStatus, ReviewReason, SourceType
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
+    Product,
     ReviewQueueItem,
     Source,
     SourceCursor,
@@ -16,7 +18,7 @@ from makhzan_schemas.models import (
 )
 from sqlalchemy import func, select
 
-from worker.sources.retire import plan, retire
+from worker.sources.retire import SourceRunning, plan, retire
 
 
 def _supplier(slug):
@@ -43,7 +45,9 @@ async def _seed():
     for source in ("old", "shop-a"):
         rows += [
             Source(source_id=source, adapter="fixture", supplier={"slug": source}, config={}),
-            IngestionRun(source=source, source_type=SourceType.SCRAPED),
+            IngestionRun(
+                source=source, source_type=SourceType.SCRAPED, status=IngestionStatus.SUCCESS
+            ),
             SourceCursor(source=source, partition_key=""),
             ReviewQueueItem(source=source, reason=ReviewReason.MISSING_PRICE, raw_payload={}),
         ]
@@ -96,3 +100,50 @@ async def test_an_unknown_source_plans_nothing():
     async with SessionLocal() as session:
         found = await plan(session, "never-existed")
     assert not any(found.values())
+
+
+async def test_retire_deletes_the_products_only_it_offered():
+    """A regroup never deletes a product (its id is permanent), but a source
+    being retired should never have been listed: its own products go with it,
+    and one another source also offered stays."""
+    own, shared = _supplier("old-shop"), _supplier("shop-a")
+    mine = Product(id=uuid.uuid4(), group_key="single:old:1")
+    both = Product(id=uuid.uuid4(), group_key="mpn:X")
+    # Merged into one of its products: it only redirects there, so it goes too.
+    merged = Product(id=uuid.uuid4(), group_key="single:old:2", merged_into=mine.id)
+    async with SessionLocal() as session:
+        session.add_all([own, shared, mine, both])
+        await session.flush()
+        session.add(merged)
+        await session.flush()
+        for source, supplier, product in (
+            ("old", own, mine),
+            ("old", own, both),
+            ("shop-a", shared, both),
+        ):
+            listing = _listing(source, supplier)
+            listing.product_id = product.id
+            session.add(listing)
+        await session.commit()
+
+    async with SessionLocal() as session:
+        await retire(session, "old")
+
+    assert await _count(Product, id=mine.id) == 0
+    assert await _count(Product, id=merged.id) == 0
+    assert await _count(Product, id=both.id) == 1
+
+
+async def test_retire_refuses_while_a_run_of_the_source_is_in_progress():
+    """Retiring runs in its own process, out of sight of the worker's per-source
+    lock: a run going on would write listings back as they are deleted."""
+    await _seed()
+    async with SessionLocal() as session:
+        session.add(IngestionRun(source="old", source_type=SourceType.SCRAPED))
+        await session.commit()
+
+    async with SessionLocal() as session:
+        with pytest.raises(SourceRunning):
+            await retire(session, "old")
+    assert await _count(Listing, source="old") == 2
+    assert await _count(Source, source_id="old") == 1

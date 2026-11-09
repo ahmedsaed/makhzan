@@ -47,7 +47,7 @@ it happened, so the run's `stats.cycle` records when it started, finished, how
 long it took and over how many partitions. That is what makes past sweeps
 comparable — the cycle in flight tells you nothing on its own.
 
-`stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries and robots.txt included, and the gaps between them per host, measured at `worker/http.py`'s `take_turn`, the per-host gate that holds every request to the source's pace — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint.
+`stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries and robots.txt included, and the gaps between them per host, measured at `worker/http.py`'s `take_turn`, the per-host gate that holds every request to the source's pace — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint. That holds only because nothing reaches a shop any other way: the client does not follow redirects itself (`make_client`), `_request` follows each hop through `take_turn`, robots-checked and logged, and every per-host table keys on `host_of()`, which folds case and default ports so robots.txt and the pages share one gate. It and `stats.requests` go on the run's row with every per-page commit (the pipeline's `checkpoint`), not only when the run ends, so a run a deploy cuts off still publishes what it sent.
 
 `make status` is the first thing to run when a sweep looks stuck or a catalog
 looks wrong: it reports per-source partition progress and resume points, recent
@@ -106,6 +106,20 @@ and there is none", which *does* clear it, so a supplier dropping a category is
 still visible. Without this the /shop pass would blank the category on all 2,867
 products the category pass had just set.
 
+**On an authoritative source, only a mapped category knows.** A product can sit
+in two categories, one the crosswalk maps and one it does not, and then whichever
+partition was swept later decided: the unmapped one cleared what the mapped one
+had just set (the Odoo shop's servos, SG90 and MG996R among them, lost their
+category this way). So when `authoritative_categories` is set and the listing's
+own category misses the crosswalk, the pipeline treats the sweep as not knowing:
+it leaves a stored category alone, and a listing with none stays uncategorized
+(never inferred). A mapped partition still sets the category, and the whole-shop
+pass still never clears one. The cost: a product the supplier *moves* from a
+mapped category to an unmapped one keeps the old category until a mapped one
+says otherwise. Tag-cloud sources (`authoritative_categories` False) are
+unchanged — a miss there falls through to inference, and "I was in a position to
+know, and there is none" still clears.
+
 Progress is **durable per page**: after each page the pipeline commits and advances
 a `SourceCursor`. A run that dies on page 40 of 43 keeps 39 pages, and the next
 run resumes at 40. This is not a nicety — without it, a host that rate-limits
@@ -158,6 +172,20 @@ small ones (the marketplace has 608 categories of ~2 pages, so capping pages wou
 spread nothing). A cycle therefore takes about a week, which is how often a
 product gets re-checked.
 
+**Each source is its own job.** The cron (`refresh_all`) only queues one
+`crawl_source` job per enabled source, with the job id `crawl:<source>:<day>`, so
+a source is never queued twice a day; each has its own timeout
+(`REFRESH_TIMEOUT_SECONDS`), so a host stuck in a long `Retry-After` or a 429
+loop is cut off alone instead of holding every other source and the rebuild. A
+per-source lock in the worker (`_exclusive`) keeps a run enqueued by hand from
+overlapping the daily one: cursors and the pace gate assume one run per source.
+Every source job, however it ends — timeout included — queues
+`rebuild_and_reindex` for the end of the current 10-minute window, deduplicated
+by the window's job id, so sources finishing together share one rebuild and a
+straggler gets its own. All of this assumes **one worker process**: the pace
+gate is process-wide, and `close_interrupted_runs` on startup treats every
+RUNNING row as orphaned.
+
 The Odoo shop needs both: 170 small category partitions *and* one 96-page whole-shop pass.
 **Order matters when one partition is much bigger than the rest.** A run takes
 `max_partitions_per_run` of whatever is still outstanding, in list order, so a
@@ -165,10 +193,28 @@ big partition left at the end is not started until the small ones are nearly
 done and then needs several runs of its own — 15 daily runs instead of 7, for
 exactly the same 497 pages. Sweep the big one first.
 
+A partition finished this cycle is not swept again until the next one starts,
+whatever the caps (`_partitions_for_this_run`, and `_sweep_partition` refuses an
+exhausted cursor). It used to be skipped only under `max_partitions_per_run`:
+without it, a finished partition's cursor sat at page 1 and every later run of
+the cycle re-read it, so shop 1 read its 49 out-of-stock pages 90 times a cycle.
+
 Prefer this over a weekly cron. Same freshness, but the load is a steady trickle
 instead of one heavy day, and a daily run means a breakage surfaces in a day
 rather than a week. Archiving is unaffected — it is cycle-gated, so it fires once
 per completed sweep.
+
+**A cycle can be given a length instead of a slice.** `target_cycle_days` on a
+source (any adapter; the registry sets it) makes each run's page budget a plan:
+what the cycle still owes, from the last completed cycle's `stats.cycle.cycle_pages`,
+spread over the daily runs the target leaves (`pipeline._page_budget`). A shop
+that grows then gets more pages a run, rather than a cycle that stretches with
+its catalogue. `max_pages_per_run` stays the hard ceiling, read in this mode as
+the cap on the **whole run** across partitions, and a floor of half a day's even
+share keeps a cycle that is ahead moving. Each run records `stats.budget`;
+`make status` shows the target, the projected cycle length, and when the
+ceiling rather than the target is setting the pace. Without a completed cycle
+to plan from (the first after enabling it), the ceiling alone applies.
 
 ## Domains
 
@@ -285,7 +331,16 @@ this way when the July crosswalks were diffed against the live shops. Lookups
 therefore go through `crosswalks.normalize_category_name`, which folds dashes,
 smart quotes, `×`, whitespace and case, and `fold_crosswalk` raises if two keys
 collide under it. It folds punctuation only — never words, so "Power Resistors"
-can never become "Resistors".
+can never become "Resistors". The drift check compares folded names too: it once
+compared exact strings, and reported "LED" and "Raspberry Pi" as unmapped while
+every listing under them was being mapped.
+
+**Deliberate skips are written down.** A crosswalk's optional top-level
+`ignore = [...]` lists source categories left unmapped on purpose — brand tags,
+generic buckets — so they stop reappearing under `unmapped` in `make status`.
+They are never mapped or guessed from; a name both mapped and ignored is refused
+at load. A crosswalk without the key ignores nothing, but an image older than it
+rejects the key outright, so publish the code before a crosswalk that uses it.
 
 **Re-scoping stays invisible.** If a supplier keeps a name but changes what goes
 under it, the mapping still matches and is now silently wrong. No diff can catch
@@ -376,6 +431,15 @@ a title silent on form. Form words must say what the listing *is*: "PCB Mount",
 "Panel Mount" and "with adapter" describe the part, and matching bare `mount`
 kept DB15 and WAGO connectors from merging across shops.
 
+**A group key is not a product's identity.** Product ids are permanent
+(`docs/decisions/0004-stable-product-ids.md`): `plan_identity` matches each group
+to the products its listings already point at, so a regroup merges (the absorbed
+id gets `merged_into` and redirects), splits (the core keeps the id), empties
+(`delisted_at`, "no longer listed") and revives, recording each in
+`product_events`. Never delete a product or look one up by `group_key`; anything
+that lists products filters on `Product.is_listed()`. Before deploying a grouping
+change, `make regroup-dry-run` shows how many ids it merges and splits.
+
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
 under exactly "Services". Narrow on purpose — a false positive deletes real stock.
@@ -395,9 +459,14 @@ are shared by two suppliers, and those are coincidences. Do not group on them.
   before committing.
 - Tests live in `apps/ingestion/tests` and `apps/api/tests`, and run against a
   real Postgres (the schema needs JSONB/UUID). Each `conftest.py` forces
-  `DATABASE_URL` to a separate test database so it can never truncate your dev
-  data, and the two suites use *different* test databases so they can run side
-  by side. `make test-ingestion` / `make test-api` run one on its own.
+  `DATABASE_URL` to a database of its **own test session**: the base name
+  (`makhzan_test`, `makhzan_api_test`, or `TEST_DATABASE_URL`'s) suffixed with
+  the process id or `TEST_DB_SUFFIX`, created at the start and dropped at the
+  end. So it can never truncate your dev data, and any number of runs (both
+  suites, two worktrees, two agents) can go at once; one shared database used to
+  fail them with `StaleDataError` and "cache lookup failed for type". A session
+  killed outright leaves its database behind; drop it by hand.
+  `make test-ingestion` / `make test-api` run one suite on its own.
 - The API suite drives the real app in-process over an ASGI transport and hits a
   real database; only the Meilisearch client is faked, because a filter built on
   the wrong attribute returns a plausible result set rather than an error, and

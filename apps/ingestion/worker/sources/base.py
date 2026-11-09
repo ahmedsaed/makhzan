@@ -185,6 +185,16 @@ class SourceAdapter(ABC):
     #: mapped. Named on the base class so drift checking can find it.
     categories: dict[str, tuple[str, str]] = {}
 
+    #: Days a cycle should take, when set: each run's page budget is planned
+    #: from the last cycle's size to keep the cycle near it, with
+    #: `max_pages_per_run` as a hard ceiling (see `pipeline._page_budget`).
+    #: Set from a source's config by the registry, so any adapter takes it.
+    target_cycle_days: float | None = None
+
+    #: The crosswalk's `ignore` list: source categories left unmapped on
+    #: purpose, which the drift check does not report as new.
+    ignored_categories: tuple[str, ...] = ()
+
     def source_categories(self, raw: RawItem) -> list[str]:
         """The source's own category names for this item, normalised.
 
@@ -203,6 +213,11 @@ class SourceAdapter(ABC):
         whole-catalogue pass that exists so products filed under nothing are
         still seen. Such a pass must not erase a category another partition
         established, which is what returning False buys.
+
+        On a source with `authoritative_categories`, the pipeline also treats
+        a True here as False when the item's category misses the crosswalk: a
+        product filed under a mapped and an unmapped category must keep the
+        mapped one whichever partition is swept last.
         """
         return True
 

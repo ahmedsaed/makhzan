@@ -8,6 +8,7 @@ mistake shows up only as a shop page quietly missing or keeping products.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType
@@ -40,17 +41,37 @@ class FakeIndex:
 
 
 class FakeClient:
+    """Named indexes, with Meilisearch's create, delete and atomic swap."""
+
     def __init__(self) -> None:
-        self.products = FakeIndex()
+        self.indexes: dict[str, FakeIndex] = {}
+        #: The live index's documents at the moment of each swap request.
+        self.live_at_swap: list[int] = []
+
+    @property
+    def products(self) -> FakeIndex:
+        return self.indexes.setdefault("products", FakeIndex())
 
     def create_index(self, name: str, options: dict) -> _Task:
+        self.indexes.setdefault(name, FakeIndex())
+        return _Task()
+
+    def delete_index(self, name: str) -> _Task:
+        self.indexes.pop(name, None)
+        return _Task()
+
+    def swap_indexes(self, pairs: list[dict]) -> _Task:
+        for pair in pairs:
+            a, b = pair["indexes"]
+            self.live_at_swap.append(len(self.indexes.get("products", FakeIndex()).documents))
+            self.indexes[a], self.indexes[b] = self.indexes[b], self.indexes[a]
         return _Task()
 
     def wait_for_task(self, uid: int) -> None:
         pass
 
     def index(self, name: str) -> FakeIndex:
-        return self.products
+        return self.indexes.setdefault(name, FakeIndex())
 
 
 def _supplier(slug: str) -> Supplier:
@@ -206,3 +227,35 @@ async def test_last_verified_at_is_filterable():
 
     assert "last_verified_at" in FILTERABLE_ATTRIBUTES
     assert "last_verified_at" in client.products.settings["filterableAttributes"]
+
+
+async def test_only_listed_products_are_indexed():
+    """Ids are permanent: a merged-away product only redirects and a withdrawn
+    one says "no longer listed". Neither is something search should offer."""
+    shop = _supplier("shop-a")
+    listed = Product(id=uuid.uuid4(), group_key="single:a", title_en="listed")
+    withdrawn = Product(
+        id=uuid.uuid4(), group_key="single:b", title_en="withdrawn", delisted_at=datetime.now(UTC)
+    )
+    merged = Product(
+        id=uuid.uuid4(), group_key="single:c", title_en="merged", merged_into=listed.id
+    )
+    await _seed(shop, listed, withdrawn, _listing(shop, listed))
+    await _seed(merged)
+
+    docs = await _reindex()
+    assert set(docs) == {"listed"}
+    # The stale filter ranges over this; a listed product always carries the key.
+    assert "last_verified_at" in docs["listed"]
+
+
+async def test_a_reindex_never_empties_the_live_index():
+    """Built in a staging index and swapped in: search keeps answering from the
+    old documents the whole time, then sees the new ones at once."""
+    client = FakeClient()
+    client.products.documents = [{"id": "old-1"}, {"id": "old-2"}]
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+    assert client.live_at_swap == [2], "the live index still held the old documents"
+    assert "products_staging" not in client.indexes, "the old index is dropped after the swap"
+    assert all(doc["id"] not in {"old-1", "old-2"} for doc in client.products.documents)

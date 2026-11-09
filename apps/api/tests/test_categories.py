@@ -8,6 +8,8 @@ them collide in the browse bar and in React keys.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from factories import make_category, make_product, make_supplier
 
 
@@ -162,3 +164,21 @@ async def test_an_unknown_domain_is_an_empty_tree_not_an_error(client, db):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+async def test_counts_leave_out_merged_and_withdrawn_products(client, db):
+    """Their rows stay (ids are permanent), but nobody can find or buy them."""
+    resistors = await make_category(db, slug="resistors", name_en="Resistors")
+    capacitors = await make_category(db, slug="capacitors", name_en="Capacitors")
+    listed = await make_product(db, category=resistors)
+    merged = await make_product(db, category=resistors)
+    merged.merged_into = listed.id
+    withdrawn = await make_product(db, category=capacitors)
+    withdrawn.delisted_at = datetime(2026, 11, 1, tzinfo=UTC)
+    await db.commit()
+
+    stats = (await client.get("/stats")).json()
+    counts = {c["slug"]: c["count"] for c in (await client.get("/categories")).json()}
+
+    assert (stats["products"], stats["categories"]) == (1, 1)
+    assert counts == {"resistors": 1, "capacitors": 0}

@@ -123,3 +123,21 @@ async def test_does_not_shadow_the_product_routes(client, db):
     shop = await make_supplier(db, slug="shop-a")
     product = await _offered(db, shop)
     assert (await client.get(f"/products/{product.id}")).status_code == 200
+
+
+async def test_leaves_out_merged_and_withdrawn_products(client, db):
+    """Ids are permanent, so both keep their rows: a merged-away one only
+    redirects, and a withdrawn one's page is noindex. Even with an active offer
+    still pointing at it (not yet regrouped), neither belongs in a sitemap."""
+    shop = await make_supplier(db, slug="shop-a")
+    listed = await _offered(db, shop)
+    merged = await _offered(db, shop)
+    merged.merged_into = listed.id
+    withdrawn = await _offered(db, shop)
+    withdrawn.delisted_at = CHANGED
+    await db.commit()
+
+    body = (await client.get("/sitemap/products")).json()
+
+    assert [item["id"] for item in body["items"]] == [str(listed.id)]
+    assert body["total"] == 1

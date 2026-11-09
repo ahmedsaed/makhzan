@@ -15,6 +15,7 @@ import math
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -566,8 +567,18 @@ class ProductSummary(BaseModel):
 
 
 class ProductRead(ProductSummary):
-    """A canonical product with its offers, for the product page."""
+    """A canonical product with its offers, for the product page.
 
+    `offers` are the active ones only. A product whose offers have all gone is
+    still served, as `status = "delisted"` with no offers: its id is permanent
+    (docs/decisions/0004-stable-product-ids.md), and its page says it is no
+    longer listed. `min_price`/`max_price` are then the last range seen,
+    `last_verified_at` when it was last read, and `delisted_at` when the last
+    offer went.
+    """
+
+    status: Literal["listed", "delisted"] = "listed"
+    delisted_at: datetime | None = None
     offers: list[OfferRead] = Field(default_factory=list)
 
 
@@ -586,7 +597,12 @@ class PricePoint(BaseModel):
     price: float | None = None
     currency: str
     stock_signal: StockSignal
+    #: False while the listing was archived, as well as while it was out of stock.
     in_stock: bool
+    #: False from when the listing was archived (the shop stopped listing it)
+    #: until it was seen again. Its price and stock signal are then only the
+    #: last ones read, not an offer.
+    available: bool = True
 
 
 class ListingHistory(BaseModel):
