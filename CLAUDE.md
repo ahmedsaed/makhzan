@@ -376,6 +376,15 @@ a title silent on form. Form words must say what the listing *is*: "PCB Mount",
 "Panel Mount" and "with adapter" describe the part, and matching bare `mount`
 kept DB15 and WAGO connectors from merging across shops.
 
+**A group key is not a product's identity.** Product ids are permanent
+(`docs/decisions/0004-stable-product-ids.md`): `plan_identity` matches each group
+to the products its listings already point at, so a regroup merges (the absorbed
+id gets `merged_into` and redirects), splits (the core keeps the id), empties
+(`delisted_at`, "no longer listed") and revives, recording each in
+`product_events`. Never delete a product or look one up by `group_key`; anything
+that lists products filters on `Product.is_listed()`. Before deploying a grouping
+change, `make regroup-dry-run` shows how many ids it merges and splits.
+
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
 under exactly "Services". Narrow on purpose — a false positive deletes real stock.
