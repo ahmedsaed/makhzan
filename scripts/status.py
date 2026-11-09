@@ -362,31 +362,67 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
 
 
 async def product_details(session, source_filter: str | None) -> None:
-    """Product-page details: how many listings are due, and why, per source that reads them.
+    """What every shop's listings carry, and, for shops read page by page, the queue.
 
-    Due by reason, in the order a run spends its budget: the change token moved,
+    One block per source, the paused ones too. The coverage line is measured on
+    active listings as the site shows them (the list feed's fields with any
+    product page laid over): the share with a description, a spec table, more
+    than one photo, and documents. A shop whose feed already carries all of it
+    is read in the sweep itself, at no extra request, so a drop there means the
+    feed changed, not that a page stage fell behind.
+
+    For a source that reads product pages, a second line splits what is still
+    due by reason, in the order a run spends its budget: the change token moved,
     the page was never read, or it was read longer ago than `max_age_days`. A
-    source still backfilling shows a large "never"; one past it should show a
-    trickle of "changed". Needs the adapters (the settings live in sources.toml).
+    source still backfilling shows a large "never"; one past it, a trickle of
+    "changed". Needs the adapters (the settings live in sources.toml).
     """
     _header("PRODUCT DETAILS")
     try:
         from worker.details import queue_counts
+        from worker.sources.base import SourceAdapter
         from worker.sources.registry import _REGISTRY
     except Exception as exc:  # noqa: BLE001 — status still works without the worker
         print(f"  {DIM}worker not importable ({type(exc).__name__}){RESET}")
         return
-    sources = {
-        sid: a
-        for sid, a in _REGISTRY.items()
-        if a.details is not None and (not source_filter or sid == source_filter)
-    }
+    sources = {sid: a for sid, a in _REGISTRY.items() if not source_filter or sid == source_filter}
     if not sources:
-        print(f"  {DIM}no source reads product pages{RESET}")
+        print(f"  {DIM}no sources loaded{RESET}")
         return
-    for source_id, adapter in sorted(sources.items()):
+    coverage = await content_coverage(session)
+    for source_id, adapter in sorted(sources.items(), key=lambda kv: (not kv[1].enabled, kv[0])):
         settings = adapter.details
+        reads_pages = type(adapter).fetch_details is not SourceAdapter.fetch_details
+        if settings is not None and settings.enabled:
+            state = f"{GREEN}product pages on{RESET}, {settings.per_run} a run"
+        elif settings is not None:
+            state = f"{YELLOW}product pages off{RESET} (details.enabled = false)"
+        elif reads_pages:
+            state = f"{YELLOW}product pages not configured{RESET} (no `details` key)"
+        else:
+            state = "list feed only — no product-page reader, no extra requests"
+        if not adapter.enabled:
+            state += f" {DIM}[source paused]{RESET}"
+        print(f"  {source_id:22s} {state}")
+        c = coverage.get(source_id)
+        if c is None or not c["active"]:
+            print(f"  {DIM}{'':22s} no active listings{RESET}")
+        else:
+            print(
+                f"  {'':22s} {c['active']} active:  description {_pct(c['description'], c['active'])}"
+                f"   specs {_pct(c['specs'], c['active'])}"
+                f"   2+ photos {_pct(c['gallery'], c['active'])}"
+                f"   documents {_pct(c['documents'], c['active'])}"
+            )
+        if settings is None:
+            continue
         counts = await queue_counts(session, source_id, settings)
+        print(
+            f"  {'':22s} token: {adapter.token_kind or 'none'}, refresh after"
+            f" {settings.max_age_days}d   have page {counts['fetched']}"
+            f"   due: changed {counts['changed']}, never fetched {counts['never_fetched']},"
+            f" stale by age {counts['stale']}   backing off {counts['backing_off']}"
+        )
         last = (
             await session.execute(
                 select(IngestionRun)
@@ -398,20 +434,6 @@ async def product_details(session, source_filter: str | None) -> None:
                 .limit(1)
             )
         ).scalar_one_or_none()
-        state = (
-            f"{GREEN}on{RESET}, {settings.per_run} a run"
-            if settings.enabled
-            else f"{DIM}off (details.enabled = false){RESET}"
-        )
-        print(
-            f"  {source_id:22s} {state}  token: {adapter.token_kind or 'none'},"
-            f" refresh after {settings.max_age_days}d"
-        )
-        print(
-            f"  {'':22s} have details {counts['fetched']:>6}   due: changed {counts['changed']}"
-            f", never fetched {counts['never_fetched']}, stale by age {counts['stale']}"
-            f"   backing off {counts['backing_off']}"
-        )
         if last is not None:
             summary = (last.stats or {}).get("details") or {}
             line = (
@@ -421,6 +443,39 @@ async def product_details(session, source_filter: str | None) -> None:
             if summary.get("stopped"):
                 line += f", stopped: {str(summary['stopped'])[:60]}"
             print(f"  {DIM}{'':22s} {line}{RESET}")
+
+
+def _pct(part: int, whole: int) -> str:
+    return f"{round(100 * part / whole):>3}%"
+
+
+async def content_coverage(session) -> dict[str, dict[str, int]]:
+    """Per source, how many active listings carry each kind of content."""
+    attrs = Listing.attributes
+    rows = (
+        await session.execute(
+            select(
+                Listing.source,
+                func.count(Listing.id),
+                func.count(Listing.id).filter(func.coalesce(Listing.description_en, "") != ""),
+                func.count(Listing.id).filter(attrs.has_key("specs")),
+                func.count(Listing.id).filter(func.jsonb_array_length(Listing.images) > 1),
+                func.count(Listing.id).filter(attrs.has_key("documents")),
+            )
+            .where(Listing.status == ListingStatus.ACTIVE)
+            .group_by(Listing.source)
+        )
+    ).all()
+    return {
+        r[0]: {
+            "active": r[1],
+            "description": r[2],
+            "specs": r[3],
+            "gallery": r[4],
+            "documents": r[5],
+        }
+        for r in rows
+    }
 
 
 async def catalog(session, source_filter: str | None) -> None:
