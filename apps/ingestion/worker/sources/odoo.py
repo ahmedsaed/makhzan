@@ -17,7 +17,8 @@ list price when the product is reduced, and a short subtitle that some shops use
 for the brand ("Acme Brand") or the warranty, and its image URL ends in a token
 that changes when the product is edited. All of it is read here. The full
 description, the photo gallery and datasheet links are only on the product page —
-one request per product, which is why they are not.
+one request per product — so they are read by the details stage
+(worker/details.py), a few a run, when that token says the product changed.
 """
 
 from __future__ import annotations
@@ -33,8 +34,27 @@ from selectolax.parser import HTMLParser
 
 from worker.http import get_text, make_client
 from worker.normalize import parse_price
-from worker.richtext import html_to_text
-from worker.sources.base import Page, SourceAdapter, SupplierInfo
+from worker.richtext import (
+    documents_from_html,
+    html_to_text,
+    maker_from_specs,
+    section_links,
+    specs_from_html,
+    videos_from_html,
+)
+from worker.sources.base import (
+    TOKEN_MODIFIED,
+    DetailsSettings,
+    Page,
+    SourceAdapter,
+    SupplierInfo,
+)
+
+DETAILS_LABEL = "details"
+#: More photos than this on one product is a gallery, not a product's pictures.
+_MAX_GALLERY = 12
+_MAX_DOCUMENTS = 10
+_GALLERY_IMAGE = re.compile(r"/web/image/product\.image/(\d+)/")
 
 MAX_PAGES = 300
 _ID_RE = re.compile(r"-(\d+)$")
@@ -70,6 +90,7 @@ class OdooAdapter(SourceAdapter):
         categories: dict[str, tuple[str, str]] | None = None,
         partition_keys: tuple[str, ...] | Sequence[str] | None = None,
         sweep_whole_shop: bool = False,
+        details: dict | None = None,
     ) -> None:
         self.source_id = source_id
         self.base_url = base_url.rstrip("/")
@@ -85,6 +106,8 @@ class OdooAdapter(SourceAdapter):
         #: Also sweep /shop, for products the shop files under no category at
         #: all. Without it a completed cycle never sees them and archives them.
         self.sweep_whole_shop = sweep_whole_shop
+        #: Product pages, read a few a run and only when the card's token moved.
+        self.details = DetailsSettings.from_config(details)
         # Browsing *by* category makes the category a fact rather than a guess,
         # so a crosswalk miss must stay uncategorized. Falling back to inference
         # here would put "IDC Sockets" and "Micro Switches" in Connectors &
@@ -139,6 +162,26 @@ class OdooAdapter(SourceAdapter):
     def source_categories(self, raw: RawItem) -> list[str]:
         category = (raw.raw or {}).get("category")
         return [category] if category else []
+
+    #: The card image's `?unique=` is Odoo's own last-write stamp of the product
+    #: template, so it moves on any edit — the description's included.
+    token_kind = TOKEN_MODIFIED
+
+    def change_token(self, raw: RawItem) -> str | None:
+        return (raw.raw or {}).get("change_token")
+
+    async def fetch_details(self, listing, fetcher) -> dict:
+        """The product page: long description, its specs and documents, the gallery.
+
+        Not read: the barcode (the manufacturer part number on most products),
+        which is only in `POST /website_sale/get_combination_info`. That is a
+        second request per product, and the page never shows the barcode — it
+        reaches the browser only for the shop's analytics, beside a stock count
+        the shop chose not to display.
+        """
+        url = _product_url(listing.source_url, self.base_url)
+        response = await fetcher.get(DETAILS_LABEL, url)
+        return parse_product_page(response.text, self.base_url)
 
     def knows_category(self, raw: RawItem) -> bool:
         """False for the whole-shop pass, which carries no category at all.
@@ -278,3 +321,97 @@ def _brand(lines: list[str]) -> str | None:
                 if brand.lower() not in _NOT_A_BRAND:
                     return brand
     return None
+
+
+# ---------------------------------------------------------------------- #
+# The product page (the details stage)
+# ---------------------------------------------------------------------- #
+
+
+def _product_url(source_url: str | None, base_url: str) -> str:
+    """The product page to read: the stored URL, on the shop's own host, no query.
+
+    Card links carry `?category=N` while a category is browsed, which robots.txt
+    forbids; the stored URL is already without it, and this makes sure.
+    """
+    if not source_url:
+        raise ValueError("the listing has no product URL")
+    parts, shop = urlsplit(urljoin(base_url + "/", source_url)), urlsplit(base_url)
+    if (parts.scheme, parts.netloc) != (shop.scheme, shop.netloc):
+        raise ValueError(f"{source_url} is not on {base_url}")
+    if not parts.path.startswith("/shop/"):
+        raise ValueError(f"{source_url} is not a product page")
+    return f"{parts.scheme}://{parts.netloc}{parts.path}"
+
+
+def parse_product_page(page_html: str, base_url: str) -> dict:
+    """What an Odoo product page adds to its card.
+
+    - the long description, `#product_full_description` (free HTML), flattened
+      to text with its line structure, and the "Name: value" lines and spec
+      tables in it read as specs (the shared readers WooCommerce uses);
+    - documents: PDFs linked anywhere in it, and every link under a
+      "Documents" / "Download" heading — most shops link the maker's page or
+      wiki rather than a PDF;
+    - videos embedded in the description or the photo carousel;
+    - the gallery's extra photos (`product.image`), at the size the page shows;
+    - a brand and a manufacturer part number only where the description states
+      them in so many words. `itemprop="mpn"` is Odoo's *internal reference*
+      (the shop's own code), not a manufacturer's part number, so it is not read.
+
+    Never the stock: microdata says "InStock" on everything, and counts are not
+    shown. A page that is not a product page is an error, so the listing is
+    retried after a backoff rather than marked read with nothing.
+    """
+    tree = HTMLParser(page_html)
+    description_el = tree.css_first("#product_full_description")
+    carousel = tree.css_first("#o-carousel-product")
+    if description_el is None and carousel is None and tree.css_first("#product_detail") is None:
+        raise ValueError("not an Odoo product page (no description, gallery or detail block)")
+
+    description_html = description_el.html if description_el is not None else None
+    out: dict = {}
+    if text := html_to_text(description_html):
+        out["description"] = text
+    specs = specs_from_html(description_html)
+    if specs:
+        out["specs"] = specs
+
+    documents: list[dict[str, str]] = []
+    for doc in documents_from_html(description_html, base_url) + section_links(
+        description_html, base_url
+    ):
+        if all(doc["url"] != known["url"] for known in documents):
+            documents.append(doc)
+    if documents:
+        out["documents"] = documents[:_MAX_DOCUMENTS]
+
+    videos: list[dict[str, str]] = []
+    for html in (description_html, carousel.html if carousel is not None else None):
+        for video in videos_from_html(html):
+            if all(video["url"] != known["url"] for known in videos):
+                videos.append(video)
+    if videos:
+        out["videos"] = videos
+
+    images: list[str] = []
+    seen: set[str] = set()
+    for img in carousel.css("img") if carousel is not None else []:
+        src = img.attributes.get("data-src") or img.attributes.get("src") or ""
+        # The extra photos only: the template's own image is the card's photo.
+        # Each photo appears twice, as the slide and as its thumbnail below it;
+        # the first, the slide, is the larger.
+        match = _GALLERY_IMAGE.search(src)
+        if match is None or match.group(1) in seen:
+            continue
+        seen.add(match.group(1))
+        images.append(urljoin(base_url + "/", src))
+    if images:
+        out["images"] = images[:_MAX_GALLERY]
+
+    brand, part = maker_from_specs(specs)
+    if brand:
+        out["brand"] = brand
+    if part:
+        out["mfr_part_number"] = part
+    return out

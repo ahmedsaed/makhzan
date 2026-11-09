@@ -48,9 +48,18 @@ for one is configuration (add the gallery it is on), not a guess. It runs last,
 after every gallery, and only compares when every gallery was swept to its end
 in the same run; otherwise it says it could not.
 
-Not fetched: the product pages, which hold the description, print settings and
-datasheet links, one request per product. TODO: a `product_pages` option, once
-fetched only for products new to the sitemap, if a shop agrees to the requests.
+**Product pages are the details stage's** (worker/details.py, `details = {...}`):
+the description, "additional info" sections such as print settings, and file
+links, one request per product, a few a run. The gallery JSON carries no
+per-product update time, so the change token is a hash of the card's own fields
+(TOKEN_CARD_HASH): it moves when the name, price, sale price, SKU, ribbon, slug,
+options or photos do, and not when only the description is edited — the
+age-based refresh catches that. Stock is left out of it: a spool selling out
+changes nothing on its page worth a request.
+
+Not read: the shop's Downloads page. Its datasheets are per material, not per
+product, and nothing on it ties a file to a product except a person reading
+the file name.
 """
 
 from __future__ import annotations
@@ -68,7 +77,15 @@ from makhzan_schemas.enums import SourceType
 from selectolax.parser import HTMLParser
 
 from worker.http import get_text, make_client
-from worker.sources.base import Page, SourceAdapter, SupplierInfo
+from worker.richtext import documents_from_html, html_to_text, specs_from_html, videos_from_html
+from worker.sources.base import (
+    TOKEN_CARD_HASH,
+    DetailsSettings,
+    Page,
+    SourceAdapter,
+    SupplierInfo,
+    card_hash,
+)
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +123,7 @@ class WixStoresAdapter(SourceAdapter):
         max_pages_per_run: int | None = None,
         max_partitions_per_run: int | None = None,
         categories: dict[str, tuple[str, str]] | None = None,
+        details: dict | None = None,
     ) -> None:
         self.source_id = source_id
         self.base_url = base_url.rstrip("/")
@@ -136,6 +154,8 @@ class WixStoresAdapter(SourceAdapter):
         # Not authoritative: a product only on a merchandising gallery has no
         # type gallery to say what it is, and its title is the better evidence.
         self.authoritative_categories = False
+        #: Product pages, read a few a run (see the module docstring).
+        self.details = DetailsSettings.from_config(details)
         if polite_delay is not None:
             self.polite_delay = polite_delay
         if max_pages_per_run is not None:
@@ -252,6 +272,24 @@ class WixStoresAdapter(SourceAdapter):
         return dict(self._report)
 
     # ------------------------------------------------------------------ #
+    # Details
+    # ------------------------------------------------------------------ #
+
+    #: No update time in the gallery JSON: a hash of the card, which misses an
+    #: edit to the description alone (the age-based refresh is the net for that).
+    token_kind = TOKEN_CARD_HASH
+
+    def change_token(self, raw: RawItem) -> str | None:
+        return (raw.raw or {}).get("change_token")
+
+    async def fetch_details(self, listing, fetcher) -> dict:
+        url = listing.source_url or ""
+        if not url.startswith(f"{self.base_url}{PRODUCT_PATH}") or "?" in url:
+            raise ValueError(f"{url!r} is not a product page of {self.base_url}")
+        response = await fetcher.get("details", url)
+        return parse_product_page(response.text, self.base_url)
+
+    # ------------------------------------------------------------------ #
     # Categories
     # ------------------------------------------------------------------ #
 
@@ -299,6 +337,18 @@ class WixStoresAdapter(SourceAdapter):
             raw["sku"] = sku
         if price and selling and price > selling:
             raw["compare_at_price"] = _text(price)
+        raw["change_token"] = card_hash(
+            {
+                "name": p.get("name"),
+                "slug": slug,
+                "price": p.get("price"),
+                "comparePrice": p.get("comparePrice"),
+                "sku": p.get("sku"),
+                "ribbon": p.get("ribbon"),
+                "options": [o.get("key") for o in p.get("options") or [] if isinstance(o, dict)],
+                "media": [m.get("url") for m in media],
+            }
+        )
 
         brand = p.get("brand")
         return RawItem(
@@ -364,6 +414,159 @@ def sitemap_slugs(xml: str) -> list[str]:
             if slug:
                 slugs[slug] = None
     return list(slugs)
+
+
+def page_product(page_html: str) -> dict:
+    """The product a Wix product page embeds (`catalog.product`), found by shape."""
+    found: list[dict] = []
+    apps = warmup_data(page_html).get("appsWarmupData") or {}
+    for app in apps.values():
+        for widget in (app or {}).values() if isinstance(app, dict) else ():
+            catalog = widget.get("catalog") if isinstance(widget, dict) else None
+            product = catalog.get("product") if isinstance(catalog, dict) else None
+            if isinstance(product, dict) and product.get("id"):
+                found.append(product)
+    if not found:
+        raise ValueError("no store product in the page's warmup data")
+    if len({str(p["id"]) for p in found}) > 1:
+        raise ValueError("more than one store product on the page")
+    return found[0]
+
+
+_HEADING_LEVELS = range(1, 7)
+
+
+def _ricos_html(node: object) -> str:
+    """Wix's rich text (Ricos: `{"nodes": [...]}`) as plain HTML, for the shared readers.
+
+    Only structure the readers use survives: paragraphs, headings, list items,
+    links and file links. Anything else contributes its text.
+    """
+    if isinstance(node, list):
+        return "".join(_ricos_html(n) for n in node)
+    if not isinstance(node, dict):
+        return ""
+    kind = str(node.get("type") or "").upper()
+    if kind == "TEXT":
+        data = node.get("textData") or {}
+        text = html.escape(str(data.get("text") or ""))
+        for decoration in data.get("decorations") or []:
+            link = ((decoration or {}).get("linkData") or {}).get("link") or {}
+            if (decoration or {}).get("type") == "LINK" and link.get("url"):
+                text = f'<a href="{html.escape(str(link["url"]))}">{text}</a>'
+        return text
+    inner = _ricos_html(node.get("nodes") or [])
+    if kind == "FILE":
+        data = node.get("fileData") or {}
+        url = (data.get("src") or {}).get("url")
+        name = html.escape(str(data.get("name") or "file"))
+        return f'<p><a href="{html.escape(str(url))}">{name}</a></p>' if url else ""
+    if kind == "HEADING":
+        level = (node.get("headingData") or {}).get("level")
+        level = level if level in _HEADING_LEVELS else 3
+        return f"<h{level}>{inner}</h{level}>"
+    if kind == "PARAGRAPH":
+        return f"<p>{inner}</p>"
+    if kind == "LIST_ITEM":
+        return f"<li>{inner}</li>"
+    if kind in ("BULLETED_LIST", "ORDERED_LIST"):
+        return f"<ul>{inner}</ul>"
+    return inner
+
+
+def _rich_html(value: object) -> str | None:
+    """A Wix rich-text field, whichever way it came: Ricos JSON or an HTML string.
+
+    Catalog V3 product pages ship Ricos *serialised*, as a string holding JSON.
+    """
+    if isinstance(value, str):
+        if value.lstrip().startswith("{"):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None  # neither Ricos nor HTML: not something to publish
+        else:
+            return value if value.strip() else None
+    if isinstance(value, dict):
+        return _ricos_html(value.get("nodes") or []) or None
+    return None
+
+
+#: "Print Temp: 210-230°C, Print Speed: 100-300mm/s" — several specs on one line.
+_NEXT_SPEC = re.compile(r"\s*[,;]\s+(?=[^\W\d_][\w .]{0,30}:\s*\S)")
+
+
+def _one_spec_a_line(page_html: str | None) -> str | None:
+    """`page_html` with a line of several "Name: value" pairs split into one each."""
+    text = html_to_text(page_html)
+    if not text:
+        return None
+    lines = [part for line in text.split("\n") for part in _NEXT_SPEC.split(line) if part]
+    return "".join(f"<p>{html.escape(line)}</p>" for line in lines)
+
+
+def _json_ld_description(page_html: str) -> str | None:
+    for node in HTMLParser(page_html).css('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(node.text(deep=True) or "null")
+        except ValueError:
+            continue
+        for item in data if isinstance(data, list) else [data]:
+            if isinstance(item, dict) and item.get("@type") == "Product":
+                text = item.get("description")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+    return None
+
+
+def parse_product_page(page_html: str, base_url: str) -> dict:
+    """What a Wix product page adds to its gallery card.
+
+    The description, then each "additional info" section ("Print Settings",
+    "Shipping") under its own title; specs from their "Name: value" lines, a
+    line holding several of them split first; links to files (PDFs) and videos
+    in any of them. The schema.org description stands in when the embedded one
+    is empty. Never the stock count: it is per variant and often wrong in the
+    page's own data.
+    """
+    product = page_product(page_html)
+    parts: list[str] = []
+    if body := _rich_html(product.get("description")):
+        parts.append(body)
+    sections = next(
+        (
+            product[key]
+            for key in ("additionalInfo", "additionalInfoSections", "infoSections")
+            if isinstance(product.get(key), list)
+        ),
+        [],
+    )
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        body = _rich_html(section.get("description"))
+        if not body:
+            continue
+        title = str(section.get("title") or "").strip()
+        parts.append((f"<h3>{html.escape(title)}</h3>" if title else "") + body)
+    rich = "".join(parts) or None
+
+    out: dict = {}
+    text = html_to_text(rich) or _json_ld_description(page_html)
+    if text:
+        out["description"] = text
+    if specs := specs_from_html(_one_spec_a_line(rich)):
+        out["specs"] = specs
+    if documents := documents_from_html(rich, base_url):
+        out["documents"] = documents
+    if videos := videos_from_html(rich):
+        out["videos"] = videos
+    brand = product.get("brand")
+    if isinstance(brand, dict):  # catalog V3 names it as an object
+        brand = brand.get("name")
+    if isinstance(brand, str) and brand.strip():
+        out["brand"] = brand.strip()
+    return out
 
 
 def _tokens(text: str | None) -> set[str]:
