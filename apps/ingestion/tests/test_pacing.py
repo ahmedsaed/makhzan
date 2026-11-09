@@ -9,12 +9,13 @@ to leave.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 from makhzan_schemas import crawl
-from makhzan_schemas.enums import SourceType
+from makhzan_schemas.enums import IngestionStatus, SourceType
 from makhzan_schemas.models import IngestionRun
 from sqlalchemy import select
 
@@ -477,3 +478,41 @@ async def test_a_run_records_every_request_and_every_gap(clock, monkeypatch):
     async with pipeline.SessionLocal() as session:
         stored = (await session.execute(select(IngestionRun))).scalar_one()
     assert stored.stats["pacing"] == pacing
+
+
+class _CutOffShop(_Shop):
+    """The worker is stopped (a deploy) while partition b's first page is in flight."""
+
+    async def fetch_page(self, partition: str, page: int) -> Page:
+        if partition == "b":
+            raise asyncio.CancelledError
+        return await super().fetch_page(partition, page)
+
+
+async def test_a_run_cut_off_mid_sweep_keeps_what_it_sent(clock, monkeypatch):
+    """Stats used to be written only when a run ended, so a run a deploy cut
+    short published no requests and no pacing: /how-we-crawl said "at least
+    N" for its week. They are on the row from the first committed page, and
+    closing the interrupted run keeps them."""
+    from worker.main import close_interrupted_runs
+
+    adapter = _CutOffShop()
+
+    def fetcher_client(**kwargs):
+        return httpx.AsyncClient(transport=adapter._transport(), **kwargs)
+
+    monkeypatch.setattr(http_mod, "make_client", fetcher_client)
+    with pytest.raises(asyncio.CancelledError):
+        await run_source(adapter.source_id, adapter)
+
+    async with pipeline.SessionLocal() as session:
+        assert await close_interrupted_runs(session) == 1
+        stored = (await session.execute(select(IngestionRun))).scalar_one()
+
+    assert stored.status == IngestionStatus.FAILED
+    # The cycle data's two requests and partition a's two pages: everything
+    # sent before the cut, counted both ways.
+    assert len(adapter.sent) == 4
+    assert stored.stats["requests"] == {"tree": 2, "pages": 2}
+    assert stored.stats["pacing"]["requests"] == 4
+    assert stored.stats["pacing"]["gaps"] == {"15": 3}

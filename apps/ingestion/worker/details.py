@@ -39,6 +39,7 @@ import asyncio
 import logging
 import re
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -319,6 +320,7 @@ async def run_details(
     errors: list[str],
     pace,
     already_sent: bool,
+    checkpoint: Callable[[Counter], None] | None = None,
 ) -> tuple[Counter, dict]:
     """Fetch details for this run's share of the due listings.
 
@@ -355,6 +357,9 @@ async def run_details(
         else:
             fetched += 1
             _apply_to_listing(listing, _fetched(attributes, details, now))
+        if checkpoint is not None:
+            # The run's request count so far, on its row with this commit.
+            checkpoint(Counter({LABEL: fetcher.requests.total()}))
         await session.commit()
 
     if fetched:
