@@ -25,6 +25,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.grouping import lock_products
 from makhzan_schemas.models import Product, ProductRedirect
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +43,8 @@ async def retire_unused_redirects(
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Delete redirects last used (or, never used, created) before `now - unused_for`."""
+    # A regroup in another process could be un-merging a row this would delete.
+    await lock_products(session)
     cutoff = (now or datetime.now(UTC)) - unused_for
     pointing = aliased(Product)
     merged = (
@@ -66,6 +69,8 @@ async def retire_unused_redirects(
         await session.execute(delete(Product).where(*merged))
         await session.execute(delete(ProductRedirect).where(*legacy))
         await session.commit()
+    else:
+        await session.rollback()  # releases the lock
     return counts
 
 

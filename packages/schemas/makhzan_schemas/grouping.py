@@ -40,7 +40,7 @@ from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
 from makhzan_schemas.freshness import fresh_since
 from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
 from makhzan_schemas.values import value_tokens, values_conflict
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -479,6 +479,22 @@ def _resolve(
     return product_id
 
 
+#: Postgres advisory lock key held, for the rest of the transaction, by anything
+#: that rewrites which products exist: a regroup and redirect retirement.
+PRODUCTS_LOCK_KEY = 0x6D616B687A616E  # "makhzan"
+
+
+async def lock_products(session: AsyncSession) -> None:
+    """Wait for, then hold until commit or rollback, the products lock.
+
+    Two regroups at once would each mint a product for the same new group, and
+    with permanent ids neither would ever go away. The worker's `_REBUILD_LOCK`
+    only covers its own jobs; `worker.regroup` and `./makhzan retire` run in
+    processes of their own, so the lock is the database's.
+    """
+    await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": PRODUCTS_LOCK_KEY})
+
+
 async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> dict:
     """Regroup active listings into products, keeping every product's id.
 
@@ -491,6 +507,7 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
     `dry_run` applies everything inside the transaction and then rolls it back:
     the counts returned are what a real run would do, and nothing is kept.
     """
+    await lock_products(session)
     listings = (
         (
             await session.execute(
