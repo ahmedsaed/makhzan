@@ -253,6 +253,45 @@ async def test_a_crawl_delay_read_from_robots_txt_paces_the_next_page(clock, mon
     assert log.pacing()["min_gap_s"] == 20.0
 
 
+@pytest.mark.parametrize(
+    "spelled",
+    ["HTTPS://Shop.TEST:443/x", "https://shop.test:443/x", "https://SHOP.test/x"],
+)
+def test_one_host_has_one_key_however_its_url_is_spelled(spelled):
+    assert http_mod.host_of(spelled) == http_mod.host_of("https://shop.test/x")
+    assert http_mod.host_of(spelled) == "https://shop.test"
+
+
+def test_a_non_default_port_is_a_different_host():
+    assert http_mod.host_of("https://shop.test:8443/x") == "https://shop.test:8443"
+    assert http_mod.host_of("http://shop.test:443/x") == "http://shop.test:443"
+
+
+async def test_robots_txt_and_pages_queue_at_one_gate_however_the_base_url_is_spelled(
+    clock, monkeypatch
+):
+    """A source whose `base_url` is `HTTPS://Shop.TEST:443` reads robots.txt
+    through that spelling and its pages through the shop's own links. Keyed
+    apart, the page went out on robots.txt's heels and never saw its
+    Crawl-delay."""
+    sent: list[str] = []
+    client = _shop_with_robots(monkeypatch, sent, "User-agent: *\nCrawl-delay: 20\n")
+    monkeypatch.setattr(robots_mod, "ROBOTS", robots_mod.RobotsCache())
+    http_mod.set_host_pace("HTTPS://Shop.TEST:443", 15.0)
+
+    with http_mod.logging_requests() as log:
+        # What the pipeline's pause does with the source's base_url.
+        await robots_mod.polite_pause("HTTPS://Shop.TEST:443/x", 15.0)
+        async with client() as c:
+            await http_mod.get_json(c, "https://shop.test/x")
+
+    assert sent == ["/robots.txt", "/x"]
+    pacing = log.pacing()
+    assert list(pacing["by_host"]) == ["https://shop.test"]
+    assert (pacing["requests"], pacing["robots"]) == (2, 1)
+    assert pacing["min_gap_s"] == 20.0
+
+
 async def test_nothing_is_logged_outside_a_run(clock):
     sent: list[str] = []
     async with _client([200], sent) as client:
