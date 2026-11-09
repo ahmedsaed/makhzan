@@ -121,7 +121,18 @@ type ShopDetailsFields = {
   documents?: ShopDocument[];
 };
 
-export type Product = ProductSummary & { offers: Offer[] };
+/**
+ * `offers` are the active ones. Ids are permanent, so a product every shop has
+ * withdrawn is still served: `status` "delisted", no offers, and `min_price` /
+ * `max_price` / `last_verified_at` as last seen. Optional so the page keeps
+ * working against an API that predates them.
+ */
+export type Product = ProductSummary & {
+  offers: Offer[];
+  status?: "listed" | "delisted";
+  /** When its last offer went. */
+  delisted_at?: string | null;
+};
 
 export type Listing = {
   id: string;
@@ -286,9 +297,9 @@ export function fetchProduct(id: string): Promise<Product | null> {
 }
 
 /**
- * The product a replaced product id now leads to, or null. A regroup replaces
- * a product when its group key changes and records where its offers went
- * (docs/decisions/0004-stable-product-ids.md).
+ * The product an id without a page of its own now leads to, or null: one
+ * merged into another product, or one deleted before ids were permanent
+ * (docs/decisions/0004-stable-product-ids.md, 0005-url-retirement.md).
  */
 export async function fetchProductRedirect(id: string): Promise<string | null> {
   const moved = await getOrNull<{ id: string }>(`/products/${encodeURIComponent(id)}/redirect`);

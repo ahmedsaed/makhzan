@@ -27,7 +27,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status reindex db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status reindex regroup-dry-run retire-redirects db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -55,8 +55,8 @@ test: test-ingestion test-api  ## Run every Python test suite
 test-ingestion:  ## Run the ingestion test suite, and the private configuration's tests
 	cd apps/ingestion && poetry run pytest -c pyproject.toml tests $(PRIVATE_TESTS)
 
-# Its own database, so the two suites can run side by side without one
-# truncating the other's tables mid-test.
+# Every test session creates and drops its own database (see the conftests),
+# so the suites, and several checkouts at once, can run side by side.
 test-api:  ## Run the API test suite
 	cd apps/api && poetry run pytest
 
@@ -95,6 +95,12 @@ status:  ## Show crawler progress, recent runs, catalog health and index drift
 
 reindex:  ## Rebuild products and the search index from the database
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup
+
+regroup-dry-run:  ## What a regroup would do to product ids (kept/merged/split/emptied); changes nothing
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup --dry-run
+
+retire-redirects:  ## Drop product redirects unused for a year: make retire-redirects [ARGS=--dry-run]
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.retire_redirects $(ARGS)
 
 # Working against real data locally. db-pull is read-only against production;
 # db-load only ever touches localhost. Set DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH

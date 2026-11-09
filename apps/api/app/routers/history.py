@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import ListingHistory, PricePoint, ProductHistory
+from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Listing, PriceObservation, Product
 from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +39,15 @@ async def _histories(
         return histories
 
     po = PriceObservation
-    columns = (po.listing_id, po.observed_at, po.price, po.currency, po.stock_signal, po.in_stock)
+    columns = (
+        po.listing_id,
+        po.observed_at,
+        po.price,
+        po.currency,
+        po.stock_signal,
+        po.in_stock,
+        po.available,
+    )
     in_window = select(*columns).where(po.listing_id.in_(listing_ids), po.observed_at >= since)
     carried_in = (
         select(*columns)
@@ -92,14 +101,22 @@ async def product_history(
     days: int = _DAYS,
     session: AsyncSession = Depends(get_session),
 ) -> ProductHistory:
-    """The history of every offer of a product: the same offers its page lists."""
-    if await session.get(Product, product_id) is None:
+    """The history of every offer of a product: the same offers its page lists.
+
+    For a listed product that is its active listings. A withdrawn one
+    (`delisted_at`, docs/decisions/0004-stable-product-ids.md) lists no offers,
+    but its archived listings still point at it, and their history is what it
+    last cost and when each shop stopped (the `available = false` point written
+    on archive), so those are returned instead. A merged-away id is a 404, as
+    on `/products/{id}`: its history is the survivor's.
+    """
+    product = await session.get(Product, product_id)
+    if product is None or product.merged_into is not None:
         raise HTTPException(status_code=404, detail="product not found")
-    listing_ids = list(
-        (await session.execute(select(Listing.id).where(Listing.product_id == product_id)))
-        .scalars()
-        .all()
-    )
+    offers = select(Listing.id).where(Listing.product_id == product_id)
+    if product.delisted_at is None:
+        offers = offers.where(Listing.status == ListingStatus.ACTIVE)
+    listing_ids = list((await session.execute(offers)).scalars().all())
     since = _since(days)
     histories = await _histories(session, listing_ids, since)
     return ProductHistory(product_id=product_id, since=since, offers=list(histories.values()))

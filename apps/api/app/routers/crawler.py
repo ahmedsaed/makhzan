@@ -111,7 +111,9 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
         if slug in suppliers:
             by_shop[slug].append(source)
 
-    crawling = crawl.crawl_enabled()
+    # What the worker said at startup: the API's own environment is stale
+    # after `./makhzan crawl off`, which recreates only the worker.
+    crawling = await crawl.crawl_enabled_in(session)
     shops = []
     every_pacing: list[dict] = []
     for slug, its_sources in by_shop.items():
@@ -144,7 +146,6 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
     shops.sort(key=lambda s: (s["name"].casefold(), s["slug"]))
 
     min_gap, median_gap = crawl.merge_gaps(every_pacing)
-    enabled = crawl.crawl_enabled()
     return {
         "generated_at": now,
         "window_days": WINDOW.days,
@@ -167,6 +168,6 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
         "schedule": {
             "refresh_hour_utc": crawl.REFRESH_HOUR,
             # Null while the daily sweep is switched off.
-            "next_run_at": crawl.next_refresh(now, crawl.REFRESH_HOUR) if enabled else None,
+            "next_run_at": crawl.next_refresh(now, crawl.REFRESH_HOUR) if crawling else None,
         },
     }

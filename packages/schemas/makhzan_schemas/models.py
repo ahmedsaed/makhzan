@@ -20,7 +20,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -30,6 +32,7 @@ from makhzan_schemas.enums import (
     DEFAULT_CURRENCY,
     IngestionStatus,
     ListingStatus,
+    ProductEventKind,
     ReviewReason,
     ReviewStatus,
     SourceType,
@@ -221,15 +224,43 @@ class Product(TimestampMixin, Base):
     everything else is a singleton ("product of one"). Aggregate fields are
     denormalized from the product's offers (listings) so the search index and
     product cards can render "from EGP X · N suppliers" without a join.
-    Rebuilt by makhzan_schemas.grouping.
+    Regrouped by makhzan_schemas.grouping.
+
+    The id is permanent (docs/decisions/0004-stable-product-ids.md): a regroup
+    never deletes a product or gives it a new id. It is in one of three states:
+
+    - listed: `merged_into` and `delisted_at` both NULL. In search, the sitemap,
+      counts and similar-product rails.
+    - no longer listed: `delisted_at` set. Every offer has gone; the row keeps
+      the title, photo and last price range, and the page says so.
+    - merged: `merged_into` set. Grouping decided it is the same product as
+      another; its URL redirects there, one hop.
+
+    Only `worker.retire_redirects` ever deletes a row: a merged-away one whose
+    redirect nobody has followed in a year (docs/decisions/0005-url-retirement.md).
     """
 
     __tablename__ = "products"
+    __table_args__ = (
+        CheckConstraint("merged_into IS NULL OR merged_into <> id", name="ck_product_not_self"),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    # Deterministic dedup key: "mpn:<PN>" for matched parts, "single:<source>:<ext>"
-    # for singletons — so a product's identity (and URL) is stable across re-scrapes.
-    group_key: Mapped[str] = mapped_column(String(300), unique=True, nullable=False)
+    #: The grouping key this product's offers last formed ("mpn:<PN>:<words>",
+    #: "single:<source>:<external id>"). Diagnostic only, not identity: it is
+    #: rewritten on every regroup and two products may share one (an emptied
+    #: product keeps its last key, which a new product can form again).
+    group_key: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    #: The product this one was merged into, and which its URL redirects to.
+    #: Always one hop: a merge into a product that is later merged itself
+    #: repoints every id that led to it.
+    merged_into: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("products.id"), index=True)
+    merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: When its last active offer went. Cleared if one comes back (revived).
+    delisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: When a merged-away id's redirect was last followed, at most once a day.
+    #: A year unused and `worker.retire_redirects` drops the row.
+    redirect_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     part_number: Mapped[str | None] = mapped_column(String(120), index=True)
     domain: Mapped[str] = mapped_column(
         String(60), default=DEFAULT_DOMAIN, nullable=False, index=True
@@ -265,20 +296,23 @@ class Product(TimestampMixin, Base):
     listings: Mapped[list[Listing]] = relationship(back_populates="product")
     category: Mapped[Category | None] = relationship()
 
+    @classmethod
+    def is_listed(cls):
+        """SQL: listed, neither merged away nor emptied. What search, the sitemap
+        and every count and rail show."""
+        return and_(cls.merged_into.is_(None), cls.delisted_at.is_(None))
+
 
 class ProductRedirect(Base):
-    """Where a deleted product's URL now goes: the product its offers moved to.
+    """A product id deleted before ids became permanent, and where it leads now.
 
-    A regroup replaces a product whenever its group key changes (a second shop
-    starts selling it, the grouping rules change), and its id goes with it. The
-    id is a URL people have shared and search engines have indexed, so
-    `rebuild_products` records the move here and the product page redirects.
-    A first step of docs/decisions/0004-stable-product-ids.md, not the whole of it.
-
-    Always one hop: when a redirect's target is itself replaced, the rebuild
-    repoints the redirect at the new target. A target deleted with nowhere to
-    go (every offer withdrawn) takes its redirects with it, so a redirect never
-    leads to a missing page.
+    Until November 2026 a regroup replaced a product whenever its group key
+    changed and deleted the old row; this table recorded where each deleted
+    id's offers went. Since ids became permanent (docs/decisions/
+    0004-stable-product-ids.md) nothing adds to it: a merge marks the row
+    `Product.merged_into` instead. The rows already here keep working, are
+    repointed when their target is merged, and retire after a year unused
+    (`last_used_at`, docs/decisions/0005-url-retirement.md).
     """
 
     __tablename__ = "product_redirects"
@@ -287,6 +321,38 @@ class ProductRedirect(Base):
     new_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: When the redirect was last followed, at most once a day.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProductEvent(Base):
+    """One change to a product's identity, for audit: merge, split, emptied, revived.
+
+    Written by `grouping.rebuild_products`, which applies every merge and split
+    itself rather than queueing it for review. This is how to find out, later,
+    why an id redirects or why an offer left it.
+
+    `product_id` is not a foreign key, so the history outlives a merged-away
+    row that `worker.retire_redirects` has dropped.
+
+    - merge: `product_id` was merged into `other_id`.
+    - split: some of `product_id`'s offers formed the new product `other_id`.
+    - emptied / revived: `other_id` is NULL.
+
+    `detail` holds the counts and group keys behind the decision.
+    """
+
+    __tablename__ = "product_events"
+    __table_args__ = (Index("ix_product_event_product_time", "product_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    kind: Mapped[ProductEventKind] = mapped_column(nullable=False)
+    other_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -301,6 +367,12 @@ class PriceObservation(Base):
     signal differs from its latest row (`worker.pipeline`), so a recheck that finds
     nothing new adds nothing and the table grows with change, not with crawling.
     A value holds from its `observed_at` until the next row's.
+
+    Archiving writes a row too, with `available` false: from then until a row
+    that says otherwise, the shop no longer offers the listing at all, and its
+    price and stock signal are only the last ones read. Without it a listing
+    archived for weeks read as "in stock" across them, and one coming back at
+    the same values added no row to say when it did.
 
     History starts at the migration that created this table, seeded with one row
     per active listing as of its `last_verified_at`.
@@ -318,9 +390,13 @@ class PriceObservation(Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     stock_signal: Mapped[StockSignal] = mapped_column(nullable=False)
-    #: `stock_signal == IN_STOCK`, the definition `Product.in_stock` uses, stored
-    #: so "in stock N of the last 12 weeks" needs no enum logic in the query.
+    #: `available and stock_signal == IN_STOCK`: the definition `Product.in_stock`
+    #: uses, false while archived, stored so "in stock N of the last 12 weeks"
+    #: needs no enum logic in the query.
     in_stock: Mapped[bool] = mapped_column(nullable=False)
+    #: False from the moment the listing was archived (the shop stopped listing
+    #: it) until it is seen again. Clip "in stock N of 12 weeks" on it.
+    available: Mapped[bool] = mapped_column(default=True, server_default=true(), nullable=False)
 
     #: Many-to-one only: lets a row be added beside a listing not yet flushed.
     listing: Mapped[Listing] = relationship()
@@ -446,6 +522,26 @@ class SourceCursor(Base):
     #: When the current sweep of this partition began (None between cycles).
     cycle_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WorkerState(Base):
+    """What the running worker believes, written by it, for the API to report.
+
+    The worker reads some settings from its environment when its container is
+    created, and the API runs in a container of its own. Asking the API's
+    environment what the worker is doing goes stale the moment one is recreated
+    without the other (`./makhzan crawl off` recreates only the worker), so the
+    worker states it here at startup instead. Keyed by name: `crawl` holds
+    `{"enabled": bool}` (see `makhzan_schemas.crawl`).
+    """
+
+    __tablename__ = "worker_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
