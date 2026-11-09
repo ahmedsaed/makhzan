@@ -23,6 +23,7 @@ import asyncio
 import sys
 
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.enums import IngestionStatus
 from makhzan_schemas.grouping import rebuild_products
 from makhzan_schemas.models import (
     IngestionRun,
@@ -72,8 +73,29 @@ async def plan(session: AsyncSession, source_id: str) -> dict[str, int | list[st
     }
 
 
+class SourceRunning(RuntimeError):
+    """A run of the source is in progress; retiring under it would race it."""
+
+
 async def retire(session: AsyncSession, source_id: str) -> None:
-    """Delete everything `plan` reports, in one transaction."""
+    """Delete everything `plan` reports, in one transaction.
+
+    Refuses while a run of the source is in progress. This runs in its own
+    process, which the worker's per-source lock cannot see, and a run going
+    on would write listings back as they are deleted. (A run the worker left
+    behind is closed when it starts, so a RUNNING row is a live one.) Once the
+    `sources` row is gone, a daily job queued earlier skips the source.
+    """
+    running = await session.scalar(
+        select(func.count())
+        .select_from(IngestionRun)
+        .where(IngestionRun.source == source_id, IngestionRun.status == IngestionStatus.RUNNING)
+    )
+    if running:
+        raise SourceRunning(
+            f"a run of {source_id!r} is in progress; wait for it, or "
+            "`./makhzan crawl off`, then retry"
+        )
     suppliers = [s.id for s in await _orphaned_suppliers(session, source_id)]
     # Products only this source ever offered go with it. A regroup never deletes
     # a product (its id is permanent, and a withdrawn one says "no longer
@@ -115,7 +137,10 @@ async def main(source_id: str, confirmed: bool) -> None:
         if not confirmed:
             print("\ndry run; add --yes to delete.")
             return
-        await retire(session, source_id)
+        try:
+            await retire(session, source_id)
+        except SourceRunning as refused:
+            raise SystemExit(str(refused)) from None
         print("deleted. rebuilding products and the search index...")
         print("  products:", await rebuild_products(session))
         print("  indexed:", await reindex_all(session, get_client()))

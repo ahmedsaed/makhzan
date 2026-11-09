@@ -62,7 +62,11 @@ def worker(monkeypatch):
     monkeypatch.setattr(main, "all_enabled", lambda: sources)
     monkeypatch.setattr(main, "get", lambda source_id: None)
 
+    async def enabled(source_id):
+        return True
+
     monkeypatch.setattr(main, "_run_source", run_source)
+    monkeypatch.setattr(main, "source_enabled", enabled)
     monkeypatch.setattr(main, "_SOURCE_LOCKS", {})
     monkeypatch.setattr(main, "CRAWL_ENABLED", True)
     return main
@@ -115,6 +119,27 @@ async def test_a_source_that_fails_or_times_out_still_leads_to_a_rebuild(
     redis = FakeRedis()
     with pytest.raises(type(ending)):
         await worker.crawl_source({"redis": redis}, "shop-a")
+    assert len(redis.named("rebuild_and_reindex")) == 1
+
+
+async def test_a_source_retired_after_it_was_queued_is_not_crawled(worker, monkeypatch):
+    """`./makhzan retire` runs in another process, so the per-source lock cannot
+    see it; the job checks the `sources` row itself as it starts."""
+    crawled: list[str] = []
+
+    async def run_source(source_id, adapter, limit=None):
+        crawled.append(source_id)
+        return _run(source_id)
+
+    async def gone(source_id):
+        return False
+
+    monkeypatch.setattr(worker, "_run_source", run_source)
+    monkeypatch.setattr(worker, "source_enabled", gone)
+    redis = FakeRedis()
+    summary = await worker.crawl_source({"redis": redis}, "shop-a")
+    assert summary["status"] == "skipped"
+    assert crawled == []
     assert len(redis.named("rebuild_and_reindex")) == 1
 
 
