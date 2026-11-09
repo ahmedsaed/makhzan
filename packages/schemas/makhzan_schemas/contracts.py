@@ -569,3 +569,43 @@ class ProductRead(ProductSummary):
     """A canonical product with its offers, for the product page."""
 
     offers: list[OfferRead] = Field(default_factory=list)
+
+
+class PricePoint(BaseModel):
+    """A listing's price and stock from `observed_at` until the next point.
+
+    A point is a change, not a check: a listing rechecked daily at one price has
+    one point, so a chart steps from each point to the next, and the last holds
+    until now.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    observed_at: datetime
+    #: None is "price on request".
+    price: float | None = None
+    currency: str
+    stock_signal: StockSignal
+    in_stock: bool
+
+
+class ListingHistory(BaseModel):
+    """One offer's change points over a window, oldest first.
+
+    The first point may predate `since`: it is the value already in force when
+    the window opened, so "lowest in 90 days" counts a price that never changed.
+    `truncated` means older points in the window were dropped to the cap.
+    """
+
+    listing_id: uuid.UUID
+    since: datetime
+    points: list[PricePoint] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class ProductHistory(BaseModel):
+    """Every offer's history for a product page, keyed to the offers by listing id."""
+
+    product_id: uuid.UUID
+    since: datetime
+    offers: list[ListingHistory] = Field(default_factory=list)
