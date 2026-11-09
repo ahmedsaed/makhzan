@@ -8,9 +8,10 @@ reached production — or a supplier makhzan no longer lists. Disabling a source
 (`enabled = false`) only stops it being crawled; its listings stay on the site.
 
 Deletes the source's listings, runs, cursors and review items, its row in
-`sources`, and its supplier unless another source still lists under it. Then
-products are rebuilt, which drops the ones left with no listings, and the search
-index is rebuilt to match. The deletes are one transaction.
+`sources`, its supplier unless another source still lists under it, and the
+products only it ever offered. Then products are regrouped (a product another
+source also offered keeps its id) and the search index is rebuilt to match. The
+deletes are one transaction.
 
 Remove the source from sources.toml first. Otherwise the next sync puts the
 row back. It brings back no listings, though, only the row.
@@ -26,6 +27,7 @@ from makhzan_schemas.grouping import rebuild_products
 from makhzan_schemas.models import (
     IngestionRun,
     Listing,
+    Product,
     ReviewQueueItem,
     Source,
     SourceCursor,
@@ -73,6 +75,24 @@ async def plan(session: AsyncSession, source_id: str) -> dict[str, int | list[st
 async def retire(session: AsyncSession, source_id: str) -> None:
     """Delete everything `plan` reports, in one transaction."""
     suppliers = [s.id for s in await _orphaned_suppliers(session, source_id)]
+    # Products only this source ever offered go with it. A regroup never deletes
+    # a product (its id is permanent, and a withdrawn one says "no longer
+    # listed"), but a source being retired should never have been listed at
+    # all. Ones merged into them go too: they only redirect there.
+    theirs = select(Listing.product_id).where(
+        Listing.source == source_id, Listing.product_id.is_not(None)
+    )
+    others = select(Listing.product_id).where(
+        Listing.source != source_id, Listing.product_id.is_not(None)
+    )
+    doomed = list(
+        (await session.execute(select(Product.id).where(Product.id.in_(theirs.except_(others)))))
+        .scalars()
+        .all()
+    )
+    if doomed:
+        await session.execute(delete(Product).where(Product.merged_into.in_(doomed)))
+        await session.execute(delete(Product).where(Product.id.in_(doomed)))
     # Review items point at listings and runs with SET NULL, so they go first
     # rather than lingering as rows about a source that no longer exists.
     for model in (ReviewQueueItem, Listing, IngestionRun, SourceCursor):

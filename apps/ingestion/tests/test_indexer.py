@@ -8,6 +8,7 @@ mistake shows up only as a shop page quietly missing or keeping products.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType
@@ -194,3 +195,20 @@ async def test_category_refs_is_filterable():
         await reindex_all(session, client)
 
     assert "category_refs" in client.products.settings["filterableAttributes"]
+
+
+async def test_only_listed_products_are_indexed():
+    """Ids are permanent: a merged-away product only redirects and a withdrawn
+    one says "no longer listed". Neither is something search should offer."""
+    shop = _supplier("shop-a")
+    listed = Product(id=uuid.uuid4(), group_key="single:a", title_en="listed")
+    withdrawn = Product(
+        id=uuid.uuid4(), group_key="single:b", title_en="withdrawn", delisted_at=datetime.now(UTC)
+    )
+    merged = Product(
+        id=uuid.uuid4(), group_key="single:c", title_en="merged", merged_into=listed.id
+    )
+    await _seed(shop, listed, withdrawn, _listing(shop, listed))
+    await _seed(merged)
+
+    assert set(await _reindex()) == {"listed"}

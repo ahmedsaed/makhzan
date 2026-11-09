@@ -94,15 +94,19 @@ def ancestry(category_id, tree: dict) -> list[str]:
 async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
     """Rebuild the whole product index from Postgres (full replace).
 
-    Clears first so products deleted by regrouping don't linger as stale docs
-    (which would 404 when clicked).
+    Clears first so a product that stopped being listed doesn't linger as a
+    stale doc. Listed products only: a merged-away id only redirects, and a
+    withdrawn product keeps its page (ids are permanent, docs/decisions/
+    0004-stable-product-ids.md) but nothing to buy, so search never shows it.
     """
     ensure_index(client)
     clear = client.index(INDEX_NAME).delete_all_documents()
     client.wait_for_task(clear.task_uid)
     rows = (
         await session.execute(
-            select(Product, Category).outerjoin(Category, Category.id == Product.category_id)
+            select(Product, Category)
+            .outerjoin(Category, Category.id == Product.category_id)
+            .where(Product.is_listed())
         )
     ).all()
     # The whole tree, so each document can carry its category's ancestors and a
