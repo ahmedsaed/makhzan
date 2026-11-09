@@ -61,7 +61,7 @@ export function ResultsFilters({
 
       {!rail && (
         <p className="-mb-2 text-[13px] text-ink-3">
-          In stock and 2+ shops are on the bar above the results.
+          In stock, recently checked and 2+ shops are on the bar above the results.
         </p>
       )}
 

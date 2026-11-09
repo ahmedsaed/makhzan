@@ -3,7 +3,16 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Freshness, StaleNote } from "@/components/freshness";
-import { daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import {
+  STALE_AFTER_DAYS,
+  daysSince,
+  freshnessTier,
+  isStaleCheck,
+  parseVerified,
+} from "@/lib/freshness";
 
 const NOW = new Date("2026-11-06T12:00:00Z");
 const daysAgo = (days: number) => new Date(NOW.getTime() - days * 86_400_000);
@@ -80,5 +89,24 @@ describe("StaleNote", () => {
   it("renders nothing for a price that is not stale", () => {
     const { container } = render(<StaleNote lastVerified={daysAgo(45)} now={NOW} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("the stale line (C2b)", () => {
+  it("is the warn tier: stale exactly when the price is flagged", () => {
+    for (const days of [0, 14, 45, 46, 76, 400]) {
+      expect(isStaleCheck(daysAgo(days), NOW)).toBe(freshnessTier(daysAgo(days), NOW) === "warn");
+    }
+    expect(isStaleCheck(null, NOW)).toBe(false);
+  });
+
+  it("is the same number the API filters with", () => {
+    // The API's `fresh` search filter reads makhzan_schemas/freshness.py. Two
+    // languages cannot share a constant, so this test keeps them equal.
+    const python = readFileSync(
+      resolve(__dirname, "../../../packages/schemas/makhzan_schemas/freshness.py"),
+      "utf8",
+    );
+    expect(python).toMatch(new RegExp(`^STALE_AFTER_DAYS = ${STALE_AFTER_DAYS}$`, "m"));
   });
 });

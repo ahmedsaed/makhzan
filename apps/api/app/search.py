@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 import meilisearch
+from makhzan_schemas.freshness import fresh_since
 from makhzan_schemas.search import (
     FACET_ATTRIBUTES,
     INDEX_NAME,
@@ -42,6 +43,7 @@ def search_products(
     category: str | None = None,
     domain: str | None = None,
     in_stock: bool = False,
+    fresh: bool = False,
     min_price: float | None = None,
     max_price: float | None = None,
     min_suppliers: int | None = None,
@@ -69,6 +71,12 @@ def search_products(
         filters.append(f"domain = {_quoted(domain)}")
     if in_stock:
         filters.append("in_stock = true")
+    if fresh:
+        # Hides stale products (rule C2b): a product is fresh when any of its
+        # offers was checked within STALE_AFTER_DAYS, and the document's
+        # last_verified_at is the newest of them. The cutoff moves with the
+        # clock, so it is computed per request rather than stored as a flag.
+        filters.append(f"last_verified_at > {fresh_since()}")
     # Price filters/sort act on the product's cheapest offer (min_price).
     if min_price is not None:
         filters.append(f"min_price >= {min_price}")

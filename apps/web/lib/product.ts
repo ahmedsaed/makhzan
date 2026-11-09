@@ -7,7 +7,7 @@
 import type { Crumb } from "@/components/breadcrumb";
 import type { Category, CategoryRef, Offer, Product, StockSignal } from "@/lib/api";
 import { plural } from "@/lib/format";
-import { parseVerified } from "@/lib/freshness";
+import { isStaleCheck, parseVerified } from "@/lib/freshness";
 import { routes } from "@/lib/routes";
 import { departmentLabel } from "@/lib/departments";
 
@@ -22,6 +22,21 @@ export function isOutOfStock(offer: Offer): boolean {
 
 function checkedAt(offer: Offer): number {
   return parseVerified(offer.last_verified_at)?.getTime() ?? 0;
+}
+
+/** Last checked more than STALE_AFTER_DAYS ago (rule C2b). */
+export function isStaleOffer(offer: Offer, now: Date = new Date()): boolean {
+  return isStaleCheck(parseVerified(offer.last_verified_at), now);
+}
+
+/**
+ * The offers the page leads with: the recently checked ones when there are
+ * any, every offer when all of them are stale. A product whose every offer is
+ * old still has a page (a direct link must work); it just says so (F2).
+ */
+export function preferFresh(offers: Offer[], now: Date = new Date()): Offer[] {
+  const fresh = offers.filter((offer) => !isStaleOffer(offer, now));
+  return fresh.length > 0 ? fresh : offers;
 }
 
 /**
@@ -41,19 +56,31 @@ export function orderOffers(offers: Offer[]): Offer[] {
 }
 
 /**
- * The offers list, and the out-of-stock offers folded beneath it (rule C2).
+ * The offers list, with the out-of-stock offers (rule C2) and the out-of-date
+ * ones (C2b) each folded beneath it.
  *
- * When every offer is out of stock nothing is folded: a fold holding the whole
- * list would leave a page that says nothing, and the reader came to see them.
+ * A stale offer goes in the out-of-date fold whatever its stock: a months-old
+ * "in stock" is no more reliable than its price. The out-of-stock fold then
+ * holds the recently checked offers that say they are gone.
+ *
+ * A fold is never the whole list: when every offer is stale, or every one left
+ * is out of stock, nothing is folded, since a fold holding everything would
+ * leave a page that says nothing, and the reader came to see them.
  */
-export function splitOffers(offers: Offer[]): {
+export function splitOffers(
+  offers: Offer[],
+  now: Date = new Date(),
+): {
   listed: Offer[];
   outOfStock: Offer[];
+  stale: Offer[];
 } {
   const ordered = orderOffers(offers);
-  const outOfStock = ordered.filter(isOutOfStock);
-  if (outOfStock.length === ordered.length) return { listed: ordered, outOfStock: [] };
-  return { listed: ordered.filter((offer) => !isOutOfStock(offer)), outOfStock };
+  const fresh = preferFresh(ordered, now);
+  const stale = fresh === ordered ? [] : ordered.filter((offer) => isStaleOffer(offer, now));
+  const outOfStock = fresh.filter(isOutOfStock);
+  if (outOfStock.length === fresh.length) return { listed: fresh, outOfStock: [], stale };
+  return { listed: fresh.filter((offer) => !isOutOfStock(offer)), outOfStock, stale };
 }
 
 /**
@@ -73,7 +100,13 @@ function shopsIn(offers: Offer[]): number {
   return new Set(offers.map((offer) => offer.supplier?.slug ?? offer.id)).size;
 }
 
-export function summarizeOffers(offers: Offer[]): OfferSummary {
+/**
+ * Counted over the recently checked offers when there are any (C2b), so the
+ * summary and the offers above the folds agree; over every offer when all are
+ * stale, and the page says so.
+ */
+export function summarizeOffers(all: Offer[], now: Date = new Date()): OfferSummary {
+  const offers = preferFresh(all, now);
   const inStock = offers.filter((offer) => isInStock(offer.stock_signal));
   const notGone = offers.filter((offer) => !isOutOfStock(offer));
   const [state, counted]: [OfferSummary["state"], Offer[]] =
@@ -108,10 +141,14 @@ export function summaryText(summary: OfferSummary): string {
  * The offer the primary button opens: the cheapest in stock; failing that the
  * cheapest not known to be gone; and when every shop is out of stock, the most
  * recently checked, since it is the one most likely to have restocked. Only an
- * offer with somewhere to go qualifies.
+ * offer with somewhere to go qualifies, and a recently checked one is preferred
+ * to any stale one (C2b): a months-old price is not the one to lead with.
  */
-export function primaryOffer(offers: Offer[]): Offer | null {
-  const linkable = orderOffers(offers).filter((offer) => offer.source_url && offer.supplier);
+export function primaryOffer(offers: Offer[], now: Date = new Date()): Offer | null {
+  const linkable = preferFresh(
+    orderOffers(offers).filter((offer) => offer.source_url && offer.supplier),
+    now,
+  );
   return (
     linkable.find((offer) => isInStock(offer.stock_signal)) ??
     linkable.find((offer) => !isOutOfStock(offer)) ??
