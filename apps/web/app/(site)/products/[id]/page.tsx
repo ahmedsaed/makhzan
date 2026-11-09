@@ -35,6 +35,7 @@ import {
   jsonLdText,
   MAX_DETAIL_SOURCES,
   orderOffers,
+  isStaleOffer,
   primaryOffer,
   productJsonLd,
   splitOffers,
@@ -136,7 +137,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const now = new Date();
   const title = displayTitle(product);
   const several = product.offers.length >= 2;
-  const primary = primaryOffer(product.offers);
+  const primary = primaryOffer(product.offers, now);
   const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
   // Descriptions are not part of an offer; each comes from its listing. Capped
@@ -289,8 +290,8 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
         >
           {several ? (
             <>
-              <Summary product={product} primary={primary} narrow={split} />
-              <Offers {...splitOffers(product.offers)} productTitle={title} now={now} />
+              <Summary product={product} primary={primary} narrow={split} now={now} />
+              <Offers {...splitOffers(product.offers, now)} productTitle={title} now={now} />
             </>
           ) : (
             <OneOffer offer={product.offers[0]} now={now} listingCount={shop?.listing_count} />
@@ -404,18 +405,30 @@ function OneOffer({
   );
 }
 
-/** Several offers: how many are in stock where, for how much, and the way out. */
+/**
+ * Several offers: how many are in stock where, for how much, and the way out.
+ * Counted over the recently checked offers (C2b); when every offer is stale it
+ * counts them all and says, once, that the prices may be out of date.
+ */
 function Summary({
   product,
   primary,
   narrow,
+  now,
 }: {
   product: Product;
   primary: Offer | null;
   /** In the narrow column: the button takes the full width under the price. */
   narrow: boolean;
+  now: Date;
 }) {
-  const summary = summarizeOffers(product.offers);
+  const summary = summarizeOffers(product.offers, now);
+  const allStale = product.offers.every((offer) => isStaleOffer(offer, now));
+  const newest = allStale
+    ? product.offers
+        .map((offer) => parseVerified(offer.last_verified_at))
+        .reduce<Date | null>((a, b) => (b && (!a || b > a) ? b : a), null)
+    : null;
   return (
     <section
       data-summary={summary.state}
@@ -434,6 +447,7 @@ function Summary({
             No shop has this in stock right now. Their offers are still listed below.
           </p>
         )}
+        {allStale && <StaleNote lastVerified={newest} now={now} className="mt-1" />}
       </div>
       {primary?.source_url && primary.supplier && (
         <ShopLink

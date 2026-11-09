@@ -115,6 +115,11 @@ export function departmentSearch(url) {
   let hits = HITS;
   if (category) hits = hits.filter((h) => ancestry(h.category_ref).includes(category));
   if (params.get("in_stock") === "true") hits = hits.filter((h) => h.in_stock);
+  // Every hit here is days old, so the stale filter (C2b) keeps them all; it
+  // is still applied, so a page that sent it wrongly would show.
+  if (params.get("fresh") === "true") {
+    hits = hits.filter((h) => Date.now() / 1000 - h.last_verified_at < 46 * 86400);
+  }
   // The API refuses more than 50 (and the page must never send it).
   const minSuppliers = Number(params.get("min_suppliers") ?? 0);
   if (minSuppliers > 50) return { status: 422, body: { detail: "min_suppliers ≤ 50" } };
