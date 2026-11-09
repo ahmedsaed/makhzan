@@ -194,3 +194,15 @@ async def test_category_refs_is_filterable():
         await reindex_all(session, client)
 
     assert "category_refs" in client.products.settings["filterableAttributes"]
+
+
+async def test_last_verified_at_is_filterable():
+    """The stale filter (rule C2b) is a range on the newest check. A filter on an
+    attribute the index does not list is a Meilisearch error, so a deploy whose
+    index settings predate this breaks search until it is reindexed."""
+    client = FakeClient()
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+
+    assert "last_verified_at" in FILTERABLE_ATTRIBUTES
+    assert "last_verified_at" in client.products.settings["filterableAttributes"]

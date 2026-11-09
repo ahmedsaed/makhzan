@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * Every offer of a product in one list (rule P3), with the out-of-stock ones
- * folded underneath (C2) in a `<details>`, which opens without JavaScript.
+ * (C2) and the out-of-date ones (C2b) each folded underneath in a `<details>`,
+ * which opens without JavaScript.
  *
  * Each offer is a two-line card at every width: on a wide screen the offers
  * sit in the page's narrow column, under the photo, and the wide one is left
@@ -24,11 +25,13 @@ import { cn } from "@/lib/utils";
 export function Offers({
   listed,
   outOfStock,
+  stale,
   productTitle,
   now,
 }: {
   listed: Offer[];
   outOfStock: Offer[];
+  stale: Offer[];
   productTitle: string;
   now: Date;
 }) {
@@ -47,25 +50,49 @@ export function Offers({
       </p>
       <div className="-mx-4 overflow-hidden border-y border-line bg-surface md:mx-0 md:rounded-card md:border">
         <OfferList offers={listed} productTitle={productTitle} now={now} />
-        {outOfStock.length > 0 && (
-          <details data-out-of-stock className="group border-t border-line">
-            <summary className="flex h-12 cursor-pointer list-none items-center gap-1.5 px-4 text-sm font-medium text-link [&::-webkit-details-marker]:hidden">
-              <span className="group-open:hidden">
-                Show {plural(outOfStock.length, "out of stock offer")}
-              </span>
-              <span className="hidden group-open:inline">Hide out of stock offers</span>
-              <ChevronDown aria-hidden="true" className="size-4 group-open:rotate-180" />
-            </summary>
-            <OfferList
-              offers={outOfStock}
-              productTitle={productTitle}
-              now={now}
-              className="border-t border-line"
-            />
-          </details>
-        )}
+        <Fold
+          offers={outOfStock}
+          kind="out of stock"
+          data="out-of-stock"
+          productTitle={productTitle}
+          now={now}
+        />
+        <Fold offers={stale} kind="out of date" data="stale" productTitle={productTitle} now={now} />
       </div>
     </section>
+  );
+}
+
+/** "Show 2 out of stock offers": the offers a default hides, one click away. */
+function Fold({
+  offers,
+  kind,
+  data,
+  productTitle,
+  now,
+}: {
+  offers: Offer[];
+  kind: string;
+  data: "out-of-stock" | "stale";
+  productTitle: string;
+  now: Date;
+}) {
+  if (offers.length === 0) return null;
+  return (
+    // data-out-of-stock / data-stale, for tests and styles alike.
+    <details {...{ [`data-${data}`]: "" }} className="group border-t border-line">
+      <summary className="flex h-12 cursor-pointer list-none items-center gap-1.5 px-4 text-sm font-medium text-link [&::-webkit-details-marker]:hidden">
+        <span className="group-open:hidden">Show {plural(offers.length, `${kind} offer`)}</span>
+        <span className="hidden group-open:inline">Hide {kind} offers</span>
+        <ChevronDown aria-hidden="true" className="size-4 group-open:rotate-180" />
+      </summary>
+      <OfferList
+        offers={offers}
+        productTitle={productTitle}
+        now={now}
+        className="border-t border-line"
+      />
+    </details>
   );
 }
 

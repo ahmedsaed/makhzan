@@ -22,7 +22,7 @@ Measured on 60.9k active listings (November 2026).
 |---|---|
 | 98.6% of products have one shop; 1.4% have 2–7 | A parts search engine that hands off to a shop, and only sometimes a comparison. The product page is designed for one offer; comparison appears only with 2+ shops. Being sold by several shops is rare, so it is a badge and a filter. |
 | 41% of listings are out of stock | Out of stock is **hidden by default**, and the count of hidden items is always shown. |
-| A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). |
+| A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). Results hide products not checked in over 45 days by default, with the count shown, like out of stock (C2b). |
 | Arabic titles 0.1%, Arabic descriptions 3% | **English only.** Arabic search queries keep working; the Arabic interface is gone. |
 | Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions come after makhzan's own facts and the way to the shop, clamped to 25 lines behind Read more. |
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
@@ -97,12 +97,16 @@ search on desktop, lower down on phones) and a note for shop owners. Every block
 the page container on desktop; each section is left out when its fetch fails.
 
 **Results (search, department, category, shop search).**
-- A chip bar with the two everyday filters, **In stock** (on by default) and
-  **2+ shops**, plus a "Category, price" chip that opens a sheet (a side rail on
-  desktop) for the rest.
+- A chip bar with the everyday filters, **In stock** and **Checked recently** (both
+  on by default) and **2+ shops**, plus a "Category, price" chip that opens a sheet (a
+  side rail on desktop) for the rest.
 - "Top categories for “query”" above the results.
-- A toolbar: the count, "N more out of stock" (one click shows them), sort (best match,
-  price low first, most shops, recently checked) and the list/grid toggle.
+- A toolbar: the count, "N more out of stock" and "N more out of date" (one click on
+  either shows them), sort (best match, price low first, most shops, recently checked)
+  and the list/grid toggle. Each count is exactly what its own click adds: a product
+  both out of stock and out of date is in neither, and turns up under the other link
+  once one filter is off. A page whose every match is hidden says which filter hid
+  them and offers them; when only both together did, it offers "Show all N".
 - List rows: photo, two-line title, price, shop name or an "N shops" badge, freshness.
   Grid cards: the same facts. The toggle is remembered per visitor.
 
@@ -146,7 +150,11 @@ the page container on desktop; each section is left out when its fetch fails.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
-  under "Show N out of stock offers". The bottom bar points to the cheapest.
+  under "Show N out of stock offers", out-of-date ones (any stock) under "Show N out of
+  date offers". The summary counts the recently checked offers, and the bottom bar
+  points to the cheapest of them. When every offer is out of date nothing folds for
+  age: the page lists them all, and the summary carries the "Price may be out of
+  date" note.
 
 **Department and category.** Header (name, count, "Search in {department}"); groups as object
 tiles; the selected group's categories as smaller object tiles; then results with the
@@ -171,7 +179,11 @@ is stale, "Visit {site}", search within the shop and what it carries (a bar by d
 On desktop the band uses the full width: name and search on the left, tiles and "Visit"
 on the right, the note and the bar across. Below it the page is search scoped to the
 shop, on the same URL (`/shops/{shop}?category=…`): chips, rail, toolbar, list/grid,
-paging. Rows leave out the shop's name, which would only repeat the heading (the one
+paging. A shop whose own data is stale shows its products anyway (C2b): the visitor
+asked for that shop and the note already says the data is old, while hiding them would
+empty the page, or leave only what a fresher shop also sells. The "Checked recently"
+chip still hides them (`?stale=hide`). A search within the shop follows the same rule.
+Rows leave out the shop's name, which would only repeat the heading (the one
 exception to C1's "shop name"); a product other shops sell keeps its "N shops" badge.
 "Biggest categories" is a phone list only, since the desktop rail already lists them.
 At the foot of the band, one line on what the crawler did there: "makhzan read this site
@@ -290,6 +302,7 @@ Each is meant to be checked by a test.
 **Content**
 - **C1** Every result, list or grid, shows: title, price (or range), shop name or "N shops", freshness. List and grid carry the same facts.
 - **C2** Out of stock is hidden by default; when anything is hidden the page says how many and offers to show them.
+- **C2b** Stale (last checked more than 45 days ago: F2's warn tier, `STALE_AFTER_DAYS` in `apps/web/lib/freshness.ts` and `makhzan_schemas/freshness.py`) is hidden by default too, in results (`?stale=all` shows it) and folded on a product page. When anything is hidden the page says how many and offers to show them. A product is fresh when any of its offers is. A direct link always works: a product whose offers are all stale still renders, with the warning, and a stale shop's own page shows its products.
 - **C3** No per-unit price is ever implied; ranges read "EGP 260 – 400". Prices are the current price only: no struck-through "before" prices, no discount badges (some shops' before prices are standing markups).
 - **C4** Specs and datasheets appear only when the shop provides them, with their source; never an empty or placeholder table. No brand filter, no Arabic interface text.
 

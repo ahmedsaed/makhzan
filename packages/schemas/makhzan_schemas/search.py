@@ -54,6 +54,12 @@ FILTERABLE_ATTRIBUTES = [
     # search with its own ranking. An array: a product sold by three shops
     # matches a filter on any one of them.
     "supplier_slugs",
+    # The newest check of any of the product's offers, in epoch seconds. Filtered
+    # as a range (`last_verified_at > cutoff`) to hide stale products by default
+    # (makhzan_schemas.freshness, rule C2b). Not a facet: a facet over a
+    # timestamp is one bucket per second. And not a stored "is stale" flag: that
+    # would go stale itself between reindexes, as time passes and nothing else does.
+    "last_verified_at",
 ]
 
 #: Facets returned with a search so a browse rail can show counts without a

@@ -189,6 +189,8 @@ export type SearchParams = {
   category?: string;
   domain?: string;
   inStock?: boolean;
+  /** Only products with an offer checked within STALE_AFTER_DAYS (C2b). */
+  fresh?: boolean;
   minPrice?: number;
   maxPrice?: number;
   minSuppliers?: number;
@@ -264,6 +266,7 @@ export function searchProducts(params: SearchParams): Promise<SearchResponse> {
       category: params.category,
       domain: params.domain,
       in_stock: params.inStock ? true : undefined,
+      fresh: params.fresh ? true : undefined,
       min_price: params.minPrice,
       max_price: params.maxPrice,
       min_suppliers: params.minSuppliers,

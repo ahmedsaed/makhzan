@@ -12,8 +12,11 @@ here is that the answer reaches `attributesToSearchOn`.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from app.search import search_products
+from makhzan_schemas.freshness import STALE_AFTER_DAYS, fresh_since
 from makhzan_schemas.search import (
     FACET_ATTRIBUTES,
     FILTERABLE_ATTRIBUTES,
@@ -268,3 +271,53 @@ async def test_the_shop_attribute_is_filterable_in_the_contract(meili):
     from makhzan_schemas.search import FILTERABLE_ATTRIBUTES
 
     assert "supplier_slugs" in FILTERABLE_ATTRIBUTES
+
+
+# --------------------------------------------------------------------------- #
+# Freshness (rule C2b): stale products are hidden unless asked for
+
+
+async def test_fresh_filters_on_the_newest_check_of_any_offer(meili, monkeypatch):
+    monkeypatch.setattr("app.search.fresh_since", lambda: 1_700_000_000)
+
+    search_products("LM358", fresh=True)
+
+    assert filters_of(meili) == ["last_verified_at > 1700000000"]
+    # Without this the filter is a Meilisearch error, i.e. a broken search page.
+    assert "last_verified_at" in FILTERABLE_ATTRIBUTES
+
+
+async def test_no_freshness_filter_unless_asked_for(meili):
+    """The API's default is everything, like in_stock: the site sends it."""
+    search_products("LM358")
+
+    assert "filter" not in opts_of(meili)
+
+
+async def test_fresh_combines_with_in_stock_and_facets(meili, monkeypatch):
+    """The site counts what each default hides by running the same search with
+    one filter dropped, so the two must compose and still bring the stock facet."""
+    monkeypatch.setattr("app.search.fresh_since", lambda: 42)
+
+    search_products("", in_stock=True, fresh=True, shop="shop-a", facets=True)
+
+    opts = opts_of(meili)
+    assert opts["filter"] == [
+        "in_stock = true",
+        "last_verified_at > 42",
+        'supplier_slugs = "shop-a"',
+    ]
+    assert "in_stock" in opts["facets"]
+
+
+def test_stale_means_the_warn_tier_more_than_45_whole_days():
+    """The web warns from day 46 (whole days, rounded down); the filter must cut
+    at the same instant, or a row could be hidden that reads "45 days"."""
+    now = datetime(2026, 11, 9, 12, tzinfo=UTC)
+    cutoff = fresh_since(now)
+
+    assert STALE_AFTER_DAYS == 45
+    almost = now - timedelta(days=45, hours=23)
+    over = now - timedelta(days=46)
+    assert int(almost.timestamp()) > cutoff  # "45 days ago": fresh
+    assert not int(over.timestamp()) > cutoff  # "46 days ago": stale
