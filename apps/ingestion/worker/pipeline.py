@@ -41,7 +41,7 @@ from makhzan_schemas.models import (
     SourceCursor,
     Supplier,
 )
-from sqlalchemy import func, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
@@ -142,6 +142,10 @@ async def _record_changes(
     change must still be recorded by the next real run rather than lost. A listing
     with no observation yet (new, or archived before history began) gets its
     first. A recheck that changes nothing writes nothing. Returns rows added.
+
+    Every listing passed here was just seen by its source, so it is available:
+    one whose latest row is its archiving (`available` false) gets a row on
+    coming back even at the same price and stock, which is what dates the gap.
     """
     latest: dict = {}
     if not new:
@@ -152,6 +156,7 @@ async def _record_changes(
                 PriceObservation.price,
                 PriceObservation.currency,
                 PriceObservation.stock_signal,
+                PriceObservation.available,
             )
             .where(PriceObservation.listing_id.in_(ids))
             .order_by(PriceObservation.listing_id, PriceObservation.observed_at.desc())
@@ -160,7 +165,7 @@ async def _record_changes(
         latest = {row[0]: tuple(row[1:]) for row in rows}
     added = 0
     for listing in listings:
-        current = (_cents(listing.price), listing.currency, listing.stock_signal)
+        current = (_cents(listing.price), listing.currency, listing.stock_signal, True)
         if latest.get(listing.id) == current:
             continue
         session.add(
@@ -171,6 +176,7 @@ async def _record_changes(
                 currency=listing.currency,
                 stock_signal=listing.stock_signal,
                 in_stock=listing.stock_signal == StockSignal.IN_STOCK,
+                available=True,
             )
         )
         added += 1
@@ -641,17 +647,39 @@ async def _finish_cycle_if_swept(
     starts = [c.cycle_started_at for c in cursors if c.cycle_started_at is not None]
     cycle_started = min(starts) if starts else datetime.now(timezone.utc)
 
-    result = await session.execute(
-        update(Listing)
-        .where(
-            Listing.supplier_id == supplier_id,
-            Listing.status == ListingStatus.ACTIVE,
-            # Seen, not verified: a listing kept alive by id alone was not
-            # re-priced, but the shop still says it sells it.
-            Listing.last_seen_at < cycle_started,
+    archived = (
+        await session.execute(
+            update(Listing)
+            .where(
+                Listing.supplier_id == supplier_id,
+                Listing.status == ListingStatus.ACTIVE,
+                # Seen, not verified: a listing kept alive by id alone was not
+                # re-priced, but the shop still says it sells it.
+                Listing.last_seen_at < cycle_started,
+            )
+            .values(status=ListingStatus.ARCHIVED)
+            .returning(Listing.id, Listing.price, Listing.currency, Listing.stock_signal)
         )
-        .values(status=ListingStatus.ARCHIVED)
-    )
+    ).all()
+    if archived:
+        # History marks the gap: from now until the listing is seen again it is
+        # not offered at all, whatever its last price and stock were.
+        now = datetime.now(timezone.utc)
+        await session.execute(
+            insert(PriceObservation),
+            [
+                {
+                    "listing_id": listing_id,
+                    "observed_at": now,
+                    "price": _cents(price),
+                    "currency": currency,
+                    "stock_signal": stock_signal,
+                    "in_stock": False,
+                    "available": False,
+                }
+                for listing_id, price, currency, stock_signal in archived
+            ],
+        )
     for cursor in cursors:
         cursor.exhausted = False
         cursor.next_page = 1
@@ -668,7 +696,7 @@ async def _finish_cycle_if_swept(
         "cycle_seconds": round((finished - cycle_started).total_seconds()),
         "cycle_partitions": len(expected),
     }
-    return result.rowcount or 0, cycle
+    return len(archived), cycle
 
 
 def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: bool) -> dict | None:

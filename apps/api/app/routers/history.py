@@ -38,7 +38,15 @@ async def _histories(
         return histories
 
     po = PriceObservation
-    columns = (po.listing_id, po.observed_at, po.price, po.currency, po.stock_signal, po.in_stock)
+    columns = (
+        po.listing_id,
+        po.observed_at,
+        po.price,
+        po.currency,
+        po.stock_signal,
+        po.in_stock,
+        po.available,
+    )
     in_window = select(*columns).where(po.listing_id.in_(listing_ids), po.observed_at >= since)
     carried_in = (
         select(*columns)
