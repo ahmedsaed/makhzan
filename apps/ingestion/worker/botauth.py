@@ -59,11 +59,19 @@ def _keygen(_: argparse.Namespace) -> int:
 
 
 def _show(_: argparse.Namespace) -> int:
-    keys = botauth.directory_keys()
-    if not keys:
-        print(f"no key configured ({botauth.KEY_ENV} / {botauth.KEY_ENV}_FILE)", file=sys.stderr)
+    labelled = [
+        (label, key)
+        for label, env in (
+            ("current (signs requests)", botauth.KEY_ENV),
+            ("next (published only)", botauth.NEXT_KEY_ENV),
+            ("previous (published only)", botauth.PREVIOUS_KEY_ENV),
+        )
+        if (key := botauth.configured_key(env)) is not None
+    ]
+    if not labelled:
+        print(f"no key configured ({botauth.KEY_ENV})", file=sys.stderr)
         return 1
-    for name, key in zip(("current", "next"), keys, strict=False):
+    for name, key in labelled:
         jwk = botauth.public_jwk(key)
         print(f"{name}: keyid {botauth.jwk_thumbprint(jwk)}  {json.dumps(jwk)}")
     return 0
