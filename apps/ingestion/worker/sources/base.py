@@ -24,8 +24,10 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from makhzan_schemas.contact import email_address, https_url, phone_number
 from makhzan_schemas.contracts import NormalizedListing, RawItem
 from makhzan_schemas.domains.base import DEFAULT_DOMAIN
 from makhzan_schemas.enums import SourceType
@@ -123,9 +125,102 @@ class DetailsSettings:
         return settings
 
 
+#: The keys a `[[source.supplier.branches]]` entry may have.
+_BRANCH_KEYS = frozenset({"name", "address", "area", "governorate", "phone", "maps_url"})
+
+#: Contact fields that must say where and when a person read them.
+_NEEDS_SOURCE = ("phone", "whatsapp", "email", "address", "maps_url", "opening_hours", "branches")
+
+
+def _optional_text(name: str, value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise TypeError(f"supplier.{name} must be non-empty text, got {value!r}")
+    return value.strip()
+
+
+def _phone_list(name: str, value: object) -> list[str] | None:
+    """`phone = "…"` or `phone = ["…", "…"]`, each one a number, as E.164."""
+    if value is None:
+        return None
+    raw = value if isinstance(value, list) else [value]
+    if not raw:
+        raise TypeError(f"supplier.{name} is an empty list; leave it out instead")
+    out: list[str] = []
+    for item in raw:
+        number = phone_number(item) if isinstance(item, str) else None
+        if number is None:
+            raise ValueError(f"supplier.{name}: {item!r} is not a phone number makhzan can dial")
+        if number not in out:
+            out.append(number)
+    return out
+
+
+def _https_setting(name: str, value: object) -> str | None:
+    if value is None:
+        return None
+    url = https_url(value)
+    if url is None:
+        raise ValueError(f"supplier.{name} must be an https:// link, got {value!r}")
+    return url
+
+
+def _checked_on(value: object) -> date | None:
+    if value is None:
+        return None
+    problem = f"supplier.contact_checked_on must be a date like 2026-11-10, got {value!r}"
+    if isinstance(value, datetime) or not isinstance(value, str | date):
+        raise TypeError(problem)
+    if isinstance(value, str):
+        try:
+            value = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(problem) from exc
+    # A day's grace: the day is Cairo's, the server's clock UTC.
+    if value > date.today() + timedelta(days=1):
+        raise ValueError(f"supplier.contact_checked_on is in the future: {value}")
+    return value
+
+
+def _branch(index: int, value: object) -> dict:
+    where = f"branches[{index}]"
+    if not isinstance(value, dict):
+        raise TypeError(f"supplier.{where} must be a table, got {value!r}")
+    unknown = set(value) - _BRANCH_KEYS
+    if unknown:
+        raise TypeError(f"supplier.{where}: unknown key(s) {sorted(unknown)}")
+    branch = {
+        "name": _optional_text(f"{where}.name", value.get("name")),
+        "address": _optional_text(f"{where}.address", value.get("address")),
+        "area": _optional_text(f"{where}.area", value.get("area")),
+        "governorate": _optional_text(f"{where}.governorate", value.get("governorate")),
+        "phones": _phone_list(f"{where}.phone", value.get("phone")),
+        "maps_url": _https_setting(f"{where}.maps_url", value.get("maps_url")),
+    }
+    if not (branch["address"] or branch["phones"]):
+        raise ValueError(f"supplier.{where} needs an address or a phone")
+    return {k: v for k, v in branch.items() if v is not None}
+
+
 @dataclass(frozen=True)
 class SupplierInfo:
-    """Static description of the shop an adapter represents."""
+    """Static description of the shop an adapter represents: its source's `supplier` table.
+
+    Beyond who the shop is, it holds how to reach it, as a person read that off
+    the shop's own pages: `phone` (one number or a list, the one to call
+    first first), `whatsapp`, `email`, `address` with `area` and `governorate`,
+    the shop's own `maps_url`, `opening_hours` (lines as the shop words them),
+    and `branches`, further places it trades from, each {name, address, area,
+    governorate, phone, maps_url}. Any of those needs `contact_source_url` and
+    `contact_checked_on`, the page they were read from and the day, which the
+    shop page shows beside them. `area` and `governorate` alone do not: they
+    predate the rest.
+
+    Checked here, when sources.toml is synced, so a number that cannot be
+    dialled or a link that is not https fails the deploy instead of reaching a
+    page. Numbers are kept in E.164 (makhzan_schemas.contact.phone_number).
+    """
 
     slug: str
     name: str
@@ -137,6 +232,72 @@ class SupplierInfo:
     name_ar: str | None = None
     area: str | None = None
     governorate: str | None = None
+    address: str | None = None
+    phone: str | list[str] | None = None
+    whatsapp: str | None = None
+    email: str | None = None
+    maps_url: str | None = None
+    opening_hours: list[str] | None = None
+    branches: list[dict] | None = None
+    contact_source_url: str | None = None
+    contact_checked_on: str | date | None = None
+
+    def __post_init__(self) -> None:
+        def put(name: str, value: object) -> None:
+            object.__setattr__(self, name, value)  # frozen: normalized once, here
+
+        for name in ("area", "governorate", "address"):
+            put(name, _optional_text(name, getattr(self, name)))
+        put("phone", _phone_list("phone", self.phone))
+        if self.whatsapp is not None:
+            numbers = _phone_list("whatsapp", self.whatsapp)
+            if not isinstance(self.whatsapp, str) or len(numbers[0]) <= 5:
+                raise ValueError(f"supplier.whatsapp must be one mobile number: {self.whatsapp!r}")
+            put("whatsapp", numbers[0])
+        if self.email is not None:
+            if email_address(self.email) is None:
+                raise ValueError(f"supplier.email is not an email address: {self.email!r}")
+            put("email", email_address(self.email))
+        put("maps_url", _https_setting("maps_url", self.maps_url))
+        put("contact_source_url", _https_setting("contact_source_url", self.contact_source_url))
+        if self.opening_hours is not None:
+            if not isinstance(self.opening_hours, list) or not self.opening_hours:
+                raise TypeError(
+                    'supplier.opening_hours must be a list of lines, like ["Sat-Thu 10-22"]'
+                )
+            put("opening_hours", [_optional_text("opening_hours", h) for h in self.opening_hours])
+        if self.branches is not None:
+            if not isinstance(self.branches, list) or not self.branches:
+                raise TypeError("supplier.branches must be [[source.supplier.branches]] tables")
+            put("branches", [_branch(i, b) for i, b in enumerate(self.branches, 1)])
+        put("contact_checked_on", _checked_on(self.contact_checked_on))
+
+        listed = [n for n in _NEEDS_SOURCE if getattr(self, n) is not None]
+        if listed and (self.contact_source_url is None or self.contact_checked_on is None):
+            raise ValueError(
+                f"supplier {self.slug!r} lists {', '.join(listed)} without where and when they "
+                "were read: add contact_source_url and contact_checked_on"
+            )
+
+    def contact_columns(self) -> dict:
+        """The Supplier columns this table owns, every one of them, None where unset.
+
+        All of them, so that a value removed from sources.toml is cleared from the
+        row rather than left behind.
+        """
+        return {
+            "phones": self.phone,
+            "whatsapp": self.whatsapp,
+            "email": self.email,
+            "address": self.address,
+            "area": self.area,
+            "governorate": self.governorate,
+            "maps_url": self.maps_url,
+            "opening_hours": self.opening_hours,
+            "branches": self.branches,
+            "contact_source_url": self.contact_source_url,
+            "contact_checked_on": self.contact_checked_on,
+        }
 
 
 class SourceAdapter(ABC):

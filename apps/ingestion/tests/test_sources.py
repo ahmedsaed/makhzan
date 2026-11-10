@@ -281,6 +281,9 @@ def test_the_example_file_builds():
     rows = read_sources(REPO_CONFIG_DIR / "sources.example.toml")
     assert [r.source_id for r in rows] == ["fixture"]
     assert rows[0].enabled is False
+    # Its worked example of a shop's contact details: every key, valid.
+    listed = build_adapter(rows[0]).supplier.contact_columns()
+    assert all(value is not None for value in listed.values()), listed
 
 
 # --------------------------------------------------------------------------- #
