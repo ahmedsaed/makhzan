@@ -185,6 +185,10 @@ class WixStoresAdapter(SourceAdapter):
         keys = [*self.tag_galleries, *self.galleries]
         return keys + [SITEMAP_PARTITION] if self.sitemap else keys
 
+    def probe_url(self) -> str | None:
+        galleries = [p for p in self.partitions() if p != SITEMAP_PARTITION]
+        return f"{self.base_url}{galleries[0]}" if galleries else None
+
     async def fetch_page(self, partition: str, page: int) -> Page:
         if partition == SITEMAP_PARTITION:
             return await self._check_sitemap()
