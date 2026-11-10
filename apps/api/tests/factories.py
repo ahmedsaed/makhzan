@@ -34,6 +34,7 @@ async def make_supplier(
     website_url: str | None = None,
     domain: str = "electronics",
     contact: dict | None = None,
+    **listed,
 ) -> Supplier:
     supplier = Supplier(
         slug=slug or f"supplier-{next(_seq)}",
@@ -45,6 +46,8 @@ async def make_supplier(
         domain=domain,
         source_type=SourceType.SCRAPED,
         contact=contact,
+        # The listed contact columns: phones, whatsapp, email, address, ...
+        **listed,
     )
     session.add(supplier)
     await session.commit()

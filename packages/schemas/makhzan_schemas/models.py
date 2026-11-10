@@ -76,13 +76,35 @@ class Supplier(TimestampMixin, Base):
     domain: Mapped[str] = mapped_column(String(60), default=DEFAULT_DOMAIN, nullable=False)
 
     website_url: Mapped[str | None] = mapped_column(Text)
-    phone: Mapped[str | None] = mapped_column(String(40))
+
+    # How to reach the shop, as a person read it where the shop's details are
+    # published (its site, its Facebook, its Google Maps listing) and entered it
+    # in the shop's `supplier` table in sources.toml. Written only by
+    # `worker.sources.sync` (every deploy) and on the row's creation, so the file
+    # is the truth: a value removed there is cleared here. Merged with `contact`
+    # below by makhzan_schemas.contact.resolve_contact, these winning per field.
+    #: E.164 (or a hotline's five digits), first the one to call.
+    phones: Mapped[list | None] = mapped_column(JSONB)
     whatsapp: Mapped[str | None] = mapped_column(String(40))
+    email: Mapped[str | None] = mapped_column(String(254))
 
     # Greater Cairo for V1, but stored generically.
     area: Mapped[str | None] = mapped_column(String(120))  # e.g. "Bab El Louk"
     governorate: Mapped[str | None] = mapped_column(String(120))  # e.g. "Cairo"
     address: Mapped[str | None] = mapped_column(Text)
+    #: The shop's own map link for that address.
+    maps_url: Mapped[str | None] = mapped_column(Text)
+    #: Lines as the shop words them ("Sat–Thu 10:00–22:00"), in its order.
+    opening_hours: Mapped[list | None] = mapped_column(JSONB)
+    #: Further places it trades from: [{name, address, area, governorate,
+    #: phones, maps_url}]. The columns above are its main (or only) one.
+    branches: Mapped[list | None] = mapped_column(JSONB)
+    #: Where and when a person read the details above, a page at a time:
+    #: [{url, checked_on: "YYYY-MM-DD", fields: [names as in ResolvedContact]}].
+    contact_sources: Mapped[list | None] = mapped_column(JSONB)
+    # The table still has `phone`, the single number `phones` replaced, until a
+    # later migration drops it: a release still running while this one migrates
+    # selects it (expand/contract, migration 2b656e4b5adc).
     lat: Mapped[float | None] = mapped_column()
     lng: Mapped[float | None] = mapped_column()
 
@@ -92,7 +114,7 @@ class Supplier(TimestampMixin, Base):
     #: How to reach the shop, as the shop itself publishes it (its own
     #: LocalBusiness JSON-LD): {address?, area?, governorate?, phone?, whatsapp?,
     #: email?, opening_hours?: [str], source_url, fetched_at}. Kept apart from the
-    #: hand-entered columns above, which it never overwrites: this is what the
+    #: listed columns above, which it never overwrites: this is what the
     #: crawler read, refreshed once a cycle, and says where and when it read it.
     contact: Mapped[dict | None] = mapped_column(JSONB)
 

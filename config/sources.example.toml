@@ -14,7 +14,8 @@
 #              run by hand, but the daily refresh skips it.
 #   supplier   The shop: slug and name, plus optionally website_url, name_ar,
 #              area, governorate and domain (the fallback vertical for listings
-#              the crosswalk does not place; defaults to electronics).
+#              the crosswalk does not place; defaults to electronics), and how
+#              to reach it (below).
 #   crosswalk  Name of a file in MAKHZAN_CROSSWALKS (default config/crosswalks),
 #              without .toml. Its [categories] map the shop's own categories to
 #              ours; its partitions, if any, are the categories to sweep.
@@ -43,11 +44,80 @@
 # change token moved, or read over max_age_days ago (worker/details.py). Off by
 # default; every other adapter refuses the key.
 
+# How to reach a shop, read by a person where the shop's details are published
+# (its site's contact page or footer, its Facebook page, its Google Maps
+# listing) and written in its supplier table. The shop page shows them, naming
+# where each came from, and a product page offers WhatsApp or a call. All
+# optional; `make sources` (and every deploy) writes them to the shop's row,
+# and a value removed here is cleared there. Where these are missing, what the
+# crawler read from the shop's JSON-LD is shown instead (the address as a whole).
+#
+#   phone          One number, or a list, the one to call first first. Written
+#                  as the shop writes it ("02 2345 6789", "+20 100 …", a
+#                  15xxx/16xxx/17xxx/19xxx hotline); stored as E.164. One that
+#                  cannot be dialled fails the sync.
+#   whatsapp       One number that takes WhatsApp (a mobile, or a landline on
+#                  WhatsApp Business).
+#   email
+#   address        The main (or only) shop's street address, as published,
+#                  with area and governorate beside it.
+#   maps_url       A Google Maps or Apple Maps link to that address.
+#   opening_hours  A list of lines, as the shop words them.
+#   branches       Further places it trades from: [[source.supplier.branches]]
+#                  tables of name, address, area, governorate, phone (one or a
+#                  list) and maps_url; each needs an address or a phone.
+#   contact_sources
+#                  Where and when each of the above was read:
+#                  [[source.supplier.contact_sources]] tables of url, checked_on
+#                  (a TOML date) and fields (the keys above it gave). Every
+#                  field listed is named by exactly one source; the shop page
+#                  says "Address from Google Maps, checked 10 Nov 2026", so a
+#                  listing the shop never claimed is not called its own. When
+#                  one page gave everything, contact_source_url and
+#                  contact_checked_on are the shorthand. area and governorate
+#                  alone need no source.
+#
+# Write the supplier as a [source.supplier] table, after every other key of the
+# source (a TOML table runs to the next header). Unknown keys are an error.
+#
+# The fixture below carries a full set, obviously fake, so this file shows the
+# shape and the tests check that it builds.
+
 [[source]]
 id = "fixture"
 adapter = "fixture"
 enabled = false
-supplier = { slug = "fixture", name = "Fixture (test source)" }
+
+[source.supplier]
+slug = "fixture"
+name = "Fixture (test source)"
+website_url = "https://shop.example"
+address = "1 Example Street, 2nd floor"
+area = "Bab El Louk"
+governorate = "Cairo"
+maps_url = "https://maps.app.goo.gl/EXAMPLE-main"
+phone = ["02 0000 0000", "02 0000 0001"]
+whatsapp = "010 0000 0000"
+email = "sales@shop.example"
+opening_hours = ["Saturday to Thursday 10:00 to 22:00", "Friday closed"]
+
+[[source.supplier.contact_sources]]
+url = "https://shop.example/contact-us"
+checked_on = 2026-11-10
+fields = ["phone", "whatsapp", "email", "opening_hours", "branches"]
+
+[[source.supplier.contact_sources]]
+url = "https://www.google.com/maps/place/EXAMPLE"
+checked_on = 2026-11-10
+fields = ["address", "area", "governorate", "maps_url"]
+
+[[source.supplier.branches]]
+name = "Giza branch"
+address = "2 Example Road"
+area = "Dokki"
+governorate = "Giza"
+phone = "02 0000 0002"
+maps_url = "https://maps.app.goo.gl/EXAMPLE-giza"
 
 # [[source]]
 # id = "example-shop"

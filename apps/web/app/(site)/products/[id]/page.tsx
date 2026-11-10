@@ -4,6 +4,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { preconnect } from "react-dom";
 
 import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
+import { ContactButtons, ReportLink, ShopContactList } from "@/components/contact-links";
 import { Freshness, StaleNote } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { PhotoFrame } from "@/components/photo-frame";
@@ -309,9 +310,16 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
             <>
               <Summary product={product} primary={primary} narrow={split} now={now} />
               <Offers {...splitOffers(product.offers, now)} productTitle={title} now={now} />
+              <ShopsContact product={product} title={title} page={absoluteUrl(path)} />
             </>
           ) : (
-            <OneOffer offer={product.offers[0]} now={now} listingCount={shop?.listing_count} />
+            <OneOffer
+              offer={product.offers[0]}
+              now={now}
+              listingCount={shop?.listing_count}
+              title={title}
+              page={absoluteUrl(path)}
+            />
           )}
         </div>
 
@@ -450,10 +458,15 @@ function OneOffer({
   offer,
   now,
   listingCount,
+  title,
+  page,
 }: {
   offer: Offer;
   now: Date;
   listingCount?: number;
+  /** The product's title and its page's absolute URL, for "Something wrong?". */
+  title: string;
+  page: string;
 }) {
   const verified = parseVerified(offer.last_verified_at);
   const stale = verified !== null && freshnessTier(verified, now) === "warn";
@@ -507,7 +520,59 @@ function OneOffer({
           <ChevronRight aria-hidden="true" className="size-[18px] shrink-0 text-ink-2" />
         </Link>
       )}
+      {/* Beside the card, not in it: the card is one link to the shop page. */}
+      {supplier && (
+        <>
+          <ContactButtons
+            reach={supplier.contact}
+            shop={supplier.slug}
+            shopName={supplier.name}
+            className="mt-3"
+          />
+          <ReportLink
+            shop={supplier.slug}
+            shopName={supplier.name}
+            product={title}
+            page={page}
+            className="mt-1"
+          />
+        </>
+      )}
     </>
+  );
+}
+
+/**
+ * Several shops: each, once, with how to reach it, under the offers (rather
+ * than on every row of a shop with several), and the way to report anything
+ * wrong on the page.
+ */
+function ShopsContact({ product, title, page }: { product: Product; title: string; page: string }) {
+  const shops = new Map<string, { slug: string; name: string; reach: Offer["supplier"] }>();
+  for (const offer of product.offers) {
+    if (offer.supplier && !shops.has(offer.supplier.slug)) {
+      shops.set(offer.supplier.slug, {
+        slug: offer.supplier.slug,
+        name: offer.supplier.name,
+        reach: offer.supplier,
+      });
+    }
+  }
+  const list = [...shops.values()];
+  if (list.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <ShopContactList
+        shops={list.map(({ slug, name, reach }) => ({ slug, name, reach: reach?.contact }))}
+      />
+      <ReportLink
+        shop={list[0].slug}
+        shopName={list.map((s) => s.name).join(", ")}
+        product={title}
+        page={page}
+        className="mt-1"
+      />
+    </div>
   );
 }
 

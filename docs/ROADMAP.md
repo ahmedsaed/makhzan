@@ -157,6 +157,10 @@ configuration"). The tests are supplier-agnostic, crosswalks are TOML data behin
 a loader, and suppliers are rows in a table, so none of it needs code here.
 
 ### 5. Deferred
+- **Drop `suppliers.phone`.** Migration `2b656e4b5adc` (shop contact details)
+  replaced it with `phones` but kept the column, because the release still serving
+  while `migrate` runs selects it. Once a release without it in the ORM is live,
+  a migration drops it (expand/contract; docs/DEPLOYMENT.md).
 - Supplier self-serve portal and "claim your shop" (PLAN Phase 3).
 - Staleness-decay freshness policy (PLAN Phase 4).
 - Proxy / multi-IP egress, so partitions of one source can be swept in parallel.

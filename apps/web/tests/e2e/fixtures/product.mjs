@@ -18,7 +18,7 @@ const CATEGORY = {
   name_ar: null,
 };
 
-const shop = (slug, name) => ({
+const shop = (slug, name, contact = null) => ({
   id: `sup-${slug}`,
   slug,
   name,
@@ -26,10 +26,16 @@ const shop = (slug, name) => ({
   area: null,
   governorate: null,
   website_url: `https://${slug}.test`,
+  contact,
 });
 
-const VOLT = shop("volt-corner", "Volt Corner");
-const NILE = shop("nile-parts", "Nile Parts");
+// How each shop can be reached from an offer: every way, a phone only, none.
+const VOLT = shop("volt-corner", "Volt Corner", {
+  phone: "+20223456789",
+  whatsapp: "+201001234567",
+  email: "sales@volt-corner.test",
+});
+const NILE = shop("nile-parts", "Nile Parts", { phone: "19123", whatsapp: null, email: null });
 const DELTA = shop("delta-bench", "Delta Bench");
 
 /** Where the cached-thumbnail photos live; the spec intercepts this host. */

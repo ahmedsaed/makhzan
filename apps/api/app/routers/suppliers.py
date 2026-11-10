@@ -12,7 +12,8 @@ from collections import defaultdict
 
 from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
-from makhzan_schemas.contracts import HEAVY_DETAILS, ListingRead, public_contact
+from makhzan_schemas.contact import resolve_contact
+from makhzan_schemas.contracts import HEAVY_DETAILS, ListingRead
 from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import Category, Listing, Supplier
 from makhzan_schemas.search import category_ref
@@ -35,11 +36,6 @@ _IN_STOCK = Listing.stock_signal == StockSignal.IN_STOCK
 #: would multiply the payload by up to fifty fields a row. The shop's contact is
 #: on its profile, once, not repeated on every row.
 _ROW_EXCLUDE: dict = {**{field: True for field in HEAVY_DETAILS}, "supplier": {"contact"}}
-
-
-def _contact_json(supplier: Supplier) -> dict | None:
-    contact = public_contact(supplier.contact)
-    return contact.model_dump(mode="json") if contact else None
 
 
 async def _get_supplier(session: AsyncSession, slug: str) -> Supplier:
@@ -145,15 +141,18 @@ async def get_supplier(slug: str, session: AsyncSession = Depends(get_session)) 
             .limit(TOP_CATEGORIES)
         )
     ).all()
+    # How to reach the shop, as the shop publishes it: what a person listed
+    # from its pages first, what the crawler read filling the gaps, and which
+    # came from where and when (makhzan_schemas.contact).
+    contact = resolve_contact(supplier)
     return {
         "slug": supplier.slug,
         "name": supplier.name,
         "name_ar": supplier.name_ar,
-        "area": supplier.area,
-        "governorate": supplier.governorate,
+        "area": contact.area if contact else None,
+        "governorate": contact.governorate if contact else None,
         "website_url": supplier.website_url,
-        # As the shop publishes it, read from its own pages once a cycle.
-        "contact": _contact_json(supplier),
+        "contact": contact.model_dump(mode="json") if contact else None,
         **_summary(supplier, activity, domains),
         "top_categories": [
             {

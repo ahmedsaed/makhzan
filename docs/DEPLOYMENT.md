@@ -30,7 +30,11 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
   queues a shared regroup-and-reindex when it ends; the first of those each day
   also retires product redirects unused for a year.
 - **migrate** is a one-shot service that runs `alembic upgrade head` on every
-  deploy before api/ingestion start.
+  deploy before api/ingestion start. The previous release keeps serving while it
+  runs, so a migration must not drop or rename anything that release reads:
+  add the new column in one release and drop the old one in a later one
+  (expand/contract). `suppliers.phone` is waiting on that second step
+  (docs/ROADMAP.md, Deferred).
 
 Images: CI pushes `ghcr.io/<owner>/makhzan/{api,web,ingestion}`. The server pulls
 them (it can also `docker compose ... build` if you prefer).

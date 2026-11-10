@@ -107,6 +107,28 @@ test("the product page's controls", async ({ page }) => {
 
   await page.goto("/products/p-specs");
   await expectTappable(page, { "datasheet link": page.locator("[data-datasheet]").first() });
+
+  await page.goto("/products/p-single");
+  await expectTappable(page, {
+    "contact button": page.locator('[data-contact-links="buttons"] a').first(),
+  });
+  await page.goto("/products/p-multi");
+  await expectTappable(page, {
+    "shop contact link": page.locator("[data-shop-contact-line] a[data-contact]").first(),
+    "report link": page.locator("[data-report] a"),
+  });
+});
+
+test("a shop page's contact links", async ({ page }) => {
+  await page.goto("/shops/shop-a");
+  const contact = page.locator("[data-shop-contact]");
+  await expectTappable(page, {
+    phone: contact.locator('a[data-contact="phone"]').first(),
+    whatsapp: contact.locator('a[data-contact="whatsapp"]'),
+    email: contact.locator('a[data-contact="email"]'),
+    map: contact.locator('a[data-contact="map"]').first(),
+    report: contact.locator('a[data-contact="report"]'),
+  });
 });
 
 test("nothing scrolls sideways at 320px on the department pages", async ({ page }) => {
