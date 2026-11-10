@@ -61,11 +61,37 @@ if [ "${SKIP_PULL:-0}" != "1" ]; then
 fi
 echo "    configuration at $(git -C "$config_dir" log -1 --format='%h %s')"
 
+# The image the running web container was started from, before the pull.
+web_image="$(set -a; . ./.env.prod; set +a; echo "${IMAGE_PREFIX}/web:${IMAGE_TAG}")"
+web_container="$("${COMPOSE[@]}" ps -q web 2>/dev/null || true)"
+web_before="$([ -n "$web_container" ] && docker inspect -f '{{.Image}}' "$web_container" 2>/dev/null || true)"
+
 echo "==> Pulling images"
 "${COMPOSE[@]}" pull
 
+# The web app caches API responses (Next's data cache, the `revalidate` results)
+# in the web_cache volume, which outlives the container so a restart starts
+# warm. Across a new web image that is a hazard: the new code reads responses
+# the old API shaped. The shop contact release did exactly that: three shop
+# pages failed for up to five minutes, until each cached response expired.
+# So a new web image gets that cache cleared once it is up (below); a plain
+# restart keeps it. Not before `up`: the old container would refill it from the
+# old API while migrations run, and stopping it early would lengthen the outage.
+web_after="$(docker image inspect -f '{{.Id}}' "$web_image" 2>/dev/null || true)"
+
 echo "==> Starting stack (migrations run first via 'migrate' service)"
 "${COMPOSE[@]}" up -d
+
+if [ -n "$web_before" ] && [ "$web_before" != "$web_after" ]; then
+  # Cleared, then restarted: Next also holds recent entries in memory, and the
+  # new container may have read old ones from disk in its first seconds.
+  echo "==> New web image: clearing its cached API responses"
+  if "${COMPOSE[@]}" exec -T web sh -c 'rm -rf /app/.next/cache/fetch-cache'; then
+    "${COMPOSE[@]}" restart web
+  else
+    echo "    (could not clear it; cached responses expire within minutes)"
+  fi
+fi
 
 echo "==> Pruning dangling images"
 docker image prune -f >/dev/null
