@@ -1,13 +1,17 @@
 """supplier listed contact
 
-How to reach a shop, as a person read it off the shop's own pages and entered
-it in sources.toml (`worker.sources.sync` writes it on every deploy): email,
-the shop's own map link, opening hours, further branches, and where and when
-the details were read.
+How to reach a shop, as a person read it where the shop's details are
+published (its site, its Facebook, its Google Maps listing) and entered it in
+sources.toml (`worker.sources.sync` writes it on every deploy): a list of
+phones, email, a map link, opening hours, further branches, and
+`contact_sources`, where and when each detail was read.
 
-`phone` (one number, never written by anything) becomes `phones`, a list: a
-shop with two landlines is common. Any value already there is carried over as
-a one-number list, although the next sync rewrites it from the file anyway.
+Expand only. `phone` (one number, never written by anything) is replaced by
+`phones`, and any value in it is copied over, but the column stays: while
+`migrate` runs, the release before this one is still serving, and its ORM
+selects `phone` with every supplier. Dropping it here would answer those
+requests with 500s for the length of the deploy. The ORM no longer maps it;
+a later migration, once no running release does, drops it (docs/ROADMAP.md).
 
 Revision ID: 2b656e4b5adc
 Revises: b7d41c2e9a10
@@ -35,19 +39,14 @@ def upgrade() -> None:
     op.add_column("suppliers", sa.Column("maps_url", sa.Text(), nullable=True))
     op.add_column("suppliers", sa.Column("opening_hours", postgresql.JSONB(), nullable=True))
     op.add_column("suppliers", sa.Column("branches", postgresql.JSONB(), nullable=True))
-    op.add_column("suppliers", sa.Column("contact_source_url", sa.Text(), nullable=True))
-    op.add_column("suppliers", sa.Column("contact_checked_on", sa.Date(), nullable=True))
+    op.add_column("suppliers", sa.Column("contact_sources", postgresql.JSONB(), nullable=True))
     op.execute("UPDATE suppliers SET phones = jsonb_build_array(phone) WHERE phone IS NOT NULL")
-    op.drop_column("suppliers", "phone")
+    # `phone` is kept on purpose; see the docstring.
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.add_column("suppliers", sa.Column("phone", sa.VARCHAR(length=40), nullable=True))
-    # The first number only: the column held one.
-    op.execute("UPDATE suppliers SET phone = left(phones ->> 0, 40) WHERE phones IS NOT NULL")
-    op.drop_column("suppliers", "contact_checked_on")
-    op.drop_column("suppliers", "contact_source_url")
+    op.drop_column("suppliers", "contact_sources")
     op.drop_column("suppliers", "branches")
     op.drop_column("suppliers", "opening_hours")
     op.drop_column("suppliers", "maps_url")
