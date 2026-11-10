@@ -42,6 +42,11 @@
   /* Behind the photo viewer: near-black in both themes, so the white frame
    * is the brightest thing on screen and nothing competes with the photo. */
   --scrim: #0b0c0e;
+  /* The badge naming the shop a photo comes from, drawn over the photo at
+   * 80% (PhotoFrame). Fixed in both themes, like the frame it sits on: it is
+   * read against the photo, not the page. */
+  --photo-tag: #15171c;
+  --photo-tag-ink: #ffffff;
   /* The filled compartment of the logo's organizer grid. The same orange as
    * `action` today, named apart so the mark never changes with a button. */
   --brand: #c2410c;
@@ -74,6 +79,8 @@
   --age-muted: #d9c46c;
   --photo-frame: #ffffff;
   --scrim: #0b0c0e;
+  --photo-tag: #15171c;
+  --photo-tag-ink: #ffffff;
   --brand: #c2410c;
   --pattern: #24262b;
 }
@@ -128,6 +135,8 @@
   --color-age-muted: var(--age-muted);
   --color-photo-frame: var(--photo-frame);
   --color-scrim: var(--scrim);
+  --color-photo-tag: var(--photo-tag);
+  --color-photo-tag-ink: var(--photo-tag-ink);
   --color-brand: var(--brand);
   --color-pattern: var(--pattern);
 

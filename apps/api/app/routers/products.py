@@ -32,7 +32,11 @@ async def get_product(
     offers, and the last price range seen. One merged into another is a 404
     here; `/products/{id}/redirect` says where it went.
     """
-    product = await session.get(Product, product_id, options=[selectinload(Product.category)])
+    product = await session.get(
+        Product,
+        product_id,
+        options=[selectinload(Product.category), selectinload(Product.image_supplier)],
+    )
     if product is None or product.merged_into is not None:
         raise HTTPException(status_code=404, detail="product not found")
 
@@ -59,6 +63,7 @@ async def get_product(
         title_ar=product.title_ar,
         brand=product.brand,
         image=product.image,
+        image_shop=product.image_supplier if product.image else None,
         supplier_count=product.supplier_count,
         offer_count=product.offer_count,
         min_price=product.min_price,
@@ -177,7 +182,7 @@ async def similar_products(
             await session.execute(
                 select(Product)
                 .where(scope, Product.id != product_id, Product.is_listed())
-                .options(selectinload(Product.category))
+                .options(selectinload(Product.category), selectinload(Product.image_supplier))
                 .order_by(*order)
                 .limit(limit)
             )

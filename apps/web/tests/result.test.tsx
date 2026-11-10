@@ -92,6 +92,48 @@ describe.each([
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute("href", "/products/prod-1");
   });
+
+  it("credits a photo to the shop it comes from, which need not be the shop named", () => {
+    const { container } = renderIn(Component, {
+      ...hit,
+      image: "https://shop-b.test/esp32.jpg",
+      image_shop: { slug: "shop-b", name: "Shop B" },
+    });
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("alt", `${hit.title_en} — photo from Shop B`);
+    // Still one link: the badge is not a way to the shop (P1).
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+  });
+
+  it("renders a photo without a credit when the hit predates image_shop", () => {
+    const { container } = renderIn(Component, { ...hit, image: "https://shop-b.test/esp32.jpg" });
+    expect(container.querySelector("img")).toHaveAttribute("alt", hit.title_en!);
+    expect(container.querySelector("[data-photo-shop]")).toBeNull();
+  });
+});
+
+describe("the photo's shop badge on results", () => {
+  const pictured: SearchHit = {
+    ...hit,
+    image: "https://shop-b.test/esp32.jpg",
+    image_shop: { slug: "shop-b", name: "Shop B" },
+  };
+
+  it("is drawn on a grid card's photo", () => {
+    const { container } = renderIn(ResultCard, pictured);
+    expect(container.querySelector("[data-photo-shop]")).toHaveTextContent("Shop B");
+  });
+
+  it("is left off a list row's 72px thumbnail, which credits the shop in alt and title", () => {
+    const { container } = renderIn(ResultRow, pictured);
+    expect(container.querySelector("[data-photo-shop]")).toBeNull();
+    expect(container.querySelector("img")).toHaveAttribute("title", "Photo from Shop B");
+  });
+
+  it("is never drawn over the placeholder", () => {
+    const { container } = renderIn(ResultCard, { ...pictured, image: null });
+    expect(container.querySelector("[data-photo-shop]")).toBeNull();
+  });
 });
 
 describe("a row's shop and freshness on a phone", () => {

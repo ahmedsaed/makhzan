@@ -275,6 +275,14 @@ def _representative(items: list[Listing]) -> Listing:
     return min(items, key=score)
 
 
+def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:
+    """The listing whose first photo is the product's: the representative's
+    when it has one, else the first listing in the group that does."""
+    if rep.images:
+        return rep
+    return next((i for i in items if i.images), None)
+
+
 def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
     """Two-phase grouping: base key, then sub-cluster ambiguous family groups."""
     base: dict[str, list[Listing]] = defaultdict(list)
@@ -569,9 +577,12 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         product.brand = rep.brand
         product.category_id = rep.category_id
         product.supplier_name = rep.supplier.name if rep.supplier else None
-        product.image = (
-            rep.images[0] if rep.images else next((i.images[0] for i in items if i.images), None)
-        )
+        pictured = _pictured(rep, items)
+        product.image = pictured.images[0] if pictured else None
+        # The photo's own shop, read off the listing it was taken from: the
+        # badge on it names whose photo it is, which is not always the shop
+        # `supplier_name` names.
+        product.image_supplier_id = pictured.supplier_id if pictured else None
         product.offer_count = len(items)
         product.supplier_count = len({i.supplier_id for i in items})
         # The price a result card shows, sorts and filters by: the fresh offers'
