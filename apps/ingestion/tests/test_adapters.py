@@ -432,4 +432,4 @@ def test_the_contact_address_is_on_a_domain_that_receives_mail():
     """It used to name a domain that does not exist, so every message a supplier
     sent us bounced — contactable on paper only. Pinned so it is changed on
     purpose, alongside the README and the probe script that repeat it."""
-    assert BROWSER_HEADERS["From"] == "crawler@merope.dev"
+    assert BROWSER_HEADERS["From"] == "crawler@makhzan.merope.dev"

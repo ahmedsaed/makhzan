@@ -16,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -525,6 +526,26 @@ class SourceCursor(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class RobotsCopy(Base):
+    """The last robots.txt read successfully from each host, kept across restarts.
+
+    When a host's robots.txt cannot be read (a 5xx, a 429, a timeout), RFC 9309
+    §2.3.1.4 says to assume complete disallow; the crawler instead uses this
+    copy for up to 30 days (worker/robots.py). It lived in memory only, so the
+    first blip after a deploy refused the host for the day. One row per host,
+    so concurrent sources never overwrite each other's.
+    """
+
+    __tablename__ = "robots_copies"
+
+    #: `worker.http.host_of()`: `scheme://host[:port]`, the pace gate's key.
+    host: Mapped[str] = mapped_column(Text, primary_key=True)
+    #: The file as read, or None when the host answered 4xx ("no rules").
+    body: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[int] = mapped_column(Integer, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class WorkerState(Base):
