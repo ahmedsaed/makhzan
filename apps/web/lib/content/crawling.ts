@@ -52,7 +52,7 @@ export type CrawlingContent = {
  * a domain with no mail records, so a shop that wrote in got a bounce — the
  * worst possible answer to "who are you?".
  */
-export const CONTACT_EMAIL = "crawler@merope.dev";
+export const CONTACT_EMAIL = "crawler@makhzan.merope.dev";
 
 export const crawlingContent: CrawlingContent = {
   title: "How we crawl",

@@ -178,7 +178,7 @@ test("for suppliers offers four requests, each an email to the crawler's address
       .getAttribute("href");
     expect(href).not.toBeNull();
     const url = new URL(href!);
-    expect(url.pathname).toBe("crawler@merope.dev");
+    expect(url.pathname).toBe("crawler@makhzan.merope.dev");
     expect(url.searchParams.get("subject")).toBe(subject);
     expect(url.searchParams.get("body")).toContain("Shop name:");
   }

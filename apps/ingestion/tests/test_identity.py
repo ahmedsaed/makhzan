@@ -101,9 +101,9 @@ def test_makhzanbot_is_honest_and_names_the_site(site):
     identity = identity_for(MAKHZANBOT)
     headers = identity.headers
     assert headers["User-Agent"] == (
-        "makhzanbot/1.0 (+https://makhzan.test/how-we-crawl; crawler@merope.dev)"
+        "makhzanbot/1.0 (+https://makhzan.test/how-we-crawl; crawler@makhzan.merope.dev)"
     )
-    assert headers["From"] == "crawler@merope.dev"
+    assert headers["From"] == "crawler@makhzan.merope.dev"
     assert not any(k.lower().startswith(("sec-ch-ua", "sec-fetch")) for k in headers)
     assert "Mozilla" not in headers["User-Agent"]
     assert identity.signed is False  # no key configured

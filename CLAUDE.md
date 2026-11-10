@@ -370,7 +370,7 @@ our client gets 429 is still the tell; the response now is the honest identity.
 
 **Identity is per source: `browser` (default) or `makhzanbot`** (`worker/identity.py`,
 `docs/crawler-identity.md`). makhzanbot sends `makhzanbot/1.0 (+<SITE_URL>/how-we-crawl;
-crawler@merope.dev)`, no client hints, and — with `MAKHZANBOT_SIGNING_KEY` set —
+crawler@makhzan.merope.dev)`, no client hints, and — with `MAKHZANBOT_SIGNING_KEY` set —
 a Web Bot Auth signature on every request (`makhzan_schemas/botauth.py`; the API
 publishes the key at `/.well-known/http-message-signatures-directory`). The
 identity is a context variable the pipeline sets for the run, so every client
