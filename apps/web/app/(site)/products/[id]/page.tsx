@@ -4,6 +4,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { preconnect } from "react-dom";
 
 import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
+import { ContactLinks } from "@/components/contact-links";
 import { Freshness, StaleNote } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { PhotoFrame } from "@/components/photo-frame";
@@ -506,6 +507,16 @@ function OneOffer({
           </span>
           <ChevronRight aria-hidden="true" className="size-[18px] shrink-0 text-ink-2" />
         </Link>
+      )}
+      {/* Beside the card, not in it: the card is one link to the shop page. */}
+      {supplier && (
+        <ContactLinks
+          reach={supplier.contact}
+          shop={supplier.slug}
+          shopName={supplier.name}
+          variant="buttons"
+          className="mt-3"
+        />
       )}
     </>
   );

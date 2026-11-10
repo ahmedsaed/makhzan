@@ -750,16 +750,71 @@ test("every link out of makhzan carries ref=makhzan (P4)", async ({ page }) => {
     "/shops/shop-a",
   ]) {
     await page.goto(path);
+    // A way to reach the shop (its WhatsApp, its own map link) is P4's one
+    // exception: the shop's own route to itself, not a page of its site.
     const external = await page
-      .locator('a[href^="http"]:not([href^="https://merope.dev"])')
+      .locator('a[href^="http"]:not([href^="https://merope.dev"]):not([data-contact])')
       .evaluateAll((links) => links.map((a) => a.getAttribute("href")));
     expect(external.length, path).toBeGreaterThan(0);
     for (const href of external) expect(href, path).toContain("ref=makhzan");
+    const contact = await page
+      .locator("a[data-contact]")
+      .evaluateAll((links) =>
+        links.map((a) => [a.getAttribute("data-contact"), a.getAttribute("href")]),
+      );
+    const expected: Record<string, RegExp> = {
+      whatsapp: /^https:\/\/wa\.me\/\d+$/,
+      phone: /^tel:(\+\d+|1\d{4})$/,
+      email: /^mailto:/,
+      map: /^https:\/\//,
+    };
+    for (const [kind, href] of contact) {
+      expect(href, `${path} ${kind}`).toMatch(expected[kind ?? ""] ?? /^$-never/);
+    }
   }
+});
+
+test.describe("contacting the shop", () => {
+  test("one shop: WhatsApp, a call and email under Sold by", async ({ page }) => {
+    await page.goto("/products/p-single");
+    const links = page.locator('[data-contact-links="buttons"]');
+    await expect(links).toContainText("Contact Volt Corner directly");
+    await expect(links.getByRole("link", { name: "WhatsApp Volt Corner" })).toHaveAttribute(
+      "href",
+      "https://wa.me/201001234567",
+    );
+    const call = links.getByRole("link", { name: "Call Volt Corner on 02 2345 6789" });
+    await expect(call).toHaveAttribute("href", "tel:+20223456789");
+    await expect(call).toHaveText("Call 02 2345 6789");
+    await expect(links.getByRole("link", { name: "Email Volt Corner" })).toHaveAttribute(
+      "href",
+      "mailto:sales@volt-corner.test",
+    );
+    // Beside the Sold by card, not inside its link.
+    await expect(page.locator("[data-sold-by] [data-contact]")).toHaveCount(0);
+  });
+
+  test("several shops: each offer says how to reach its own shop, or nothing", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    const nile = page.locator('[data-offer="o-m3"]');
+    await expect(nile.locator("[data-contact]")).toHaveCount(1);
+    await expect(nile.getByRole("link", { name: "Call Nile Parts on 19123" })).toHaveAttribute(
+      "href",
+      "tel:19123",
+    );
+    // Delta Bench publishes no way to reach it: no empty "Contact:" line.
+    const delta = page.locator('[data-offer="o-m1"]');
+    await expect(delta.locator("[data-contact-links]")).toHaveCount(0);
+    // The price and View keep their place on the row's first two lines.
+    const view = await nile.getByRole("link", { name: "View at Nile Parts" }).boundingBox();
+    const contact = await nile.locator("[data-contact-links]").boundingBox();
+    expect(contact!.y).toBeGreaterThanOrEqual(view!.y + view!.height);
+  });
 });
 
 test("nothing scrolls sideways at 320px", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
+  // p-single and p-multi carry the contact buttons and lines.
   for (const path of [
     "/products/p-single",
     "/products/p-multi",

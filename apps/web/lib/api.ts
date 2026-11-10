@@ -52,6 +52,54 @@ export type Supplier = {
   area: string | null;
   governorate: string | null;
   website_url: string | null;
+  /** The ways to reach the shop an offer row needs. Optional so the page keeps
+   *  working against an API that predates it. */
+  contact?: ShopReach | null;
+};
+
+/** A shop's first phone, WhatsApp and email, as an offer carries them. Numbers
+ *  are E.164 (or a five-digit hotline); lib/contact.ts formats them. */
+export type ShopReach = {
+  phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
+};
+
+/** One more place a shop trades from. */
+export type ShopBranch = {
+  name: string | null;
+  address: string | null;
+  area: string | null;
+  governorate: string | null;
+  phones: string[];
+  maps_url: string | null;
+};
+
+/**
+ * Where some of a shop's contact details came from: "listed" by a person from
+ * the shop's own pages, or "read" by the crawler from its structured data, the
+ * page, the day, and which fields it supplied.
+ */
+export type ContactSource = {
+  origin: "listed" | "read";
+  url: string | null;
+  /** An ISO day, "2026-11-03". */
+  checked_on: string | null;
+  fields: string[];
+};
+
+/** How to reach a shop, one value per field, listed values ahead of the crawler's. */
+export type ShopContact = {
+  phones: string[];
+  whatsapp: string | null;
+  email: string | null;
+  address: string | null;
+  area: string | null;
+  governorate: string | null;
+  maps_url: string | null;
+  opening_hours: string[];
+  branches: ShopBranch[];
+  sources: ContactSource[];
 };
 
 /** One shop as `/suppliers` lists it. Counts cover active listings only, and
@@ -72,6 +120,8 @@ export type ShopSummary = {
 export type SupplierProfile = ShopSummary & {
   area: string | null;
   governorate: string | null;
+  /** How to reach it; null when nothing is known. Optional for an older API. */
+  contact?: ShopContact | null;
   /** Its largest categories, biggest first. */
   top_categories: { ref: string; name_en: string; name_ar: string | null; count: number }[];
 };

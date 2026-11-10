@@ -14,11 +14,17 @@ export function Container({
 export function SectionHeading({
   children,
   className,
+  id,
 }: {
   children: React.ReactNode;
   className?: string;
+  id?: string;
 }) {
-  return <h2 className={cn("mb-3 text-lg text-ink", className)}>{children}</h2>;
+  return (
+    <h2 id={id} className={cn("mb-3 text-lg text-ink", className)}>
+      {children}
+    </h2>
+  );
 }
 
 export function Empty({ title, hint }: { title: string; hint?: string }) {
