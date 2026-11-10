@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from makhzan_schemas.contact import email_address, https_url, phone_number
+from makhzan_schemas.contact import email_address, https_url, map_url, phone_number
 from makhzan_schemas.contracts import NormalizedListing, RawItem
 from makhzan_schemas.domains.base import DEFAULT_DOMAIN
 from makhzan_schemas.enums import SourceType
@@ -128,8 +128,26 @@ class DetailsSettings:
 #: The keys a `[[source.supplier.branches]]` entry may have.
 _BRANCH_KEYS = frozenset({"name", "address", "area", "governorate", "phone", "maps_url"})
 
-#: Contact fields that must say where and when a person read them.
-_NEEDS_SOURCE = ("phone", "whatsapp", "email", "address", "maps_url", "opening_hours", "branches")
+#: The keys a `[[source.supplier.contact_sources]]` entry may have.
+_SOURCE_KEYS = frozenset({"url", "checked_on", "fields"})
+
+#: A contact field's name in sources.toml → its Supplier column, which is also
+#: its name in the resolved contact (makhzan_schemas.contact.FIELDS).
+_CONTACT_FIELDS = {
+    "phone": "phones",
+    "whatsapp": "whatsapp",
+    "email": "email",
+    "address": "address",
+    "area": "area",
+    "governorate": "governorate",
+    "maps_url": "maps_url",
+    "opening_hours": "opening_hours",
+    "branches": "branches",
+}
+
+#: Fields a shop may list with no source at all, because they predate sources.
+#: Once a shop has any source, these need one too.
+_UNSOURCED_OK = frozenset({"area", "governorate"})
 
 
 def _optional_text(name: str, value: object) -> str | None:
@@ -166,10 +184,20 @@ def _https_setting(name: str, value: object) -> str | None:
     return url
 
 
-def _checked_on(value: object) -> date | None:
+def _map_setting(name: str, value: object) -> str | None:
+    """A map link: https, and on Google or Apple Maps (makhzan_schemas.contact.map_url)."""
     if value is None:
         return None
-    problem = f"supplier.contact_checked_on must be a date like 2026-11-10, got {value!r}"
+    url = map_url(value)
+    if url is None:
+        raise ValueError(
+            f"supplier.{name} must be an https:// Google Maps or Apple Maps link, got {value!r}"
+        )
+    return url
+
+
+def _checked_on(name: str, value: object) -> date:
+    problem = f"supplier.{name} must be a date like 2026-11-10, got {value!r}"
     if isinstance(value, datetime) or not isinstance(value, str | date):
         raise TypeError(problem)
     if isinstance(value, str):
@@ -179,7 +207,7 @@ def _checked_on(value: object) -> date | None:
             raise ValueError(problem) from exc
     # A day's grace: the day is Cairo's, the server's clock UTC.
     if value > date.today() + timedelta(days=1):
-        raise ValueError(f"supplier.contact_checked_on is in the future: {value}")
+        raise ValueError(f"supplier.{name} is in the future: {value}")
     return value
 
 
@@ -196,30 +224,71 @@ def _branch(index: int, value: object) -> dict:
         "area": _optional_text(f"{where}.area", value.get("area")),
         "governorate": _optional_text(f"{where}.governorate", value.get("governorate")),
         "phones": _phone_list(f"{where}.phone", value.get("phone")),
-        "maps_url": _https_setting(f"{where}.maps_url", value.get("maps_url")),
+        "maps_url": _map_setting(f"{where}.maps_url", value.get("maps_url")),
     }
     if not (branch["address"] or branch["phones"]):
         raise ValueError(f"supplier.{where} needs an address or a phone")
     return {k: v for k, v in branch.items() if v is not None}
 
 
+def _contact_source(index: int, value: object, listed: list[str]) -> dict:
+    where = f"contact_sources[{index}]"
+    if not isinstance(value, dict):
+        raise TypeError(f"supplier.{where} must be a table, got {value!r}")
+    unknown = set(value) - _SOURCE_KEYS
+    if unknown:
+        raise TypeError(f"supplier.{where}: unknown key(s) {sorted(unknown)}")
+    missing = _SOURCE_KEYS - set(value)
+    if missing:
+        raise TypeError(f"supplier.{where} is missing {sorted(missing)}")
+    fields = value["fields"]
+    if not isinstance(fields, list) or not fields or not all(isinstance(f, str) for f in fields):
+        raise TypeError(f'supplier.{where}.fields must be a list of field names, like ["phone"]')
+    for name in fields:
+        if name not in _CONTACT_FIELDS:
+            raise ValueError(
+                f"supplier.{where}.fields: {name!r} is not a contact field "
+                f"(one of {', '.join(_CONTACT_FIELDS)})"
+            )
+        if name not in listed:
+            raise ValueError(
+                f"supplier.{where}.fields names {name!r}, which the shop does not list"
+            )
+    if len(set(fields)) != len(fields):
+        raise ValueError(f"supplier.{where}.fields names a field twice")
+    url = https_url(value["url"])
+    if url is None:
+        raise ValueError(f"supplier.{where}.url must be an https:// link, got {value['url']!r}")
+    return {
+        "url": url,
+        "checked_on": _checked_on(f"{where}.checked_on", value["checked_on"]).isoformat(),
+        "fields": fields,
+    }
+
+
 @dataclass(frozen=True)
 class SupplierInfo:
     """Static description of the shop an adapter represents: its source's `supplier` table.
 
-    Beyond who the shop is, it holds how to reach it, as a person read that off
-    the shop's own pages: `phone` (one number or a list, the one to call
+    Beyond who the shop is, it holds how to reach it, as a person read that
+    where the shop's details are published (its site, its Facebook page, its
+    Google Maps listing): `phone` (one number or a list, the one to call
     first first), `whatsapp`, `email`, `address` with `area` and `governorate`,
-    the shop's own `maps_url`, `opening_hours` (lines as the shop words them),
-    and `branches`, further places it trades from, each {name, address, area,
-    governorate, phone, maps_url}. Any of those needs `contact_source_url` and
-    `contact_checked_on`, the page they were read from and the day, which the
-    shop page shows beside them. `area` and `governorate` alone do not: they
-    predate the rest.
+    a Google or Apple Maps `maps_url`, `opening_hours` (lines as the shop words
+    them), and `branches`, further places it trades from, each {name, address,
+    area, governorate, phone, maps_url}.
+
+    Every one of those names where and when it was read, in `contact_sources`:
+    one {url, checked_on, fields} table a page, each field named by exactly one,
+    so the shop page can say "Address from Google Maps" and not pass a listing
+    the shop never claimed off as its own. `contact_source_url` with
+    `contact_checked_on` is the shorthand for one page that gave everything.
+    `area` and `governorate` alone need no source: they predate the rest.
 
     Checked here, when sources.toml is synced, so a number that cannot be
-    dialled or a link that is not https fails the deploy instead of reaching a
-    page. Numbers are kept in E.164 (makhzan_schemas.contact.phone_number).
+    dialled, a link that is not https or a field nobody can vouch for fails the
+    deploy instead of reaching a page. Numbers are kept in E.164
+    (makhzan_schemas.contact.phone_number).
     """
 
     slug: str
@@ -239,6 +308,7 @@ class SupplierInfo:
     maps_url: str | None = None
     opening_hours: list[str] | None = None
     branches: list[dict] | None = None
+    contact_sources: list[dict] | None = None
     contact_source_url: str | None = None
     contact_checked_on: str | date | None = None
 
@@ -252,14 +322,16 @@ class SupplierInfo:
         if self.whatsapp is not None:
             numbers = _phone_list("whatsapp", self.whatsapp)
             if not isinstance(self.whatsapp, str) or len(numbers[0]) <= 5:
-                raise ValueError(f"supplier.whatsapp must be one mobile number: {self.whatsapp!r}")
+                raise ValueError(
+                    "supplier.whatsapp must be one number that takes WhatsApp (a mobile, or a "
+                    f"landline on WhatsApp Business), not a list or a hotline: {self.whatsapp!r}"
+                )
             put("whatsapp", numbers[0])
         if self.email is not None:
             if email_address(self.email) is None:
                 raise ValueError(f"supplier.email is not an email address: {self.email!r}")
             put("email", email_address(self.email))
-        put("maps_url", _https_setting("maps_url", self.maps_url))
-        put("contact_source_url", _https_setting("contact_source_url", self.contact_source_url))
+        put("maps_url", _map_setting("maps_url", self.maps_url))
         if self.opening_hours is not None:
             if not isinstance(self.opening_hours, list) or not self.opening_hours:
                 raise TypeError(
@@ -270,14 +342,63 @@ class SupplierInfo:
             if not isinstance(self.branches, list) or not self.branches:
                 raise TypeError("supplier.branches must be [[source.supplier.branches]] tables")
             put("branches", [_branch(i, b) for i, b in enumerate(self.branches, 1)])
-        put("contact_checked_on", _checked_on(self.contact_checked_on))
+        put("contact_sources", self._sources())
 
-        listed = [n for n in _NEEDS_SOURCE if getattr(self, n) is not None]
-        if listed and (self.contact_source_url is None or self.contact_checked_on is None):
+    def _sources(self) -> list[dict] | None:
+        """`contact_sources`, checked and stored by column name; None when there are none."""
+        listed = [name for name in _CONTACT_FIELDS if getattr(self, name) is not None]
+        shorthand = self.contact_source_url is not None or self.contact_checked_on is not None
+        if shorthand and self.contact_sources is not None:
             raise ValueError(
-                f"supplier {self.slug!r} lists {', '.join(listed)} without where and when they "
-                "were read: add contact_source_url and contact_checked_on"
+                f"supplier {self.slug!r}: give contact_sources, or the shorthand "
+                "contact_source_url and contact_checked_on, not both"
             )
+        if shorthand:
+            if self.contact_source_url is None or self.contact_checked_on is None:
+                raise ValueError(
+                    f"supplier {self.slug!r}: contact_source_url and contact_checked_on go together"
+                )
+            if not listed:
+                raise ValueError(f"supplier {self.slug!r} names a contact source for no details")
+            entries = [
+                {
+                    "url": _https_setting("contact_source_url", self.contact_source_url),
+                    "checked_on": _checked_on(
+                        "contact_checked_on", self.contact_checked_on
+                    ).isoformat(),
+                    "fields": listed,
+                }
+            ]
+        elif self.contact_sources is not None:
+            if not isinstance(self.contact_sources, list) or not self.contact_sources:
+                raise TypeError(
+                    "supplier.contact_sources must be [[source.supplier.contact_sources]] tables"
+                )
+            entries = [
+                _contact_source(i, entry, listed) for i, entry in enumerate(self.contact_sources, 1)
+            ]
+        else:
+            entries = []
+
+        named = [field for entry in entries for field in entry["fields"]]
+        twice = sorted({field for field in named if named.count(field) > 1})
+        if twice:
+            raise ValueError(
+                f"supplier {self.slug!r}: {', '.join(twice)} named by more than one contact source"
+            )
+        exempt = _UNSOURCED_OK if not entries else frozenset()
+        unsourced = [name for name in listed if name not in named and name not in exempt]
+        if unsourced:
+            raise ValueError(
+                f"supplier {self.slug!r} lists {', '.join(unsourced)} without where and when "
+                "they were read: name them in a [[source.supplier.contact_sources]] table"
+            )
+        if not entries:
+            return None
+        return [
+            {**entry, "fields": [_CONTACT_FIELDS[field] for field in entry["fields"]]}
+            for entry in entries
+        ]
 
     def contact_columns(self) -> dict:
         """The Supplier columns this table owns, every one of them, None where unset.
@@ -295,8 +416,7 @@ class SupplierInfo:
             "maps_url": self.maps_url,
             "opening_hours": self.opening_hours,
             "branches": self.branches,
-            "contact_source_url": self.contact_source_url,
-            "contact_checked_on": self.contact_checked_on,
+            "contact_sources": self.contact_sources,
         }
 
 
