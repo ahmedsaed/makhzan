@@ -59,7 +59,7 @@ export const TEXT_LINK =
 
 /** An outlined contact button: 44px on phones (S4), a little tighter from `lg`. */
 const BUTTON =
-  "inline-flex h-11 items-center gap-1.5 rounded-control border-[1.5px] border-line-strong bg-surface px-3 text-sm font-semibold whitespace-nowrap text-ink hover:border-link lg:h-9";
+  "inline-flex h-11 min-w-0 items-center gap-1.5 rounded-control border-[1.5px] border-line-strong bg-surface px-3 text-sm font-semibold whitespace-nowrap text-ink hover:border-link lg:h-9";
 
 /** "Something wrong? Tell us", inline: for a line that says something else first. */
 export function ReportText({
@@ -147,21 +147,28 @@ type Action = { kind: ContactKind; href: string; label: string; text: string };
 
 /**
  * A shop's ways to be reached, in the order a buyer reaches for them: a call
- * (its first number), WhatsApp, email. The same order on the shop page and on
- * a product page.
+ * per number (the shop page passes all of them; offers carry the first),
+ * WhatsApp, email. The same order on the shop page and on a product page.
  */
 export function contactActions(
   {
     phone,
+    phones,
     whatsapp,
     email,
-  }: { phone: string | null; whatsapp: string | null; email: string | null },
+  }: {
+    phone?: string | null;
+    phones?: string[];
+    whatsapp: string | null;
+    email: string | null;
+  },
   shopName: string,
 ): Action[] {
   const actions: Action[] = [];
-  const tel = phone ? telHref(phone) : null;
-  if (phone && tel) {
-    const number = formatPhone(phone);
+  for (const each of phones ?? (phone ? [phone] : [])) {
+    const tel = telHref(each);
+    if (!tel) continue;
+    const number = formatPhone(each);
     actions.push({
       kind: "phone",
       href: tel,
@@ -200,11 +207,14 @@ function ActionButtons({
   /** Classes for one button, by its place. */
   className?: (index: number) => string | undefined;
 }) {
+  // Several numbers: the phone icon says "call" on every width, so they fit a
+  // row with WhatsApp and Email. One number keeps the word where it fits.
+  const severalNumbers = actions.filter((action) => action.kind === "phone").length > 1;
   return actions.map(({ kind, href, label, text }, index) => {
     const Icon = ICONS[kind];
     return (
       <ContactLink
-        key={kind}
+        key={href}
         kind={kind}
         shop={shop}
         href={href}
@@ -213,32 +223,43 @@ function ActionButtons({
         title={kind === "email" ? href.slice("mailto:".length) : undefined}
         className={cn(BUTTON, className?.(index))}
       >
-        <Icon aria-hidden="true" className="size-4" />
-        <span className={kind === "phone" ? "tabular" : undefined}>{text}</span>
+        <Icon aria-hidden="true" className="size-4 shrink-0" />
+        {kind === "phone" ? (
+          // Two numbers side by side do not fit a phone's half-width with the
+          // word: there the icon says "call" (and the aria-label says it all).
+          <span className="tabular">
+            <span className={severalNumbers ? "hidden" : "max-sm:hidden"}>Call </span>
+            {text.replace(/^Call /, "")}
+          </span>
+        ) : (
+          <span>{text}</span>
+        )}
       </ContactLink>
     );
   });
 }
 
 /**
- * The buttons in a row: "Call 02 2345 6789", then `extra` (the shop page's
- * other numbers, "or 02 2345 6780"), then WhatsApp and Email. On a phone the
- * call takes the width and the rest go in pairs under it, one left over taking
- * a row, so a row never ends in a stray button; from `sm` they are one row.
+ * The buttons in a row: a call button per number, then WhatsApp and Email, all
+ * the same outlined button. On a phone they go two to a row, the first taking
+ * the row when the count is odd; from `sm` they wrap as one row.
  */
 export function ContactActionsRow({
   actions,
   shop,
-  extra,
   className,
 }: {
   actions: Action[];
   shop: string;
-  extra?: ReactNode;
   className?: string;
 }) {
-  const call = actions.filter((action) => action.kind === "phone");
-  const rest = actions.filter((action) => action.kind !== "phone");
+  // Calls first, then WhatsApp and Email. On a phone they go two to a row; with
+  // an odd number the first (the main call) takes the whole row, so a row never
+  // ends in a stray button and four numbers do not stack into a column.
+  const ordered = [
+    ...actions.filter((action) => action.kind === "phone"),
+    ...actions.filter((action) => action.kind !== "phone"),
+  ];
   return (
     <div
       data-contact-actions
@@ -247,14 +268,10 @@ export function ContactActionsRow({
         className,
       )}
     >
-      <ActionButtons actions={call} shop={shop} className={() => "col-span-2"} />
-      {extra}
       <ActionButtons
-        actions={rest}
+        actions={ordered}
         shop={shop}
-        className={(index) =>
-          rest.length % 2 === 1 && index === rest.length - 1 ? "col-span-2" : undefined
-        }
+        className={(index) => (ordered.length % 2 === 1 && index === 0 ? "col-span-2" : undefined)}
       />
     </div>
   );

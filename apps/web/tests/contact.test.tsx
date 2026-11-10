@@ -350,7 +350,7 @@ describe("the shop page's contact section", () => {
     );
   }
 
-  it("a call, WhatsApp and Email as buttons, the other number beside the call", () => {
+  it("a call button per number, then WhatsApp and Email, all the same button", () => {
     const { container, getByRole } = renderFull();
     const buttons = [...container.querySelectorAll("[data-contact-actions] a")];
     expect(buttons.map((a) => a.getAttribute("data-contact"))).toEqual([
@@ -361,10 +361,15 @@ describe("the shop page's contact section", () => {
     ]);
     const call = getByRole("link", { name: "Call Shop A on 02 2345 6789" });
     expect(call).toHaveAttribute("href", "tel:+20223456789");
-    expect(call).toHaveTextContent("Call 02 2345 6789");
     const other = getByRole("link", { name: "Call Shop A on 02 2345 6780" });
-    expect(other).toHaveTextContent(/^02 2345 6780$/);
-    expect(other.parentElement?.parentElement).toHaveTextContent(/^or 02 2345 6780$/);
+    expect(other).toHaveAttribute("href", "tel:+20223456780");
+    // The second number is the same button as the first, not a text link beside
+    // it; with several numbers the icon says "call", so the word is hidden.
+    expect(other.className).toBe(call.className);
+    expect(container.querySelector("[data-contact-actions]")).not.toHaveTextContent(/\bor\b/);
+    for (const button of [call, other]) {
+      expect(button.querySelector(".tabular > span")).toHaveClass("hidden");
+    }
     const whatsapp = getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" });
     expect(whatsapp).toHaveAttribute("href", "https://wa.me/201001234567");
     expect(whatsapp).toHaveAttribute("target", "_blank");

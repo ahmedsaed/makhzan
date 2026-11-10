@@ -71,7 +71,7 @@ test.describe("how to reach a shop", () => {
     const contact = page.locator("[data-shop-contact]");
     await expect(contact.getByRole("heading", { name: "Contact" })).toBeVisible();
 
-    // One row of buttons: the call, the other number beside it, WhatsApp, Email.
+    // One row of buttons: a call per number, WhatsApp, Email.
     // Formatted for an Egyptian reader, dialled in E.164.
     const actions = contact.locator("[data-contact-actions] a");
     expect(await actions.evaluateAll((all) => all.map((a) => a.dataset.contact))).toEqual([
@@ -80,12 +80,13 @@ test.describe("how to reach a shop", () => {
       "whatsapp",
       "email",
     ]);
+    // Two numbers: each the same button, the phone icon saying "call".
     const first = contact.getByRole("link", { name: "Call Shop A on 02 2345 6789" });
-    await expect(first).toHaveText("Call 02 2345 6789");
+    await expect(first).toHaveText("02 2345 6789", { useInnerText: true });
     await expect(first).toHaveAttribute("href", "tel:+20223456789");
-    await expect(contact.getByRole("link", { name: "Call Shop A on 02 2345 6780" })).toHaveText(
-      "02 2345 6780",
-    );
+    const second = contact.getByRole("link", { name: "Call Shop A on 02 2345 6780" });
+    await expect(second).toHaveText("02 2345 6780", { useInnerText: true });
+    expect(await second.getAttribute("class")).toBe(await first.getAttribute("class"));
     await expect(
       contact.getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" }),
     ).toHaveAttribute("href", "https://wa.me/201001234567");
@@ -200,7 +201,7 @@ test.describe("how to reach a shop", () => {
   });
 });
 
-test("on a phone, how to reach the shop comes straight after Visit, its buttons never stranded", async ({
+test("on a phone, how to reach the shop comes straight after Visit, its buttons two to a row", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -210,13 +211,19 @@ test("on a phone, how to reach the shop comes straight after Visit, its buttons 
   const search = await page.getByRole("searchbox", { name: "Search Shop A" }).boundingBox();
   expect(contact?.y ?? 0).toBeGreaterThan(visit?.y ?? 0);
   expect(contact?.y ?? 0).toBeLessThan(search?.y ?? 0);
-  // The call across the width; WhatsApp and Email side by side under it.
-  const box = (kind: string) =>
-    page.locator(`[data-contact-actions] > a[data-contact="${kind}"]`).boundingBox();
-  const [call, whatsapp, email] = await Promise.all([box("phone"), box("whatsapp"), box("email")]);
-  expect(call?.width ?? 0).toBeGreaterThan(300);
-  expect(whatsapp?.y).toBe(email?.y);
-  expect(whatsapp?.y ?? 0).toBeGreaterThan(call?.y ?? 0);
+  // Two to a row, never a button stranded: Shop A's two numbers side by side,
+  // WhatsApp and Email side by side under them.
+  const boxes = await page.locator("[data-contact-actions] > a").evaluateAll((all) =>
+    all.map((a) => {
+      const r = a.getBoundingClientRect();
+      return { kind: (a as HTMLElement).dataset.contact, y: Math.round(r.y), w: r.width };
+    }),
+  );
+  expect(boxes.map((b) => b.kind)).toEqual(["phone", "phone", "whatsapp", "email"]);
+  expect(boxes[0].y).toBe(boxes[1].y);
+  expect(boxes[2].y).toBe(boxes[3].y);
+  expect(boxes[2].y).toBeGreaterThan(boxes[0].y);
+  for (const b of boxes) expect(b.w).toBeLessThan(200);
 });
 
 test("phones list the shop's biggest categories, each narrowing its products", async ({ page }) => {
