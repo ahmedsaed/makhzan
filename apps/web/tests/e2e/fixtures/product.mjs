@@ -243,6 +243,12 @@ const SUPPLIERS = {
   "delta-bench": DELTA,
 };
 
+/** Opening hours: Volt Corner's read from its markup, Nile Parts' as a person wrote them. */
+const HOURS = {
+  "volt-corner": ["Sa,Su,Mo,Tu,We,Th 10:00-21:00", "Fr 14:00-21:00"],
+  "nile-parts": ["Daily 9:00 to 18:00"],
+};
+
 /** `[status, body]` for a path this fixture owns, or null. */
 export function productFixture(path) {
   const similar = path.match(/^\/products\/([^/]+)\/similar$/);
@@ -297,6 +303,29 @@ export function productFixture(path) {
   }
 
   const slug = path.match(/^\/suppliers\/([^/]+)$/)?.[1];
-  if (slug && SUPPLIERS[slug]) return [200, { ...SUPPLIERS[slug], listing_count: 4340 }];
+  if (slug && SUPPLIERS[slug]) {
+    // A profile carries the full contact (an offer only its first ways in):
+    // the product page reads its opening hours from here.
+    const reach = SUPPLIERS[slug].contact;
+    return [
+      200,
+      {
+        ...SUPPLIERS[slug],
+        listing_count: 4340,
+        contact: reach && {
+          phones: reach.phone ? [reach.phone] : [],
+          whatsapp: reach.whatsapp,
+          email: reach.email,
+          address: null,
+          area: null,
+          governorate: null,
+          maps_url: null,
+          opening_hours: HOURS[slug] ?? [],
+          branches: [],
+          sources: [],
+        },
+      },
+    ];
+  }
   return null;
 }

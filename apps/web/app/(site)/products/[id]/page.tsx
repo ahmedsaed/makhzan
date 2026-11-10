@@ -158,18 +158,29 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const primary = primaryOffer(product.offers, now);
   const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
+  // Every shop's profile, for its opening hours beside how to reach it (an
+  // offer carries only the numbers and email); cached like the taxonomy.
+  const shopSlugs = [
+    ...new Set(product.offers.flatMap((offer) => (offer.supplier ? [offer.supplier.slug] : []))),
+  ];
   // Descriptions are not part of an offer; each comes from its listing. Capped
   // like the tabs they feed, and in the offers' own order.
   const described = orderOffers(product.offers).slice(0, MAX_DETAIL_SOURCES);
 
   // Everything but the product itself is garnish: a failure there must not
   // take the page down with it.
-  const [similar, categories, listings, shop] = await Promise.all([
+  const [similar, categories, listings, shopProfiles] = await Promise.all([
     fetchSimilar(id, 8).catch(() => []),
     product.category ? fetchCategories().catch(() => []) : Promise.resolve([]),
     Promise.all(described.map((offer) => fetchListing(offer.id).catch(() => null))),
-    soleShop ? fetchSupplier(soleShop).catch(() => null) : Promise.resolve(null),
+    Promise.all(shopSlugs.map((slug) => fetchSupplier(slug).catch(() => null))),
   ]);
+  const shop = soleShop ? (shopProfiles[shopSlugs.indexOf(soleShop)] ?? null) : null;
+  const hoursOf = new Map(
+    shopProfiles.flatMap((profile) =>
+      profile ? [[profile.slug, profile.contact?.opening_hours ?? []] as const] : [],
+    ),
+  );
   const descriptions = new Map(
     described.map((offer, i) => [
       offer.id,
@@ -310,13 +321,19 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
             <>
               <Summary product={product} primary={primary} narrow={split} now={now} />
               <Offers {...splitOffers(product.offers, now)} productTitle={title} now={now} />
-              <ShopsContact product={product} title={title} page={absoluteUrl(path)} />
+              <ShopsContact
+                product={product}
+                title={title}
+                page={absoluteUrl(path)}
+                hoursOf={hoursOf}
+              />
             </>
           ) : (
             <OneOffer
               offer={product.offers[0]}
               now={now}
               listingCount={shop?.listing_count}
+              hours={shop?.contact?.opening_hours}
               title={title}
               page={absoluteUrl(path)}
             />
@@ -458,12 +475,15 @@ function OneOffer({
   offer,
   now,
   listingCount,
+  hours,
   title,
   page,
 }: {
   offer: Offer;
   now: Date;
   listingCount?: number;
+  /** The shop's opening hours, as its profile has them. */
+  hours?: string[];
   /** The product's title and its page's absolute URL, for "Something wrong?". */
   title: string;
   page: string;
@@ -527,6 +547,7 @@ function OneOffer({
             reach={supplier.contact}
             shop={supplier.slug}
             shopName={supplier.name}
+            hours={hours}
             className="mt-3"
           />
           <ReportLink
@@ -547,7 +568,18 @@ function OneOffer({
  * than on every row of a shop with several), and the way to report anything
  * wrong on the page.
  */
-function ShopsContact({ product, title, page }: { product: Product; title: string; page: string }) {
+function ShopsContact({
+  product,
+  title,
+  page,
+  hoursOf,
+}: {
+  product: Product;
+  title: string;
+  page: string;
+  /** Each shop's opening hours, by slug, as its profile has them. */
+  hoursOf: Map<string, readonly string[]>;
+}) {
   const shops = new Map<string, { slug: string; name: string; reach: Offer["supplier"] }>();
   for (const offer of product.offers) {
     if (offer.supplier && !shops.has(offer.supplier.slug)) {
@@ -563,7 +595,12 @@ function ShopsContact({ product, title, page }: { product: Product; title: strin
   return (
     <div className="mt-4">
       <ShopContactList
-        shops={list.map(({ slug, name, reach }) => ({ slug, name, reach: reach?.contact }))}
+        shops={list.map(({ slug, name, reach }) => ({
+          slug,
+          name,
+          reach: reach?.contact,
+          hours: [...(hoursOf.get(slug) ?? [])],
+        }))}
       />
       <ReportLink
         shop={list[0].slug}
