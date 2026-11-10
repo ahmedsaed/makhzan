@@ -184,7 +184,10 @@ main() {
   # the lock (fd 9) once the script has let it go.
   exec > >(
     trap '' INT HUP TERM
-    exec tee --output-error=warn -a "$LOG" 9>&-
+    # setsid: an ignored INT does not survive the exec, so in the terminal's
+    # process group tee died on Ctrl-C and the cleanup's report was lost.
+    # Its own session keeps it out of the terminal's signals altogether.
+    exec setsid tee --output-error=warn -a "$LOG" 9>&-
   ) 2>&1
   PHASE=""
   trap on_exit EXIT
@@ -307,14 +310,16 @@ main() {
         exit 1
       }
       if [ "$has_products" = t ]; then
-        products_now="$(psql_on "$DB" <<<"SELECT count(*) FROM products")" || {
-          echo "Cannot count the products in '$DB'; nothing was changed." >&2
+        # Listings too: products are derived from them, so a database with
+        # listings but no products yet still has a catalogue to lose.
+        products_now="$(psql_on "$DB" <<<"SELECT (SELECT count(*) FROM products) + (SELECT count(*) FROM listings)")" || {
+          echo "Cannot count the products and listings in '$DB'; nothing was changed." >&2
           exit 1
         }
       fi
     fi
     if [ "$products_now" = 0 ]; then
-      echo "==> No safety backup: '$DB' holds no products, so there is nothing to keep"
+      echo "==> No safety backup: '$DB' holds no products or listings, so there is nothing to keep"
     else
       SAFETY_FILE="$PWD/backups/makhzan-$(date +%Y%m%d-%H%M%S)-pre-restore.dump"
       echo "==> Backing up the current database to $SAFETY_FILE"
