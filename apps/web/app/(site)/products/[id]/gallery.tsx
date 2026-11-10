@@ -1,3 +1,4 @@
+import { photoNumbered, type GalleryPhoto } from "@/lib/product";
 import { shopUrl } from "@/lib/shop-url";
 import { cn } from "@/lib/utils";
 
@@ -14,28 +15,29 @@ import { PhotoViewer } from "./viewer";
  * Photos come from every shop's listing (21% of listings have several), all
  * contained in the white frame (rule S5), and at full size where a shop only
  * hands out cached thumbnails (FullSizePhoto); the page is the one place a
- * photo is big enough for that to matter.
+ * photo is big enough for that to matter. Each is badged with its own shop
+ * (PhotoFrame), so a gallery of two shops' photos says whose each one is.
  *
  * Each photo is a link to the image on the shop's site (with `ref=makhzan`,
  * rule P4), so without JavaScript a tap still opens it; with JavaScript it
  * opens the full-screen viewer instead (PhotoViewer).
  */
 export function Gallery({
-  images,
+  photos,
   alt,
   frameClassName,
   priority = false,
 }: {
-  images: string[];
+  photos: GalleryPhoto[];
   alt: string;
   /** Shape of each frame, e.g. 4:3 on a phone. */
   frameClassName?: string;
   priority?: boolean;
 }) {
-  if (images.length === 0) {
+  if (photos.length === 0) {
     return <FullSizePhoto src={null} alt={alt} priority={priority} className={frameClassName} />;
   }
-  const photo = (src: string, index: number) => (
+  const photo = ({ src, shop }: GalleryPhoto, index: number) => (
     <a
       href={shopUrl(src)}
       target="_blank"
@@ -45,32 +47,33 @@ export function Gallery({
     >
       <FullSizePhoto
         src={src}
-        alt={index === 0 ? alt : `${alt}, photo ${index + 1}`}
+        alt={photoNumbered(alt, index)}
+        shop={shop}
         priority={priority && index === 0}
         className={frameClassName}
       />
     </a>
   );
-  if (images.length === 1) {
+  if (photos.length === 1) {
     return (
-      <PhotoViewer images={images} alt={alt}>
-        {photo(images[0], 0)}
+      <PhotoViewer photos={photos} alt={alt}>
+        {photo(photos[0], 0)}
       </PhotoViewer>
     );
   }
   return (
-    <PhotoViewer images={images} alt={alt}>
+    <PhotoViewer photos={photos} alt={alt}>
       <Carousel previous="Previous photo" next="Next photo">
         <div
           role="group"
-          aria-label={`${images.length} photos`}
+          aria-label={`${photos.length} photos`}
           data-gallery
           data-carousel-track
           className="flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain"
         >
-          {images.map((src, index) => (
-            <div key={src} className="relative w-full shrink-0 snap-center">
-              {photo(src, index)}
+          {photos.map((item, index) => (
+            <div key={item.src} data-photo-count className="relative w-full shrink-0 snap-center">
+              {photo(item, index)}
               <span
                 aria-hidden="true"
                 className={cn(
@@ -78,7 +81,7 @@ export function Gallery({
                   "text-ink-2 tabular",
                 )}
               >
-                {index + 1} / {images.length}
+                {index + 1} / {photos.length}
               </span>
             </div>
           ))}

@@ -259,3 +259,43 @@ async def test_a_reindex_never_empties_the_live_index():
     assert client.live_at_swap == [2], "the live index still held the old documents"
     assert "products_staging" not in client.indexes, "the old index is dropped after the swap"
     assert all(doc["id"] not in {"old-1", "old-2"} for doc in client.products.documents)
+
+
+async def test_documents_name_the_shop_each_photo_comes_from():
+    """For the badge on a result's photo: the photo's own shop, slug and name,
+    which need not be a shop the card names (`supplier_name`)."""
+    shop_a, shop_b = _supplier("shop-a"), _supplier("shop-b")
+    shop_b.name = "Shop B"
+    pictured = Product(
+        id=uuid.uuid4(),
+        group_key="mpn:sg90",
+        title_en="pictured",
+        image="https://shop-b.test/sg90.jpg",
+        image_supplier_id=shop_b.id,
+        supplier_name="shop-a",
+    )
+    unknown = Product(
+        id=uuid.uuid4(),
+        group_key="single:u",
+        title_en="unknown",
+        image="https://shop-a.test/u.jpg",
+    )
+    bare = Product(id=uuid.uuid4(), group_key="single:b", title_en="bare")
+    await _seed(
+        shop_a,
+        shop_b,
+        pictured,
+        unknown,
+        bare,
+        _listing(shop_a, pictured),
+        _listing(shop_b, pictured),
+        _listing(shop_a, unknown),
+        _listing(shop_a, bare),
+    )
+
+    docs = await _reindex()
+
+    assert docs["pictured"]["image_shop"] == {"slug": "shop-b", "name": "Shop B"}
+    # Not rebuilt since the column was added: no badge rather than a guess.
+    assert docs["unknown"]["image_shop"] is None
+    assert docs["bare"]["image_shop"] is None

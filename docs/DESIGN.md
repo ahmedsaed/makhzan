@@ -283,6 +283,7 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 | `age-muted` (15–45 days) | `#6E5A00` | `#D9C46C` |
 | `photo-frame` | `#FFFFFF` | `#FFFFFF` |
 | `scrim` (behind the photo viewer) | `#0B0C0E` | `#0B0C0E` |
+| `photo-tag` / `photo-tag-ink` (the shop badge on a photo, fill at 80%) | `#15171C` / `#FFFFFF` | `#15171C` / `#FFFFFF` |
 | `pattern` (background icons) | `#E2E1D9` | `#24262B` |
 
 | | |
@@ -367,3 +368,4 @@ Each is meant to be checked by a test.
 - **S3** Prices use tabular figures; part numbers use the monospace face.
 - **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px.
 - **S5** Photos are contained in a white frame in both themes; never cropped.
+- **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.

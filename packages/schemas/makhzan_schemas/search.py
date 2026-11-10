@@ -120,6 +120,7 @@ def build_product_document(
     category_domain: str | None = None,
     supplier_slugs: list[str] | None = None,
     category_refs: list[str] | None = None,
+    image_shop: dict | None = None,
 ) -> dict:
     """Project a Product (with its aggregates) into a flat Meilisearch document.
 
@@ -130,6 +131,10 @@ def build_product_document(
     `category_refs` is the category's ref followed by its ancestors' (the caller
     walks the tree). Omitted, it is just the leaf's own ref; a product with no
     category gets an empty list rather than a missing attribute.
+
+    `image_shop` is `{"slug", "name"}` of the shop the photo comes from
+    (`Product.image_supplier_id`), for the badge on it; null without a photo or
+    a known shop. Display only: not searched, filtered or sorted on.
     """
     lv = product.last_verified_at
     leaf = category_ref(category_domain or product.domain, category_slug)
@@ -155,5 +160,6 @@ def build_product_document(
         "currency": product.currency,
         "in_stock": product.in_stock,
         "image": product.image,
+        "image_shop": image_shop if product.image else None,
         "last_verified_at": int(lv.timestamp()) if lv else None,
     }

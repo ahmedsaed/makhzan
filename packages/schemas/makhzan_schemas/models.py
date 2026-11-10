@@ -296,6 +296,17 @@ class Product(TimestampMixin, Base):
         ForeignKey("categories.id", ondelete="SET NULL")
     )
     image: Mapped[str | None] = mapped_column(Text)
+    #: The shop whose listing `image` was taken from, so every place the photo
+    #: is shown can credit that shop (it is hotlinked from the shop's own site,
+    #: decision 0003). Recorded from the listing the photo was taken from rather
+    #: than read off `supplier_name`, which is a display name only and names the
+    #: representative listing: the badge must stay right if that ranking ever
+    #: stops putting photos first. Set with `image` by
+    #: grouping.rebuild_products; null when there is no photo, and on rows not
+    #: rebuilt since the column was added.
+    image_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL")
+    )
     # Representative (cheapest) offer's supplier name — for single-supplier cards.
     supplier_name: Mapped[str | None] = mapped_column(String(255))
 
@@ -318,6 +329,7 @@ class Product(TimestampMixin, Base):
 
     listings: Mapped[list[Listing]] = relationship(back_populates="product")
     category: Mapped[Category | None] = relationship()
+    image_supplier: Mapped[Supplier | None] = relationship()
 
     @classmethod
     def is_listed(cls):
