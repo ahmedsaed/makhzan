@@ -62,13 +62,11 @@ export function ShopContactSection({
   now?: Date;
   className?: string;
 }) {
-  const [first, ...others] = contact.phones;
+  // Every number a "Call …" button like the first: one row of the same buttons.
   const actions = contactActions(
-    { phone: first ?? null, whatsapp: contact.whatsapp, email: contact.email },
+    { phones: contact.phones, whatsapp: contact.whatsapp, email: contact.email },
     shopName,
   );
-  // A number that cannot be dialled (none is expected) still shows, as text.
-  const extraPhones = first && !telHref(first) ? contact.phones : others;
   const hasBranches = contact.branches.length > 0;
   const mainAddress = addressLine(contact.address, [contact.area, contact.governorate], shownPlace);
   const mainPlace = [contact.area, contact.governorate].filter(Boolean).join(", ");
@@ -102,7 +100,7 @@ export function ShopContactSection({
   });
 
   const hasHours = contact.opening_hours.length > 0;
-  if (actions.length === 0 && extraPhones.length === 0 && lines.length === 0 && !hasHours) {
+  if (actions.length === 0 && lines.length === 0 && !hasHours) {
     return null;
   }
   const source = provenanceLine(contact, shopName, websiteUrl, now);
@@ -120,27 +118,7 @@ export function ShopContactSection({
       >
         Contact
       </SectionHeading>
-      {(actions.length > 0 || extraPhones.length > 0) && (
-        <ContactActionsRow
-          actions={actions}
-          shop={shop}
-          extra={
-            // The other numbers beside the call: "Call 02 2345 6789 or 02 2345
-            // 6780"; a row of its own on a phone, 44px like the buttons (S4).
-            extraPhones.length > 0 && (
-              <span className="col-span-2 flex min-h-11 flex-wrap items-center text-sm whitespace-pre text-ink-2 sm:me-1 sm:min-h-0">
-                {actions.some((action) => action.kind === "phone") ? "or " : "Call "}
-                {extraPhones.map((number, index) => (
-                  <span key={number}>
-                    {index > 0 && ", "}
-                    <PhoneText number={number} shop={shop} shopName={shopName} />
-                  </span>
-                ))}
-              </span>
-            )
-          }
-        />
-      )}
+      {actions.length > 0 && <ContactActionsRow actions={actions} shop={shop} />}
       {(lines.length > 0 || hasHours) && (
         <div className="mt-3 flex flex-col gap-1.5 text-sm leading-snug lg:mt-2.5 lg:gap-1">
           {lines}
