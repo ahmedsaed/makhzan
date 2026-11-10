@@ -70,7 +70,7 @@ export const crawlingContent: CrawlingContent = {
       body: [
         "Before fetching anything we read the site's robots.txt and obey it. A path a shop asks us not to read is not read.",
         "If a site sets Crawl-delay, we treat it as a floor rather than a target: a shop asking for 20 seconds between requests gets 20, even though our own default is longer than most crawlers use.",
-        "Our robots.txt token is makhzanbot, so a shop can address us by name. To stop us reading your site altogether, add these two lines to your robots.txt:",
+        "Our robots.txt token is makhzanbot. Rules written for makhzanbot are obeyed on every shop we read, starting now, so a shop can address us by name. To stop us reading your site altogether, add these two lines to your robots.txt:",
       ],
       snippet: ROBOTS_BLOCK,
     },
@@ -79,7 +79,7 @@ export const crawlingContent: CrawlingContent = {
       body: [
         "One request at a time per shop, with a pause of at least 15 seconds between them. A full pass over a supplier's catalogue is spread across about a week rather than run in one burst, so no shop sees a spike of traffic from us.",
         "Each day's run starts early in the morning, Egypt time (03:00 UTC), when shops are quietest. A shop that prefers another hour, a slower pace or fewer pages a day can ask, and gets it.",
-        "Our crawler identifies itself in every request and gives an address to write to, so anyone looking at their server logs can tell who we are.",
+        "Every request carries a From header with an address to write to. We are also moving, one shop at a time, from a browser-style User-Agent to one that names makhzanbot and links to this page. Until a shop is moved, our User-Agent there still looks like a browser.",
       ],
     },
     {

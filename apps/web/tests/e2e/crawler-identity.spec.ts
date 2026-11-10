@@ -25,4 +25,6 @@ test("how-we-crawl names our robots.txt token and gives the block to copy", asyn
   await page.goto("/how-we-crawl");
   await expect(page.getByText("Our robots.txt token is makhzanbot")).toBeVisible();
   await expect(page.locator("pre")).toHaveText("User-agent: makhzanbot\nDisallow: /");
+  // Truthful during the move: not every request says makhzanbot yet.
+  await expect(page.getByText("one shop at a time")).toBeVisible();
 });
