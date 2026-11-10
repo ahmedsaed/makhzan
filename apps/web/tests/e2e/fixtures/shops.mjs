@@ -31,8 +31,9 @@ function profile(summary, extra) {
 }
 
 /**
- * Shop A: every detail, most listed by a person from its contact page, the
- * WhatsApp and hours read by the crawler, and a second branch.
+ * Shop A: every detail. Its numbers, email and branch listed by a person from
+ * its contact page; its address from its Google Maps listing, which it has not
+ * claimed; its WhatsApp and hours read by the crawler.
  */
 const SHOP_A_CONTACT = {
   phones: ["+20223456789", "+20223456780"],
@@ -41,7 +42,7 @@ const SHOP_A_CONTACT = {
   address: "12 Example Street, 2nd floor",
   area: "Bab El Louk",
   governorate: "Cairo",
-  maps_url: "https://maps.example/shop-a",
+  maps_url: "https://maps.app.goo.gl/shopA",
   opening_hours: ["Saturday to Thursday 10:00 to 22:00", "Friday closed"],
   branches: [
     {
@@ -50,7 +51,7 @@ const SHOP_A_CONTACT = {
       area: "Dokki",
       governorate: "Giza",
       phones: ["+20233334444"],
-      maps_url: "https://maps.example/shop-a-giza",
+      maps_url: "https://maps.app.goo.gl/shopAGiza",
     },
   ],
   sources: [
@@ -58,7 +59,13 @@ const SHOP_A_CONTACT = {
       origin: "listed",
       url: "https://www.shop-a.test/contact-us",
       checked_on: "2026-11-03",
-      fields: ["phones", "email", "address", "area", "governorate", "maps_url", "branches"],
+      fields: ["phones", "email", "branches"],
+    },
+    {
+      origin: "listed",
+      url: "https://www.google.com/maps/place/Shop+A",
+      checked_on: "2026-11-03",
+      fields: ["address", "area", "governorate", "maps_url"],
     },
     {
       origin: "read",

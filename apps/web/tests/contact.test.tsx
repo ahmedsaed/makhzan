@@ -1,20 +1,25 @@
 /**
  * How a shop's contact details read and link: numbers formatted for an
  * Egyptian reader but dialled in E.164, the line naming only what is still
- * missing, where the details came from, and the per-offer "Contact" links.
+ * missing, where each detail came from (never calling a Google Maps listing
+ * the shop's own), the product page's contact blocks, and "Something wrong?".
  */
 import "@testing-library/jest-dom/vitest";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ShopContactSection } from "@/app/(site)/shops/_components/shop-contact";
-import { ContactLinks } from "@/components/contact-links";
-import type { ShopContact } from "@/lib/api";
+import { ContactButtons, ReportLink, ShopContactList } from "@/components/contact-links";
+import type { ContactSource, ShopContact } from "@/lib/api";
 import {
   formatCheckedOn,
   formatPhone,
   missingLine,
-  sourceLines,
+  possessive,
+  provenance,
+  registrableDomain,
+  reportHref,
+  sourceLabel,
   telHref,
   whatsappHref,
 } from "@/lib/contact";
@@ -39,7 +44,7 @@ const FULL: ShopContact = {
   address: "12 Example Street",
   area: "Bab El Louk",
   governorate: "Cairo",
-  maps_url: "https://maps.example/shop-a",
+  maps_url: "https://maps.app.goo.gl/shopA",
   opening_hours: ["Saturday to Thursday 10:00 to 22:00", "Friday closed"],
   branches: [
     {
@@ -56,7 +61,7 @@ const FULL: ShopContact = {
       origin: "listed",
       url: "https://www.shop-a.test/contact-us",
       checked_on: "2026-11-03",
-      fields: ["phones", "email", "address"],
+      fields: ["phones", "email", "address", "area", "governorate", "maps_url", "branches"],
     },
     {
       origin: "read",
@@ -67,6 +72,12 @@ const FULL: ShopContact = {
   ],
 };
 
+const PAGE = "https://makhzan.test/shops/shop-a";
+
+function source(url: string | null, fields: string[], extra: Partial<ContactSource> = {}) {
+  return { origin: "listed" as const, url, checked_on: "2026-11-10", fields, ...extra };
+}
+
 describe("phone numbers", () => {
   it.each([
     ["+201001234567", "010 0123 4567"],
@@ -74,7 +85,10 @@ describe("phone numbers", () => {
     ["+20223456789", "02 2345 6789"],
     ["+2031234567", "03 123 4567"],
     ["+20401234567", "040 123 4567"],
+    ["+20133221234", "013 322 1234"],
+    ["+20154361234", "015 436 1234"],
     ["19123", "19123"],
+    ["16789", "16789"],
     ["+442079460000", "+442079460000"],
   ])("%s reads as %s", (number, text) => {
     expect(formatPhone(number)).toBe(text);
@@ -83,6 +97,7 @@ describe("phone numbers", () => {
   it("links in E.164, which dials from anywhere", () => {
     expect(telHref("+201001234567")).toBe("tel:+201001234567");
     expect(telHref("19123")).toBe("tel:19123");
+    expect(telHref("12345")).toBeNull();
     expect(telHref("2345 6789")).toBeNull();
     expect(whatsappHref("+201001234567")).toBe("https://wa.me/201001234567");
     // A hotline has no WhatsApp.
@@ -124,38 +139,132 @@ describe("what is still missing", () => {
   });
 });
 
-describe("where the details came from", () => {
-  it("names the shop's own website, and how each was checked", () => {
-    expect(sourceLines(FULL, "Shop A", "https://shop-a.test")).toEqual([
-      "From Shop A's website, checked 3 Nov 2026.",
-      "WhatsApp and opening hours read automatically from Shop A's website, 8 Nov 2026.",
-    ]);
+describe("naming a source", () => {
+  it("is the shop's website when either domain is a subdomain of the other", () => {
+    const site = "https://store.volt-corner.com";
+    expect(sourceLabel("https://volt-corner.com/contact", "Volt", site)).toBe("Volt's website");
+    expect(sourceLabel("https://store.volt-corner.com/pages/contact-us", "Volt", site)).toBe(
+      "Volt's website",
+    );
+    expect(sourceLabel("https://store.volt-corner.com/x", "Volt", "https://volt-corner.com")).toBe(
+      "Volt's website",
+    );
+    expect(registrableDomain("www.shop.com.eg")).toBe("shop.com.eg");
+    // A different shop under the same public suffix is not this shop.
+    expect(sourceLabel("https://other.com.eg/", "Shop", "https://shop.com.eg")).toBe(
+      "other.com.eg",
+    );
   });
 
-  it("names another site by its host", () => {
+  it("is Google Maps, in every form, and never the shop's", () => {
+    for (const url of [
+      "https://www.google.com/maps/place/Nile+Parts",
+      "https://www.google.com.eg/maps/place/x",
+      "https://maps.google.com/?q=x",
+      "https://maps.app.goo.gl/AbCdEf123",
+      "https://goo.gl/maps/abc",
+      "https://g.page/example-shop?share",
+    ]) {
+      expect(sourceLabel(url, "Nile Parts", "https://nile-parts.com"), url).toBe("Google Maps");
+    }
+    expect(sourceLabel("https://www.google.com/search?q=x", "A", null)).toBe("google.com");
+  });
+
+  it("is Facebook or Instagram, else the host", () => {
+    expect(sourceLabel("https://www.facebook.com/shopa", "Shop A", null)).toBe("Facebook");
+    expect(sourceLabel("https://m.facebook.com/shopa", "Shop A", null)).toBe("Facebook");
+    expect(sourceLabel("https://www.instagram.com/shopa", "Shop A", null)).toBe("Instagram");
+    expect(sourceLabel("https://linktr.ee/shopa", "Shop A", null)).toBe("linktr.ee");
+  });
+
+  it("writes the possessive the English way", () => {
+    expect(possessive("Shop A")).toBe("Shop A's");
+    expect(possessive("Nile Parts")).toBe("Nile Parts'");
+    expect(possessive("Volt Bits")).toBe("Volt Bits'");
+  });
+});
+
+describe("where the details came from, in one sentence", () => {
+  it("one source", () => {
+    const contact = { ...EMPTY, sources: [source("https://shop-a.test/contact", ["phones"])] };
+    expect(provenance(contact, "Shop A", "https://shop-a.test")).toBe(
+      "From Shop A's website, checked 10 Nov 2026.",
+    );
+  });
+
+  it("a site and an unclaimed Google Maps listing, checked the same day", () => {
     const contact = {
       ...EMPTY,
       sources: [
-        {
-          origin: "listed" as const,
-          url: "https://www.facebook.com/shop-a",
-          checked_on: "2026-11-03",
-          fields: [],
-        },
+        source("https://nile-parts.com/contact-us/", ["phones", "whatsapp", "email"]),
+        source("https://www.google.com/maps/place/Nile+Parts", ["address", "area", "governorate"]),
       ],
     };
-    expect(sourceLines(contact, "Shop A", "https://shop-a.test")).toEqual([
-      "From facebook.com, checked 3 Nov 2026.",
-    ]);
+    expect(provenance(contact, "Nile Parts", "https://nile-parts.com")).toBe(
+      "Phone, WhatsApp and email from Nile Parts' website and address from Google Maps, all checked 10 Nov 2026.",
+    );
   });
 
-  it("leaves out a source that says neither where nor when", () => {
+  it("names the shop's website once, with what was checked and what was read", () => {
+    expect(provenance(FULL, "Shop A", "https://shop-a.test")).toBe(
+      "Phone, email, address, map link and branches from Shop A's website, checked 3 Nov 2026, and WhatsApp and opening hours read automatically 8 Nov 2026.",
+    );
+  });
+
+  it("two pages of one site on one day are one place", () => {
     const contact = {
       ...EMPTY,
-      sources: [{ origin: "listed" as const, url: null, checked_on: null, fields: ["area"] }],
+      sources: [
+        source("https://shop-a.test/contact", ["phones"]),
+        source("https://shop-a.test/about", ["address"]),
+      ],
     };
-    expect(sourceLines(contact, "Shop A", null)).toEqual([]);
+    expect(provenance(contact, "Shop A", "https://shop-a.test")).toBe(
+      "From Shop A's website, checked 10 Nov 2026.",
+    );
+  });
+
+  it("different places on different days", () => {
+    const contact = {
+      ...EMPTY,
+      sources: [
+        source("https://www.facebook.com/shopa", ["phones"], { checked_on: "2026-11-01" }),
+        source("https://maps.app.goo.gl/x", ["address", "maps_url"]),
+      ],
+    };
+    expect(provenance(contact, "Shop A", "https://shop-a.test")).toBe(
+      "Phone from Facebook, checked 1 Nov 2026; address and map link from Google Maps, checked 10 Nov 2026.",
+    );
+  });
+
+  it("is null when no source says where or when", () => {
+    const contact = { ...EMPTY, sources: [source(null, ["area"], { checked_on: null })] };
+    expect(provenance(contact, "Shop A", null)).toBeNull();
+    expect(provenance(EMPTY, "Shop A", null)).toBeNull();
     expect(formatCheckedOn("garbage")).toBeNull();
+  });
+});
+
+describe("Something wrong? Tell us", () => {
+  it("emails makhzan, naming the shop and the product", () => {
+    const href = reportHref({ shop: "Shop A", product: "LM358", page: PAGE });
+    const url = new URL(href);
+    expect(url.protocol).toBe("mailto:");
+    expect(url.pathname).toBe("crawler@makhzan.merope.dev");
+    expect(decodeURIComponent(href)).toContain("subject=Something wrong: LM358 at Shop A");
+    expect(decodeURIComponent(href)).toContain("What is wrong, and what should it say?");
+    expect(decodeURIComponent(href)).toContain(`Page: ${PAGE}`);
+    expect(decodeURIComponent(reportHref({ shop: "Shop A", page: PAGE }))).toContain(
+      "subject=Something wrong: Shop A&",
+    );
+  });
+
+  it("is a contact link, counted and untagged", () => {
+    const { getByRole } = render(<ReportLink shop="shop-a" shopName="Shop A" page={PAGE} />);
+    const link = getByRole("link", { name: "Tell us" });
+    expect(link).toHaveAttribute("data-contact", "report");
+    expect(link).toHaveAttribute("data-umami-event", "shop-contact");
+    expect(link.getAttribute("href")).toMatch(/^mailto:crawler@makhzan\.merope\.dev\?subject=/);
   });
 });
 
@@ -167,6 +276,7 @@ describe("the shop page's contact section", () => {
         shop="shop-a"
         shopName="Shop A"
         websiteUrl="https://shop-a.test"
+        page={PAGE}
       />,
     );
     expect(getByRole("link", { name: "Call Shop A on 02 2345 6789" })).toHaveAttribute(
@@ -174,7 +284,10 @@ describe("the shop page's contact section", () => {
       "tel:+20223456789",
     );
     expect(getByRole("link", { name: "Call Shop A on 02 2345 6780" })).toBeInTheDocument();
-    expect(getByRole("link", { name: "Call Shop A on 02 3333 4444" })).toBeInTheDocument();
+    // A branch's number says which branch it rings.
+    expect(
+      getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" }),
+    ).toBeInTheDocument();
     const whatsapp = getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" });
     expect(whatsapp).toHaveAttribute("href", "https://wa.me/201001234567");
     expect(whatsapp).toHaveAttribute("target", "_blank");
@@ -184,15 +297,15 @@ describe("the shop page's contact section", () => {
     );
     expect(getByRole("link", { name: "Map: Shop A, Bab El Louk, Cairo" })).toHaveAttribute(
       "href",
-      "https://maps.example/shop-a",
+      "https://maps.app.goo.gl/shopA",
     );
     expect(getByText("Main shop")).toBeInTheDocument();
-    expect(getByText("Giza branch")).toBeInTheDocument();
     expect(getByText("Friday closed")).toBeInTheDocument();
     expect(container.querySelector("[data-contact-source]")).toHaveTextContent(
-      "From Shop A's website, checked 3 Nov 2026.",
+      /^Phone, email, address, map link and branches from Shop A's website/,
     );
-    // Every contact link is counted, none is tagged as a visit (P4's exception).
+    expect(getByRole("link", { name: "Tell us" })).toHaveAttribute("data-contact", "report");
+    // Every link is a contact link, counted, none tagged as a visit (P4's exception).
     for (const link of container.querySelectorAll("a")) {
       expect(link).toHaveAttribute("data-umami-event", "shop-contact");
       expect(link.getAttribute("href")).not.toContain("ref=makhzan");
@@ -201,20 +314,25 @@ describe("the shop page's contact section", () => {
 
   it("renders nothing for an empty block", () => {
     const { container } = render(
-      <ShopContactSection contact={EMPTY} shop="shop-a" shopName="Shop A" websiteUrl={null} />,
+      <ShopContactSection
+        contact={EMPTY}
+        shop="shop-a"
+        shopName="Shop A"
+        websiteUrl={null}
+        page={PAGE}
+      />,
     );
     expect(container).toBeEmptyDOMElement();
   });
 });
 
-describe("an offer's Contact links", () => {
-  it("offers WhatsApp, a call and email, whichever the shop publishes", () => {
+describe("contacting the shops from a product page", () => {
+  it("one shop: WhatsApp, a call and email, whichever it publishes", () => {
     const { getByRole, getAllByRole } = render(
-      <ContactLinks
+      <ContactButtons
         reach={{ phone: "+20223456789", whatsapp: "+201001234567", email: null }}
         shop="shop-a"
         shopName="Shop A"
-        variant="inline"
       />,
     );
     expect(getAllByRole("link")).toHaveLength(2);
@@ -227,12 +345,47 @@ describe("an offer's Contact links", () => {
     expect(call).toHaveTextContent("Call 02 2345 6789");
   });
 
-  it("renders nothing for a shop with no way to reach it", () => {
+  it("several shops: one line a shop that can be reached", () => {
+    const { container, getByRole } = render(
+      <ShopContactList
+        shops={[
+          {
+            slug: "nile",
+            name: "Nile Parts",
+            reach: { phone: "19123", whatsapp: null, email: null },
+          },
+          { slug: "delta", name: "Delta Bench", reach: null },
+          {
+            slug: "volt",
+            name: "Volt Corner",
+            reach: { phone: null, whatsapp: "+201001234567", email: "a@volt.test" },
+          },
+        ]}
+      />,
+    );
+    const lines = container.querySelectorAll("[data-shop-contact-line]");
+    expect([...lines].map((l) => l.getAttribute("data-shop-contact-line"))).toEqual([
+      "nile",
+      "volt",
+    ]);
+    expect(getByRole("link", { name: "Call Nile Parts on 19123" })).toHaveAttribute(
+      "href",
+      "tel:19123",
+    );
+    expect(getByRole("link", { name: "Email Volt Corner" })).toHaveAttribute(
+      "href",
+      "mailto:a@volt.test",
+    );
+  });
+
+  it("renders nothing when no shop can be reached", () => {
     for (const reach of [null, undefined, { phone: null, whatsapp: null, email: null }]) {
-      const { container } = render(
-        <ContactLinks reach={reach} shop="shop-a" shopName="Shop A" variant="buttons" />,
-      );
+      const { container } = render(<ContactButtons reach={reach} shop="a" shopName="A" />);
       expect(container).toBeEmptyDOMElement();
     }
+    const { container } = render(
+      <ShopContactList shops={[{ slug: "a", name: "A", reach: null }]} />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });

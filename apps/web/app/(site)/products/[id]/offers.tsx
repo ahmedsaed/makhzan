@@ -1,13 +1,11 @@
 import { ChevronDown, ExternalLink } from "lucide-react";
 
-import { ContactLinks } from "@/components/contact-links";
 import { Freshness } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { PriceRange } from "@/components/price";
 import { ShopLink } from "@/components/shop-link";
 import { StockBadge } from "@/components/stock-badge";
 import { titleOf, type Offer } from "@/lib/api";
-import { isReachable } from "@/lib/contact";
 import { plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { isInStock } from "@/lib/product";
@@ -59,13 +57,7 @@ export function Offers({
           productTitle={productTitle}
           now={now}
         />
-        <Fold
-          offers={stale}
-          kind="out of date"
-          data="stale"
-          productTitle={productTitle}
-          now={now}
-        />
+        <Fold offers={stale} kind="out of date" data="stale" productTitle={productTitle} now={now} />
       </div>
     </section>
   );
@@ -135,18 +127,10 @@ function OfferList({
 function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: string; now: Date }) {
   const supplier = offer.supplier;
   const title = titleOf(offer) || productTitle;
-  // A third line, under the price and View, only for a shop that publishes a
-  // way to reach it: the row's first two lines stay as they are.
-  const reachable = supplier !== null && isReachable(supplier.contact);
   return (
     <li
       data-offer={offer.id}
-      className={cn(
-        "grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 last:border-b-0",
-        reachable
-          ? "[grid-template-areas:'title_title_price'_'shop_fresh_view'_'contact_contact_contact']"
-          : "[grid-template-areas:'title_title_price'_'shop_fresh_view']",
-      )}
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'] last:border-b-0"
     >
       <div className="[grid-area:title]">
         <span
@@ -196,15 +180,6 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
           </ShopLink>
         )}
       </div>
-      {reachable && supplier && (
-        <ContactLinks
-          reach={supplier.contact}
-          shop={supplier.slug}
-          shopName={supplier.name}
-          variant="inline"
-          className="[grid-area:contact]"
-        />
-      )}
     </li>
   );
 }

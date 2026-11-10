@@ -1,33 +1,37 @@
 import type { ReactNode } from "react";
 
-import { ContactLink } from "@/components/contact-links";
+import { ContactLink, ReportLink, TEXT_LINK } from "@/components/contact-links";
 import { SectionHeading } from "@/components/section";
 import type { ShopBranch, ShopContact } from "@/lib/api";
-import { formatPhone, mailtoHref, sourceLines, telHref, whatsappHref } from "@/lib/contact";
+import { emailHref, formatPhone, provenance, telHref, whatsappHref } from "@/lib/contact";
 import { cn } from "@/lib/utils";
 
 /**
- * How to reach a shop, as the shop itself publishes it: its numbers as `tel:`
- * links, WhatsApp, email, its address (and branches) with the shop's own map
- * link, and its opening hours. Text is the shop's own, in whatever language it
- * wrote it, hence `dir="auto"`.
+ * How to reach a shop, as its details are published (its site, its Facebook,
+ * its Google Maps listing): its numbers as `tel:` links, WhatsApp, email, its
+ * address (and branches) with a map link, and its opening hours. Text is as
+ * published, in whatever language, hence `dir="auto"`.
  *
- * Under it, quietly, where the details came from and when they were checked:
- * a person reading the shop's site, or the crawler reading its structured
- * data. Nothing renders for a shop nobody has found anything for; the line at
- * the foot of the page says what is missing.
+ * Under it, quietly, one sentence on where each detail came from and when it
+ * was checked ("Phone and email from Nile Parts' website and address from Google
+ * Maps, all checked 10 Nov 2026."), then "Something wrong? Tell us". Nothing
+ * renders for a shop nobody has found anything for; the line at the foot of
+ * the page says what is missing.
  */
 export function ShopContactSection({
   contact,
   shop,
   shopName,
   websiteUrl,
+  page,
   className,
 }: {
   contact: ShopContact;
   shop: string;
   shopName: string;
   websiteUrl: string | null;
+  /** The shop page's absolute URL, for the report email. */
+  page: string;
   className?: string;
 }) {
   const blocks: ReactNode[] = [];
@@ -64,7 +68,7 @@ export function ShopContactSection({
         <ContactLink
           kind="email"
           shop={shop}
-          href={mailtoHref(contact.email)}
+          href={emailHref(contact.email)}
           className={cn(LINK, "break-all")}
         >
           {contact.email}
@@ -110,7 +114,7 @@ export function ShopContactSection({
     );
   }
   if (blocks.length === 0) return null;
-  const sources = sourceLines(contact, shopName, websiteUrl);
+  const source = provenance(contact, shopName, websiteUrl);
 
   return (
     <section data-shop-contact aria-labelledby="shop-contact-heading" className={className}>
@@ -121,17 +125,17 @@ export function ShopContactSection({
         Contact
       </SectionHeading>
       <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">{blocks}</div>
-      {sources.length > 0 && (
+      {source && (
         <p data-contact-source className="mt-2 text-[13px] leading-relaxed text-ink-2">
-          {sources.join(" ")}
+          {source}
         </p>
       )}
+      <ReportLink shop={shop} shopName={shopName} page={page} />
     </section>
   );
 }
 
-/** A text link, 44px to tap on phones (S4) though it reads as a line of text. */
-const LINK = "inline-flex min-h-11 items-center font-semibold text-link hover:underline lg:min-h-0";
+const LINK = TEXT_LINK;
 
 function Block({ label, kind, children }: { label: string; kind: string; children: ReactNode }) {
   return (
@@ -215,19 +219,19 @@ function Branch({
   shopName: string;
 }) {
   const place = [branch.area, branch.governorate].filter(Boolean).join(", ");
+  // "Call Shop A Giza branch on …": which of the shop's places the number rings.
+  const label = branch.name ? `${shopName} ${branch.name}` : shopName;
   return (
-    <>
-      <Place
-        address={branch.address}
-        place={place}
-        mapsUrl={branch.maps_url}
-        shop={shop}
-        shopName={branch.name ? `${shopName} ${branch.name}` : shopName}
-      >
-        {branch.phones.map((number) => (
-          <Phone key={number} number={number} shop={shop} shopName={shopName} />
-        ))}
-      </Place>
-    </>
+    <Place
+      address={branch.address}
+      place={place}
+      mapsUrl={branch.maps_url}
+      shop={shop}
+      shopName={label}
+    >
+      {branch.phones.map((number) => (
+        <Phone key={number} number={number} shop={shop} shopName={label} />
+      ))}
+    </Place>
   );
 }

@@ -764,9 +764,10 @@ test("every link out of makhzan carries ref=makhzan (P4)", async ({ page }) => {
       );
     const expected: Record<string, RegExp> = {
       whatsapp: /^https:\/\/wa\.me\/\d+$/,
-      phone: /^tel:(\+\d+|1\d{4})$/,
-      email: /^mailto:/,
-      map: /^https:\/\//,
+      phone: /^tel:(\+\d{8,15}|1[5679]\d{3})$/,
+      email: /^mailto:[^?]+@[^?]+$/,
+      map: /^https:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.page|(www\.)?google\.[a-z.]+\/maps|maps\.apple\.com)\//,
+      report: /^mailto:crawler@makhzan\.merope\.dev\?subject=/,
     };
     for (const [kind, href] of contact) {
       expect(href, `${path} ${kind}`).toMatch(expected[kind ?? ""] ?? /^$-never/);
@@ -792,23 +793,39 @@ test.describe("contacting the shop", () => {
     );
     // Beside the Sold by card, not inside its link.
     await expect(page.locator("[data-sold-by] [data-contact]")).toHaveCount(0);
+
+    // And a way to say something is wrong, naming the shop and the product.
+    const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
+    const href = decodeURIComponent((await report.getAttribute("href")) ?? "");
+    expect(href).toMatch(/^mailto:crawler@makhzan\.merope\.dev\?subject=/);
+    expect(href).toContain(
+      "subject=Something wrong: Digital Caliper 150mm x 0.01mm IP54 at Volt Corner",
+    );
+    expect(href).toContain("Page: https://makhzan.test/products/p-single");
   });
 
-  test("several shops: each offer says how to reach its own shop, or nothing", async ({ page }) => {
+  test("several shops: each shop once, under the offers, never on the rows", async ({ page }) => {
     await page.goto("/products/p-multi");
-    const nile = page.locator('[data-offer="o-m3"]');
-    await expect(nile.locator("[data-contact]")).toHaveCount(1);
-    await expect(nile.getByRole("link", { name: "Call Nile Parts on 19123" })).toHaveAttribute(
+    // Nile Parts has three offers here; its number is said once.
+    await expect(page.locator("[data-offer] [data-contact]")).toHaveCount(0);
+    const block = page.locator('[data-contact-links="shops"]');
+    await expect(block.getByRole("heading", { name: "Contact the shops" })).toBeVisible();
+    const lines = block.locator("[data-shop-contact-line]");
+    // Delta Bench publishes no way to reach it, so it has no line.
+    await expect(lines).toHaveCount(2);
+    await expect(block.locator('[data-shop-contact-line="delta-bench"]')).toHaveCount(0);
+    await expect(block.getByRole("link", { name: "Call Nile Parts on 19123" })).toHaveAttribute(
       "href",
       "tel:19123",
     );
-    // Delta Bench publishes no way to reach it: no empty "Contact:" line.
-    const delta = page.locator('[data-offer="o-m1"]');
-    await expect(delta.locator("[data-contact-links]")).toHaveCount(0);
-    // The price and View keep their place on the row's first two lines.
-    const view = await nile.getByRole("link", { name: "View at Nile Parts" }).boundingBox();
-    const contact = await nile.locator("[data-contact-links]").boundingBox();
-    expect(contact!.y).toBeGreaterThanOrEqual(view!.y + view!.height);
+    await expect(block.getByRole("link", { name: "WhatsApp Volt Corner" })).toHaveAttribute(
+      "href",
+      "https://wa.me/201001234567",
+    );
+    const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
+    expect(decodeURIComponent((await report.getAttribute("href")) ?? "")).toContain(
+      "subject=Something wrong: ESP32 Development Board 30 pin at ",
+    );
   });
 });
 

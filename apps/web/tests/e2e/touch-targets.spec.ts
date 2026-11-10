@@ -114,7 +114,8 @@ test("the product page's controls", async ({ page }) => {
   });
   await page.goto("/products/p-multi");
   await expectTappable(page, {
-    "offer contact link": page.locator('[data-offer="o-m3"] a[data-contact]'),
+    "shop contact link": page.locator("[data-shop-contact-line] a[data-contact]").first(),
+    "report link": page.locator("[data-report] a"),
   });
 });
 
@@ -126,6 +127,7 @@ test("a shop page's contact links", async ({ page }) => {
     whatsapp: contact.locator('a[data-contact="whatsapp"]'),
     email: contact.locator('a[data-contact="email"]'),
     map: contact.locator('a[data-contact="map"]').first(),
+    report: contact.locator('a[data-contact="report"]'),
   });
 });
 

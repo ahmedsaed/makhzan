@@ -22,6 +22,7 @@ import { formatCount } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
 import { pageMetadata, shopDescription, pagedPath } from "@/lib/metadata";
 import { routes, withParams } from "@/lib/routes";
+import { absoluteUrl } from "@/lib/site";
 import {
   fetchResults,
   parseResultsQuery,
@@ -241,6 +242,7 @@ function ShopHeader({
             shop={supplier.slug}
             shopName={supplier.name}
             websiteUrl={supplier.website_url}
+            page={absoluteUrl(routes.shop(supplier.slug))}
             className="mt-2 lg:mt-1 lg:[grid-area:contact]"
           />
         )}
