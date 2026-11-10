@@ -12,11 +12,14 @@ import { ShopContactSection } from "@/app/(site)/shops/_components/shop-contact"
 import { ContactButtons, ReportLink, ShopContactList } from "@/components/contact-links";
 import type { ContactSource, ShopContact } from "@/lib/api";
 import {
+  addressLine,
+  daySpan,
   formatCheckedOn,
   formatPhone,
   missingLine,
   possessive,
-  provenance,
+  provenanceDetails,
+  provenanceLine,
   registrableDomain,
   reportHref,
   sourceLabel,
@@ -184,31 +187,73 @@ describe("naming a source", () => {
   });
 });
 
-describe("where the details came from, in one sentence", () => {
+const NOW = new Date("2026-11-12T12:00:00Z");
+
+describe("where the details came from, in one short line", () => {
   it("one source", () => {
     const contact = { ...EMPTY, sources: [source("https://shop-a.test/contact", ["phones"])] };
-    expect(provenance(contact, "Shop A", "https://shop-a.test")).toBe(
-      "From Shop A's website, checked 10 Nov 2026.",
+    expect(provenanceLine(contact, "Shop A", "https://shop-a.test", NOW)).toBe(
+      "From Shop A's website, checked 10 Nov",
     );
   });
 
-  it("a site and an unclaimed Google Maps listing, checked the same day", () => {
+  it("names each place once, a site and an unclaimed Google Maps listing", () => {
     const contact = {
       ...EMPTY,
       sources: [
         source("https://nile-parts.com/contact-us/", ["phones", "whatsapp", "email"]),
         source("https://www.google.com/maps/place/Nile+Parts", ["address", "area", "governorate"]),
+        source("https://nile-parts.com/", ["opening_hours"], {
+          origin: "read",
+          checked_on: "2026-11-09",
+        }),
       ],
     };
-    expect(provenance(contact, "Nile Parts", "https://nile-parts.com")).toBe(
-      "Phone, WhatsApp and email from Nile Parts' website and address from Google Maps, all checked 10 Nov 2026.",
+    expect(provenanceLine(contact, "Nile Parts", "https://nile-parts.com", NOW)).toBe(
+      "From Nile Parts' website and Google Maps, checked 9–10 Nov",
     );
   });
 
-  it("names the shop's website once, with what was checked and what was read", () => {
-    expect(provenance(FULL, "Shop A", "https://shop-a.test")).toBe(
-      "Phone, email, address, map link and branches from Shop A's website, checked 3 Nov 2026, and WhatsApp and opening hours read automatically 8 Nov 2026.",
+  it("spans days across months and years, with the year only when it is not this one", () => {
+    expect(daySpan(["2026-11-10"], NOW)).toBe("10 Nov");
+    expect(daySpan(["2026-11-10", "2026-11-09", "2026-11-10"], NOW)).toBe("9–10 Nov");
+    expect(daySpan(["2026-10-28", "2026-11-10"], NOW)).toBe("28 Oct – 10 Nov");
+    expect(daySpan(["2025-12-28", "2026-01-03"], new Date("2026-01-05T00:00:00Z"))).toBe(
+      "28 Dec 2025 – 3 Jan",
     );
+    expect(daySpan(["2025-11-03"], NOW)).toBe("3 Nov 2025");
+    expect(daySpan(["2025-11-03", "2025-11-05"], NOW)).toBe("3–5 Nov 2025");
+    expect(daySpan(["garbage"], NOW)).toBeNull();
+  });
+
+  it("without a page, says only when; without either, nothing", () => {
+    const when = { ...EMPTY, sources: [source(null, ["phones"])] };
+    expect(provenanceLine(when, "Shop A", null, NOW)).toBe("Checked 10 Nov");
+    const neither = { ...EMPTY, sources: [source(null, ["area"], { checked_on: null })] };
+    expect(provenanceLine(neither, "Shop A", null, NOW)).toBeNull();
+    expect(provenanceLine(EMPTY, "Shop A", null, NOW)).toBeNull();
+    expect(formatCheckedOn("garbage")).toBeNull();
+  });
+});
+
+describe("where each detail came from, for the Sources disclosure", () => {
+  it("one line a place, a way of reading and a day; Google Maps never the shop's", () => {
+    const contact = {
+      ...EMPTY,
+      sources: [
+        source("https://nile-parts.com/contact-us/", ["phones", "whatsapp", "email"]),
+        source("https://maps.app.goo.gl/x", ["address", "area", "governorate", "maps_url"]),
+        source("https://nile-parts.com/", ["opening_hours"], {
+          origin: "read",
+          checked_on: "2026-11-09",
+        }),
+      ],
+    };
+    expect(provenanceDetails(contact, "Nile Parts", "https://nile-parts.com")).toEqual([
+      "Phone, WhatsApp and email from Nile Parts' website, checked 10 Nov 2026",
+      "Opening hours from Nile Parts' website, read automatically 9 Nov 2026",
+      "Address and map link from Google Maps, checked 10 Nov 2026",
+    ]);
   });
 
   it("two pages of one site on one day are one place", () => {
@@ -219,29 +264,51 @@ describe("where the details came from, in one sentence", () => {
         source("https://shop-a.test/about", ["address"]),
       ],
     };
-    expect(provenance(contact, "Shop A", "https://shop-a.test")).toBe(
-      "From Shop A's website, checked 10 Nov 2026.",
-    );
+    expect(provenanceDetails(contact, "Shop A", "https://shop-a.test")).toEqual([
+      "Phone and address from Shop A's website, checked 10 Nov 2026",
+    ]);
   });
 
-  it("different places on different days", () => {
+  it("names Facebook as such, and a source with no page by its day alone", () => {
     const contact = {
       ...EMPTY,
       sources: [
         source("https://www.facebook.com/shopa", ["phones"], { checked_on: "2026-11-01" }),
-        source("https://maps.app.goo.gl/x", ["address", "maps_url"]),
+        source(null, ["email"]),
       ],
     };
-    expect(provenance(contact, "Shop A", "https://shop-a.test")).toBe(
-      "Phone from Facebook, checked 1 Nov 2026; address and map link from Google Maps, checked 10 Nov 2026.",
+    expect(provenanceDetails(contact, "Shop A", "https://shop-a.test")).toEqual([
+      "Phone from Facebook, checked 1 Nov 2026",
+      "Email, checked 10 Nov 2026",
+    ]);
+  });
+});
+
+describe("an address on one line", () => {
+  it("leaves out the places the page already shows", () => {
+    expect(
+      addressLine("12 Example Street", ["Bab El Louk", "Cairo"], ["Bab El Louk", "Cairo"]),
+    ).toBe("12 Example Street");
+    expect(addressLine("12 Example Street", ["Dokki", "Giza"], ["Bab El Louk", "Cairo"])).toBe(
+      "12 Example Street, Dokki, Giza",
     );
   });
 
-  it("is null when no source says where or when", () => {
-    const contact = { ...EMPTY, sources: [source(null, ["area"], { checked_on: null })] };
-    expect(provenance(contact, "Shop A", null)).toBeNull();
-    expect(provenance(EMPTY, "Shop A", null)).toBeNull();
-    expect(formatCheckedOn("garbage")).toBeNull();
+  it("leaves out a place the address already names, as whole words only", () => {
+    expect(addressLine("4 Nile Road, Garden Heights, Smouha", ["Smouha", "Alexandria"])).toBe(
+      "4 Nile Road, Garden Heights, Smouha, Alexandria",
+    );
+    expect(addressLine("4 Nile Road, Garden Heights", ["Garden", "Alexandria"])).toBe(
+      "4 Nile Road, Garden Heights, Alexandria",
+    );
+    expect(addressLine("4 Nile Road, Gardenia", ["Garden", null])).toBe(
+      "4 Nile Road, Gardenia, Garden",
+    );
+  });
+
+  it("is the places alone without an address, and empty with nothing", () => {
+    expect(addressLine(null, ["Dokki", "Giza"])).toBe("Dokki, Giza");
+    expect(addressLine(null, [null, "Giza"], ["Giza"])).toBe("");
   });
 });
 
@@ -269,47 +336,110 @@ describe("Something wrong? Tell us", () => {
 });
 
 describe("the shop page's contact section", () => {
-  it("links every number, WhatsApp, email and map, and says where they came from", () => {
-    const { container, getByRole, getByText } = render(
+  function renderFull(contact: ShopContact = FULL) {
+    return render(
       <ShopContactSection
-        contact={FULL}
+        contact={contact}
         shop="shop-a"
         shopName="Shop A"
         websiteUrl="https://shop-a.test"
         page={PAGE}
+        shownPlace={["Bab El Louk", "Cairo"]}
+        now={NOW}
       />,
     );
-    expect(getByRole("link", { name: "Call Shop A on 02 2345 6789" })).toHaveAttribute(
-      "href",
-      "tel:+20223456789",
-    );
-    expect(getByRole("link", { name: "Call Shop A on 02 2345 6780" })).toBeInTheDocument();
-    // A branch's number says which branch it rings.
-    expect(
-      getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" }),
-    ).toBeInTheDocument();
+  }
+
+  it("a call, WhatsApp and Email as buttons, the other number beside the call", () => {
+    const { container, getByRole } = renderFull();
+    const buttons = [...container.querySelectorAll("[data-contact-actions] a")];
+    expect(buttons.map((a) => a.getAttribute("data-contact"))).toEqual([
+      "phone",
+      "phone",
+      "whatsapp",
+      "email",
+    ]);
+    const call = getByRole("link", { name: "Call Shop A on 02 2345 6789" });
+    expect(call).toHaveAttribute("href", "tel:+20223456789");
+    expect(call).toHaveTextContent("Call 02 2345 6789");
+    const other = getByRole("link", { name: "Call Shop A on 02 2345 6780" });
+    expect(other).toHaveTextContent(/^02 2345 6780$/);
+    expect(other.parentElement?.parentElement).toHaveTextContent(/^or 02 2345 6780$/);
     const whatsapp = getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" });
     expect(whatsapp).toHaveAttribute("href", "https://wa.me/201001234567");
     expect(whatsapp).toHaveAttribute("target", "_blank");
-    expect(getByRole("link", { name: "sales@shop-a.test" })).toHaveAttribute(
+    expect(getByRole("link", { name: "Email Shop A at sales@shop-a.test" })).toHaveAttribute(
       "href",
       "mailto:sales@shop-a.test",
     );
+  });
+
+  it("the address on one line, without the area the header shows, then the map", () => {
+    const { container, getByRole } = renderFull();
+    const address = container.querySelector('[data-contact-line="address"]');
+    expect(address).toHaveTextContent(/^Main shop: 12 Example Street · Open in maps$/);
     expect(getByRole("link", { name: "Map: Shop A, Bab El Louk, Cairo" })).toHaveAttribute(
       "href",
       "https://maps.app.goo.gl/shopA",
     );
-    expect(getByText("Main shop")).toBeInTheDocument();
-    expect(getByText("Friday closed")).toBeInTheDocument();
-    expect(container.querySelector("[data-contact-source]")).toHaveTextContent(
-      /^Phone, email, address, map link and branches from Shop A's website/,
+  });
+
+  it("a branch on one compact line, its own place kept, its number saying which branch", () => {
+    const { container, getByRole } = renderFull();
+    expect(container.querySelector('[data-contact-line="branch"]')).toHaveTextContent(
+      /^Giza branch: 3 Other Street, Dokki, Giza · 02 3333 4444$/,
     );
+    expect(getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" })).toHaveAttribute(
+      "href",
+      "tel:+20233334444",
+    );
+  });
+
+  it("hours in plain English, or as written", () => {
+    const { container } = renderFull({
+      ...FULL,
+      opening_hours: ["Sa,Su,Mo,Tu,We,Th 10:00-20:30", "Fr 14:00-20:00"],
+    });
+    expect(container.querySelector("[data-opening-hours]")).toHaveTextContent(
+      "Opening hours: Sat–Thu 10:00–20:30 · Fri 14:00–20:00",
+    );
+    const written = renderFull();
+    expect(written.container.querySelector("[data-opening-hours]")).toHaveTextContent(
+      "Saturday to Thursday 10:00 to 22:00 · Friday closed",
+    );
+  });
+
+  it("one short source line beside the report link, the breakdown behind Sources", () => {
+    const { container, getByRole } = renderFull();
+    expect(container.querySelector("[data-contact-source]")).toHaveTextContent(
+      "From Shop A's website, checked 3–8 Nov (sources)",
+    );
+    const sources = container.querySelector("details[data-contact-sources]");
+    expect(sources).not.toHaveAttribute("open");
+    expect([...(sources?.querySelectorAll("li") ?? [])].map((li) => li.textContent)).toEqual([
+      "Phone, email, address, map link and branches from Shop A's website, checked 3 Nov 2026",
+      "WhatsApp and opening hours from Shop A's website, read automatically 8 Nov 2026",
+    ]);
     expect(getByRole("link", { name: "Tell us" })).toHaveAttribute("data-contact", "report");
     // Every link is a contact link, counted, none tagged as a visit (P4's exception).
     for (const link of container.querySelectorAll("a")) {
       expect(link).toHaveAttribute("data-umami-event", "shop-contact");
       expect(link.getAttribute("href")).not.toContain("ref=makhzan");
     }
+  });
+
+  it("a shop with only a map link and one number", () => {
+    const { container } = renderFull({
+      ...EMPTY,
+      phones: ["+201001234567"],
+      maps_url: "https://maps.app.goo.gl/x",
+      sources: [source("https://shop-a.test/contact", ["phones", "maps_url"])],
+    });
+    expect(container.querySelector('[data-contact-line="address"]')).toHaveTextContent(
+      /^Open in maps$/,
+    );
+    expect(container.querySelector("[data-opening-hours]")).toBeNull();
+    expect(container.querySelectorAll("[data-contact-actions] a")).toHaveLength(1);
   });
 
   it("renders nothing for an empty block", () => {
@@ -327,25 +457,32 @@ describe("the shop page's contact section", () => {
 });
 
 describe("contacting the shops from a product page", () => {
-  it("one shop: WhatsApp, a call and email, whichever it publishes", () => {
-    const { getByRole, getAllByRole } = render(
+  it("one shop: a call, WhatsApp and email, whichever it publishes, then its hours", () => {
+    const { container, getByRole, getAllByRole } = render(
       <ContactButtons
         reach={{ phone: "+20223456789", whatsapp: "+201001234567", email: null }}
         shop="shop-a"
         shopName="Shop A"
+        hours={["Mo-Fr 09:00-17:00"]}
       />,
     );
-    expect(getAllByRole("link")).toHaveLength(2);
-    expect(getByRole("link", { name: "WhatsApp Shop A" })).toHaveAttribute(
+    expect(getAllByRole("link").map((a) => a.getAttribute("data-contact"))).toEqual([
+      "phone",
+      "whatsapp",
+    ]);
+    expect(getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" })).toHaveAttribute(
       "href",
       "https://wa.me/201001234567",
     );
     const call = getByRole("link", { name: "Call Shop A on 02 2345 6789" });
     expect(call).toHaveAttribute("href", "tel:+20223456789");
     expect(call).toHaveTextContent("Call 02 2345 6789");
+    expect(container.querySelector("[data-opening-hours]")).toHaveTextContent(
+      "Mon–Fri 09:00–17:00 · Sat, Sun closed",
+    );
   });
 
-  it("several shops: one line a shop that can be reached", () => {
+  it("several shops: a block a shop that can be reached, with its hours", () => {
     const { container, getByRole } = render(
       <ShopContactList
         shops={[
@@ -353,6 +490,7 @@ describe("contacting the shops from a product page", () => {
             slug: "nile",
             name: "Nile Parts",
             reach: { phone: "19123", whatsapp: null, email: null },
+            hours: ["Sa-Th 10:00-22:00"],
           },
           { slug: "delta", name: "Delta Bench", reach: null },
           {
@@ -372,7 +510,11 @@ describe("contacting the shops from a product page", () => {
       "href",
       "tel:19123",
     );
-    expect(getByRole("link", { name: "Email Volt Corner" })).toHaveAttribute(
+    expect(lines[0]).toHaveTextContent(
+      "Nile PartsCall 19123Opening hours: Sat–Thu 10:00–22:00 · Fri closed",
+    );
+    expect(lines[1]).toHaveTextContent(/^Volt CornerWhatsApp · Email$/);
+    expect(getByRole("link", { name: "Email Volt Corner at a@volt.test" })).toHaveAttribute(
       "href",
       "mailto:a@volt.test",
     );

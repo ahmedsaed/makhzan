@@ -31,8 +31,8 @@ test("a fresh shop page: stats, the way out, search and what it carries", async 
   await page.goto("/shops/shop-a");
   await expect(page).toHaveTitle(/^Shop A · makhzan/);
   await expect(page.getByRole("heading", { level: 1, name: "Shop A" })).toBeVisible();
-  // Under the name, and again with the address in the contact section.
-  await expect(page.getByText("Bab El Louk, Cairo").first()).toBeVisible();
+  // Under the name, and only there: the contact section's address leaves it out.
+  await expect(page.getByText("Bab El Louk, Cairo", { exact: true })).toHaveCount(1);
   await expect(page.locator("[data-stale-note]")).toHaveCount(0);
   await expect(page.locator('[data-tier="warn"]')).toHaveCount(0);
   await expect(page.locator("dl")).toContainText("Last checked3 days ago");
@@ -71,40 +71,62 @@ test.describe("how to reach a shop", () => {
     const contact = page.locator("[data-shop-contact]");
     await expect(contact.getByRole("heading", { name: "Contact" })).toBeVisible();
 
+    // One row of buttons: the call, the other number beside it, WhatsApp, Email.
     // Formatted for an Egyptian reader, dialled in E.164.
+    const actions = contact.locator("[data-contact-actions] a");
+    expect(await actions.evaluateAll((all) => all.map((a) => a.dataset.contact))).toEqual([
+      "phone",
+      "phone",
+      "whatsapp",
+      "email",
+    ]);
     const first = contact.getByRole("link", { name: "Call Shop A on 02 2345 6789" });
-    await expect(first).toHaveText("02 2345 6789");
+    await expect(first).toHaveText("Call 02 2345 6789");
     await expect(first).toHaveAttribute("href", "tel:+20223456789");
-    await expect(contact.getByRole("link", { name: "Call Shop A on 02 2345 6780" })).toBeVisible();
+    await expect(contact.getByRole("link", { name: "Call Shop A on 02 2345 6780" })).toHaveText(
+      "02 2345 6780",
+    );
     await expect(
       contact.getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" }),
     ).toHaveAttribute("href", "https://wa.me/201001234567");
-    await expect(contact.getByRole("link", { name: "sales@shop-a.test" })).toHaveAttribute(
-      "href",
-      "mailto:sales@shop-a.test",
-    );
+    await expect(
+      contact.getByRole("link", { name: "Email Shop A at sales@shop-a.test" }),
+    ).toHaveAttribute("href", "mailto:sales@shop-a.test");
 
-    // The main shop and its branch, each with its own map link and number.
-    await expect(contact).toContainText("Main shop");
-    await expect(contact).toContainText("12 Example Street, 2nd floor");
+    // The main shop on one line, without the area the header already shows,
+    // and its branch on one line, each with its own map link and number.
+    await expect(contact.locator('[data-contact-line="address"]')).toHaveText(
+      "Main shop: 12 Example Street, 2nd floor · Open in maps",
+    );
     await expect(
       contact.getByRole("link", { name: "Map: Shop A, Bab El Louk, Cairo" }),
     ).toHaveAttribute("href", "https://maps.app.goo.gl/shopA");
-    await expect(contact).toContainText("Giza branch");
+    await expect(contact.locator('[data-contact-line="branch"]')).toHaveText(
+      "Giza branch: 3 Other Street, Dokki, Giza · 02 3333 4444 · Open in maps",
+    );
     await expect(
       contact.getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" }),
     ).toHaveAttribute("href", "tel:+20233334444");
-    await expect(contact).toContainText("Friday closed");
 
-    // Quietly, where it all came from.
-    await expect(contact.locator("[data-contact-source]")).toHaveText(
-      "Phone, email and branches from Shop A's website, checked 3 Nov 2026, and WhatsApp and opening hours read automatically 8 Nov 2026; address and map link from Google Maps, checked 3 Nov 2026.",
+    // The hours as schema.org markup has them, read in plain English.
+    await expect(contact.locator("[data-opening-hours]")).toHaveText(
+      "Opening hours: Sat–Thu 10:00–22:00 · Fri closed",
     );
 
-    // A Google Maps listing is never called the shop's own.
-    await expect(contact.locator("[data-contact-source]")).not.toContainText(
-      "address and map link from Shop A",
+    // Quietly, in one short line, where it all came from; field by field
+    // behind it. A Google Maps listing is never called the shop's own.
+    const source = contact.locator("[data-contact-source]");
+    await expect(source).toHaveText(
+      /^From Shop A's website and Google Maps, checked 3–8 Nov( 2026)? \(sources\)$/,
     );
+    const sources = contact.locator("[data-contact-sources] li");
+    await expect(sources.first()).toBeHidden();
+    await source.click();
+    await expect(sources).toHaveText([
+      "Phone, email and branches from Shop A's website, checked 3 Nov 2026",
+      "WhatsApp and opening hours from Shop A's website, read automatically 8 Nov 2026",
+      "Address and map link from Google Maps, checked 3 Nov 2026",
+    ]);
 
     // Something wrong? An email to makhzan naming the shop and the page.
     const report = contact.getByRole("link", { name: "Tell us" });
@@ -124,7 +146,11 @@ test.describe("how to reach a shop", () => {
     // Nothing to call or open: only the way to report something wrong.
     await expect(contact.locator("a:not([data-contact=report])")).toHaveCount(0);
     await expect(contact.locator("[data-contact-source]")).toHaveText(
-      "From Stale Shop's website, read automatically 20 Aug 2026.",
+      /^From Stale Shop's website, checked 20 Aug( 2026)? \(sources\)$/,
+    );
+    await expect(contact.locator("[data-contact-sources] li")).toHaveText(
+      ["Address from Stale Shop's website, read automatically 20 Aug 2026"],
+      { useInnerText: false },
     );
     await expect(page.locator("[data-contact-missing]")).toHaveText(
       "Phone and opening hours aren't listed yet. Own this shop? Add your details.",
@@ -167,10 +193,30 @@ test.describe("how to reach a shop", () => {
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/shops/shop-a");
     await expect(page.locator("html")).toHaveClass(/dark/);
-    const link = page.locator('[data-shop-contact] a[data-contact="phone"]').first();
+    // The text links: the call is an outlined button, in `ink`.
+    const link = page.locator('[data-shop-contact] a[data-contact="map"]').first();
     // `link` in the dark theme: #FB923C (docs/DESIGN.md).
     await expect(link).toHaveCSS("color", "rgb(251, 146, 60)");
   });
+});
+
+test("on a phone, how to reach the shop comes straight after Visit, its buttons never stranded", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/shops/shop-a");
+  const visit = await page.getByRole("link", { name: "Visit shop-a.test" }).boundingBox();
+  const contact = await page.locator("[data-shop-contact]").boundingBox();
+  const search = await page.getByRole("searchbox", { name: "Search Shop A" }).boundingBox();
+  expect(contact?.y ?? 0).toBeGreaterThan(visit?.y ?? 0);
+  expect(contact?.y ?? 0).toBeLessThan(search?.y ?? 0);
+  // The call across the width; WhatsApp and Email side by side under it.
+  const box = (kind: string) =>
+    page.locator(`[data-contact-actions] > a[data-contact="${kind}"]`).boundingBox();
+  const [call, whatsapp, email] = await Promise.all([box("phone"), box("whatsapp"), box("email")]);
+  expect(call?.width ?? 0).toBeGreaterThan(300);
+  expect(whatsapp?.y).toBe(email?.y);
+  expect(whatsapp?.y ?? 0).toBeGreaterThan(call?.y ?? 0);
 });
 
 test("phones list the shop's biggest categories, each narrowing its products", async ({ page }) => {
@@ -201,6 +247,20 @@ test("a shop's page uses a desktop's width, and its rows do not repeat its name"
   const visit = await main.getByRole("link", { name: "Visit shop-a.test" }).boundingBox();
   expect((figures?.x ?? 0) - (name?.x ?? 0)).toBeGreaterThan(600);
   expect((visit?.x ?? 0) + (visit?.width ?? 0) - (name?.x ?? 0)).toBeGreaterThan(1000);
+
+  // How to reach the shop sits under "Visit" in the right-hand column, beside
+  // what it carries, rather than in a band of its own across the page.
+  const contact = await main.locator("[data-shop-contact]").boundingBox();
+  const carries = await main.getByRole("heading", { name: "What they carry" }).boundingBox();
+  expect(Math.abs((contact?.x ?? 0) - (visit?.x ?? 0))).toBeLessThan(2);
+  expect(contact?.y ?? 0).toBeGreaterThan((visit?.y ?? 0) + (visit?.height ?? 0));
+  expect(contact?.width ?? 0).toBeLessThanOrEqual((visit?.width ?? 0) + 1);
+  expect(Math.abs((carries?.y ?? 0) - (contact?.y ?? 0))).toBeLessThan(4);
+  // The buttons are one row.
+  const tops = await main
+    .locator("[data-contact-actions] > a")
+    .evaluateAll((all) => all.map((a) => Math.round(a.getBoundingClientRect().top)));
+  expect(new Set(tops).size).toBe(1);
 
   // Desktop has the category rail beside the results, not the phone's list.
   await expect(page.getByRole("heading", { name: "Biggest categories here" })).toBeHidden();

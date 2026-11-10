@@ -126,7 +126,11 @@ test("a shop page's contact links", async ({ page }) => {
     phone: contact.locator('a[data-contact="phone"]').first(),
     whatsapp: contact.locator('a[data-contact="whatsapp"]'),
     email: contact.locator('a[data-contact="email"]'),
+    "other number": contact.getByRole("link", { name: "Call Shop A on 02 2345 6780" }),
     map: contact.locator('a[data-contact="map"]').first(),
+    "branch number": contact.getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" }),
+    "branch map": contact.locator('a[data-contact="map"]').last(),
+    sources: contact.locator("[data-contact-source]"),
     report: contact.locator('a[data-contact="report"]'),
   });
 });
