@@ -6,26 +6,26 @@
 #
 # Custom format (pg_dump -Fc): compressed, and pg_restore can list it, restore
 # selectively and restore into any database. Restore with ./makhzan restore FILE.
-# Keeps the 14 newest backups (old *.sql.gz and new *.dump counted together);
-# BACKUP_PRUNE=0 skips that, so a safety copy never evicts the file being restored.
 #
-# COMPOSE_FILE / ENV_FILE point it at another stack (default: production).
+# Retention: the 14 newest backups (old *.sql.gz and new *.dump counted
+# together), and separately the 3 newest *-pre-restore.dump safety copies, so
+# repeated restore attempts never push out the last good backups.
+# MAKHZAN_KEEP_FILE (a realpath) names one file never to prune: the one being restored.
+#
+# Takes the operations lock (scripts/lib/ops.sh), so it never runs during a
+# restore or deploy. MAKHZAN_ENV_FILE / MAKHZAN_COMPOSE_FILE with
+# COMPOSE_PROJECT_NAME point it at another stack (default: production).
 set -euo pipefail
+export MAKHZAN_CALLER_PWD="${MAKHZAN_CALLER_PWD:-$PWD}"
 cd "$(dirname "$0")/.."
+. scripts/lib/ops.sh
+out_arg=""
+[ -z "${1:-}" ] || out_arg="$(ops_abspath "$1")"
 
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-ENV_FILE="${ENV_FILE:-.env.prod}"
-case "$ENV_FILE" in /* | ./* | ../*) ;; *) ENV_FILE="./$ENV_FILE" ;; esac
-export ENV_FILE  # docker-compose.prod.yml's env_file: follows it
-COMPOSE=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
+ops_stack
+ops_lock "backup-db.sh"
 
-# Load POSTGRES_USER / POSTGRES_DB (and everything else) from the env file.
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
-
-out="${1:-backups/makhzan-$(date +%Y%m%d-%H%M%S).dump}"
+out="${out_arg:-$PWD/backups/makhzan-$(date +%Y%m%d-%H%M%S).dump}"
 mkdir -p "$(dirname "$out")"
 partial="${out}.partial"
 trap 'rm -f "$partial"' EXIT
@@ -57,11 +57,20 @@ fi
 mv "$partial" "$out"
 echo "==> Wrote $out ($(du -h "$out" | cut -f1), $(grep -c 'TABLE DATA' <<<"$toc") tables, verified)"
 
-if [ "${BACKUP_PRUNE:-1}" != "0" ]; then
-  shopt -s nullglob
-  backups=(backups/makhzan-*.dump backups/makhzan-*.sql.gz)
-  if [ "${#backups[@]}" -gt 14 ]; then
-    # shellcheck disable=SC2012 # our own names, no newlines
-    ls -1t -- "${backups[@]}" | tail -n +15 | xargs -r -d '\n' rm --
-  fi
-fi
+# prune KEEP FILE...: delete all but the KEEP newest of FILE..., never MAKHZAN_KEEP_FILE.
+prune() {
+  local keep="$1" f
+  shift
+  [ "$#" -gt "$keep" ] || return 0
+  # shellcheck disable=SC2012 # our own names, no newlines
+  ls -1t -- "$@" | tail -n +"$((keep + 1))" | while read -r f; do
+    [ "$(realpath -- "$f")" = "${MAKHZAN_KEEP_FILE:-}" ] || rm -- "$f"
+  done
+}
+shopt -s nullglob
+regular=()
+for f in backups/makhzan-*.dump backups/makhzan-*.sql.gz; do
+  case "$f" in *-pre-restore.dump) ;; *) regular+=("$f") ;; esac
+done
+prune 14 "${regular[@]}"
+prune 3 backups/makhzan-*-pre-restore.dump

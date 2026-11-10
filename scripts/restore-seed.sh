@@ -6,16 +6,19 @@
 #   ./scripts/restore-seed.sh [--yes] [path/to/dump]   # default: seed/makhzan-seed.dump
 #
 # There is one restore path: this is restore-db.sh with a default file, so it
-# reads either dump format, migrates and confirms the same way.
+# reads either dump format, migrates and confirms the same way. On a fresh
+# server it skips the safety backup by itself: the empty database has nothing to keep.
 set -euo pipefail
+export MAKHZAN_CALLER_PWD="${MAKHZAN_CALLER_PWD:-$PWD}"
 cd "$(dirname "$0")/.."
+. scripts/lib/ops.sh
 
 args=()
 dump=""
 for a in "$@"; do
   case "$a" in -*) args+=("$a") ;; *) dump="$a" ;; esac
 done
-dump="${dump:-seed/makhzan-seed.dump}"
+if [ -n "$dump" ]; then dump="$(ops_abspath "$dump")"; else dump="$PWD/seed/makhzan-seed.dump"; fi
 
 if [ ! -s "$dump" ]; then
   echo "Seed dump not found, or empty: $dump" >&2
