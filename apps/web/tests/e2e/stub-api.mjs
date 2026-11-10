@@ -299,6 +299,17 @@ const server = createServer((req, res) => {
   if (path === "/search") return send(200, search(url));
   if (path === "/sitemap/products") return send(200, sitemapProducts(url));
   if (path === "/crawler/activity") return send(200, crawlerActivity());
+  if (path === "/.well-known/http-message-signatures-directory") {
+    // Shaped like the API's: a JWKS, its media type, and the signature headers
+    // the proxy must pass through untouched.
+    res.writeHead(200, {
+      "content-type": "application/http-message-signatures-directory+json",
+      "signature-input":
+        'sig1=("@authority";req);created=1;expires=301;keyid="k";alg="ed25519";tag="http-message-signatures-directory"',
+      signature: "sig1=:c3R1Yg==:",
+    });
+    return res.end(JSON.stringify({ keys: [{ kty: "OKP", crv: "Ed25519", x: "stub" }] }));
+  }
   if (path === "/products/prod-1/similar") {
     // A ProductSummary: no offers key at all, which is the point of the shape.
     const summary = { ...PRODUCT };
