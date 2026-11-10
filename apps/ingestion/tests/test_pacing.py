@@ -156,65 +156,89 @@ async def test_the_backoff_still_grows_above_the_pace(clock):
     times = log.times["https://shop.test"]
     gaps = [later - earlier for earlier, later in zip(times, times[1:])]
     assert len(sent) == 4
-    # max(pace × slowdown, 100·2^n + jitter): each 503 doubles the pace (30, 60,
-    # 120), and the backoff (100, 200, 400) is longer still, so it wins.
+    # max(pace × slowdown, 100·2^n + jitter): the backoff (100, 200, 400) is
+    # longer than the pace even once the third 503 in a row doubles it to 30.
     assert 100.0 <= gaps[0] <= 100.5
     assert 200.0 <= gaps[1] <= 200.5
     assert 400.0 <= gaps[2] <= 400.5
 
 
-async def test_server_errors_slow_the_host_down_and_successes_ease_it(clock):
-    """A 5xx doubles the host's pace, at take_turn, so stats.pacing shows the wider gaps."""
+async def _statuses(sent: list[str], statuses: list[int], path: str = "/x") -> None:
+    """One request per status, each a separate call (none retried)."""
+    for status in statuses:
+        async with _client([status], sent) as client:
+            try:
+                await http_mod.get_json(client, f"https://shop.test{path}", retries=0)
+            except httpx.HTTPStatusError:
+                pass
+
+
+async def test_three_errors_in_a_row_slow_the_host_and_successes_recover_it(clock):
+    """At take_turn, so stats.pacing shows the wider gaps."""
     http_mod.set_host_pace("https://shop.test", 15.0)
     sent: list[str] = []
     with http_mod.logging_requests(http_mod.RequestLog()) as log:
-        async with _client([503, 503, 200], sent) as client:
-            await http_mod.get_json(client, "https://shop.test/a", retries=3, base_delay=1.0)
-        # A later page: the pace is still raised (60 s × 0.9 after one 2xx).
-        async with _client([200], sent) as client:
-            await http_mod.get_json(client, "https://shop.test/b")
-
+        await _statuses(sent, [500, 502, 504, 200, 200, 200, 200])
     times = log.times["https://shop.test"]
     gaps = [later - earlier for earlier, later in zip(times, times[1:])]
-    assert gaps[0] == pytest.approx(30.0)  # 15 × 2
-    assert gaps[1] == pytest.approx(60.0)  # 15 × 4
-    assert gaps[2] == pytest.approx(54.0)  # 15 × 4 × 0.9: one success eases it
-    assert log.pacing()["min_gap_s"] >= 30.0
+    # Two errors change nothing; the third doubles the pace; three 2xx halve it.
+    assert gaps == pytest.approx([15.0, 15.0, 30.0, 30.0, 30.0, 15.0])
+    assert http_mod.slowdown("https://shop.test") == 1.0
 
 
-async def test_a_500_that_is_not_retried_still_slows_the_next_request(clock):
+async def test_an_occasional_error_leaves_the_pace_alone(clock):
+    """One error in ten never makes three in a row: the host stays at 1×."""
     http_mod.set_host_pace("https://shop.test", 15.0)
     sent: list[str] = []
     with http_mod.logging_requests(http_mod.RequestLog()) as log:
-        async with _client([500], sent) as client:
-            with pytest.raises(httpx.HTTPStatusError):
-                await http_mod.get_json(client, "https://shop.test/a")
-        async with _client([200], sent) as client:
-            await http_mod.get_json(client, "https://shop.test/b")
-    times = log.times["https://shop.test"]
-    assert times[1] - times[0] == pytest.approx(30.0)
+        await _statuses(sent, ([500] + [200] * 9) * 5)
+    assert http_mod.slowdown("https://shop.test") == 1.0
+    assert log.pacing()["max_gap_s"] == 15.0
 
 
-async def test_a_timeout_slows_the_host_down(clock):
+async def test_the_slowdown_is_capped(clock):
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    sent: list[str] = []
+    await _statuses(sent, [500] * 30)
+    assert http_mod.slowdown("https://shop.test") == http_mod.SLOWDOWN_CAP == 4.0
+
+
+async def test_the_slowdown_is_forgotten_by_the_next_days_run(clock):
+    for _ in range(http_mod.SLOWDOWN_AFTER):
+        http_mod.note_trouble("https://shop.test")
+    assert http_mod.slowdown("https://shop.test") == 2.0
+    clock.now += http_mod.SLOWDOWN_FORGET + 1
+    assert http_mod.slowdown("https://shop.test") == 1.0
+
+
+async def test_a_timeout_counts_as_an_error(clock):
     http_mod.set_host_pace("https://shop.test", 15.0)
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("slow", request=request)
 
-    async with http_mod.make_client(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(httpx.ReadTimeout):
-            await http_mod.get_json(client, "https://shop.test/a")
+    for _ in range(http_mod.SLOWDOWN_AFTER):
+        async with http_mod.make_client(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(httpx.ReadTimeout):
+                await http_mod.get_json(client, "https://shop.test/a")
     assert http_mod.slowdown("https://shop.test") == 2.0
 
 
-def test_the_slowdown_is_capped_and_decays_to_nothing():
-    for _ in range(10):
-        http_mod.note_trouble("https://shop.test")
-    assert http_mod.slowdown("https://shop.test") == http_mod.SLOWDOWN_CAP
-    for _ in range(25):
-        http_mod.note_response("https://shop.test", 200)
-    assert http_mod.slowdown("https://shop.test") == 1.0
-    assert "https://shop.test" not in http_mod._SLOWDOWN
+async def test_a_429_without_retry_after_is_not_stretched_absurdly(clock):
+    """Five retries of a 429 with no Retry-After: backoff and slowdown do not compound.
+
+    Before the slowdown it took about 75 s; doubling on every error made it
+    about 450 s. Raising only after three in a row keeps it near 2 minutes.
+    """
+    http_mod.set_host_pace("https://shop.test", 15.0)
+    sent: list[str] = []
+    with http_mod.logging_requests(http_mod.RequestLog()) as log:
+        async with _client([429], sent) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                await http_mod.get_json(client, "https://shop.test/a", retries=5)
+    times = log.times["https://shop.test"]
+    assert len(times) == 6
+    assert times[-1] - times[0] < 130.0
 
 
 async def test_crawl_delay_raises_the_retry_floor(clock, monkeypatch):
