@@ -29,7 +29,7 @@ Measured on 60.9k active listings (November 2026).
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
 | 16 departments, very uneven (three hold 88% of products) | Departments are listed by size and each says what's inside; never equal tiles of names. |
-| Supplier profiles have no location, phone or logo | The shop page is thin until shops add details (see `docs/PRODUCT.md`). |
+| Shops' contact details: listed by hand from where each shop's details are published (its site, its Facebook, its Google Maps listing; `sources.toml`) or read by the crawler from its JSON-LD; few shops have them yet, and none has a logo | The shop page shows what is known with where and when it was read, and names what is still missing; a product page offers WhatsApp or a call only for a shop that publishes one. |
 | Offers per product exceed shops per product | One shop can list several variants of one product. |
 
 ## How aggregators do it (research, November 2026)
@@ -131,7 +131,10 @@ the page container on desktop; each section is left out when its fetch fails.
   swipe, arrows, Left/Right and Esc, an "n / N" counter, and focus back on the photo
   when it closes.
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
-  shop page, then what the shop wrote. A fixed bottom bar on phones: price, "checked …"
+  shop page and, under it when the shop publishes one, "Contact {shop} directly":
+  outlined buttons for WhatsApp, "Call 02 2345 6789" and Email, then "Something wrong?
+  Tell us" (an email to makhzan naming the product and the shop); then what the shop
+  wrote. A fixed bottom bar on phones: price, "checked …"
   and **View at {shop}**.
 - Similar products are always last, on every product page: a swipeable row with arrows
   on a phone, a grid from `sm`.
@@ -153,7 +156,11 @@ the page container on desktop; each section is left out when its fetch fails.
   description shows in full with no button.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
-  own title, then shop and freshness, then price and **View**. Out-of-stock offers fold
+  own title, then shop and freshness, then price and **View**. Under the list,
+  **Contact the shops**: each shop that publishes a way to reach it, once, on its own
+  line ("Nile Parts  Call 19123"), never on the rows (a shop with three offers would
+  say it three times, and a row leaving it out because a neighbour said it would break
+  P3), then "Something wrong? Tell us". Out-of-stock offers fold
   under "Show N out of stock offers", out-of-date ones (any stock) under "Show N out of
   date offers". The summary counts the recently checked offers, and the bottom bar
   points to the cheapest of them. When every offer is out of date nothing folds for
@@ -190,6 +197,19 @@ chip still hides them (`?stale=hide`). A search within the shop follows the same
 Rows leave out the shop's name, which would only repeat the heading (the one
 exception to C1's "shop name"); a product other shops sell keeps its "N shops" badge.
 "Biggest categories" is a phone list only, since the desktop rail already lists them.
+In the band, under the stale note, **Contact**: the shop's
+numbers as `tel:` links, WhatsApp, email, its address ("Main shop" when it has branches)
+and each branch with the shop's own map link, and its opening hours, in columns from `sm`.
+Numbers read the Egyptian way ("010 0123 4567", "02 2345 6789") and link in E.164.
+Under them, quietly, one sentence on where each came from, grouped by place: "Phone,
+WhatsApp and email from Nile Parts' website and address from Google Maps, all checked 10 Nov
+2026." A page on the shop's own domain (either a subdomain of the other) is "{shop}'s
+website"; Google Maps, Facebook and Instagram are named as such and never called the
+shop's (a Google Maps listing is often unclaimed); anything else by its host. "checked"
+is a person reading the page, "read automatically" the crawler reading the shop's
+structured data. Then "Something wrong? Tell us", an email to makhzan naming the shop. A shop nobody has found anything for has no section. At the foot of the
+page one line names only what is still missing ("Phone and opening hours aren't listed
+yet.") before "Own this shop? Add your details.", which stands alone when nothing is.
 At the foot of the band, one line on what the crawler did there: "makhzan read this site
 3 hours ago · 412 requests in the last 7 days · at least 15 s apart · How we crawl", the
 link going to `/how-we-crawl#activity`; for a paused shop only "makhzan is not reading this
@@ -319,7 +339,7 @@ Each is meant to be checked by a test.
 - **P1** Every result opens the product page; nothing in a result links straight to a shop.
 - **P2** The comparison list appears only with 2+ offers.
 - **P3** All of a product's offers share one list, each row led by its own title (variants differ). Rows must not depend on their neighbours, so variant groups can wrap them later.
-- **P4** The only link out of makhzan is to a shop's own page, and it carries `ref=makhzan`.
+- **P4** The only link out of makhzan is to a shop's own page, and it carries `ref=makhzan`. The one exception is a way to reach a shop, as its details are published (its site, its Facebook, its Google Maps listing): `tel:`, `mailto:`, `https://wa.me/<its number>` and a Google or Apple Maps link, plus the "Something wrong? Tell us" email to makhzan. These carry no `ref` (it would break them) and are marked `data-contact`.
 
 **Style and accessibility**
 - **S1** Colours come only from the tokens above; no literal colours in components.

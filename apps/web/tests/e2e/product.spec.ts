@@ -750,16 +750,88 @@ test("every link out of makhzan carries ref=makhzan (P4)", async ({ page }) => {
     "/shops/shop-a",
   ]) {
     await page.goto(path);
+    // A way to reach the shop (its WhatsApp, its own map link) is P4's one
+    // exception: the shop's own route to itself, not a page of its site.
     const external = await page
-      .locator('a[href^="http"]:not([href^="https://merope.dev"])')
+      .locator('a[href^="http"]:not([href^="https://merope.dev"]):not([data-contact])')
       .evaluateAll((links) => links.map((a) => a.getAttribute("href")));
     expect(external.length, path).toBeGreaterThan(0);
     for (const href of external) expect(href, path).toContain("ref=makhzan");
+    const contact = await page
+      .locator("a[data-contact]")
+      .evaluateAll((links) =>
+        links.map((a) => [a.getAttribute("data-contact"), a.getAttribute("href")]),
+      );
+    const expected: Record<string, RegExp> = {
+      whatsapp: /^https:\/\/wa\.me\/\d+$/,
+      phone: /^tel:(\+\d{8,15}|1[5679]\d{3})$/,
+      email: /^mailto:[^?]+@[^?]+$/,
+      map: /^https:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.page|(www\.)?google\.[a-z.]+\/maps|maps\.apple\.com)\//,
+      report: /^mailto:crawler@makhzan\.merope\.dev\?subject=/,
+    };
+    for (const [kind, href] of contact) {
+      expect(href, `${path} ${kind}`).toMatch(expected[kind ?? ""] ?? /^$-never/);
+    }
   }
+});
+
+test.describe("contacting the shop", () => {
+  test("one shop: WhatsApp, a call and email under Sold by", async ({ page }) => {
+    await page.goto("/products/p-single");
+    const links = page.locator('[data-contact-links="buttons"]');
+    await expect(links).toContainText("Contact Volt Corner directly");
+    await expect(links.getByRole("link", { name: "WhatsApp Volt Corner" })).toHaveAttribute(
+      "href",
+      "https://wa.me/201001234567",
+    );
+    const call = links.getByRole("link", { name: "Call Volt Corner on 02 2345 6789" });
+    await expect(call).toHaveAttribute("href", "tel:+20223456789");
+    await expect(call).toHaveText("Call 02 2345 6789");
+    await expect(links.getByRole("link", { name: "Email Volt Corner" })).toHaveAttribute(
+      "href",
+      "mailto:sales@volt-corner.test",
+    );
+    // Beside the Sold by card, not inside its link.
+    await expect(page.locator("[data-sold-by] [data-contact]")).toHaveCount(0);
+
+    // And a way to say something is wrong, naming the shop and the product.
+    const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
+    const href = decodeURIComponent((await report.getAttribute("href")) ?? "");
+    expect(href).toMatch(/^mailto:crawler@makhzan\.merope\.dev\?subject=/);
+    expect(href).toContain(
+      "subject=Something wrong: Digital Caliper 150mm x 0.01mm IP54 at Volt Corner",
+    );
+    expect(href).toContain("Page: https://makhzan.test/products/p-single");
+  });
+
+  test("several shops: each shop once, under the offers, never on the rows", async ({ page }) => {
+    await page.goto("/products/p-multi");
+    // Nile Parts has three offers here; its number is said once.
+    await expect(page.locator("[data-offer] [data-contact]")).toHaveCount(0);
+    const block = page.locator('[data-contact-links="shops"]');
+    await expect(block.getByRole("heading", { name: "Contact the shops" })).toBeVisible();
+    const lines = block.locator("[data-shop-contact-line]");
+    // Delta Bench publishes no way to reach it, so it has no line.
+    await expect(lines).toHaveCount(2);
+    await expect(block.locator('[data-shop-contact-line="delta-bench"]')).toHaveCount(0);
+    await expect(block.getByRole("link", { name: "Call Nile Parts on 19123" })).toHaveAttribute(
+      "href",
+      "tel:19123",
+    );
+    await expect(block.getByRole("link", { name: "WhatsApp Volt Corner" })).toHaveAttribute(
+      "href",
+      "https://wa.me/201001234567",
+    );
+    const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
+    expect(decodeURIComponent((await report.getAttribute("href")) ?? "")).toContain(
+      "subject=Something wrong: ESP32 Development Board 30 pin at ",
+    );
+  });
 });
 
 test("nothing scrolls sideways at 320px", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
+  // p-single and p-multi carry the contact buttons and lines.
   for (const path of [
     "/products/p-single",
     "/products/p-multi",

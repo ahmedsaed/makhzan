@@ -31,7 +31,8 @@ test("a fresh shop page: stats, the way out, search and what it carries", async 
   await page.goto("/shops/shop-a");
   await expect(page).toHaveTitle(/^Shop A · makhzan/);
   await expect(page.getByRole("heading", { level: 1, name: "Shop A" })).toBeVisible();
-  await expect(page.getByText("Bab El Louk, Cairo")).toBeVisible();
+  // Under the name, and again with the address in the contact section.
+  await expect(page.getByText("Bab El Louk, Cairo").first()).toBeVisible();
   await expect(page.locator("[data-stale-note]")).toHaveCount(0);
   await expect(page.locator('[data-tier="warn"]')).toHaveCount(0);
   await expect(page.locator("dl")).toContainText("Last checked3 days ago");
@@ -60,6 +61,116 @@ test("a fresh shop page: stats, the way out, search and what it carries", async 
   await expect(
     page.getByRole("link", { name: "Own this shop? Add your details." }),
   ).toHaveAttribute("href", "/for-suppliers");
+});
+
+test.describe("how to reach a shop", () => {
+  test("every detail: numbers, WhatsApp, email, addresses, map links, hours, and their source", async ({
+    page,
+  }) => {
+    await page.goto("/shops/shop-a");
+    const contact = page.locator("[data-shop-contact]");
+    await expect(contact.getByRole("heading", { name: "Contact" })).toBeVisible();
+
+    // Formatted for an Egyptian reader, dialled in E.164.
+    const first = contact.getByRole("link", { name: "Call Shop A on 02 2345 6789" });
+    await expect(first).toHaveText("02 2345 6789");
+    await expect(first).toHaveAttribute("href", "tel:+20223456789");
+    await expect(contact.getByRole("link", { name: "Call Shop A on 02 2345 6780" })).toBeVisible();
+    await expect(
+      contact.getByRole("link", { name: "WhatsApp Shop A on 010 0123 4567" }),
+    ).toHaveAttribute("href", "https://wa.me/201001234567");
+    await expect(contact.getByRole("link", { name: "sales@shop-a.test" })).toHaveAttribute(
+      "href",
+      "mailto:sales@shop-a.test",
+    );
+
+    // The main shop and its branch, each with its own map link and number.
+    await expect(contact).toContainText("Main shop");
+    await expect(contact).toContainText("12 Example Street, 2nd floor");
+    await expect(
+      contact.getByRole("link", { name: "Map: Shop A, Bab El Louk, Cairo" }),
+    ).toHaveAttribute("href", "https://maps.app.goo.gl/shopA");
+    await expect(contact).toContainText("Giza branch");
+    await expect(
+      contact.getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" }),
+    ).toHaveAttribute("href", "tel:+20233334444");
+    await expect(contact).toContainText("Friday closed");
+
+    // Quietly, where it all came from.
+    await expect(contact.locator("[data-contact-source]")).toHaveText(
+      "Phone, email and branches from Shop A's website, checked 3 Nov 2026, and WhatsApp and opening hours read automatically 8 Nov 2026; address and map link from Google Maps, checked 3 Nov 2026.",
+    );
+
+    // A Google Maps listing is never called the shop's own.
+    await expect(contact.locator("[data-contact-source]")).not.toContainText(
+      "address and map link from Shop A",
+    );
+
+    // Something wrong? An email to makhzan naming the shop and the page.
+    const report = contact.getByRole("link", { name: "Tell us" });
+    const href = decodeURIComponent((await report.getAttribute("href")) ?? "");
+    expect(href).toMatch(/^mailto:crawler@makhzan\.merope\.dev\?subject=Something wrong: Shop A&/);
+    expect(href).toContain("Page: https://makhzan.test/shops/shop-a");
+
+    // Nothing is missing, so the foot of the page offers corrections only.
+    const foot = page.locator("[data-contact-missing]");
+    await expect(foot).toHaveText("Own this shop? Add your details.");
+  });
+
+  test("some details: shows them and names only what is missing", async ({ page }) => {
+    await page.goto("/shops/stale-shop");
+    const contact = page.locator("[data-shop-contact]");
+    await expect(contact).toContainText("31 شارع المثال");
+    // Nothing to call or open: only the way to report something wrong.
+    await expect(contact.locator("a:not([data-contact=report])")).toHaveCount(0);
+    await expect(contact.locator("[data-contact-source]")).toHaveText(
+      "From Stale Shop's website, read automatically 20 Aug 2026.",
+    );
+    await expect(page.locator("[data-contact-missing]")).toHaveText(
+      "Phone and opening hours aren't listed yet. Own this shop? Add your details.",
+    );
+  });
+
+  test("no details: no empty section, and the line names all three", async ({ page }) => {
+    await page.goto("/shops/gone-shop");
+    await expect(page.locator("[data-shop-contact]")).toHaveCount(0);
+    await expect(page.locator("[data-contact-missing]")).toHaveText(
+      "Address, phone and opening hours aren't listed yet. Own this shop? Add your details.",
+    );
+    await expect(
+      page.getByRole("link", { name: "Own this shop? Add your details." }),
+    ).toHaveAttribute("href", "/for-suppliers");
+  });
+
+  test("every contact link has the shape of its kind (P4's exception)", async ({ page }) => {
+    await page.goto("/shops/shop-a");
+    const links = await page
+      .locator("[data-shop-contact] a")
+      .evaluateAll((all) =>
+        all.map((a) => [a.getAttribute("data-contact"), a.getAttribute("href")]),
+      );
+    const shape: Record<string, RegExp> = {
+      phone: /^tel:(\+\d{8,15}|1[5679]\d{3})$/,
+      whatsapp: /^https:\/\/wa\.me\/\d+$/,
+      email: /^mailto:[^?]+@[^?]+$/,
+      map: /^https:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.page|(www\.)?google\.[a-z.]+\/maps|maps\.apple\.com)\//,
+      report: /^mailto:crawler@makhzan\.merope\.dev\?subject=/,
+    };
+    expect(new Set(links.map(([kind]) => kind))).toEqual(new Set(Object.keys(shape)));
+    for (const [kind, href] of links) {
+      expect(href, kind ?? "").toMatch(shape[kind ?? ""] ?? /^$-never/);
+      expect(href, kind ?? "").not.toContain("ref=makhzan");
+    }
+  });
+
+  test("the contact links take the link colour in the dark theme too", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/shops/shop-a");
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    const link = page.locator('[data-shop-contact] a[data-contact="phone"]').first();
+    // `link` in the dark theme: #FB923C (docs/DESIGN.md).
+    await expect(link).toHaveCSS("color", "rgb(251, 146, 60)");
+  });
 });
 
 test("phones list the shop's biggest categories, each narrowing its products", async ({ page }) => {
@@ -195,6 +306,7 @@ test("the shop and supplier pages do not scroll sideways at 320px (S4)", async (
     "/shops",
     "/shops/shop-a",
     "/shops/stale-shop",
+    "/shops/gone-shop",
     "/for-suppliers",
     "/how-we-crawl",
     "/no-such-page",
@@ -213,6 +325,9 @@ test("the 404 page helps onward", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
   await expect(page.getByRole("main").getByRole("searchbox")).toBeVisible();
   const browse = page.getByRole("navigation", { name: "Browse" });
-  await expect(browse.getByRole("link", { name: "All departments" })).toHaveAttribute("href", "/departments");
+  await expect(browse.getByRole("link", { name: "All departments" })).toHaveAttribute(
+    "href",
+    "/departments",
+  );
   await expect(browse.getByRole("link", { name: "All shops" })).toHaveAttribute("href", "/shops");
 });
