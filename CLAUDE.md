@@ -74,6 +74,17 @@ as constructor arguments, so an unknown key is an error rather than a setting
 silently ignored. The table is seeded from `sources.toml` by `make sources`,
 and in production by the `migrate` service on every deploy.
 
+**A shop's contact details have two writers, merged per field.** What a person
+read off the shop's own pages goes in its `[source.supplier]` table (phone,
+whatsapp, email, address, maps_url, opening_hours, branches, with
+`contact_source_url` and `contact_checked_on`, required with any of them;
+`SupplierInfo` validates and normalizes numbers to E.164). `worker.sources.sync`
+writes every one of those columns on each deploy, so the file is their only
+writer and removing a value clears it. The crawler's reading of the shop's
+JSON-LD lives apart, in `Supplier.contact`. `makhzan_schemas.contact.resolve_contact`
+merges them — listed wins, the crawler fills gaps — and is the only thing that
+should read either for display.
+
 **The real configuration is not in this repository.** `sources.toml`, the
 crosswalks, their tests and a bespoke adapter (named in `sources.toml` by
 import path) live in the private `makhzan-config` repository, checked out
