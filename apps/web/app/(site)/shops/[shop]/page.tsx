@@ -2,6 +2,7 @@ import { ArrowUpRight, Clock } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { Dotted, INLINE_LINK } from "@/components/dotted";
 import { Link } from "@/components/link";
 import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
@@ -167,9 +168,12 @@ export default async function ShopPage({
 
 /**
  * The band at the top. Phones: one column — name, figures, the stale note,
- * "Visit", search, how to reach the shop, what they carry. From `lg` it uses the width: the name and
- * search on the left, the figures and "Visit" on the right, and the note and
- * the department bar each across the whole band.
+ * "Visit", how to reach the shop, search, what they carry. From `lg` it uses
+ * the width: the name and search on the left, the figures and "Visit" on the
+ * right, the note across the whole band, then what they carry and the crawl
+ * line on the left beside how to reach the shop on the right, under "Visit".
+ * The contact details no longer take a band of their own, which pushed the
+ * products below the fold.
  */
 function ShopHeader({
   supplier,
@@ -184,10 +188,18 @@ function ShopHeader({
   const verified = parseVerified(supplier.last_verified_at);
   const stale = isStale(supplier.last_verified_at, now);
   const location = [supplier.area, supplier.governorate].filter(Boolean).join(", ");
+  const contact = supplier.contact ?? null;
 
   return (
     <section className="border-b border-line bg-surface">
-      <Container className="flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7 lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'contact_contact'_'carries_carries'_'crawl_crawl']">
+      <Container
+        className={cn(
+          "flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7",
+          contact
+            ? "lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'more_contact']"
+            : "lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'more_more']",
+        )}
+      >
         <div className="lg:self-center lg:[grid-area:name]">
           <h1 className="text-2xl leading-tight sm:text-3xl lg:text-4xl">{supplier.name}</h1>
           {location && <p className="mt-1 text-sm text-ink-2">{location}</p>}
@@ -228,6 +240,21 @@ function ShopHeader({
           </ShopLink>
         )}
 
+        {/* Phones: straight under "Visit", before the search. From `lg`: the
+            right-hand column, under "Visit", beside what the shop carries. */}
+        {contact && (
+          <ShopContactSection
+            contact={contact}
+            shop={supplier.slug}
+            shopName={supplier.name}
+            websiteUrl={supplier.website_url}
+            page={absoluteUrl(routes.shop(supplier.slug))}
+            shownPlace={[supplier.area, supplier.governorate]}
+            now={now}
+            className="mt-1 sm:max-w-xl lg:mt-0 lg:max-w-none lg:[grid-area:contact]"
+          />
+        )}
+
         <SearchField
           compact
           scope={{ shop: supplier.slug }}
@@ -236,26 +263,15 @@ function ShopHeader({
           className="mt-2 sm:max-w-xl lg:mt-0 lg:max-w-none lg:[grid-area:search]"
         />
 
-        {supplier.contact && (
-          <ShopContactSection
-            contact={supplier.contact}
-            shop={supplier.slug}
-            shopName={supplier.name}
-            websiteUrl={supplier.website_url}
-            page={absoluteUrl(routes.shop(supplier.slug))}
-            className="mt-2 lg:mt-1 lg:[grid-area:contact]"
-          />
-        )}
+        {/* One flow on phones; from `lg` one column on the left, so the crawl
+            line sits under the bar rather than under the taller contact block. */}
+        <div className="contents lg:flex lg:min-w-0 lg:flex-col lg:gap-4 lg:[grid-area:more]">
+          {supplier.domains.length > 0 && (
+            <Carries supplier={supplier} narrow={narrow} className="mt-2 lg:mt-0" />
+          )}
 
-        {supplier.domains.length > 0 && (
-          <Carries
-            supplier={supplier}
-            narrow={narrow}
-            className="mt-2 lg:mt-1 lg:[grid-area:carries]"
-          />
-        )}
-
-        <CrawlLine activity={activity} slug={supplier.slug} now={now} />
+          <CrawlLine activity={activity} slug={supplier.slug} now={now} />
+        </div>
       </Container>
     </section>
   );
@@ -278,27 +294,41 @@ function CrawlLine({
 }) {
   const shop = activity?.shops.find((s) => s.slug === slug);
   if (!activity || !shop) return null;
-  const text = shopActivityLine(shop, activity.window_days, now).join(" · ");
+  const parts = shopActivityLine(shop, activity.window_days, now);
   const lastRead = parseTime(shop.last_read_at);
-  return (
-    <p
-      data-crawl-activity={shop.status}
-      title={
-        lastRead && shop.status === "active" ? `Last read ${absoluteTime(lastRead)}` : undefined
-      }
-      className="text-[13px] leading-relaxed text-ink-2 lg:[grid-area:crawl]"
+  const title =
+    lastRead && shop.status === "active" ? `Last read ${absoluteTime(lastRead)}` : undefined;
+  const link = (
+    <Link
+      href={`${routes.howWeCrawl()}#activity`}
+      // 44px to tap on phones (S4), though it reads as a line of text.
+      className={cn(INLINE_LINK, "whitespace-nowrap")}
     >
-      {text}
-      {/* A sentence ends with its full stop; figures run on with a dot. */}
-      {text.endsWith(".") ? " " : " · "}
-      <Link
-        href={`${routes.howWeCrawl()}#activity`}
-        // 44px to tap on phones (S4), though it reads as a line of text.
-        className="inline-flex min-h-11 items-center font-semibold text-link hover:underline lg:min-h-0"
+      How we crawl
+    </Link>
+  );
+  // A sentence ends with its full stop and the link follows it.
+  if (parts.length === 1 && parts[0].endsWith(".")) {
+    return (
+      <p
+        data-crawl-activity={shop.status}
+        title={title}
+        className="text-[13px] leading-relaxed text-ink-2"
       >
-        How we crawl
-      </Link>
-    </p>
+        {parts[0]} {link}
+      </p>
+    );
+  }
+  // Figures run on with a dot, each kept whole, so a wrap never strands one.
+  return (
+    <div title={title}>
+      <Dotted data-crawl-activity={shop.status} className="text-[13px] leading-relaxed text-ink-2">
+        {parts.map((part) => (
+          <span key={part}>{part}</span>
+        ))}
+        {link}
+      </Dotted>
+    </div>
   );
 }
 
@@ -357,10 +387,10 @@ function Carries({
         What they carry
       </SectionHeading>
       <DepartmentBar shares={shares} />
-      <p className="mt-2 text-[13px] text-ink-2">
-        {shares.map((share, index) => (
-          <span key={share.domain ?? "other"}>
-            {index > 0 && " · "}
+      {/* Each department kept whole, so a wrap never strands a dot. */}
+      <Dotted className="mt-2 text-[13px] text-ink-2">
+        {shares.map((share) => (
+          <span key={share.domain ?? "other"} className="whitespace-nowrap">
             {share.domain ? (
               <Link
                 href={narrow("domain", share.domain)}
@@ -374,7 +404,7 @@ function Carries({
             )}
           </span>
         ))}
-      </p>
+      </Dotted>
     </section>
   );
 }

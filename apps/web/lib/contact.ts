@@ -206,73 +206,137 @@ function capitalize(text: string): string {
   return text ? `${text[0].toUpperCase()}${text.slice(1)}` : text;
 }
 
-type Entry = { verb: string; when: string | null; fields: string[] };
-
 function verbOf(source: ContactSource): string {
   return source.origin === "read" ? "read automatically" : "checked";
 }
 
-function when(entry: Entry): string {
-  return entry.when ? `${entry.verb} ${entry.when}` : entry.verb;
+function validDay(day: string | null): day is string {
+  return formatCheckedOn(day) !== null;
+}
+
+const DAY_ONLY = new Intl.DateTimeFormat("en-GB", { day: "numeric", timeZone: "UTC" });
+const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  timeZone: "UTC",
+});
+
+/**
+ * ISO days as a short span: "10 Nov", "9–10 Nov", "28 Oct – 10 Nov", with the
+ * year only when it is not `now`'s ("28 Dec 2025 – 3 Jan"). Null for none.
+ */
+export function daySpan(days: string[], now: Date = new Date()): string | null {
+  const sorted = [...new Set(days.filter(validDay))].sort();
+  if (sorted.length === 0) return null;
+  const first = new Date(`${sorted[0]}T00:00:00Z`);
+  const last = new Date(`${sorted[sorted.length - 1]}T00:00:00Z`);
+  const year = now.getUTCFullYear();
+  const short = (date: Date) =>
+    date.getUTCFullYear() === year
+      ? DAY_MONTH.format(date)
+      : (formatCheckedOn(date.toISOString().slice(0, 10)) ?? "");
+  if (sorted.length === 1) return short(first);
+  const sameMonth =
+    first.getUTCFullYear() === last.getUTCFullYear() && first.getUTCMonth() === last.getUTCMonth();
+  if (sameMonth) return `${DAY_ONLY.format(first)}–${short(last)}`;
+  return `${short(first)} – ${short(last)}`;
 }
 
 /**
- * Where the details came from, in one sentence, grouped by place:
+ * Where the details came from, in one short line: the places, once each, in
+ * the order they were listed, and when, as a span if the days differ.
  *
- *   "From Shop A's website, checked 3 Nov 2026."
- *   "Phone, WhatsApp and email from Nile Parts' website and address from Google
- *    Maps, all checked 10 Nov 2026."
- *   "Phone, email and address from Shop A's website, checked 3 Nov 2026, and
- *    WhatsApp and opening hours read automatically 8 Nov 2026."
+ *   "From Nile Parts' website and Google Maps, checked 9–10 Nov"
+ *   "From Shop A's website, checked 3 Nov"
+ *   "Checked 10 Nov" (no page named)
  *
- * "checked" is a person reading the page; "read automatically" the crawler
- * reading the shop's structured data. Null when no source says where or when.
+ * "checked" covers the crawler's reading too: it is when the detail was last
+ * confirmed, and the Sources breakdown (provenanceDetails) says which ones
+ * were read automatically. Null when no source says where or when.
  */
-export function provenance(
+export function provenanceLine(
   contact: ShopContact,
   shopName: string,
   websiteUrl: string | null,
+  now: Date = new Date(),
 ): string | null {
-  const groups = new Map<string, Entry[]>();
+  const labels: string[] = [];
+  const days: string[] = [];
+  for (const source of contact.sources) {
+    const label = source.url ? sourceLabel(source.url, shopName, websiteUrl) : null;
+    if (label && !labels.includes(label)) labels.push(label);
+    if (validDay(source.checked_on)) days.push(source.checked_on);
+  }
+  const span = daySpan(days, now);
+  const from = labels.length > 0 ? `From ${inWords(labels)}` : null;
+  if (!from) return span ? `Checked ${span}` : null;
+  return span ? `${from}, checked ${span}` : from;
+}
+
+/**
+ * The same, field by field, for the "Sources" disclosure: one line a place,
+ * a way of reading and a day.
+ *
+ *   "Phone, WhatsApp and email from Nile Parts' website, checked 10 Nov 2026"
+ *   "Opening hours from Nile Parts' website, read automatically 9 Nov 2026"
+ *   "Address and map link from Google Maps, checked 10 Nov 2026"
+ *
+ * "checked" is a person reading the page, "read automatically" the crawler
+ * reading the shop's structured data. Grouped by place (two pages of one site
+ * are one place), in the order each place was first listed. A Google Maps
+ * listing is never called the shop's (sourceLabel).
+ */
+export function provenanceDetails(
+  contact: ShopContact,
+  shopName: string,
+  websiteUrl: string | null,
+): string[] {
+  type Entry = { label: string | null; verb: string; day: string | null; fields: string[] };
+  const entries: Entry[] = [];
   for (const source of contact.sources) {
     const label = source.url ? sourceLabel(source.url, shopName, websiteUrl) : null;
     const day = formatCheckedOn(source.checked_on);
     if (!label && !day) continue;
-    const key = label ?? "";
-    const entries = groups.get(key) ?? [];
     const words = source.fields.map((f) => FIELD_WORDS[f] ?? f);
-    const same = entries.find((e) => e.verb === verbOf(source) && e.when === day);
+    const verb = verbOf(source);
+    const same = entries.find((e) => e.label === label && e.verb === verb && e.day === day);
     if (same) same.fields.push(...words);
-    else entries.push({ verb: verbOf(source), when: day, fields: words });
-    groups.set(key, entries);
+    else entries.push({ label, verb, day, fields: words });
   }
-  for (const entries of groups.values()) {
-    for (const entry of entries) entry.fields = [...new Set(entry.fields)];
-  }
-  const all = [...groups.entries()];
-  if (all.length === 0) return null;
-  const from = (label: string) => (label ? ` from ${label}` : "");
+  const places = [...new Set(entries.map((e) => e.label))];
+  entries.sort((a, b) => places.indexOf(a.label) - places.indexOf(b.label));
+  return entries.map(({ label, verb, day, fields }) => {
+    const what = capitalize(inWords([...new Set(fields)]) || "details");
+    const where = label ? ` from ${label}` : "";
+    return `${what}${where}, ${day ? `${verb} ${day}` : verb}`;
+  });
+}
 
-  if (all.length === 1 && all[0][1].length === 1) {
-    const [label, [entry]] = all[0];
-    return label ? `From ${label}, ${when(entry)}.` : `${capitalize(when(entry))}.`;
-  }
-  const entries = all.flatMap(([, list]) => list);
-  const shared = entries.every((e) => e.verb === entries[0].verb && e.when === entries[0].when);
-  if (shared) {
-    const phrases = all.map(([label, [entry]]) => `${inWords(entry.fields)}${from(label)}`);
-    return `${capitalize(inWords(phrases))}, all ${when(entries[0])}.`;
-  }
-  const phrases = all.map(([label, list]) =>
-    list
-      .map((entry, index) =>
-        index === 0
-          ? `${inWords(entry.fields)}${from(label)}, ${when(entry)}`
-          : `${inWords(entry.fields)} ${when(entry)}`,
-      )
-      .join(", and "),
-  );
-  return `${capitalize(phrases.join("; "))}.`;
+/**
+ * An address as one line, with only the places that add something: the area
+ * and governorate follow the street address unless the page already shows
+ * them (the shop header's "Bab El Louk, Cairo") or the address names them
+ * itself. Exact words only, ignoring case: "Ibrahimiya" in the header hides
+ * the area "Ibrahimiya", never a different one that merely sounds alike.
+ */
+export function addressLine(
+  address: string | null,
+  places: (string | null)[],
+  shown: (string | null)[] = [],
+): string {
+  const fold = (text: string) => text.trim().toLowerCase();
+  const seen = shown.filter((p): p is string => Boolean(p)).map(fold);
+  const text = address?.trim() ?? "";
+  const extra = places
+    .filter((p): p is string => Boolean(p?.trim()))
+    .filter((p) => !seen.includes(fold(p)) && !containsWords(text, p));
+  return [text, ...extra].filter(Boolean).join(", ");
+}
+
+/** Whether `text` contains `words` as whole words, ignoring case. */
+function containsWords(text: string, words: string): boolean {
+  const escaped = words.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, "iu").test(text);
 }
 
 /** Whether an offer's shop can be reached from the product page at all. */
