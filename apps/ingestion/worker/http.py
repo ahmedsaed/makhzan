@@ -59,7 +59,7 @@ _SLOW_DOWN_ON = {429, 500, 502, 503, 504}
 #: (The research note: "after three consecutive errors".)
 SLOWDOWN_AFTER = 3
 #: Each raise doubles the pace, up to this: 15 s becomes at most 60 s. Low on
-#: purpose: the run's time budget (`pipeline.RUN_TIME_BUDGET`) is what bounds a
+#: purpose: the run's time budget (`pipeline.RUN_TIME_SHARE`) is what bounds a
 #: run against a host that stays slow, and a cap of 8 put a busy source past
 #: the 6 h job timeout on the multiplier alone.
 SLOWDOWN_CAP = 4.0

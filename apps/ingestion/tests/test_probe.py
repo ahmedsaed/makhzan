@@ -47,6 +47,8 @@ def wire(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         state["sent"].append((clock.now, request))
         if request.url.path == "/robots.txt":
+            if state.get("robots_redirect"):
+                return httpx.Response(301, headers={"Location": state["robots_redirect"]})
             return httpx.Response(200, text=state["robots"])
         return httpx.Response(200, json=[])
 
@@ -100,6 +102,18 @@ async def test_a_page_robots_txt_disallows_is_not_asked(wire):
     rows, _ = await probe_mod.probe([probe_mod.Target("shop", "https://shop.test/a")], gate=gate)
     assert [r.url.path for _, r in wire["sent"]] == ["/robots.txt"]
     assert rows[0].cells["robots"].text() == "200 h1.1 DISALLOWS this page"
+    assert rows[0].cells["browser"].text() == "not asked"
+
+
+async def test_a_redirecting_robots_txt_is_not_followed_and_the_page_not_asked(wire):
+    """The probe does not follow redirects, so it has not read the rules a run
+    would obey; it asks for nothing it has not cleared."""
+    wire["robots_redirect"] = "https://elsewhere.test/robots.txt"
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    rows, _ = await probe_mod.probe([probe_mod.Target("shop", "https://shop.test/a")], gate=gate)
+    assert [r.url.path for _, r in wire["sent"]] == ["/robots.txt"]
+    assert "redirects (not followed)" in rows[0].cells["robots"].text()
     assert rows[0].cells["browser"].text() == "not asked"
 
 
