@@ -35,7 +35,26 @@ async def test_returns_the_supplier_profile(client, db):
         "area": "Bab El Louk",
         "governorate": "Cairo",
         "website_url": "https://shop-b.test",
-        "contact": None,
+        # An area entered before details carried their source: shown, unsourced.
+        "contact": {
+            "phones": [],
+            "whatsapp": None,
+            "email": None,
+            "address": None,
+            "area": "Bab El Louk",
+            "governorate": "Cairo",
+            "maps_url": None,
+            "opening_hours": [],
+            "branches": [],
+            "sources": [
+                {
+                    "origin": "listed",
+                    "url": None,
+                    "checked_on": None,
+                    "fields": ["area", "governorate"],
+                }
+            ],
+        },
         "listing_count": 1,
         "in_stock_count": 1,
         "last_verified_at": "2026-06-01T12:00:00Z",

@@ -9,6 +9,8 @@ shop page's rows stay slim.
 
 from __future__ import annotations
 
+from datetime import date
+
 from factories import make_listing, make_product, make_supplier
 
 DETAILS = {
@@ -192,24 +194,112 @@ CONTACT = {
 }
 
 
-async def test_the_supplier_profile_carries_its_contact(client, db):
+#: What a person listed in sources.toml, as sync writes it onto the row.
+LISTED = {
+    "phones": ["+20223456789", "+20223456780"],
+    "email": "sales@shop-a.test",
+    "address": "12 Example Street",
+    "area": "Bab El Louk",
+    "governorate": "Cairo",
+    "maps_url": "https://maps.example.test/shop-a",
+    "branches": [{"name": "Giza", "address": "3 Other Street", "phones": ["+20233334444"]}],
+    "contact_source_url": "https://shop-a.test/contact-us",
+    "contact_checked_on": date(2026, 11, 3),
+}
+
+
+async def test_the_supplier_profile_carries_what_the_crawler_read(client, db):
     await make_supplier(db, slug="shop-a", contact=CONTACT)
 
     contact = (await client.get("/suppliers/shop-a")).json()["contact"]
 
     assert contact == {
-        **CONTACT,
+        # Normalized to E.164, so the page can link it.
+        "phones": ["+201000000000"],
+        "whatsapp": "+201000000000",
+        "email": "info@shop.test",
+        "address": "31 شارع المثال",
+        "area": "حي المثال",
+        "governorate": "القاهرة",
+        "maps_url": None,
         # Kept as the shop wrote it; only a non-text hour line is dropped.
         "opening_hours": ["Mo,Tu,We,Th,Fr,Sa 10:00-20:00"],
-        "fetched_at": "2026-11-08T20:00:00Z",
+        "branches": [],
+        "sources": [
+            {
+                "origin": "read",
+                "url": "https://shop-a.test/",
+                "checked_on": "2026-11-08",
+                "fields": [
+                    "phones",
+                    "whatsapp",
+                    "email",
+                    "address",
+                    "area",
+                    "governorate",
+                    "opening_hours",
+                ],
+            }  # fmt: skip
+        ],
     }
+
+
+async def test_listed_details_win_per_field_and_the_crawler_fills_gaps(client, db):
+    """A person checked the listed details; the crawler's are one page's markup.
+    Where both name a phone the listed one is shown, but the hours and the
+    WhatsApp only the crawler found are shown too, each said to come from where
+    it came from."""
+    await make_supplier(db, slug="shop-a", contact=CONTACT, **LISTED)
+
+    body = (await client.get("/suppliers/shop-a")).json()
+    contact = body["contact"]
+
+    assert contact["phones"] == ["+20223456789", "+20223456780"]
+    assert contact["email"] == "sales@shop-a.test"
+    assert contact["address"] == "12 Example Street"
+    assert (body["area"], body["governorate"]) == ("Bab El Louk", "Cairo")
+    assert contact["whatsapp"] == "+201000000000"
+    assert contact["opening_hours"] == ["Mo,Tu,We,Th,Fr,Sa 10:00-20:00"]
+    assert contact["branches"] == [
+        {
+            "name": "Giza",
+            "address": "3 Other Street",
+            "area": None,
+            "governorate": None,
+            "phones": ["+20233334444"],
+            "maps_url": None,
+        }
+    ]
+    assert contact["sources"] == [
+        {
+            "origin": "listed",
+            "url": "https://shop-a.test/contact-us",
+            "checked_on": "2026-11-03",
+            "fields": ["phones", "email", "address", "area", "governorate", "maps_url", "branches"],
+        },  # fmt: skip
+        {
+            "origin": "read",
+            "url": "https://shop-a.test/",
+            "checked_on": "2026-11-08",
+            "fields": ["whatsapp", "opening_hours"],
+        },
+    ]
 
 
 async def test_a_contact_source_that_is_not_https_is_dropped(client, db):
     await make_supplier(db, slug="shop-a", contact={**CONTACT, "source_url": "http://shop-a.test/"})
     contact = (await client.get("/suppliers/shop-a")).json()["contact"]
-    assert contact["source_url"] is None
-    assert contact["phone"] == "01000000000"
+    assert contact["sources"][0]["url"] is None
+    assert contact["phones"] == ["+201000000000"]
+
+
+async def test_a_number_that_does_not_parse_is_left_out_not_guessed(client, db):
+    await make_supplier(
+        db, slug="shop-a", contact={**CONTACT, "phone": "2345 6789 / 2345 6780 ext 4"}
+    )
+    contact = (await client.get("/suppliers/shop-a")).json()["contact"]
+    assert contact["phones"] == []
+    assert contact["whatsapp"] == "+201000000000"
 
 
 async def test_a_contact_with_nothing_to_show_is_none(client, db):
@@ -221,14 +311,47 @@ async def test_a_contact_with_nothing_to_show_is_none(client, db):
     assert (await client.get("/suppliers/shop-a")).json()["contact"] is None
 
 
-async def test_an_offers_supplier_carries_its_contact(client, db):
+async def test_an_offer_carries_the_compact_contact_only(client, db):
+    """Enough for "Contact the shop" on the product page; the addresses, hours
+    and branches are the shop page's, not repeated for every offer."""
     product = await make_product(db)
-    supplier = await make_supplier(db, slug="shop-a", contact=CONTACT)
+    supplier = await make_supplier(db, slug="shop-a", contact=CONTACT, **LISTED)
     await make_listing(db, supplier=supplier, product=product)
 
     (offer,) = (await client.get(f"/products/{product.id}")).json()["offers"]
 
-    assert offer["supplier"]["contact"]["phone"] == "01000000000"
+    assert offer["supplier"]["contact"] == {
+        "phone": "+20223456789",
+        "whatsapp": "+201000000000",
+        "email": "sales@shop-a.test",
+    }
+    assert offer["supplier"]["area"] == "Bab El Louk"
+
+
+async def test_an_offer_from_a_shop_with_no_way_to_reach_it_carries_none(client, db):
+    product = await make_product(db)
+    supplier = await make_supplier(db, slug="shop-a", area="Bab El Louk")
+    await make_listing(db, supplier=supplier, product=product)
+
+    (offer,) = (await client.get(f"/products/{product.id}")).json()["offers"]
+
+    assert offer["supplier"]["contact"] is None
+
+
+async def test_a_shop_listing_only_branch_numbers_is_still_reachable_by_phone(client, db):
+    product = await make_product(db)
+    supplier = await make_supplier(
+        db,
+        slug="shop-a",
+        branches=[{"name": "Giza", "phones": ["+20233334444"]}],
+        contact_source_url="https://shop-a.test/branches",
+        contact_checked_on=date(2026, 11, 3),
+    )
+    await make_listing(db, supplier=supplier, product=product)
+
+    (offer,) = (await client.get(f"/products/{product.id}")).json()["offers"]
+
+    assert offer["supplier"]["contact"]["phone"] == "+20233334444"
 
 
 async def test_the_shop_pages_rows_stay_slim(client, db):
