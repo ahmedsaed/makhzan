@@ -32,6 +32,11 @@
 # with max_pages_per_run as a hard ceiling on the whole run (see `make status`,
 # CYCLE TARGETS).
 #
+# Any adapter also takes identity = "browser" (the default) or "makhzanbot": who
+# the crawler says it is to this shop. makhzanbot sends an honest User-Agent
+# naming SITE_URL and, when MAKHZANBOT_SIGNING_KEY is set, signs every request
+# with Web Bot Auth. Probe before switching a shop: docs/crawler-identity.md.
+#
 # Odoo and Wix (and an adapter that implements `fetch_details`) also take
 # `details = { enabled = false, per_run = 20, max_age_days = 90 }`: read up to
 # per_run product pages a run, after the sweep, for listings never read, whose

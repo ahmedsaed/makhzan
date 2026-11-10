@@ -25,6 +25,14 @@ const nextConfig: NextConfig = {
       // /sitemap.xml, so the index cannot be a route there; see
       // app/sitemap-index.xml/route.ts.
       { source: "/sitemap.xml", destination: "/sitemap-index.xml" },
+      // The crawler's Web Bot Auth key directory, served and signed by the API
+      // (apps/api/app/routers/wellknown.py). A rewrite, not a redirect: a
+      // verifier (Cloudflare, Shopify) requires a plain 200 at exactly this
+      // path, on the origin our Signature-Agent header names.
+      {
+        source: "/.well-known/http-message-signatures-directory",
+        destination: `${api}/.well-known/http-message-signatures-directory`,
+      },
     ];
   },
 };

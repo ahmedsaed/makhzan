@@ -9,6 +9,7 @@
 #   ./makhzan backup|migrate
 #   ./makhzan restore FILE [--yes] # replace the database with a backup (restore-db.sh)
 #   ./makhzan retire SOURCE [--yes] # remove a source and its listings (dry run without --yes)
+#   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
 #
 # Run it on the server, or from a laptop: without a .env.prod here it re-runs
 # itself on DEPLOY_HOST over SSH, using the same .env.local variables as
@@ -19,7 +20,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -120,5 +121,8 @@ case "$cmd" in
   restore) exec ./scripts/restore-db.sh "$@" ;;
   migrate) exec ./scripts/migrate.sh ;;
   retire) "${COMPOSE[@]}" exec -T ingestion python -m worker.sources.retire "$@" ;;
+  # The crawler's own client, in the ingestion image; run it while no crawl is
+  # running, since its 15 s per-host gap is its own, not the worker's.
+  probe) exec ./scripts/probe-suppliers.sh "$@" ;;
   *) echo "unknown command: $cmd" >&2; usage 1 ;;
 esac

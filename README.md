@@ -25,7 +25,7 @@ it:
   `Crawl-delay` in robots.txt is a floor on that, never a ceiling.
 - **A full pass is spread across about a week.** Each daily run takes only a
   slice of a catalogue, so a shop sees a steady trickle, not a spike.
-- **The crawler identifies itself** in every request (`From: crawler@merope.dev`).
+- **The crawler identifies itself** in every request (`From: crawler@makhzan.merope.dev`).
 - **No circumvention.** If a site blocks us, we ask its owner; we do not route
   around a control they chose to switch on.
 - **Suppliers can ask us to stop, slow down, or change anything**, and we will.

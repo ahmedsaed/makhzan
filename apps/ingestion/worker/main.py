@@ -31,6 +31,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from worker.indexer import get_client, reindex_all
+from worker import pipeline as _pipeline
 from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
 from worker.retire_redirects import retire_unused_redirects
@@ -61,7 +62,7 @@ MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "8"))
 #: source now, so a host stuck in a long Retry-After or a 429 loop is cut off
 #: on its own, without holding the other sources or the rebuild. Pages are
 #: durable, so a run cut off loses nothing; the next one resumes from its cursor.
-JOB_TIMEOUT = int(os.getenv("REFRESH_TIMEOUT_SECONDS", str(6 * 3600)))
+JOB_TIMEOUT = _pipeline.JOB_TIMEOUT
 
 #: Sources finishing within one window of this many seconds share one rebuild,
 #: run at the end of that window. Short next to a crawl, long next to a rebuild.
