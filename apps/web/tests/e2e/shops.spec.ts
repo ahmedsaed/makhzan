@@ -89,17 +89,28 @@ test.describe("how to reach a shop", () => {
     await expect(contact).toContainText("12 Example Street, 2nd floor");
     await expect(
       contact.getByRole("link", { name: "Map: Shop A, Bab El Louk, Cairo" }),
-    ).toHaveAttribute("href", "https://maps.example/shop-a");
+    ).toHaveAttribute("href", "https://maps.app.goo.gl/shopA");
     await expect(contact).toContainText("Giza branch");
     await expect(
-      contact.getByRole("link", { name: "Call Shop A on 02 3333 4444" }),
+      contact.getByRole("link", { name: "Call Shop A Giza branch on 02 3333 4444" }),
     ).toHaveAttribute("href", "tel:+20233334444");
     await expect(contact).toContainText("Friday closed");
 
     // Quietly, where it all came from.
     await expect(contact.locator("[data-contact-source]")).toHaveText(
-      "From Shop A's website, checked 3 Nov 2026. WhatsApp and opening hours read automatically from Shop A's website, 8 Nov 2026.",
+      "Phone, email and branches from Shop A's website, checked 3 Nov 2026, and WhatsApp and opening hours read automatically 8 Nov 2026; address and map link from Google Maps, checked 3 Nov 2026.",
     );
+
+    // A Google Maps listing is never called the shop's own.
+    await expect(contact.locator("[data-contact-source]")).not.toContainText(
+      "address and map link from Shop A",
+    );
+
+    // Something wrong? An email to makhzan naming the shop and the page.
+    const report = contact.getByRole("link", { name: "Tell us" });
+    const href = decodeURIComponent((await report.getAttribute("href")) ?? "");
+    expect(href).toMatch(/^mailto:crawler@makhzan\.merope\.dev\?subject=Something wrong: Shop A&/);
+    expect(href).toContain("Page: https://makhzan.test/shops/shop-a");
 
     // Nothing is missing, so the foot of the page offers corrections only.
     const foot = page.locator("[data-contact-missing]");
@@ -110,7 +121,8 @@ test.describe("how to reach a shop", () => {
     await page.goto("/shops/stale-shop");
     const contact = page.locator("[data-shop-contact]");
     await expect(contact).toContainText("31 شارع المثال");
-    await expect(contact.locator("a")).toHaveCount(0);
+    // Nothing to call or open: only the way to report something wrong.
+    await expect(contact.locator("a:not([data-contact=report])")).toHaveCount(0);
     await expect(contact.locator("[data-contact-source]")).toHaveText(
       "From Stale Shop's website, read automatically 20 Aug 2026.",
     );
@@ -128,6 +140,27 @@ test.describe("how to reach a shop", () => {
     await expect(
       page.getByRole("link", { name: "Own this shop? Add your details." }),
     ).toHaveAttribute("href", "/for-suppliers");
+  });
+
+  test("every contact link has the shape of its kind (P4's exception)", async ({ page }) => {
+    await page.goto("/shops/shop-a");
+    const links = await page
+      .locator("[data-shop-contact] a")
+      .evaluateAll((all) =>
+        all.map((a) => [a.getAttribute("data-contact"), a.getAttribute("href")]),
+      );
+    const shape: Record<string, RegExp> = {
+      phone: /^tel:(\+\d{8,15}|1[5679]\d{3})$/,
+      whatsapp: /^https:\/\/wa\.me\/\d+$/,
+      email: /^mailto:[^?]+@[^?]+$/,
+      map: /^https:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|g\.page|(www\.)?google\.[a-z.]+\/maps|maps\.apple\.com)\//,
+      report: /^mailto:crawler@makhzan\.merope\.dev\?subject=/,
+    };
+    expect(new Set(links.map(([kind]) => kind))).toEqual(new Set(Object.keys(shape)));
+    for (const [kind, href] of links) {
+      expect(href, kind ?? "").toMatch(shape[kind ?? ""] ?? /^$-never/);
+      expect(href, kind ?? "").not.toContain("ref=makhzan");
+    }
   });
 
   test("the contact links take the link colour in the dark theme too", async ({ page }) => {

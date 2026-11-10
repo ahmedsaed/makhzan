@@ -1,4 +1,5 @@
-import type { ShopContact, ShopReach } from "@/lib/api";
+import type { ContactSource, ShopContact, ShopReach } from "@/lib/api";
+import { CONTACT_EMAIL, mailtoHref } from "@/lib/content/supplier-requests";
 import { hostOf } from "@/lib/shops";
 
 /**
@@ -11,9 +12,12 @@ import { hostOf } from "@/lib/shops";
  * or a five-digit hotline. Anything else is shown as it came and not linked.
  */
 
+/** Egyptian five-digit hotlines: 15xxx, 16xxx, 17xxx, 19xxx (as contact.py). */
+const HOTLINE = /^1[5679]\d{3}$/;
+
 /** "010 0123 4567", "02 2345 6789", "03 123 4567", "040 123 4567", "19123". */
 export function formatPhone(number: string): string {
-  if (/^1\d{4}$/.test(number)) return number;
+  if (HOTLINE.test(number)) return number;
   const match = /^\+20(\d{8,10})$/.exec(number);
   if (!match) return number;
   const national = `0${match[1]}`;
@@ -28,6 +32,7 @@ export function formatPhone(number: string): string {
     return `03 ${national.slice(2, 5)} ${national.slice(5)}`;
   }
   if (national.length === 10) {
+    // Every other area, 013 (Banha) and 015 (10th of Ramadan) among them.
     return `${national.slice(0, 3)} ${national.slice(3, 6)} ${national.slice(6)}`;
   }
   return national;
@@ -35,7 +40,7 @@ export function formatPhone(number: string): string {
 
 /** `tel:+20…` (or `tel:19123`), or null for a number we cannot dial. */
 export function telHref(number: string): string | null {
-  return /^\+\d{8,15}$/.test(number) || /^1\d{4}$/.test(number) ? `tel:${number}` : null;
+  return /^\+\d{8,15}$/.test(number) || HOTLINE.test(number) ? `tel:${number}` : null;
 }
 
 /** `https://wa.me/201001234567`: WhatsApp's own click-to-chat link, digits only. */
@@ -43,8 +48,38 @@ export function whatsappHref(number: string): string | null {
   return /^\+\d{8,15}$/.test(number) ? `https://wa.me/${number.slice(1)}` : null;
 }
 
-export function mailtoHref(email: string): string {
+/** `mailto:` for a shop's own address. */
+export function emailHref(email: string): string {
   return `mailto:${email}`;
+}
+
+/**
+ * "Something wrong? Tell us": an email to makhzan, its subject naming the shop
+ * (and the product, on a product page), its body asking what is wrong and
+ * carrying the page, so a report arrives with what is needed to act on it.
+ */
+export function reportHref({
+  shop,
+  product,
+  page,
+}: {
+  shop: string;
+  product?: string;
+  page: string;
+}): string {
+  return mailtoHref(CONTACT_EMAIL, {
+    subject: product ? `Something wrong: ${product} at ${shop}` : `Something wrong: ${shop}`,
+    body: [
+      "What is wrong, and what should it say?",
+      "",
+      "",
+      "",
+      "---",
+      `Shop: ${shop}`,
+      ...(product ? [`Product: ${product}`] : []),
+      `Page: ${page}`,
+    ].join("\n"),
+  });
 }
 
 /** What a shop page can still not say about how to reach the shop. */
@@ -70,12 +105,8 @@ export function missingDetails(contact: ShopContact | null | undefined): Missing
 export function missingLine(contact: ShopContact | null | undefined): string | null {
   const missing = missingDetails(contact);
   if (missing.length === 0) return null;
-  const words =
-    missing.length === 1
-      ? missing[0]
-      : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;
   const verb = missing.length === 1 && missing[0] !== "opening hours" ? "isn't" : "aren't";
-  return `${words[0].toUpperCase()}${words.slice(1)} ${verb} listed yet.`;
+  return `${capitalize(inWords(missing))} ${verb} listed yet.`;
 }
 
 const DAY = new Intl.DateTimeFormat("en-GB", {
@@ -92,14 +123,74 @@ export function formatCheckedOn(day: string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : DAY.format(date);
 }
 
+/** "Shop A's", "Nile Parts'". */
+export function possessive(name: string): string {
+  return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+}
+
+/** Second-level domains under which a registrable domain has three labels. */
+const SECOND_LEVEL = new Set(["com", "net", "org", "edu", "gov", "co", "ac"]);
+
+/**
+ * The domain a business registers: "nile-parts.com" for
+ * store.nile-parts.com, "shop.com.eg" for www.shop.com.eg. Approximate
+ * (no public-suffix list), which is enough to tell a shop's own pages apart.
+ */
+export function registrableDomain(host: string): string {
+  const labels = host.toLowerCase().replace(/\.$/, "").split(".");
+  const take =
+    labels.length >= 3 &&
+    labels[labels.length - 1].length === 2 &&
+    SECOND_LEVEL.has(labels[labels.length - 2])
+      ? 3
+      : 2;
+  return labels.slice(-take).join(".");
+}
+
+/**
+ * What a source page is, in words a buyer trusts the right amount: "Nile Parts'
+ * website" for a page on the shop's own domain (either may be a subdomain of
+ * the other); "Google Maps", "Facebook", "Instagram" for those, never "the
+ * shop's" (a Google Maps listing is often not the shop's own, and its page
+ * on a social network may not be either); the host for anything else.
+ */
+export function sourceLabel(url: string, shopName: string, websiteUrl: string | null): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  const path = parsed.pathname;
+  if (
+    (/^google\.[a-z.]+$/.test(host) && path.startsWith("/maps")) ||
+    /^maps\.google\.[a-z.]+$/.test(host) ||
+    host === "maps.app.goo.gl" ||
+    (host === "goo.gl" && path.startsWith("/maps")) ||
+    host === "g.page"
+  ) {
+    return "Google Maps";
+  }
+  if (host === "maps.apple.com") return "Apple Maps";
+  if (/(^|\.)(facebook\.com|fb\.com)$/.test(host)) return "Facebook";
+  if (/(^|\.)instagram\.com$/.test(host)) return "Instagram";
+  if (websiteUrl) {
+    const site = hostOf(websiteUrl);
+    if (registrableDomain(site) === registrableDomain(host))
+      return `${possessive(shopName)} website`;
+  }
+  return host;
+}
+
 /** How a contact field is named in a sentence about where it came from. */
 const FIELD_WORDS: Record<string, string> = {
   phones: "phone",
   whatsapp: "WhatsApp",
   email: "email",
   address: "address",
-  area: "area",
-  governorate: "area",
+  area: "address",
+  governorate: "address",
   maps_url: "map link",
   opening_hours: "opening hours",
   branches: "branches",
@@ -111,40 +202,77 @@ function inWords(items: string[]): string {
     : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+function capitalize(text: string): string {
+  return text ? `${text[0].toUpperCase()}${text.slice(1)}` : text;
+}
+
+type Entry = { verb: string; when: string | null; fields: string[] };
+
+function verbOf(source: ContactSource): string {
+  return source.origin === "read" ? "read automatically" : "checked";
+}
+
+function when(entry: Entry): string {
+  return entry.when ? `${entry.verb} ${entry.when}` : entry.verb;
+}
+
 /**
- * Where the details came from, one sentence a source: "From Shop A's website,
- * checked 3 Nov 2026." The website by name when the page is on the shop's own
- * site, its host otherwise (a shop's Facebook page). What the crawler read,
- * beside what a person listed, names its fields: "WhatsApp and opening hours
- * read automatically from Shop A's website, 8 Nov 2026." A source that says
- * neither where nor when is not mentioned: there is nothing to say.
+ * Where the details came from, in one sentence, grouped by place:
+ *
+ *   "From Shop A's website, checked 3 Nov 2026."
+ *   "Phone, WhatsApp and email from Nile Parts' website and address from Google
+ *    Maps, all checked 10 Nov 2026."
+ *   "Phone, email and address from Shop A's website, checked 3 Nov 2026, and
+ *    WhatsApp and opening hours read automatically 8 Nov 2026."
+ *
+ * "checked" is a person reading the page; "read automatically" the crawler
+ * reading the shop's structured data. Null when no source says where or when.
  */
-export function sourceLines(
+export function provenance(
   contact: ShopContact,
   shopName: string,
   websiteUrl: string | null,
-): string[] {
-  const site = websiteUrl ? hostOf(websiteUrl) : null;
-  const both = contact.sources.length > 1;
-  return contact.sources.flatMap((source) => {
-    const host = source.url ? hostOf(source.url) : null;
-    const where = host
-      ? host === site || (site !== null && host.endsWith(`.${site}`))
-        ? `${shopName}'s website`
-        : host
-      : null;
-    const when = formatCheckedOn(source.checked_on);
-    if (!where && !when) return [];
-    if (source.origin === "read" && both && where) {
-      const fields = inWords([...new Set(source.fields.map((f) => FIELD_WORDS[f] ?? f))]);
-      const subject = fields ? `${fields[0].toUpperCase()}${fields.slice(1)}` : "Some details";
-      return [`${subject} read automatically from ${where}${when ? `, ${when}` : ""}.`];
-    }
-    const verb = source.origin === "read" ? "read automatically" : "checked";
-    if (where && when) return [`From ${where}, ${verb} ${when}.`];
-    if (where) return [`From ${where}.`];
-    return [`Checked ${when}.`];
-  });
+): string | null {
+  const groups = new Map<string, Entry[]>();
+  for (const source of contact.sources) {
+    const label = source.url ? sourceLabel(source.url, shopName, websiteUrl) : null;
+    const day = formatCheckedOn(source.checked_on);
+    if (!label && !day) continue;
+    const key = label ?? "";
+    const entries = groups.get(key) ?? [];
+    const words = source.fields.map((f) => FIELD_WORDS[f] ?? f);
+    const same = entries.find((e) => e.verb === verbOf(source) && e.when === day);
+    if (same) same.fields.push(...words);
+    else entries.push({ verb: verbOf(source), when: day, fields: words });
+    groups.set(key, entries);
+  }
+  for (const entries of groups.values()) {
+    for (const entry of entries) entry.fields = [...new Set(entry.fields)];
+  }
+  const all = [...groups.entries()];
+  if (all.length === 0) return null;
+  const from = (label: string) => (label ? ` from ${label}` : "");
+
+  if (all.length === 1 && all[0][1].length === 1) {
+    const [label, [entry]] = all[0];
+    return label ? `From ${label}, ${when(entry)}.` : `${capitalize(when(entry))}.`;
+  }
+  const entries = all.flatMap(([, list]) => list);
+  const shared = entries.every((e) => e.verb === entries[0].verb && e.when === entries[0].when);
+  if (shared) {
+    const phrases = all.map(([label, [entry]]) => `${inWords(entry.fields)}${from(label)}`);
+    return `${capitalize(inWords(phrases))}, all ${when(entries[0])}.`;
+  }
+  const phrases = all.map(([label, list]) =>
+    list
+      .map((entry, index) =>
+        index === 0
+          ? `${inWords(entry.fields)}${from(label)}, ${when(entry)}`
+          : `${inWords(entry.fields)} ${when(entry)}`,
+      )
+      .join(", and "),
+  );
+  return `${capitalize(phrases.join("; "))}.`;
 }
 
 /** Whether an offer's shop can be reached from the product page at all. */
