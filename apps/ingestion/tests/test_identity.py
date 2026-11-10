@@ -36,7 +36,6 @@ SITE = "https://makhzan.test"
 def site(monkeypatch):
     monkeypatch.setenv("SITE_URL", SITE)
     monkeypatch.delenv(botauth.KEY_ENV, raising=False)
-    monkeypatch.delenv(f"{botauth.KEY_ENV}_FILE", raising=False)
 
 
 @pytest.fixture
@@ -67,8 +66,20 @@ def test_a_source_without_the_key_stays_browser():
     assert build_adapter(_row()).identity == BROWSER
 
 
-def test_a_source_can_ask_for_makhzanbot():
+def test_a_source_can_ask_for_makhzanbot(site):
     assert build_adapter(_row(identity="makhzanbot")).identity == MAKHZANBOT
+
+
+@pytest.mark.parametrize("value", [None, "http://makhzan.test", "makhzan.test"])
+def test_makhzanbot_without_an_https_site_is_refused_at_sync(monkeypatch, value):
+    """Loud in the deploy's migrate step, not silent in every daily run."""
+    if value is None:
+        monkeypatch.delenv("SITE_URL", raising=False)
+    else:
+        monkeypatch.setenv("SITE_URL", value)
+    with pytest.raises(ValueError, match="SITE_URL"):
+        build_adapter(_row(identity="makhzanbot"))
+    build_adapter(_row())  # a browser source does not care
 
 
 def test_an_unknown_identity_is_refused_not_ignored():

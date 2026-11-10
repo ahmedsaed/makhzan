@@ -22,7 +22,9 @@ from makhzan_schemas.models import Source
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from worker.identity import BROWSER, IDENTITIES
+from makhzan_schemas.botauth import signature_agent_header
+
+from worker.identity import BROWSER, IDENTITIES, MAKHZANBOT, site_url
 from worker.sources.base import SourceAdapter, SupplierInfo
 
 log = logging.getLogger(__name__)
@@ -71,6 +73,15 @@ def build_adapter(source: Source) -> SourceAdapter:
     identity = options.pop("identity", BROWSER)
     if identity not in IDENTITIES:
         raise ValueError(f"identity must be one of {IDENTITIES}, got {identity!r}")
+    if identity == MAKHZANBOT:
+        # Its User-Agent and Signature-Agent name the site: refuse it here, in
+        # the deploy's sync step, rather than failing every daily run.
+        try:
+            signature_agent_header(site_url())
+        except (RuntimeError, ValueError) as exc:
+            raise ValueError(
+                f"identity = 'makhzanbot' needs SITE_URL set to the public https:// origin: {exc}"
+            ) from exc
     target_cycle_days = options.pop("target_cycle_days", None)
     if target_cycle_days is not None and (
         isinstance(target_cycle_days, bool)

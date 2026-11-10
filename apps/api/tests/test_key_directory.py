@@ -26,6 +26,7 @@ def keyed(monkeypatch):
     monkeypatch.setenv("SITE_URL", "https://makhzan.test")
     monkeypatch.setenv(botauth.KEY_ENV, KEY)
     monkeypatch.delenv(botauth.NEXT_KEY_ENV, raising=False)
+    monkeypatch.delenv(botauth.PREVIOUS_KEY_ENV, raising=False)
 
 
 def _b64url(text: str) -> bytes:
@@ -79,8 +80,8 @@ async def test_a_rotation_publishes_both_keys_and_signs_with_both(client, keyed,
 async def test_no_key_means_no_directory(client, monkeypatch):
     monkeypatch.setenv("SITE_URL", "https://makhzan.test")
     monkeypatch.delenv(botauth.KEY_ENV, raising=False)
-    monkeypatch.delenv(f"{botauth.KEY_ENV}_FILE", raising=False)
     monkeypatch.delenv(botauth.NEXT_KEY_ENV, raising=False)
+    monkeypatch.delenv(botauth.PREVIOUS_KEY_ENV, raising=False)
     response = await client.get(PATH)
     assert response.status_code == 404
     assert json.loads(response.text)["detail"]

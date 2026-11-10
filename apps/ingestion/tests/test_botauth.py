@@ -233,24 +233,25 @@ def test_the_directory_response_is_signed_by_every_key_it_lists():
         Ed25519PublicKey.from_public_bytes(_b64url_decode(jwk["x"])).verify(signature, base)
 
 
-def test_rotation_publishes_current_and_next_once_each(monkeypatch):
-    monkeypatch.setenv(botauth.KEY_ENV, RFC_JWK_D)
-    monkeypatch.setenv(botauth.NEXT_KEY_ENV, RFC_JWK_D)  # promoted but not yet removed
-    assert len(botauth.directory_keys()) == 1
-    following = botauth.generate_private_key()
-    monkeypatch.setenv(botauth.NEXT_KEY_ENV, botauth.private_key_to_text(following))
-    assert [botauth.public_jwk(k)["x"] for k in botauth.directory_keys()] == [
-        RFC_JWK_X,
-        botauth.public_jwk(following)["x"],
-    ]
+def test_a_rotation_publishes_current_next_and_previous_once_each(monkeypatch):
+    """Before the switch: current + next. After: current (the new key) + previous."""
+    old, new = RFC_JWK_D, botauth.private_key_to_text(botauth.generate_private_key())
+    new_x = botauth.public_jwk(botauth.load_private_key(new))["x"]
+    monkeypatch.delenv(botauth.PREVIOUS_KEY_ENV, raising=False)
 
+    monkeypatch.setenv(botauth.KEY_ENV, old)
+    monkeypatch.setenv(botauth.NEXT_KEY_ENV, new)
+    assert [botauth.public_jwk(k)["x"] for k in botauth.directory_keys()] == [RFC_JWK_X, new_x]
 
-def test_the_key_can_come_from_a_secrets_file(monkeypatch, tmp_path):
-    secret = tmp_path / "key"
-    secret.write_text(RFC_JWK_D + "\n")
-    monkeypatch.delenv(botauth.KEY_ENV, raising=False)
-    monkeypatch.setenv(f"{botauth.KEY_ENV}_FILE", str(secret))
-    assert botauth.public_jwk(botauth.configured_key())["x"] == RFC_JWK_X
+    monkeypatch.setenv(botauth.KEY_ENV, new)
+    monkeypatch.delenv(botauth.NEXT_KEY_ENV)
+    monkeypatch.setenv(botauth.PREVIOUS_KEY_ENV, old)
+    assert [botauth.public_jwk(k)["x"] for k in botauth.directory_keys()] == [new_x, RFC_JWK_X]
+    # Only the current key signs requests.
+    assert botauth.public_jwk(botauth.configured_key())["x"] == new_x
+
+    monkeypatch.setenv(botauth.NEXT_KEY_ENV, new)  # a leftover duplicate is published once
+    assert len(botauth.directory_keys()) == 2
 
 
 # --------------------------------------------------------------------------- #

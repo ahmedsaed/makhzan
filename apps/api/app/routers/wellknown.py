@@ -13,10 +13,18 @@ IETF draft ask for:
     `@authority` — taken from SITE_URL, not from the Host header, which behind
     the web app's proxy is the API's internal name.
 
-Two keys at once for rotation: `MAKHZANBOT_SIGNING_KEY` (current, signs the
-crawler's requests) and `MAKHZANBOT_SIGNING_KEY_NEXT` (published ahead of the
-switch). The private keys are needed here only to sign this response. No key
-configured means no directory: 404.
+Up to three keys at once for rotation: `MAKHZANBOT_SIGNING_KEY` (current,
+signs the crawler's requests), `MAKHZANBOT_SIGNING_KEY_NEXT` (published a week
+before the switch) and `MAKHZANBOT_SIGNING_KEY_PREVIOUS` (published a week
+after it). No key configured means no directory: 404.
+
+**Why this container holds the private keys.** The response signature proves
+that whoever serves the directory holds each key in it, and it must be fresh
+(`expires` a few minutes out), so it is made per request. A signature made in
+advance would need a long `expires`, which is exactly what verifiers are told
+to distrust; a separate directory-signing key would prove nothing about the
+listed keys. So the API reads the same keys as the worker, from `.env.prod`,
+and uses them for this one response only.
 """
 
 from __future__ import annotations

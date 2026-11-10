@@ -11,8 +11,8 @@ One implementation for both sides of the crawler's identity:
 A shop's edge (Cloudflare, Shopify) reads the `Signature-Agent` header, fetches
 our key directory from it, and checks the `Signature` against the key whose
 JWK thumbprint is the `keyid`. Nothing here is secret but the private key,
-which comes from the environment (`MAKHZANBOT_SIGNING_KEY`, or a file named by
-`MAKHZANBOT_SIGNING_KEY_FILE`) and never from either repository.
+which comes from the environment (`MAKHZANBOT_SIGNING_KEY`, set in `.env.prod`)
+and never from either repository.
 
 Only what makhzan needs of RFC 9421 is implemented: derived components
 `@authority`, `@method`, `@path`, plain header fields, the `req` flag, and
@@ -60,10 +60,14 @@ REQUEST_LIFETIME = 60
 #: request's, because the response may sit in a cache for `max-age` (60 s).
 DIRECTORY_LIFETIME = 300
 
+#: The key that signs the crawler's requests.
 KEY_ENV = "MAKHZANBOT_SIGNING_KEY"
-#: The next key during a rotation: published in the directory, not used to sign
-#: requests until it is promoted to `KEY_ENV`.
+#: During a rotation, before the switch: the new key, published in the directory
+#: a week ahead so verifiers have it, but not yet signing requests.
 NEXT_KEY_ENV = "MAKHZANBOT_SIGNING_KEY_NEXT"
+#: During a rotation, after the switch: the old key, still published for a week
+#: so a verifier holding a cached directory or an in-flight request still checks.
+PREVIOUS_KEY_ENV = "MAKHZANBOT_SIGNING_KEY_PREVIOUS"
 
 
 def _b64url(data: bytes) -> str:
@@ -126,27 +130,15 @@ def jwk_thumbprint(jwk: dict[str, str]) -> str:
     return _b64url(hashlib.sha256(canonical.encode("utf-8")).digest())
 
 
-def _env_secret(name: str) -> str | None:
-    """`NAME`, or the contents of the file `NAME_FILE` points at (Docker secrets)."""
-    value = os.environ.get(name, "").strip()
-    if value:
-        return value
-    path = os.environ.get(f"{name}_FILE", "").strip()
-    if path:
-        with open(path, encoding="ascii") as handle:
-            return handle.read().strip() or None
-    return None
-
-
 def configured_key(name: str = KEY_ENV) -> Ed25519PrivateKey | None:
-    """The signing key from the environment, or None when there is none."""
-    text = _env_secret(name)
+    """A key from the environment, or None when it is unset."""
+    text = os.environ.get(name, "").strip()
     return load_private_key(text) if text else None
 
 
 def directory_keys() -> list[Ed25519PrivateKey]:
-    """Every key the directory publishes: the current one, then the next during a rotation."""
-    keys = [configured_key(KEY_ENV), configured_key(NEXT_KEY_ENV)]
+    """Every key the directory publishes: current, then next and previous during a rotation."""
+    keys = [configured_key(KEY_ENV), configured_key(NEXT_KEY_ENV), configured_key(PREVIOUS_KEY_ENV)]
     seen: set[str] = set()
     out: list[Ed25519PrivateKey] = []
     for key in keys:
