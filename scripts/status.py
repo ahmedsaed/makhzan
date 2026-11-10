@@ -368,6 +368,51 @@ async def crawler_identity(session, source_filter: str | None) -> None:
         print(line)
 
 
+#: A host served from a stale robots.txt copy older than this is flagged.
+STALE_COPY_WARN_DAYS = 7
+
+
+async def robots_health(session, source_filter: str | None) -> None:
+    """What robots.txt said to each source's latest run (`stats.robots`), and why a run stopped.
+
+    "fetched" and "no rules" (a 4xx) are the normal answers and print as one
+    quiet line. A stale copy standing in for an unreadable file is shown with
+    its age, flagged past a week; "unavailable" means the host was refused for
+    that run (RFC 9309: unreadable and no usable copy).
+    """
+    query = (
+        select(IngestionRun.source, IngestionRun.stats["robots"], IngestionRun.stats["stopped"])
+        .where(IngestionRun.stats.has_key("robots"))
+        .order_by(IngestionRun.started_at.desc())
+    )
+    if source_filter:
+        query = query.where(IngestionRun.source == source_filter)
+    latest: dict[str, tuple[dict, str | None]] = {}
+    for source, robots, stopped in (await session.execute(query)).all():
+        latest.setdefault(source, (robots or {}, stopped))
+    if not latest:
+        return
+    _header("ROBOTS.TXT (latest run)")
+    for source, (robots, stopped) in sorted(latest.items()):
+        parts = []
+        for host, said in sorted(robots.items()):
+            state = said.get("state", "?")
+            age = said.get("copy_age_days")
+            if state in ("fetched", "no_rules"):
+                parts.append(f"{DIM}{host} {state.replace('_', ' ')}{RESET}")
+            elif state == "stale":
+                colour = RED if (age or 0) > STALE_COPY_WARN_DAYS else YELLOW
+                parts.append(
+                    f"{colour}{host} unreadable, using a copy {age:g}d old "
+                    f"({said.get('error', '')}){RESET}"
+                )
+            else:
+                parts.append(f"{RED}{host} UNAVAILABLE: {said.get('error', '')}{RESET}")
+        print(f"  {source:22s} " + "; ".join(parts))
+        if stopped:
+            print(f"  {'':22s} {YELLOW}run stopped early: {stopped}{RESET}")
+
+
 async def crosswalk_drift(session, source_filter: str | None, days: int = 30) -> None:
     """Categories a supplier has added, renamed or retired since the crosswalk was written.
 
@@ -659,6 +704,7 @@ async def main() -> None:
         await cycle_history(session, args.source)
         await cycle_budget(session, args.source)
         await crawler_identity(session, args.source)
+        await robots_health(session, args.source)
         await recent_runs(session, args.source, args.runs)
         await crosswalk_drift(session, args.source)
         await product_details(session, args.source)
