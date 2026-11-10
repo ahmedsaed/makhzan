@@ -380,12 +380,21 @@ time after a probe; a shop that refuses makhzanbot gets a registered key and a
 letter, never the browser headers back. `CHROME_VERSION` stays as it is for the
 browser sources that remain; do not bump it to get past a WAF.
 
-`scripts/probe-suppliers.sh` answers "is it the headers or is it us?": by
-default it sends each source the browser headers, makhzanbot, and makhzanbot
-signed, 15 s apart per host, and prints the status codes. Run it on the server
-*and* on a laptop and compare — the same result in both places means the
-headers or the site, different results mean the egress IP, and no header will
-fix an address problem.
+`python -m worker.probe` (wrapped by `scripts/probe-suppliers.sh`, `make probe`)
+answers "is it the headers or is it us?". For each source it requests the real
+first page (`SourceAdapter.probe_url`) as browser, as makhzanbot, and as
+makhzanbot signed. It also asks for robots.txt and obeys it. Requests are 15 s
+apart per host, and it prints each status code and HTTP version.
+
+**A probe must use the crawler's own client** (`make_client` with the identity
+under test), never curl. curl's TLS fingerprint (JA3/JA4), its HTTP/2 and its
+header order and defaults all differ from httpx's, and Cloudflare scores them.
+curl with browser headers got 429 from a shop the crawler read fine with the
+same headers. The probe used to be a curl script.
+
+Run it on the server *and* on a laptop and compare. The same result in both
+places means the headers or the site; different results mean the egress IP, and
+no header will fix an address problem.
 
 **Cloudflare caches successful responses per URL.** During an investigation this
 makes already-fetched URLs keep returning 200 while never-fetched ones fail, which
@@ -398,24 +407,55 @@ what was asked before retrying, records it per host so the next partition waits
 too, and gives up for the run (cursor kept) when asked for more than
 `RETRY_AFTER_CAP`. Never shorten that wait to make a sweep finish.
 
-**A struggling host is slowed down, not pushed.** A 429/500/502/503/504 or a
-timeout doubles that host's pace (`_SLOWDOWN`, capped at 8x); each 2xx eases it
-by 10%. It acts inside `take_turn`, so `stats.pacing` measures the wider gaps —
-and never records why, because that endpoint is public.
+**A struggling host is slowed down, not pushed** (`worker/http.py`, `_HEALTH`).
+Errors are 429/500/502/503/504 and timeouts.
+
+- Every third error in a row doubles the host's pace, up to 4x. An occasional
+  error changes nothing.
+- Three 2xx in a row halve the pace again.
+- An hour after the host's last error, the slowdown is forgotten, so it does
+  not carry into the next day's run.
+
+The slowdown acts inside `take_turn`, so `stats.pacing` measures the wider gaps,
+and never records why, because that endpoint is public. The first version
+doubled on every error and took off only 10% per success. It pinned a host with
+13% errors at 8x and pushed a busy source past the job timeout.
+
+**A run ends itself before the job timeout**
+(`pipeline.RUN_TIME_SHARE` × `REFRESH_TIMEOUT_SECONDS`). It starts no page after
+that point, keeps its cursors and records `stats.stopped`. This bound covers
+everything that can stretch a run — Crawl-delay, Retry-After and the slowdown —
+so arq never has to cancel a run mid-page.
 
 **robots.txt is matched by `worker/robots.py`, not `urllib.robotparser`.** On the
 Python the worker runs (3.12) the standard parser ignores `*` and `$` and lets the
 first matching line win, so `Disallow: /collections/*sort_by*` matched nothing.
 Every request is checked against its full URL, query included — which matters most
 for paths the crawler discovers at runtime, like a shop's collection handles.
-Groups are matched on our token `makhzanbot` in every identity (it used to be
-"mozilla", taken from the browser User-Agent, so no shop could name us). A
-robots.txt that answers 5xx/429 or cannot be reached falls back to the host's
-last good copy (≤ 30 days, in memory) and otherwise refuses the host
-(`RobotsUnavailable`, RFC 9309 §2.3.1.4) — never "allow all", as it once did.
-`RobotsUnavailable` is deliberately not a `DisallowedByRobots`: the latter lets a
-caller skip one path and carry on, the former must fail the page so its cursor
-waits for the next run.
+Groups are matched on our token `makhzanbot` in every identity. It used to be
+"mozilla", taken from the browser User-Agent, so no shop could name us.
+
+A robots.txt that answers 5xx or 429, or cannot be reached, is handled per RFC
+9309 §2.3.1.4, never as "allow all" as it once was:
+
+1. It is retried once, after the host's pace.
+2. Then the host's last good copy is used, up to 30 days old. Copies are kept
+   in the `robots_copies` table, so a deploy does not forget them.
+3. Otherwise the host is refused (`RobotsUnavailable`) for 10 minutes.
+
+A run whose own host refuses it — robots.txt unavailable, or a `HostBackingOff`
+— stops at once. It records one error and `stats.stopped`, keeps every cursor,
+and does not stamp its cycle data as attempted. Before this, one blip after a
+deploy cost a source its day: one error per partition, with a pace's sleep
+between each.
+
+`RobotsUnavailable` is deliberately not a `DisallowedByRobots`. The latter lets a
+caller skip one path and carry on; the former must fail the page.
+
+Each run records what robots.txt said per host in `stats.robots`. `make status`
+shows it under ROBOTS.TXT and flags any copy more than 7 days old.
+
+A page refused before anything was sent is not counted in `stats.requests.pages`.
 
 **WooCommerce prices are minor units** (÷ 10^`currency_minor_unit`); Shopify's are
 major units. Getting this wrong is silent — prices are just 100x off.

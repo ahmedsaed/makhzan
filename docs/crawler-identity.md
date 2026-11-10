@@ -30,6 +30,26 @@ User-agent: makhzanbot
 Disallow: /
 ```
 
+### robots.txt when it cannot be read
+
+RFC 9309 says an unreadable robots.txt (a 5xx, a 429, a timeout) means "assume
+complete disallow". The crawler handles it in this order (`worker/robots.py`):
+
+1. It retries once, after the host's pace.
+2. If the file is still unreadable, it uses the host's last good copy, up to
+   30 days old. Copies are kept in the `robots_copies` table, so a restart
+   does not lose them.
+3. With no copy, the host is refused for 10 minutes. A run whose own host is
+   refused stops at once, with one error and every cursor kept, and resumes
+   at the next run.
+
+A copy older than 30 days is not used. The research note would then treat the
+file as absent and allow everything. This code refuses the host instead, on
+purpose: a file nobody could read for a month is no evidence that its rules
+went away. Each run records what robots.txt said in `stats.robots`.
+`make status` shows it under ROBOTS.TXT and flags any host served from a copy
+more than 7 days old.
+
 The browser identity exists only because every source used it before November
 2026. Some shops' edges challenge an unknown bot, so shops move one at a time,
 after a probe. The rule from the research note is in force: if a shop refuses
@@ -56,11 +76,20 @@ RFC 9421 HTTP Message Signatures, profiled by the IETF webbotauth working group
   test. Re-check it at each draft revision.
 
 The key directory is at `<SITE_URL>/.well-known/http-message-signatures-directory`.
-The API serves it (`apps/api/app/routers/wellknown.py`) and the web app proxies it
-with a rewrite, not a redirect. It returns a JWKS with
+The API serves it (`apps/api/app/routers/wellknown.py`), and the web app proxies
+it with a rewrite, not a redirect. It returns a JWKS with
 `Content-Type: application/http-message-signatures-directory+json`, signed by each
 key it lists with `tag="http-message-signatures-directory"`. With no key
 configured it answers 404.
+
+The API container therefore holds the private key or keys, and uses them only
+to sign this response. The signature must come from every listed key and
+expire within minutes, so it is made per request. A signature made in advance
+would need an expiry verifiers distrust, and signing with a separate key would
+prove nothing about the listed ones.
+
+Signatures expire 60 seconds after they are made, so the server's clock must be
+synced. See `docs/DEPLOYMENT.md`.
 
 ## Before registering: generate and publish the key
 
@@ -132,10 +161,17 @@ means a new directory URL and re-registering with both vendors.
 
 One shop at a time, starting with one that does not sit behind a strict WAF.
 
-1. **Probe first**, from the server:
-   `SIGN_CMD="docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T ingestion python -m worker.botauth headers --sign" ./scripts/probe-suppliers.sh`.
-   The `makhzanbot` and `signed` columns must be 200 for that shop. The probe is
-   read-only and spaces requests 15 s apart per host.
+1. **Probe first**, from the server: `./scripts/probe-suppliers.sh --source <id>`.
+   On the server this runs `python -m worker.probe` in the ingestion image. The
+   `makhzanbot` and `signed` columns must be 200 for that shop, and the
+   `robots` column must not say `unreadable` or `DISALLOWS`.
+   - The probe sends each source's real first page, using the crawler's own
+     client (`make_client`) for each identity. It never uses curl: curl's TLS
+     fingerprint, HTTP/2 and header order differ from the crawler's, and
+     Cloudflare scores those. curl with browser headers once got 429 from a
+     shop that served the crawler fine.
+   - It is read-only: no retries, at least 15 s between requests to a host, and
+     it obeys robots.txt.
 2. **Switch one shop**: in the private configuration, add
    `identity = "makhzanbot"` to that source's config, commit, and deploy. The
    `migrate` service syncs `sources.toml`, and an unknown identity fails the
@@ -160,5 +196,3 @@ One shop at a time, starting with one that does not sit behind a strict WAF.
   snippet. It does not yet mention the key directory, the server IP or its
   reverse DNS, or a takedown promise. Those wait for the owner's answers in the
   research note.
-- **Robots.txt copies.** The last good copy is held in the worker's memory, so
-  a restart forgets it.

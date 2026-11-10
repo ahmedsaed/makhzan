@@ -148,23 +148,43 @@ crawler report from `scripts/status.py`, read from the live database.
 ### Crawler signing key
 
 Sources with `identity = "makhzanbot"` sign their requests with Web Bot Auth
-(`docs/crawler-identity.md`). The key is an Ed25519 private key held only in
+(`docs/crawler-identity.md`). The key is an Ed25519 private key, held only in
 `.env.prod` on the server. It is never committed to this repository or to the
-private configuration. Both the `ingestion` service (to sign) and the `api`
-service (to publish the public key and sign the directory response) read it
-from `.env.prod`. `SITE_URL` must be set too, and must be `https://`: the
-User-Agent and the `Signature-Agent` header both name it.
+private configuration.
 
-**Generate** (prints the env line, the public JWK and its keyid; sends nothing):
+Two services read it from `.env.prod`:
+
+- `ingestion` uses it to sign the crawler's requests.
+- `api` publishes the public key at `/.well-known/http-message-signatures-directory`
+  and signs that response with the private key.
+
+The API needs the private key, not only the public one: the directory response
+must be signed by every key it lists, with a short `expires`, so the signature
+is made per request. A signature made in advance would need a long expiry,
+which verifiers distrust, and signing with a separate key would prove nothing
+about the listed keys. Nothing else in the API uses the key.
+
+`SITE_URL` must also be set, to the public `https://` origin: the User-Agent and
+the `Signature-Agent` header both name it. A source set to makhzanbot without it
+is refused when `migrate` syncs `sources.toml`, so the deploy fails rather than
+every daily run.
+
+**The clock must be right.** A signature is valid for 60 seconds after
+`created`. A server clock that drifts by more than that makes every signed
+request fail verification. Check with `timedatectl`; it should show
+`System clock synchronized: yes` and `NTP service: active`. If not, run
+`sudo timedatectl set-ntp true`.
+
+**Generate a key.** This prints the env line, the public JWK and its keyid, and
+sends nothing:
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
   run --rm --no-deps ingestion python -m worker.botauth keygen
 ```
 
-Paste the `MAKHZANBOT_SIGNING_KEY=…` line into `.env.prod`, or put the value in
-a file and set `MAKHZANBOT_SIGNING_KEY_FILE` to its path inside the containers.
-Then `./scripts/deploy.sh`, which recreates `api` and `ingestion` with it.
+Paste the `MAKHZANBOT_SIGNING_KEY=…` line into `.env.prod`. Then run
+`./scripts/deploy.sh`, which recreates `api` and `ingestion` with it.
 
 **Verify the directory** from outside:
 
@@ -173,35 +193,44 @@ curl -sS -D - -o - --max-redirs 0 \
   "$SITE_URL/.well-known/http-message-signatures-directory"
 ```
 
-Expect `HTTP/… 200` (not a 30x), and
-`content-type: application/http-message-signatures-directory+json`. Expect
-`signature-input: sig1=("@authority";req);…;tag="http-message-signatures-directory"`
-plus a `signature` header, and a body of
-`{"keys":[{"kty":"OKP","crv":"Ed25519","x":"…"}]}`. A 404 means the API has no
-key. A redirect means a proxy in front of the web app is rewriting the path,
-which verifiers reject; fix the proxy. To check that the keyid matches what you
-registered:
+Expect all of the following:
+
+- `HTTP/… 200`, not a 30x;
+- `content-type: application/http-message-signatures-directory+json`;
+- `signature-input: sig1=("@authority";req);…;tag="http-message-signatures-directory"`
+  and a `signature` header;
+- a body of `{"keys":[{"kty":"OKP","crv":"Ed25519","x":"…"}]}`.
+
+A 404 means the API has no key. A redirect means a proxy in front of the web
+app is rewriting the path, which verifiers reject; fix the proxy.
+
+To check that the keyid matches what you registered:
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
   exec ingestion python -m worker.botauth show
 ```
 
-**Rotate** (the research note's schedule; the dates are what verifiers need,
-not code):
+**Rotate.** The research note's schedule; the waiting periods are for
+verifiers, the code does not need them. The directory publishes up to three
+keys. Only `MAKHZANBOT_SIGNING_KEY` ever signs requests.
 
-1. Generate a new key and set it as `MAKHZANBOT_SIGNING_KEY_NEXT`. Deploy. The
-   directory now lists both keys, signs with both, and requests are still
-   signed with the current key.
-2. After the directory has been live for a week, promote it: move the value to
-   `MAKHZANBOT_SIGNING_KEY` and keep the old one as
-   `MAKHZANBOT_SIGNING_KEY_NEXT` (both stay published). Deploy.
-3. A week later, empty `MAKHZANBOT_SIGNING_KEY_NEXT`. Deploy.
+1. Generate a new key and set it as `MAKHZANBOT_SIGNING_KEY_NEXT`, then deploy.
+   The directory lists both keys and requests are still signed with the
+   current one.
+2. Once the directory has been live for a week, switch:
+   - `MAKHZANBOT_SIGNING_KEY_PREVIOUS` = the old key;
+   - `MAKHZANBOT_SIGNING_KEY` = the new key;
+   - `MAKHZANBOT_SIGNING_KEY_NEXT` emptied.
+
+   Deploy. Requests are now signed with the new key, and the old one stays
+   published for verifiers with a cached directory.
+3. A week later, empty `MAKHZANBOT_SIGNING_KEY_PREVIOUS` and deploy.
 4. If a vendor registered the keyid rather than the directory, update it there.
 
-A leaked key: replace `MAKHZANBOT_SIGNING_KEY` at once, leave `…_NEXT` empty,
-and deploy. Signed requests then use only the new key, and the old one leaves
-the directory.
+**A leaked key:** replace `MAKHZANBOT_SIGNING_KEY` at once, leave `…_NEXT` and
+`…_PREVIOUS` empty, and deploy. Signed requests then use only the new key, and
+the leaked one leaves the directory.
 
 Nightly backup cron:
 
