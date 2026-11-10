@@ -50,8 +50,9 @@ comparable — the cycle in flight tells you nothing on its own.
 `stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries and robots.txt included, and the gaps between them per host, measured at `worker/http.py`'s `take_turn`, the per-host gate that holds every request to the source's pace — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint. That holds only because nothing reaches a shop any other way: the client does not follow redirects itself (`make_client`), `_request` follows each hop through `take_turn`, robots-checked and logged, and every per-host table keys on `host_of()`, which folds case and default ports so robots.txt and the pages share one gate. It and `stats.requests` go on the run's row with every per-page commit (the pipeline's `checkpoint`), not only when the run ends, so a run a deploy cuts off still publishes what it sent.
 
 `make status` is the first thing to run when a sweep looks stuck or a catalog
-looks wrong: it reports per-source partition progress and resume points, recent
-runs with their errors, uncategorized/unpriced counts per supplier, the review
+looks wrong: it reports per-source partition progress and resume points, each
+source's crawler identity and whether its last run was signed, recent runs with
+their errors, uncategorized/unpriced counts per supplier, the review
 queue, and whether the search index has drifted from the database.
 
 ## How ingestion works
@@ -355,19 +356,36 @@ the live category list before committing.
 
 ## Gotchas that have already bitten
 
-**A 429 is not necessarily rate limiting.** Cloudflare scores stale browser
-versions as bots and answers with `429`, a zero-length body, and no `Retry-After`.
-Shop 3 was diagnosed as rate-limited twice before the real cause was
-found: our `User-Agent` advertised Chrome/124, about two years old. `CHROME_VERSION`
-in `worker/http.py` is load-bearing — bump it when it ages, and suspect it before
-building elaborate pacing theories. The site staying reachable in a browser while
-our client gets 429 is the tell.
+**A 429 is not necessarily rate limiting — and a bot check is not to be dodged.**
+Cloudflare scores clients it thinks are bots and answers with `429`, a
+zero-length body, and no `Retry-After`. Shop 3 was diagnosed as rate-limited
+twice before the real cause was found: our browser `User-Agent` advertised
+Chrome/124, about two years old, and Cloudflare scored it as a bot. The fix then
+was to bump the Chrome version, and these notes used to say to keep bumping it.
+That advice is withdrawn (November 2026, `docs/crawling-practices.md` in the private
+configuration): the score was right, the crawler *is* a bot, and passing a bot
+check by looking more like a browser is circumvention — the pattern Cloudflare
+publicly calls stealth crawling. The site staying reachable in a browser while
+our client gets 429 is still the tell; the response now is the honest identity.
 
-`scripts/probe-suppliers.sh` answers that question directly: it sends the
-crawler's exact headers to every source at two browser versions and prints the
-status codes. Run it on the server *and* on a laptop and compare — the same
-result in both places means the header or the site, different results mean the
-egress IP, and no amount of header tuning will fix an address problem.
+**Identity is per source: `browser` (default) or `makhzanbot`** (`worker/identity.py`,
+`docs/crawler-identity.md`). makhzanbot sends `makhzanbot/1.0 (+<SITE_URL>/how-we-crawl;
+crawler@merope.dev)`, no client hints, and — with `MAKHZANBOT_SIGNING_KEY` set —
+a Web Bot Auth signature on every request (`makhzan_schemas/botauth.py`; the API
+publishes the key at `/.well-known/http-message-signatures-directory`). The
+identity is a context variable the pipeline sets for the run, so every client
+(`make_client`, robots.txt, the details stage, the private adapter) takes it;
+never build a client with headers of its own. Shops move to makhzanbot one at a
+time after a probe; a shop that refuses makhzanbot gets a registered key and a
+letter, never the browser headers back. `CHROME_VERSION` stays as it is for the
+browser sources that remain; do not bump it to get past a WAF.
+
+`scripts/probe-suppliers.sh` answers "is it the headers or is it us?": by
+default it sends each source the browser headers, makhzanbot, and makhzanbot
+signed, 15 s apart per host, and prints the status codes. Run it on the server
+*and* on a laptop and compare — the same result in both places means the
+headers or the site, different results mean the egress IP, and no header will
+fix an address problem.
 
 **Cloudflare caches successful responses per URL.** During an investigation this
 makes already-fetched URLs keep returning 200 while never-fetched ones fail, which
@@ -380,11 +398,24 @@ what was asked before retrying, records it per host so the next partition waits
 too, and gives up for the run (cursor kept) when asked for more than
 `RETRY_AFTER_CAP`. Never shorten that wait to make a sweep finish.
 
+**A struggling host is slowed down, not pushed.** A 429/500/502/503/504 or a
+timeout doubles that host's pace (`_SLOWDOWN`, capped at 8x); each 2xx eases it
+by 10%. It acts inside `take_turn`, so `stats.pacing` measures the wider gaps —
+and never records why, because that endpoint is public.
+
 **robots.txt is matched by `worker/robots.py`, not `urllib.robotparser`.** On the
 Python the worker runs (3.12) the standard parser ignores `*` and `$` and lets the
 first matching line win, so `Disallow: /collections/*sort_by*` matched nothing.
 Every request is checked against its full URL, query included — which matters most
 for paths the crawler discovers at runtime, like a shop's collection handles.
+Groups are matched on our token `makhzanbot` in every identity (it used to be
+"mozilla", taken from the browser User-Agent, so no shop could name us). A
+robots.txt that answers 5xx/429 or cannot be reached falls back to the host's
+last good copy (≤ 30 days, in memory) and otherwise refuses the host
+(`RobotsUnavailable`, RFC 9309 §2.3.1.4) — never "allow all", as it once did.
+`RobotsUnavailable` is deliberately not a `DisallowedByRobots`: the latter lets a
+caller skip one path and carry on, the former must fail the page so its cursor
+waits for the next run.
 
 **WooCommerce prices are minor units** (÷ 10^`currency_minor_unit`); Shopify's are
 major units. Getting this wrong is silent — prices are just 100x off.

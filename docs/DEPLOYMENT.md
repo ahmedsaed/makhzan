@@ -145,6 +145,64 @@ crawler report from `scripts/status.py`, read from the live database.
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
 | Status | `docker compose -f docker-compose.prod.yml --env-file .env.prod ps` |
 
+### Crawler signing key
+
+Sources with `identity = "makhzanbot"` sign their requests with Web Bot Auth
+(`docs/crawler-identity.md`). The key is an Ed25519 private key held only in
+`.env.prod` on the server. It is never committed to this repository or to the
+private configuration. Both the `ingestion` service (to sign) and the `api`
+service (to publish the public key and sign the directory response) read it
+from `.env.prod`. `SITE_URL` must be set too, and must be `https://`: the
+User-Agent and the `Signature-Agent` header both name it.
+
+**Generate** (prints the env line, the public JWK and its keyid; sends nothing):
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  run --rm --no-deps ingestion python -m worker.botauth keygen
+```
+
+Paste the `MAKHZANBOT_SIGNING_KEY=…` line into `.env.prod`, or put the value in
+a file and set `MAKHZANBOT_SIGNING_KEY_FILE` to its path inside the containers.
+Then `./scripts/deploy.sh`, which recreates `api` and `ingestion` with it.
+
+**Verify the directory** from outside:
+
+```bash
+curl -sS -D - -o - --max-redirs 0 \
+  "$SITE_URL/.well-known/http-message-signatures-directory"
+```
+
+Expect `HTTP/… 200` (not a 30x), and
+`content-type: application/http-message-signatures-directory+json`. Expect
+`signature-input: sig1=("@authority";req);…;tag="http-message-signatures-directory"`
+plus a `signature` header, and a body of
+`{"keys":[{"kty":"OKP","crv":"Ed25519","x":"…"}]}`. A 404 means the API has no
+key. A redirect means a proxy in front of the web app is rewriting the path,
+which verifiers reject; fix the proxy. To check that the keyid matches what you
+registered:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  exec ingestion python -m worker.botauth show
+```
+
+**Rotate** (the research note's schedule; the dates are what verifiers need,
+not code):
+
+1. Generate a new key and set it as `MAKHZANBOT_SIGNING_KEY_NEXT`. Deploy. The
+   directory now lists both keys, signs with both, and requests are still
+   signed with the current key.
+2. After the directory has been live for a week, promote it: move the value to
+   `MAKHZANBOT_SIGNING_KEY` and keep the old one as
+   `MAKHZANBOT_SIGNING_KEY_NEXT` (both stay published). Deploy.
+3. A week later, empty `MAKHZANBOT_SIGNING_KEY_NEXT`. Deploy.
+4. If a vendor registered the keyid rather than the directory, update it there.
+
+A leaked key: replace `MAKHZANBOT_SIGNING_KEY` at once, leave `…_NEXT` empty,
+and deploy. Signed requests then use only the new key, and the old one leaves
+the directory.
+
 Nightly backup cron:
 
 ```
