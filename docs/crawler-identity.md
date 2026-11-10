@@ -11,9 +11,9 @@ configuration). The worker reads it per run (`worker/identity.py`).
 
 | | `browser` (default) | `makhzanbot` |
 |---|---|---|
-| User-Agent | `Mozilla/5.0 … Chrome/153.0.0.0 Safari/537.36` | `makhzanbot/1.0 (+<SITE_URL>/how-we-crawl; crawler@merope.dev)` |
+| User-Agent | `Mozilla/5.0 … Chrome/153.0.0.0 Safari/537.36` | `makhzanbot/1.0 (+<SITE_URL>/how-we-crawl; crawler@makhzan.merope.dev)` |
 | Client hints, `Sec-Fetch-*` | sent | not sent |
-| `From` | `crawler@merope.dev` | `crawler@merope.dev` |
+| `From` | `crawler@makhzan.merope.dev` | `crawler@makhzan.merope.dev` |
 | Web Bot Auth signature | never | on every request, when `MAKHZANBOT_SIGNING_KEY` is set |
 | robots.txt group | `makhzanbot`, else `*` | `makhzanbot`, else `*` |
 
@@ -144,9 +144,9 @@ form before relying on this.**
 | Field | Value |
 |---|---|
 | Bot name / product token | `makhzanbot` |
-| User-Agent | `makhzanbot/1.0 (+<SITE_URL>/how-we-crawl; crawler@merope.dev)` |
+| User-Agent | `makhzanbot/1.0 (+<SITE_URL>/how-we-crawl; crawler@makhzan.merope.dev)` |
 | Purpose | A product directory for Egyptian electronics and hardware suppliers. It reads public catalogue pages and product APIs and links buyers to the shop. No purchases, no logins, no AI training. |
-| Contact | `crawler@merope.dev` |
+| Contact | `crawler@makhzan.merope.dev` |
 | Information page | `<SITE_URL>/how-we-crawl` |
 | Key directory | `<SITE_URL>/.well-known/http-message-signatures-directory` |
 | keyid | the output of `python -m worker.botauth show` on the server |

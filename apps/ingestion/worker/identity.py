@@ -47,7 +47,7 @@ IDENTITIES = (BROWSER, MAKHZANBOT)
 ROBOTS_TOKEN = "makhzanbot"
 
 #: Where a shop can reach the operator. In every request, as `From`.
-CONTACT = "crawler@merope.dev"
+CONTACT = "crawler@makhzan.merope.dev"
 
 #: The browser identity's Chrome version. Kept as it is while sources still use
 #: that identity; it is not to be bumped to get past a bot check. That is the
