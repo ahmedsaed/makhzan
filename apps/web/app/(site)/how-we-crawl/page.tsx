@@ -4,8 +4,9 @@ import type { Metadata } from "next";
 import { Link } from "@/components/link";
 import { Container } from "@/components/section";
 import { fetchCrawlerActivity } from "@/lib/api";
-import { crawlingContent as content } from "@/lib/content/crawling";
+import { crawlingContent as content, SITE } from "@/lib/content/crawling";
 import { pageMetadata } from "@/lib/metadata";
+import { siteUrl } from "@/lib/site";
 import { routes } from "@/lib/routes";
 
 import { CrawlerActivitySection } from "./activity";
@@ -24,6 +25,10 @@ export const metadata: Metadata = pageMetadata({
 
 export default async function HowWeCrawlPage() {
   const activity = await fetchCrawlerActivity();
+  // The copy names our own origin (the User-Agent, the key directory) as SITE;
+  // it is filled in here from SITE_URL so one image serves any host.
+  const origin = siteUrl().origin;
+  const withSite = (text: string) => text.replaceAll(SITE, origin);
   return (
     <Container className="max-w-2xl py-10">
       <h1 className="text-2xl sm:text-3xl">{content.title}</h1>
@@ -35,12 +40,12 @@ export default async function HowWeCrawlPage() {
             <h2 className="text-lg text-ink">{section.heading}</h2>
             {section.body.map((paragraph) => (
               <p key={paragraph} className="mt-2 text-[15px] leading-relaxed text-ink-2">
-                {paragraph}
+                {withSite(paragraph)}
               </p>
             ))}
             {section.snippet ? (
               <pre className="mt-2 overflow-x-auto rounded-card border border-line bg-surface p-3 font-mono text-[13px] text-ink">
-                {section.snippet}
+                {withSite(section.snippet)}
               </pre>
             ) : null}
           </section>
