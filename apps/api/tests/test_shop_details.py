@@ -9,8 +9,6 @@ shop page's rows stay slim.
 
 from __future__ import annotations
 
-from datetime import date
-
 from factories import make_listing, make_product, make_supplier
 
 DETAILS = {
@@ -201,10 +199,21 @@ LISTED = {
     "address": "12 Example Street",
     "area": "Bab El Louk",
     "governorate": "Cairo",
-    "maps_url": "https://maps.example.test/shop-a",
+    "maps_url": "https://maps.app.goo.gl/shopA",
     "branches": [{"name": "Giza", "address": "3 Other Street", "phones": ["+20233334444"]}],
-    "contact_source_url": "https://shop-a.test/contact-us",
-    "contact_checked_on": date(2026, 11, 3),
+    # Per page, as sync stores them: the address from a Google Maps listing.
+    "contact_sources": [
+        {
+            "url": "https://shop-a.test/contact-us",
+            "checked_on": "2026-11-03",
+            "fields": ["phones", "email", "branches"],
+        },
+        {
+            "url": "https://www.google.com/maps/place/Shop+A",
+            "checked_on": "2026-11-04",
+            "fields": ["address", "area", "governorate", "maps_url"],
+        },
+    ],
 }
 
 
@@ -270,13 +279,20 @@ async def test_listed_details_win_per_field_and_the_crawler_fills_gaps(client, d
             "maps_url": None,
         }
     ]
+    assert contact["maps_url"] == "https://maps.app.goo.gl/shopA"
     assert contact["sources"] == [
         {
             "origin": "listed",
             "url": "https://shop-a.test/contact-us",
             "checked_on": "2026-11-03",
-            "fields": ["phones", "email", "address", "area", "governorate", "maps_url", "branches"],
-        },  # fmt: skip
+            "fields": ["phones", "email", "branches"],
+        },
+        {
+            "origin": "listed",
+            "url": "https://www.google.com/maps/place/Shop+A",
+            "checked_on": "2026-11-04",
+            "fields": ["address", "area", "governorate", "maps_url"],
+        },
         {
             "origin": "read",
             "url": "https://shop-a.test/",
@@ -344,8 +360,13 @@ async def test_a_shop_listing_only_branch_numbers_is_still_reachable_by_phone(cl
         db,
         slug="shop-a",
         branches=[{"name": "Giza", "phones": ["+20233334444"]}],
-        contact_source_url="https://shop-a.test/branches",
-        contact_checked_on=date(2026, 11, 3),
+        contact_sources=[
+            {
+                "url": "https://shop-a.test/branches",
+                "checked_on": "2026-11-03",
+                "fields": ["branches"],
+            }
+        ],  # fmt: skip
     )
     await make_listing(db, supplier=supplier, product=product)
 

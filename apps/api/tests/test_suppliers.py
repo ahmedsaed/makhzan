@@ -35,7 +35,6 @@ async def test_returns_the_supplier_profile(client, db):
         "area": "Bab El Louk",
         "governorate": "Cairo",
         "website_url": "https://shop-b.test",
-        # An area entered before details carried their source: shown, unsourced.
         "contact": {
             "phones": [],
             "whatsapp": None,
@@ -46,14 +45,8 @@ async def test_returns_the_supplier_profile(client, db):
             "maps_url": None,
             "opening_hours": [],
             "branches": [],
-            "sources": [
-                {
-                    "origin": "listed",
-                    "url": None,
-                    "checked_on": None,
-                    "fields": ["area", "governorate"],
-                }
-            ],
+            # Entered before details carried a source: shown, attributed to nothing.
+            "sources": [],
         },
         "listing_count": 1,
         "in_stock_count": 1,
