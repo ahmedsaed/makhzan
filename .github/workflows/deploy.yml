@@ -18,7 +18,16 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           # deploy.sh does the git pull itself; the one here is the bootstrap,
           # so a server still running an older deploy.sh gets the current one.
+          # It takes the operations lock too (scripts/lib/ops.sh), so a release
+          # published during a restore or backup fails here instead of
+          # updating the checkout under it. -o: git's leftovers (gc --auto, an
+          # ssh master) must not inherit the lock. mkdir: a fresh server has
+          # no backups/ yet.
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
-            git pull --ff-only
+            mkdir -p backups
+            flock -n -o backups/.ops.lock git pull --ff-only || {
+              echo "A backup, restore or deploy holds backups/.ops.lock, or the pull failed; not deploying." >&2
+              exit 1
+            }
             ./scripts/deploy.sh
