@@ -8,12 +8,11 @@ matching (canonical Product) is deliberately OUT of V1 — see docs/PLAN.md.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
-    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -78,8 +77,9 @@ class Supplier(TimestampMixin, Base):
 
     website_url: Mapped[str | None] = mapped_column(Text)
 
-    # How to reach the shop, as a person read it from the shop's own pages and
-    # entered it in the shop's `supplier` table in sources.toml. Written only by
+    # How to reach the shop, as a person read it where the shop's details are
+    # published (its site, its Facebook, its Google Maps listing) and entered it
+    # in the shop's `supplier` table in sources.toml. Written only by
     # `worker.sources.sync` (every deploy) and on the row's creation, so the file
     # is the truth: a value removed there is cleared here. Merged with `contact`
     # below by makhzan_schemas.contact.resolve_contact, these winning per field.
@@ -99,9 +99,12 @@ class Supplier(TimestampMixin, Base):
     #: Further places it trades from: [{name, address, area, governorate,
     #: phones, maps_url}]. The columns above are its main (or only) one.
     branches: Mapped[list | None] = mapped_column(JSONB)
-    #: Where and when a person read the details above.
-    contact_source_url: Mapped[str | None] = mapped_column(Text)
-    contact_checked_on: Mapped[date | None] = mapped_column(Date)
+    #: Where and when a person read the details above, a page at a time:
+    #: [{url, checked_on: "YYYY-MM-DD", fields: [names as in ResolvedContact]}].
+    contact_sources: Mapped[list | None] = mapped_column(JSONB)
+    # The table still has `phone`, the single number `phones` replaced, until a
+    # later migration drops it: a release still running while this one migrates
+    # selects it (expand/contract, migration 2b656e4b5adc).
     lat: Mapped[float | None] = mapped_column()
     lng: Mapped[float | None] = mapped_column()
 
