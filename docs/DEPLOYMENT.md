@@ -147,22 +147,20 @@ crawler report from `scripts/status.py`, read from the live database.
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
 | Status | `docker compose -f docker-compose.prod.yml --env-file .env.prod ps` |
 
-Nightly backup cron:
-
-```
-0 2 * * * ~/Documents/Projects/makhzan/scripts/backup-db.sh >> ~/Documents/Projects/makhzan/backups/backup.log 2>&1
-```
-
 ## Backup and restore
 
-Backups are taken by hand for now and live only on the server, next to the
-database they protect. Until off-site copies are automated, copy them off the box
-yourself.
+**Not done yet:** scheduled backups and off-site copies are a separate, pending
+task. Today backups are taken by hand and live only on the server, next to the
+database they protect, so copy them off the box yourself. (Earlier versions of
+this page suggested a nightly cron of `backup-db.sh`; if one was installed, it
+keeps working and now writes `.dump` files. It fails, visibly, if it collides
+with a deploy or restore.)
 
 1. **Take one:** `./makhzan backup` writes `backups/makhzan-<ts>.dump`
-   (`pg_dump -Fc`) and keeps the 14 newest. It reads the whole file back with
-   `pg_restore` and fails loudly if it cannot, or if it has no `alembic_version`
-   data, so a 0-byte or truncated backup is never kept under its final name.
+   (`pg_dump -Fc`). It reads the whole file back with `pg_restore` and fails
+   loudly if it cannot, or if it has no `alembic_version` data, so a 0-byte or
+   truncated backup is never kept under its final name. It keeps the 14 newest
+   backups, and separately the 3 newest `*-pre-restore.dump` safety copies.
 2. **Copy it off the box**, from your laptop:
    `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
 3. **Test-restore it into a scratch database** now and then, without touching the
@@ -177,34 +175,45 @@ yourself.
    $C exec -T db dropdb -U makhzan restore_check
    ```
 
-   An older plain-SQL backup (`*.sql.gz`) loads with
-   `gunzip -c F | $C exec -T db psql -U makhzan -d restore_check -v ON_ERROR_STOP=1` instead.
-4. **Full restore:** `./makhzan restore backups/makhzan-<ts>.dump` (or a legacy
-   `*.sql.gz`). It asks you to type the database name (`--yes` skips that), then:
-   backs up the current database to `backups/makhzan-<ts>-pre-restore.dump`
-   (`--no-safety-backup` skips that); stops `api` and `ingestion`; loads the file
-   into a scratch database, stopping at the first error; only then drops the live
-   database and renames the scratch one into its place; runs the deploy's
-   `migrate` service (`alembic upgrade head`, sources sync), so an older backup
-   comes up to the current schema; rebuilds products and the search index; starts
-   `api` and `ingestion` again and prints the alembic version, listed products,
-   listings and newest crawl run.
+   If a step fails, the last line still needs running: `restore_check` stays
+   behind otherwise. An older plain-SQL backup (`*.sql.gz`) loads with
+   `gunzip -c F | $C exec -T db psql -U makhzan -d restore_check -v ON_ERROR_STOP=1`.
+4. **Full restore:** pause releases first (publishing one deploys), open `tmux`
+   or `screen`, then `./makhzan restore backups/makhzan-<ts>.dump` (or a legacy
+   `*.sql.gz`). It shows the stack and database and asks you to type the
+   database name (`--yes` skips that), then:
+   - backs up the current database to `backups/makhzan-<ts>-pre-restore.dump`
+     (`--no-safety-backup` skips it; skipped by itself on a fresh, empty database);
+   - stops `api` and `ingestion`;
+   - loads the file into a scratch database `<db>_restoring`, stopping at the
+     first error, and refuses it unless it has one alembic version, products,
+     listings, the core tables' primary keys and foreign keys;
+   - runs the deploy's `migrate` service against the scratch database, so an
+     older backup comes up to the current schema and a broken one fails there;
+   - only then drops the live database and renames the scratch one into place;
+   - rebuilds the search index, starts `api` and `ingestion` again and prints the
+     alembic version, listed products, listings and newest crawl run.
 
-   If it fails while loading, the live database was not touched and the services
-   are started again. If it fails after the swap (migrations, reindex), it leaves
-   `api` and `ingestion` stopped and prints the commands to finish, or to go back
-   to the safety backup.
+   Everything is also written to `backups/restore-<ts>.log`. A failure before
+   the swap leaves the live database untouched and starts the services again.
+   A failure during or after it prints what Postgres reports and the exact
+   commands to finish, or to go back to the safety copy.
+
+   Restore, backup, deploy and `migrate.sh` share a lock (`backups/.ops.lock`):
+   while one runs, the others refuse to start.
 
    The crawl resumes from the backup: `source_cursors` come back with everything
    else, so a sweep in progress continues from the backup's page and the pages
    swept since are swept again. Runs the backup caught mid-way are closed as
    interrupted when the worker starts. Nothing needs resetting: cursors and
    listings are from the same moment. (`db-load.sh`, which loads a server dump into
-   a *dev* database, does reset them.)
+   a *dev* database, does reset them.) Products come back as the backup had them;
+   the worker regroups them on its next rebuild, after the next crawl.
 
-`COMPOSE_FILE` and `ENV_FILE` point `backup-db.sh` and `restore-db.sh` at
-another stack, e.g. a throwaway one with `COMPOSE_PROJECT_NAME` set, for trying a
-restore without production.
+`MAKHZAN_ENV_FILE` and `MAKHZAN_COMPOSE_FILE` point `backup-db.sh` and
+`restore-db.sh` at another stack, for trying a restore without production. They
+refuse unless `COMPOSE_PROJECT_NAME` is set too: without it another env file
+still addresses the production containers.
 
 ## Deploying
 
@@ -355,6 +364,6 @@ Two things worth knowing:
   `docker-compose.prod.yml` and set `NEXT_PUBLIC_API_URL` to that URL (rebuild web).
 - **`migrate` fails** → check `DATABASE_URL` matches `POSTGRES_USER/PASSWORD/DB`,
   uses host `db` and the `+asyncpg` driver.
-- **Search empty after restore** → `restore-db.sh` rebuilds the index as its last
-  step; if that step failed, `docker compose ... run --rm --no-deps ingestion python -m worker.reindex`.
+- **Search empty after restore** → `restore-db.sh` rebuilds the index after the
+  swap; if that step failed, `docker compose ... run --rm --no-deps ingestion python -m worker.reindex`.
 - **Resources** → 2 vCPU / 2–4 GB is comfortable. Add swap if the box is small.

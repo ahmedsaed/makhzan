@@ -13,6 +13,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Never alongside a restore or a backup (scripts/lib/ops.sh). Taken before the
+# git pull and kept across the re-exec below, which inherits it.
+. scripts/lib/ops.sh
+ops_lock "deploy.sh"
+
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env.prod)
 
 # Update first, then hand over to the version we just pulled.

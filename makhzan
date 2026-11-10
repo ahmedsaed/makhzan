@@ -14,6 +14,8 @@
 # itself on DEPLOY_HOST over SSH, using the same .env.local variables as
 # db-pull.sh. Either way the commands act on the server's stack.
 set -euo pipefail
+# backup/restore resolve relative paths against where you ran this from.
+export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {

@@ -6,6 +6,8 @@
 #   ./scripts/migrate.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/lib/ops.sh
+ops_lock "migrate.sh"
 
 docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm migrate
 echo "==> Migrations applied"
