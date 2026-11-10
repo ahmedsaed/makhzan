@@ -43,6 +43,8 @@ if [ ! -f .env.prod ]; then
 fi
 
 # --- On the server ------------------------------------------------------------
+. scripts/lib/ops.sh
+ops_production_only
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env.prod)
 
 # What the running worker actually believes, which is not necessarily what

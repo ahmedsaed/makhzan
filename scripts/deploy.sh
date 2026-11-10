@@ -16,6 +16,7 @@ cd "$(dirname "$0")/.."
 # Never alongside a restore or a backup (scripts/lib/ops.sh). Taken before the
 # git pull and kept across the re-exec below, which inherits it.
 . scripts/lib/ops.sh
+ops_production_only
 ops_lock "deploy.sh"
 
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env.prod)
@@ -28,7 +29,8 @@ COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env.prod)
 # process with the new file is the fix, and the guard stops it looping.
 if [ "${SKIP_PULL:-0}" != "1" ] && [ "${DEPLOY_REEXEC:-0}" != "1" ]; then
   echo "==> Updating the checkout"
-  git pull --ff-only
+  # 9>&-: git may leave gc --auto or an ssh master running; they must not hold the lock.
+  git pull --ff-only 9>&-
   DEPLOY_REEXEC=1 exec "$0" "$@"
 fi
 
@@ -55,7 +57,7 @@ if [ -z "$site_url" ]; then
 fi
 if [ "${SKIP_PULL:-0}" != "1" ]; then
   echo "==> Updating the configuration in ${config_dir}"
-  git -C "$config_dir" pull --ff-only
+  git -C "$config_dir" pull --ff-only 9>&-
 fi
 echo "    configuration at $(git -C "$config_dir" log -1 --format='%h %s')"
 

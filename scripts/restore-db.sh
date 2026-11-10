@@ -78,16 +78,28 @@ start_again() {
     echo "  could not; run: $CMD start ${WERE_UP[*]}"
 }
 
-# From step 3 on, a failure says what state it left, from what Postgres reports
-# rather than from how far the script got.
+# From step 3 on, any exit that is not the finish (an error, Ctrl-C, an SSH
+# drop, a kill) cleans up and says what state it left, from what Postgres
+# reports rather than from how far the script got. It decides on PHASE, never
+# on $?: when bash dies from a signal, $? in the EXIT trap is the last command's
+# status, often 0. The signals are turned into exits (in main) and ignored from
+# here on, so neither a second Ctrl-C nor a dead terminal cuts the cleanup short.
 # shellcheck disable=SC2329 # run by the EXIT trap
 on_exit() {
-  local code=$? live scratch
-  [ "$code" = 0 ] && return
+  local code=$? live scratch why
+  trap '' INT HUP TERM PIPE
+  set +e
+  case "$PHASE" in "" | finished) return ;; esac
+  case "$code" in
+    129) why="hangup: the terminal or SSH session went away" ;;
+    130) why="interrupted" ;;
+    143) why="terminated" ;;
+    *) why="exit $code" ;;
+  esac
   echo
   case "$PHASE" in
     prepare | load | validate | migrate)
-      echo "RESTORE FAILED during: $PHASE (exit $code)."
+      echo "RESTORE FAILED during: $PHASE ($why)."
       echo "The live database '$DB' was NOT changed."
       if "${COMPOSE[@]}" exec -T db psql -U "$POSTGRES_USER" -d postgres -qc \
         "DROP DATABASE IF EXISTS \"$SCRATCH\" WITH (FORCE)" >/dev/null 2>&1; then
@@ -101,7 +113,7 @@ on_exit() {
     swap)
       live="$(db_exists "$DB")"
       scratch="$(db_exists "$SCRATCH")"
-      echo "RESTORE FAILED while swapping the databases (exit $code)."
+      echo "RESTORE FAILED while swapping the databases ($why)."
       echo "Postgres reports: '$DB' exists: $live; '$SCRATCH' exists: $scratch."
       if [ "$live" = yes ] && [ "$scratch" = yes ]; then
         echo "The live database '$DB' was NOT changed. The restored, migrated copy is kept"
@@ -126,7 +138,7 @@ on_exit() {
       fi
       ;;
     reindex | restart)
-      echo "RESTORE FAILED during: $PHASE (exit $code)."
+      echo "RESTORE FAILED during: $PHASE ($why)."
       echo "'$DB' holds $FILE, migrated; that part is done."
       [ "$PHASE" = reindex ] && echo "The search index was not rebuilt: $CMD run --rm --no-deps ingestion python -m worker.reindex"
       start_again
@@ -167,13 +179,23 @@ main() {
   ops_lock "restore-db.sh $FILE"
 
   LOG="$PWD/backups/restore-$(date +%Y%m%d-%H%M%S).log"
-  exec > >(tee -a "$LOG") 2>&1
+  # The log keeps going when the terminal goes: tee ignores the signals that
+  # end this script, only warns when the terminal is gone, and does not hold
+  # the lock (fd 9) once the script has let it go.
+  exec > >(
+    trap '' INT HUP TERM
+    exec tee --output-error=warn -a "$LOG" 9>&-
+  ) 2>&1
+  PHASE=""
+  trap on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
+  trap 'exit 143' TERM
 
   DB="$POSTGRES_DB"
   SCRATCH="${DB}_restoring"
   SAFETY_FILE=""
   WERE_UP=()
-  PHASE=""
 
   # The migrate service reads DATABASE_URL; pointed at the scratch database it
   # migrates that instead of the live one.
@@ -275,14 +297,24 @@ main() {
 
   # --- 2. Safety backup ---------------------------------------------------------
   if [ "$SAFETY" = 1 ]; then
-    local versions=0
-    # Two queries: a count over a table that does not exist fails at parse time.
-    if [ "$live_db" = yes ] &&
-      [ "$(psql_on "$DB" <<<"SELECT to_regclass('public.alembic_version') IS NOT NULL")" = t ]; then
-      versions="$(psql_on "$DB" <<<"SELECT count(*) FROM alembic_version")"
+    # Skipped only when there is no catalogue to lose: no database, no products
+    # table, or an empty one (a fresh server). A query that fails is not "empty".
+    local products_now=0 has_products
+    if [ "$live_db" = yes ]; then
+      # Two queries: a count over a table that does not exist fails at parse time.
+      has_products="$(psql_on "$DB" <<<"SELECT to_regclass('public.products') IS NOT NULL")" || {
+        echo "Cannot tell whether '$DB' holds products; nothing was changed." >&2
+        exit 1
+      }
+      if [ "$has_products" = t ]; then
+        products_now="$(psql_on "$DB" <<<"SELECT count(*) FROM products")" || {
+          echo "Cannot count the products in '$DB'; nothing was changed." >&2
+          exit 1
+        }
+      fi
     fi
-    if [ "$versions" = 0 ]; then
-      echo "==> No safety backup: '$DB' has no alembic version, so nothing is there to keep"
+    if [ "$products_now" = 0 ]; then
+      echo "==> No safety backup: '$DB' holds no products, so there is nothing to keep"
     else
       SAFETY_FILE="$PWD/backups/makhzan-$(date +%Y%m%d-%H%M%S)-pre-restore.dump"
       echo "==> Backing up the current database to $SAFETY_FILE"
@@ -306,7 +338,6 @@ main() {
   done
 
   PHASE=prepare
-  trap on_exit EXIT
   echo "==> Stopping ${WRITERS[*]} (were up: ${WERE_UP[*]:-none})"
   "${COMPOSE[@]}" stop "${WRITERS[@]}"
 
@@ -386,7 +417,6 @@ SQL
     "${COMPOSE[@]}" start "${WERE_UP[@]}"
   fi
   PHASE=finished
-  trap - EXIT
 
   echo
   echo "==> Restored $FILE into '$DB'"

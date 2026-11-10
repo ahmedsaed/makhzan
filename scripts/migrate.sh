@@ -7,6 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/ops.sh
+ops_production_only
 ops_lock "migrate.sh"
 
 docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm migrate

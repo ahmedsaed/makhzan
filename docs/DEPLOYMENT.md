@@ -160,7 +160,8 @@ with a deploy or restore.)
    (`pg_dump -Fc`). It reads the whole file back with `pg_restore` and fails
    loudly if it cannot, or if it has no `alembic_version` data, so a 0-byte or
    truncated backup is never kept under its final name. It keeps the 14 newest
-   backups, and separately the 3 newest `*-pre-restore.dump` safety copies.
+   backups, and separately every `*-pre-restore.dump` safety copy from the
+   last 7 days (never fewer than 3). A pruning failure is only a warning.
 2. **Copy it off the box**, from your laptop:
    `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
 3. **Test-restore it into a scratch database** now and then, without touching the
@@ -183,7 +184,8 @@ with a deploy or restore.)
    `*.sql.gz`). It shows the stack and database and asks you to type the
    database name (`--yes` skips that), then:
    - backs up the current database to `backups/makhzan-<ts>-pre-restore.dump`
-     (`--no-safety-backup` skips it; skipped by itself on a fresh, empty database);
+     (`--no-safety-backup` skips it; skipped by itself only when the database
+     has no products table or an empty one, as on a fresh server);
    - stops `api` and `ingestion`;
    - loads the file into a scratch database `<db>_restoring`, stopping at the
      first error, and refuses it unless it has one alembic version, products,
@@ -195,12 +197,17 @@ with a deploy or restore.)
      alembic version, listed products, listings and newest crawl run.
 
    Everything is also written to `backups/restore-<ts>.log`. A failure before
-   the swap leaves the live database untouched and starts the services again.
-   A failure during or after it prints what Postgres reports and the exact
+   the swap leaves the live database untouched and starts the services again,
+   and that includes Ctrl-C, a dropped SSH session and a kill: the cleanup
+   runs and its report reaches the log even when the terminal is gone. A
+   failure during or after the swap prints what Postgres reports and the exact
    commands to finish, or to go back to the safety copy.
 
-   Restore, backup, deploy and `migrate.sh` share a lock (`backups/.ops.lock`):
-   while one runs, the others refuse to start.
+   Restore, backup, deploy (and the release workflow's `git pull`) and
+   `migrate.sh` share a lock (`backups/.ops.lock`): while one runs, the others
+   refuse to start. `./makhzan start`, `stop` and `crawl on|off` do not take
+   it; do not use them while a restore runs, since starting `api` or
+   `ingestion` mid-restore points them at a database being replaced.
 
    The crawl resumes from the backup: `source_cursors` come back with everything
    else, so a sweep in progress continues from the backup's page and the pages
