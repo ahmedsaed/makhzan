@@ -24,7 +24,28 @@ test("the key directory is proxied with a plain 200, never redirected", async ({
 test("how-we-crawl names our robots.txt token and gives the block to copy", async ({ page }) => {
   await page.goto("/how-we-crawl");
   await expect(page.getByText("Our robots.txt token is makhzanbot")).toBeVisible();
-  await expect(page.locator("pre")).toHaveText("User-agent: makhzanbot\nDisallow: /");
+  await expect(page.locator("pre").filter({ hasText: "Disallow" })).toHaveText(
+    "User-agent: makhzanbot\nDisallow: /",
+  );
   // Truthful during the move: not every request says makhzanbot yet.
   await expect(page.getByText("one shop at a time")).toBeVisible();
+});
+
+test("how-we-crawl says how to recognise and verify us, on the public origin", async ({
+  page,
+}) => {
+  await page.goto("/how-we-crawl");
+  // SITE_URL (playwright.config.ts), filled in at request time: the User-Agent
+  // a moved shop sees names this page there, never the copy's placeholder.
+  const origin = "https://makhzan.test";
+  await expect(page.locator("pre").filter({ hasText: "makhzanbot/1.0" })).toHaveText(
+    `makhzanbot/1.0 (+${origin}/how-we-crawl; crawler@makhzan.merope.dev)`,
+  );
+  await expect(page.getByText(`${origin}${PATH}`)).toBeVisible();
+  await expect(page.getByText("Our requests come from 45.95.173.97.")).toBeVisible();
+  await expect(page.getByText("{site}")).toHaveCount(0);
+  // What we keep, and the promises a shop can hold us to.
+  await expect(page.getByText("we do not use shop content to train AI models")).toBeVisible();
+  await expect(page.getByText("we do not copy them")).toBeVisible();
+  await expect(page.getByText("we will stop, keeping only the name, price")).toBeVisible();
 });

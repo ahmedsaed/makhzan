@@ -54,6 +54,22 @@ export type CrawlingContent = {
  */
 export const CONTACT_EMAIL = "crawler@makhzan.merope.dev";
 
+/**
+ * Where the crawler's requests come from: the production server's egress
+ * address, as `python -m worker.probe` prints it. Published so a shop can
+ * check a log line against it. If the server moves, change this the same day.
+ */
+export const CRAWLER_IP = "45.95.173.97";
+
+/** Where the Web Bot Auth public keys are published (served by the API). */
+export const KEY_DIRECTORY_PATH = "/.well-known/http-message-signatures-directory";
+
+/**
+ * Placeholder for the site's own origin in the copy below. The page replaces
+ * it with SITE_URL at request time, so the copy never hard-codes a host.
+ */
+export const SITE = "{site}";
+
 export const crawlingContent: CrawlingContent = {
   title: "How we crawl",
   lead: "makhzan is a directory. It shows what Egyptian suppliers publish and sends you to them to buy. Nothing is sold here, and no supplier pays to appear.",
@@ -66,11 +82,26 @@ export const crawlingContent: CrawlingContent = {
       ],
     },
     {
+      heading: "How to recognise us",
+      body: [
+        `Our crawler is called makhzanbot. We are moving shops to it one shop at a time. On a shop that has been moved, every request carries this User-Agent:`,
+      ],
+      snippet: `makhzanbot/1.0 (+${SITE}/how-we-crawl; ${CONTACT_EMAIL})`,
+    },
+    {
+      heading: "How to check it is really us",
+      body: [
+        `Requests from makhzanbot are signed with Web Bot Auth (RFC 9421 HTTP message signatures), which anyone can verify and nobody else can forge. Our public key is published at ${SITE}${KEY_DIRECTORY_PATH}. We have applied to Cloudflare's directory of verified bots under the name makhzanbot.`,
+        `Our requests come from ${CRAWLER_IP}.`,
+        `On a shop not yet moved, our User-Agent still looks like a browser. Every request, moved or not, carries a From header with ${CONTACT_EMAIL}, an address that reaches a person.`,
+      ],
+    },
+    {
       heading: "We follow what each site publishes",
       body: [
-        "Before fetching anything we read the site's robots.txt and obey it. A path a shop asks us not to read is not read.",
+        "Before fetching anything we read the site's robots.txt and obey it. A path a shop asks us not to read is not read. If a site's robots.txt cannot be read, we use the last copy we read, and without one we do not crawl that site that day.",
         "If a site sets Crawl-delay, we treat it as a floor rather than a target: a shop asking for 20 seconds between requests gets 20, even though our own default is longer than most crawlers use.",
-        "Our robots.txt token is makhzanbot. Rules written for makhzanbot are obeyed on every shop we read, starting now, so a shop can address us by name. To stop us reading your site altogether, add these two lines to your robots.txt:",
+        "Our robots.txt token is makhzanbot. Rules written for makhzanbot are obeyed on every shop we read, whichever User-Agent we send there, so a shop can address us by name. To stop us reading your site altogether, add these two lines to your robots.txt:",
       ],
       snippet: ROBOTS_BLOCK,
     },
@@ -78,8 +109,15 @@ export const crawlingContent: CrawlingContent = {
       heading: "We go slowly on purpose",
       body: [
         "One request at a time per shop, with a pause of at least 15 seconds between them. A full pass over a supplier's catalogue is spread across about a week rather than run in one burst, so no shop sees a spike of traffic from us.",
+        "If a site starts answering with errors, we slow down rather than retry harder. If it asks us to wait, we wait at least as long as it asks; if it asks for longer than ten minutes, we stop for the day and pick up where we left off.",
         "Each day's run starts early in the morning, Egypt time (03:00 UTC), when shops are quietest. A shop that prefers another hour, a slower pace or fewer pages a day can ask, and gets it.",
-        "Every request carries a From header with an address to write to. We are also moving, one shop at a time, from a browser-style User-Agent to one that names makhzanbot and links to this page. Until a shop is moved, our User-Agent there still looks like a browser.",
+      ],
+    },
+    {
+      heading: "What we keep, and what we do not do with it",
+      body: [
+        "For each product we keep its name, price (and how the price changes over time), whether it is in stock, its description and specifications, and links to its photos. Photos are shown from the shop's own site; we do not copy them.",
+        "Every product on makhzan links to the shop's own page, where people buy. We use what we read to show it here with that link, and for nothing else: we do not use shop content to train AI models, and we do not feed it to AI tools.",
       ],
     },
     {
@@ -93,6 +131,8 @@ export const crawlingContent: CrawlingContent = {
       heading: "If you are a supplier",
       body: [
         "We would rather have your permission than work around its absence. If you would like to be removed, listed differently, crawled more slowly, or crawled at a particular hour, write to us and we will do it.",
+        "If you would rather we did not show your product descriptions or photos, say so and we will stop, keeping only the name, price and a link to your page.",
+        "If your site refuses our crawler, we write to you rather than work around it: we never disguise our requests, change addresses or retry harder to get past a block.",
         "If you would like to be listed and are not yet, that is easier still.",
       ],
     },
