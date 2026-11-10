@@ -310,6 +310,16 @@ class SourceAdapter(ABC):
         """
         raise NotImplementedError
 
+    def probe_url(self) -> str | None:
+        """The URL of this source's first page, exactly as `fetch_page` requests it.
+
+        For `python -m worker.probe`, which asks each shop what it thinks of each
+        identity with the request a run would really send. None when the first
+        page is not a plain GET (the probe then falls back to the probe-sites
+        list, else the shop's home page).
+        """
+        return None
+
     def extra_requests(self) -> dict[str, int]:
         """Requests made inside `fetch_page` beyond the page itself, by label.
 

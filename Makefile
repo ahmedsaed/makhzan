@@ -27,7 +27,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status reindex regroup-dry-run retire-redirects db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status probe reindex regroup-dry-run retire-redirects db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -92,6 +92,10 @@ sources:  ## Seed the sources table from sources.toml (private config, else the 
 
 status:  ## Show crawler progress, recent runs, catalog health and index drift
 	cd apps/ingestion && $(RUN_ENV) poetry run python ../../scripts/status.py $(ARGS)
+
+# Sends real requests to every enabled source (read-only, 15 s apart per host).
+probe:  ## Ask each supplier what it thinks of each crawler identity (ARGS="--source x")
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.probe $(ARGS)
 
 reindex:  ## Rebuild products and the search index from the database
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup

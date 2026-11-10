@@ -27,6 +27,7 @@ import re
 from collections.abc import Sequence
 from urllib.parse import parse_qs, urljoin, urlsplit
 
+import httpx
 from makhzan_schemas.contracts import RawItem
 from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_category_name
 from makhzan_schemas.enums import SourceType
@@ -139,6 +140,11 @@ class OdooAdapter(SourceAdapter):
             # product is re-checked, for no extra work.
             keys.insert(0, "")
         return keys or [""]
+
+    def probe_url(self) -> str | None:
+        partition = self.partitions()[0]
+        url = f"{self.base_url}/shop/category/{partition}" if partition else f"{self.base_url}/shop"
+        return str(httpx.URL(url, params={"page": 1}))
 
     async def fetch_page(self, partition: str, page: int) -> Page:
         # /shop/category/<slug> pages exactly like /shop does.
