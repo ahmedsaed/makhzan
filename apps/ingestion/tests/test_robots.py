@@ -11,10 +11,12 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from worker import http as http_mod
 from worker import robots as robots_mod
-from worker.robots import DisallowedByRobots, RobotsCache
+from worker.robots import DisallowedByRobots, RobotsCache, RobotsUnavailable
 
-UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/153.0.0.0"
+#: What every lookup is matched on, whichever identity sends the request.
+UA = "makhzanbot"
 
 DISALLOWS_API = """
 User-agent: *
@@ -84,22 +86,238 @@ async def test_a_missing_robots_file_allows_everything(monkeypatch):
     assert cache.failures == {}
 
 
-async def test_an_unreachable_robots_file_does_not_halt_the_crawl(monkeypatch):
-    """Refusing to crawl because a probe timed out would let a blip stop a
-    catalogue — a worse failure than the one it avoids. It is recorded, though."""
+async def test_an_unreachable_robots_file_with_no_copy_disallows_the_host(monkeypatch):
+    """RFC 9309 §2.3.1.4: unreachable means "assume complete disallow". It used to
+    allow everything; the durable cursor makes refusing cheap (the page resumes
+    tomorrow), and it is never mistaken for a path-level disallow."""
     monkeypatch.setattr(
         robots_mod.httpx, "AsyncClient", _client_raising(httpx.ConnectTimeout("slow"))
     )
     cache = RobotsCache()
-    assert await cache.allowed("https://shop.test/anything", UA) is True
+    with pytest.raises(RobotsUnavailable):
+        await cache.allowed("https://shop.test/anything", UA)
     assert "unreachable" in cache.failures["https://shop.test"]
+    assert not issubclass(RobotsUnavailable, DisallowedByRobots)
 
 
-async def test_a_server_error_is_recorded_rather_than_silently_allowed(monkeypatch):
-    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", _client_returning(503))
+@pytest.mark.parametrize("status", [500, 503, 429])
+async def test_a_server_error_with_no_copy_disallows_the_host(monkeypatch, status):
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", _client_returning(status))
     cache = RobotsCache()
-    assert await cache.allowed("https://shop.test/anything", UA) is True
-    assert "503" in cache.failures["https://shop.test"]
+    with pytest.raises(RobotsUnavailable):
+        await cache.allowed("https://shop.test/anything", UA)
+    assert str(status) in cache.failures["https://shop.test"]
+    # Read from the cache for the rest of the TTL: the run does not keep asking.
+    assert await cache.crawl_delay("https://shop.test/anything", UA) is None
+
+
+def _client_sequence(responses: list):
+    """Each `AsyncClient()` answers with the next (status, body) or raises the next error."""
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def get(self, url):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            status, body = item
+            return httpx.Response(status, text=body, request=httpx.Request("GET", url))
+
+    return lambda **_kwargs: _Client()
+
+
+class _Wall:
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_a_server_error_falls_back_to_the_last_good_copy(monkeypatch):
+    wall = _Wall()
+    monkeypatch.setattr(
+        robots_mod.httpx,
+        "AsyncClient",
+        _client_sequence(
+            [
+                (200, DISALLOWS_API),
+                (503, ""),
+                httpx.ConnectError("down"),  # the retry fails too
+                httpx.ConnectError("down"),
+                (500, ""),
+            ]
+        ),
+    )
+    cache = RobotsCache(ttl=0, wall=wall)
+    assert await cache.allowed("https://shop.test/shop", UA) is True
+    wall.now += 29 * 86400
+    # The copy's rules still apply, disallows included.
+    assert await cache.allowed("https://shop.test/wp-json/x", UA) is False
+    assert "copy from 29.0 days ago" in cache.failures["https://shop.test"]
+    assert await cache.allowed("https://shop.test/shop", UA) is True
+
+
+async def test_one_failure_is_retried_before_anything_is_decided(monkeypatch):
+    """A blip right after a deploy must not cost the source its day."""
+    monkeypatch.setattr(
+        robots_mod.httpx, "AsyncClient", _client_sequence([(503, ""), (200, DISALLOWS_API)])
+    )
+    cache = RobotsCache()
+    with http_mod.logging_requests() as log:
+        assert await cache.allowed("https://shop.test/shop", UA) is True
+    assert cache.failures == {}
+    # Both reads were paced and counted requests.
+    assert log.robots["https://shop.test"] == 2
+    assert log.robots_state["https://shop.test"]["state"] == "fetched"
+
+
+async def test_a_good_copy_older_than_thirty_days_is_not_used(monkeypatch):
+    """Stricter than the note's "then treat it as absent", on purpose (see RobotsCache)."""
+    wall = _Wall()
+    monkeypatch.setattr(
+        robots_mod.httpx,
+        "AsyncClient",
+        _client_sequence([(200, ALLOWS_ALL), (503, ""), (503, "")]),
+    )
+    cache = RobotsCache(ttl=0, wall=wall)
+    assert await cache.allowed("https://shop.test/a", UA) is True
+    wall.now += 31 * 86400
+    with pytest.raises(RobotsUnavailable, match="31 days old"):
+        await cache.allowed("https://shop.test/a", UA)
+
+
+async def test_a_404_is_a_good_copy_too(monkeypatch):
+    """ "No rules" was what the host last said; an outage does not change it."""
+    monkeypatch.setattr(
+        robots_mod.httpx, "AsyncClient", _client_sequence([(404, ""), (502, ""), (502, "")])
+    )
+    cache = RobotsCache(ttl=0)
+    assert await cache.allowed("https://shop.test/a", UA) is True
+    assert await cache.allowed("https://shop.test/a", UA) is True
+    assert "502" in cache.failures["https://shop.test"]
+
+
+class _Monotonic:
+    def __init__(self) -> None:
+        self.now = 500.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_unavailable_is_remembered_for_minutes_not_the_hour(monkeypatch):
+    clock = _Monotonic()
+    responses = [(503, ""), (503, ""), (200, ALLOWS_ALL)]
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", _client_sequence(responses))
+    cache = RobotsCache(clock=clock)
+    with pytest.raises(RobotsUnavailable):
+        await cache.allowed("https://shop.test/a", UA)
+    clock.now += robots_mod.UNAVAILABLE_TTL_SECONDS - 1
+    with pytest.raises(RobotsUnavailable):  # from the cache: nothing sent
+        await cache.allowed("https://shop.test/a", UA)
+    assert len(responses) == 1
+    clock.now += 2
+    assert await cache.allowed("https://shop.test/a", UA) is True
+
+
+async def test_the_good_copy_survives_a_restart():
+    """Kept in the database: a new process (a deploy) still has it."""
+    store = robots_mod.DatabaseRobotsStore()
+    wall = _Wall()
+    first = RobotsCache(wall=wall, store=store)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(robots_mod.httpx, "AsyncClient", _client_returning(200, DISALLOWS_API))
+        assert await first.allowed("https://shop.test/shop", UA) is True
+
+    wall.now += 2 * 86400
+    after_deploy = RobotsCache(wall=wall, store=robots_mod.DatabaseRobotsStore())
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(robots_mod.httpx, "AsyncClient", _client_returning(503))
+        with http_mod.logging_requests() as log:
+            assert await after_deploy.allowed("https://shop.test/wp-json/x", UA) is False
+    assert log.robots_state["https://shop.test"] == {
+        "state": "stale",
+        "copy_age_days": 2.0,
+        "error": "robots.txt returned 503",
+    }
+
+
+async def test_backing_off_on_a_redirect_hop_is_not_unreachable(monkeypatch):
+    """The hop's host asked us to wait: that propagates, and no verdict is cached."""
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def get(self, url):
+            response = httpx.Response(
+                301,
+                headers={"Location": "https://cdn.test/robots.txt"},
+                request=httpx.Request("GET", url),
+            )
+            response.next_request = httpx.Request("GET", "https://cdn.test/robots.txt")
+            return response
+
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", lambda **_k: _Client())
+    monkeypatch.setattr(http_mod, "_NOT_BEFORE", {"https://cdn.test": 10**12})
+    cache = RobotsCache()
+    with pytest.raises(http_mod.HostBackingOff):
+        await cache.allowed("https://shop.test/a", UA)
+    assert "https://shop.test" not in cache.failures
+
+
+async def test_the_fetch_layer_sends_nothing_when_robots_cannot_be_read(monkeypatch):
+    from worker import http as http_mod
+
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", _client_returning(503))
+    monkeypatch.setattr(robots_mod, "ROBOTS", RobotsCache())
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    with pytest.raises(RobotsUnavailable):
+        async with http_mod.make_client(transport=httpx.MockTransport(handler)) as client:
+            await http_mod.get_json(client, "https://shop.test/products.json")
+    assert sent == []
+
+
+async def test_robots_txt_is_fetched_as_the_runs_identity(monkeypatch):
+    """A makhzanbot run asks for robots.txt as makhzanbot, not as a browser."""
+    from worker.identity import MAKHZANBOT, identity_for, using_identity
+
+    monkeypatch.setenv("SITE_URL", "https://makhzan.test")
+    seen: list[dict] = []
+
+    class _Client:
+        def __init__(self, **kwargs):
+            seen.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def get(self, url):
+            return httpx.Response(200, text=ALLOWS_ALL, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(robots_mod.httpx, "AsyncClient", _Client)
+    with using_identity(identity_for(MAKHZANBOT)):
+        await RobotsCache().allowed("https://shop.test/a")
+    await RobotsCache().allowed("https://other.test/a")
+    assert seen[0]["headers"]["User-Agent"].startswith("makhzanbot/1.0 (+https://makhzan.test/")
+    assert seen[1]["headers"]["User-Agent"].startswith("Mozilla/5.0")
 
 
 async def test_robots_is_fetched_once_per_host(monkeypatch):
@@ -221,10 +439,54 @@ def test_rules_match_the_way_rfc_9309_says(path, allowed):
 
 def test_a_group_naming_us_replaces_the_star_group():
     rules = robots_mod.Rules(
-        "User-agent: *\nDisallow: /\n\nUser-agent: mozilla\nUser-agent: other\nDisallow: /x\n"
+        "User-agent: *\nDisallow: /\n\nUser-agent: makhzanbot\nUser-agent: other\nDisallow: /x\n"
     )
     assert rules.allowed("https://shop.test/a", UA) is True
     assert rules.allowed("https://shop.test/x", UA) is False
+
+
+@pytest.mark.parametrize("agent", ["makhzanbot", "MakhzanBot", "makhzanbot/1.0"])
+def test_a_shop_can_block_us_by_name(agent):
+    """The snippet /how-we-crawl publishes. It binds every identity: the lookup
+    is always on our own token, never on the User-Agent string we sent."""
+    rules = robots_mod.Rules(f"User-agent: {agent}\nDisallow: /\n\nUser-agent: *\nAllow: /\n")
+    assert rules.allowed("https://shop.test/products.json", UA) is False
+    assert rules.allowed("https://shop.test/products.json") is False  # the default token
+
+
+def test_a_group_for_mozilla_no_longer_applies_to_us():
+    """The browser identity's User-Agent starts "Mozilla", which a group for
+    browsers used to catch. Our token is makhzanbot; such a group is not ours."""
+    rules = robots_mod.Rules("User-agent: mozilla\nDisallow: /\n\nUser-agent: *\nDisallow: /x\n")
+    assert rules.allowed("https://shop.test/a", UA) is True
+    assert rules.allowed("https://shop.test/x", UA) is False
+
+
+def test_a_group_matching_part_of_our_token_is_not_ours():
+    rules = robots_mod.Rules("User-agent: bot\nDisallow: /\n")
+    assert rules.allowed("https://shop.test/a", UA) is True
+
+
+def test_crawl_delay_is_read_from_the_group_naming_us():
+    rules = robots_mod.Rules(
+        "User-agent: *\nCrawl-delay: 5\n\nUser-agent: makhzanbot\nCrawl-delay: 30\n"
+    )
+    assert rules.crawl_delay(UA) == 30.0
+
+
+async def test_the_fetch_layer_obeys_a_makhzanbot_block_in_browser_mode(monkeypatch):
+    """No identity set (browser headers), and still refused by a group naming us."""
+    from worker import http as http_mod
+
+    monkeypatch.setattr(
+        robots_mod.httpx,
+        "AsyncClient",
+        _client_returning(200, "User-agent: makhzanbot\nDisallow: /\n"),
+    )
+    monkeypatch.setattr(robots_mod, "ROBOTS", RobotsCache())
+    with pytest.raises(DisallowedByRobots):
+        async with http_mod.make_client() as client:
+            await http_mod.get_json(client, "https://shop.test/products.json")
 
 
 def test_rules_before_any_user_agent_bind_nobody():
@@ -237,3 +499,11 @@ def test_a_malformed_crawl_delay_is_not_a_rule():
     rules = robots_mod.Rules("User-agent: *\nCrawl-delay: soon\nDisallow: /x\n")
     assert rules.crawl_delay(UA) is None
     assert rules.allowed("https://shop.test/x", UA) is False
+
+
+def test_the_details_stage_treats_an_unreadable_robots_txt_as_host_trouble():
+    """It stops the stage for the run and blames no listing, like a host backing off."""
+    from worker.details import _host_trouble
+
+    assert _host_trouble(RobotsUnavailable("https://shop.test", "robots.txt returned 503"))
+    assert not _host_trouble(DisallowedByRobots("https://shop.test/p/1"))

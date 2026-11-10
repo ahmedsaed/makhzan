@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
@@ -48,9 +50,63 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.categorize import category_slug_for, seed_categories
 from worker.details import apply_details, carry_details, run_details
-from worker.http import CycleFetcher, RequestLog, logging_requests, set_host_pace
+from worker.http import (
+    CycleFetcher,
+    HostBackingOff,
+    RequestLog,
+    current_request_log,
+    host_of,
+    logging_requests,
+    set_host_pace,
+)
+from worker.identity import Identity, identity_for, using_identity
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
+
+#: How long one source's job may take before arq cancels it (worker.main).
+JOB_TIMEOUT = int(os.getenv("REFRESH_TIMEOUT_SECONDS", str(6 * 3600)))
+
+#: The share of `JOB_TIMEOUT` a run may spend before it stops starting pages.
+#: Whatever slows a host down — its Crawl-delay, a Retry-After, the error
+#: slowdown in worker/http.py — the run ends itself cleanly first (cursors
+#: kept, stats written) instead of being cancelled mid-page by arq. This is
+#: the bound on the slowdown multiplier: it can stretch a run, never past this.
+RUN_TIME_SHARE = 0.85
+
+#: Monotonic clock for the run's time budget (patched in tests).
+_clock = time.monotonic
+
+
+def _refused_by_own_host(exc: Exception, adapter: SourceAdapter) -> bool:
+    """Whether `exc` says the source's host will not be read today, whatever the page.
+
+    Its robots.txt cannot be read (`RobotsUnavailable`), or it asked for a
+    longer wait than the crawler waits out (`HostBackingOff`). Every later page
+    and partition would fail the same way without sending anything, so the run
+    stops instead of logging one identical error per partition and sleeping the
+    pace between them.
+    """
+    from worker.robots import RobotsUnavailable
+
+    if not adapter.base_url or not isinstance(exc, RobotsUnavailable | HostBackingOff):
+        return False
+    return exc.host == host_of(adapter.base_url)
+
+
+def _refused_unsent(exc: Exception, log: RequestLog | None, before: int | None) -> bool:
+    """A page refused before any request for it went out: not a page sent."""
+    from worker.robots import DisallowedByRobots, RobotsUnavailable
+
+    if not isinstance(exc, RobotsUnavailable | DisallowedByRobots | HostBackingOff):
+        return False
+    return before is None or _requests_logged(log) == before
+
+
+def _requests_logged(log: RequestLog | None) -> int | None:
+    """Requests the run has sent to any host, robots.txt excluded (None outside a run)."""
+    if log is None:
+        return None
+    return sum(len(times) for times in log.times.values()) - sum(log.robots.values())
 
 
 async def _upsert_listing(
@@ -420,8 +476,12 @@ async def _load_cycle_data(
     *,
     ephemeral: bool,
     errors: list[str],
+    halt: list[str] | None = None,
 ) -> Counter:
     """Hand the adapter its per-cycle reference data, fetching what is due.
+
+    A refusal by the source's own host (`_refused_by_own_host`) stops the
+    fetching and is appended to `halt`, so the run sweeps nothing today.
 
     A part is due when it has never been tried, when a new cycle is starting —
     no partition of this source has a cycle in flight — or when its last try is
@@ -479,6 +539,11 @@ async def _load_cycle_data(
             data = await adapter.fetch_cycle_part(fetcher, part)
         except Exception as exc:  # noqa: BLE001 — reference data must not stop the sweep
             errors.append(f"cycle data {part}: {type(exc).__name__}: {exc}")
+            if halt is not None and _refused_by_own_host(exc, adapter):
+                # Not stamped as attempted: nothing was asked of the shop, so
+                # the next run tries again rather than waiting out the delay.
+                halt.append(str(exc))
+                break
             previous = stored.get(part) if isinstance(stored.get(part), dict) else {}
             stored[part] = {**previous, "attempted_at": datetime.now(timezone.utc).isoformat()}
             continue
@@ -520,6 +585,8 @@ async def _sweep_partition(
     tally: Counter | None = None,
     checkpoint: Callable[[], None] | None = None,
     run_page_budget: int | None = None,
+    deadline: float | None = None,
+    halt: list[str] | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
 
@@ -528,6 +595,15 @@ async def _sweep_partition(
 
     `checkpoint` puts what the run has sent so far on its row before each
     commit, so a run cut off mid-sweep still says how many requests it made.
+
+    `deadline` (`_clock` time) stops it before the next page once the run's time
+    budget is spent; `halt` receives the reason when the source's own host
+    refuses the run (see `_refused_by_own_host`), so the caller stops too.
+
+    Only pages that sent a request are counted in `tally["pages"]`: a page
+    refused before anything went out (robots.txt, a host backing off) is not
+    a request, and counting it inflated `stats.requests` and the cycle size
+    the `target_cycle_days` budget plans from.
 
     Returns True if the fetch failed. The cursor is left pointing at the page
     that failed, so the next run retries exactly there instead of restarting at
@@ -559,14 +635,22 @@ async def _sweep_partition(
             return False  # budget spent; the cursor resumes here next run
         if run_page_budget is not None and tally is not None and tally["pages"] >= run_page_budget:
             return False  # the run's adaptive budget is spent
+        if deadline is not None and _clock() >= deadline:
+            return False  # the run's time budget is spent; the cursor resumes here
 
-        if tally is not None:
-            tally["pages"] += 1
+        log = current_request_log()
+        before = _requests_logged(log)
         try:
             result = await adapter.fetch_page(partition, page)
         except Exception as exc:  # noqa: BLE001 — a dead host must not discard the run
+            if tally is not None and not _refused_unsent(exc, log, before):
+                tally["pages"] += 1  # it reached the host, whatever came back
             errors.append(f"{partition or 'default'} p{page}: {exc}")
+            if halt is not None and _refused_by_own_host(exc, adapter):
+                halt.append(str(exc))
             return True
+        if tally is not None:
+            tally["pages"] += 1
         pages_this_run += 1
 
         if result.out_of_stock_ids:
@@ -919,10 +1003,15 @@ async def _run(
 
     Every request the run sends — cycle data, every partition's pages, whatever
     the adapter fetches to build a page — is logged with when it went out, so
-    the run's `stats.pacing` is the pace the shop actually saw.
+    the run's `stats.pacing` is the pace the shop actually saw — and sent as
+    the source's identity (`identity` in its config, worker/identity.py), which
+    every client the run makes reads, so no request goes out as anything else.
     """
-    with logging_requests() as log:
-        return await _logged_run(source_id, adapter, partitions, limit=limit, log=log)
+    identity = identity_for(adapter.identity)
+    with logging_requests() as log, using_identity(identity):
+        return await _logged_run(
+            source_id, adapter, partitions, limit=limit, log=log, identity=identity
+        )
 
 
 async def _logged_run(
@@ -932,11 +1021,16 @@ async def _logged_run(
     *,
     limit: int | None,
     log: RequestLog,
+    identity: Identity,
 ) -> IngestionRun:
     errors: list[str] = []
     # The least gap between any two requests to this host, retries and
     # robots.txt included (worker.http.take_turn); Crawl-Delay is a floor on it.
     set_host_pace(adapter.base_url, adapter.polite_delay)
+    # No page is started after this: the run ends itself before arq cancels it.
+    deadline = _clock() + JOB_TIMEOUT * RUN_TIME_SHARE
+    #: Why the run stopped early, if it did: its own host refused it.
+    halt: list[str] = []
 
     async with SessionLocal() as session:
         run = IngestionRun(source=source_id, source_type=adapter.source_type)
@@ -954,7 +1048,7 @@ async def _logged_run(
 
         # Before any page: the adapter reads it while turning pages into listings.
         cycle_requests = await _load_cycle_data(
-            session, adapter, supplier_id, ephemeral=limit is not None, errors=errors
+            session, adapter, supplier_id, ephemeral=limit is not None, errors=errors, halt=halt
         )
         fetch_failed = False
         observed: Counter = Counter()
@@ -977,16 +1071,26 @@ async def _logged_run(
             if sent:
                 stats["requests"] = sent
             stats["pacing"] = log.pacing()
+            stats["identity"] = identity.describe()
+            if log.robots_state:
+                stats["robots"] = dict(log.robots_state)
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and
         # a part that failed stays marked as tried.
         checkpoint()
         await session.commit()
+        stopped: str | None = None
+        if halt:
+            fetch_failed, stopped = True, f"refused by its host: {halt[0]}"
+            partitions = []
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
                 break
             if run_page_budget is not None and tally["pages"] >= run_page_budget:
+                break
+            if _clock() >= deadline:
+                stopped = "time budget spent; the cursors resume next run"
                 break
             if i:
                 # Partitions share one host. The pause between pages ends at a
@@ -1009,8 +1113,15 @@ async def _logged_run(
                 tally=tally,
                 checkpoint=checkpoint,
                 run_page_budget=run_page_budget,
+                deadline=deadline,
+                halt=halt,
             )
             fetch_failed = fetch_failed or failed
+            if halt:
+                # Every later partition would be refused the same way, sending
+                # nothing: one error, not one per partition, and no idle pauses.
+                stopped = f"refused by its host: {halt[0]}"
+                break
 
         archived, cycle = 0, {}
         if limit is None:
@@ -1020,7 +1131,7 @@ async def _logged_run(
 
         details_requests: Counter = Counter()
         details: dict = {}
-        if limit is None and not fetch_failed:
+        if limit is None and not fetch_failed and _clock() < deadline:
             # After the sweep and its archiving, so only listings the shop still
             # sells are read. A `limit=` run is a quick test: it never costs a
             # shop product-page requests. Nor does a run whose sweep failed: a
@@ -1044,6 +1155,13 @@ async def _logged_run(
         stats: dict = {}
         if errors:
             stats["errors"] = errors
+        # Who the run said it was, and what robots.txt said, for `make status`.
+        # Never on /how-we-crawl.
+        stats["identity"] = identity.describe()
+        if log.robots_state:
+            stats["robots"] = dict(log.robots_state)
+        if stopped:
+            stats["stopped"] = stopped
         if limit is not None:
             # A test run: its pages are not part of any cycle (`_cycle_pages_since`).
             stats["limit"] = limit
@@ -1062,8 +1180,8 @@ async def _logged_run(
             stats["requests"] = requests
         # What the shop's server saw: requests sent (a retry is one more) and the
         # gaps between them, which is what /how-we-crawl publishes. `requests`
-        # above counts by purpose, and a page refused before sending (robots.txt,
-        # a host still backing off) is in it but not here.
+        # above counts by purpose; a page refused before sending (robots.txt, a
+        # host still backing off) is in neither.
         stats["pacing"] = log.pacing()
         if report := adapter.run_report():
             stats["source_report"] = report

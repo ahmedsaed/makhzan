@@ -29,6 +29,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from urllib.parse import quote, urlsplit
 
+import httpx
 from makhzan_schemas.contracts import RawItem
 from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_category_name
 from makhzan_schemas.enums import SourceType
@@ -156,6 +157,11 @@ class ShopifyAdapter(SourceAdapter):
             if best is None or rank < best[0]:
                 best = (rank, mapped)
         return best[1] if best else None
+
+    def probe_url(self) -> str | None:
+        return str(
+            httpx.URL(f"{self.base_url}/products.json", params={"limit": PER_PAGE, "page": 1})
+        )
 
     async def fetch_page(self, partition: str, page: int) -> Page:
         url = f"{self.base_url}/products.json"

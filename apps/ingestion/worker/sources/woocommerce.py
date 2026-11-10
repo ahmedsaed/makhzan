@@ -37,6 +37,7 @@ from __future__ import annotations
 import html
 import re
 
+import httpx
 from makhzan_schemas.contracts import RawItem
 from makhzan_schemas.enums import SourceType
 
@@ -269,6 +270,15 @@ class WooCommerceAdapter(SourceAdapter):
             # Last: it only confirms what the Store API passes did not return.
             parts.append(UNLISTED_OUT_OF_STOCK)
         return parts
+
+    def probe_url(self) -> str | None:
+        status = next(iter(STOCK_STATUSES))
+        return str(
+            httpx.URL(
+                f"{self.base_url}/wp-json/wc/store/v1/products",
+                params={"per_page": PER_PAGE, "page": 1, "stock_status": status},
+            )
+        )
 
     async def fetch_page(self, partition: str, page: int) -> Page:
         if partition == UNLISTED_OUT_OF_STOCK:
