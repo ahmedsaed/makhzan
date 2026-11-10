@@ -16,6 +16,7 @@ from app.routers import (
     search,
     sitemap,
     suppliers,
+    wellknown,
 )
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,3 +47,4 @@ app.include_router(suppliers.router)
 app.include_router(sitemap.router)
 app.include_router(crawler.router)
 app.include_router(history.router)
+app.include_router(wellknown.router)

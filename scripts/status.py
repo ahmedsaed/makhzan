@@ -312,6 +312,107 @@ async def cycle_budget(session, source_filter: str | None, days: int = 14) -> No
         print(line)
 
 
+async def crawler_identity(session, source_filter: str | None) -> None:
+    """Who each source is crawled as: configured, and what its last run actually sent.
+
+    `identity` in a source's config is "browser" (the default) or "makhzanbot"
+    (honest User-Agent, Web Bot Auth signed when MAKHZANBOT_SIGNING_KEY is set);
+    see docs/crawler-identity.md. The last run's `stats.identity` is the
+    evidence: a source switched to makhzanbot whose runs go out unsigned has no
+    key on the worker, and a shop's edge cannot verify it.
+    """
+    from makhzan_schemas import botauth
+
+    query = select(Source.source_id, Source.config, Source.enabled).order_by(Source.source_id)
+    if source_filter:
+        query = query.where(Source.source_id == source_filter)
+    sources = (await session.execute(query)).all()
+    if not sources:
+        return
+    runs = select(IngestionRun.source, IngestionRun.stats["identity"]).where(
+        IngestionRun.stats.has_key("identity")
+    )
+    last: dict[str, dict] = {}
+    for source, identity in (
+        await session.execute(runs.order_by(IngestionRun.started_at.desc()))
+    ).all():
+        last.setdefault(source, identity or {})
+
+    _header("CRAWLER IDENTITY")
+    try:
+        key = botauth.configured_key()
+    except Exception as exc:  # noqa: BLE001 — a bad key must not hide the rest
+        print(f"  {RED}signing key here is unreadable: {exc}{RESET}")
+        key = None
+    if key is not None:
+        print(f"  {DIM}signing key here: keyid {botauth.Signer(key).keyid}{RESET}")
+    else:
+        print(f"  {DIM}no signing key in this environment ({botauth.KEY_ENV}){RESET}")
+    for source_id, config, enabled in sources:
+        configured = (config or {}).get("identity", "browser")
+        seen = last.get(source_id)
+        if seen is None:
+            sent = f"{DIM}no run has recorded it yet{RESET}"
+        else:
+            signed = "signed" if seen.get("signed") else "unsigned"
+            sent = f"last run: {seen.get('name')}, {signed}"
+            if seen.get("keyid"):
+                sent += f" (keyid {seen['keyid'][:12]}…)"
+        line = f"  {source_id:22s} {configured:11s} {sent}"
+        if configured == "makhzanbot" and seen is not None and not seen.get("signed"):
+            line += f"  {YELLOW}unverifiable: no key on the worker{RESET}"
+        if seen is not None and seen.get("name") != configured:
+            line += f"  {YELLOW}changed since the last run{RESET}"
+        if not enabled:
+            line += f"  {DIM}(disabled){RESET}"
+        print(line)
+
+
+#: A host served from a stale robots.txt copy older than this is flagged.
+STALE_COPY_WARN_DAYS = 7
+
+
+async def robots_health(session, source_filter: str | None) -> None:
+    """What robots.txt said to each source's latest run (`stats.robots`), and why a run stopped.
+
+    "fetched" and "no rules" (a 4xx) are the normal answers and print as one
+    quiet line. A stale copy standing in for an unreadable file is shown with
+    its age, flagged past a week; "unavailable" means the host was refused for
+    that run (RFC 9309: unreadable and no usable copy).
+    """
+    query = (
+        select(IngestionRun.source, IngestionRun.stats["robots"], IngestionRun.stats["stopped"])
+        .where(IngestionRun.stats.has_key("robots"))
+        .order_by(IngestionRun.started_at.desc())
+    )
+    if source_filter:
+        query = query.where(IngestionRun.source == source_filter)
+    latest: dict[str, tuple[dict, str | None]] = {}
+    for source, robots, stopped in (await session.execute(query)).all():
+        latest.setdefault(source, (robots or {}, stopped))
+    if not latest:
+        return
+    _header("ROBOTS.TXT (latest run)")
+    for source, (robots, stopped) in sorted(latest.items()):
+        parts = []
+        for host, said in sorted(robots.items()):
+            state = said.get("state", "?")
+            age = said.get("copy_age_days")
+            if state in ("fetched", "no_rules"):
+                parts.append(f"{DIM}{host} {state.replace('_', ' ')}{RESET}")
+            elif state == "stale":
+                colour = RED if (age or 0) > STALE_COPY_WARN_DAYS else YELLOW
+                parts.append(
+                    f"{colour}{host} unreadable, using a copy {age:g}d old "
+                    f"({said.get('error', '')}){RESET}"
+                )
+            else:
+                parts.append(f"{RED}{host} UNAVAILABLE: {said.get('error', '')}{RESET}")
+        print(f"  {source:22s} " + "; ".join(parts))
+        if stopped:
+            print(f"  {'':22s} {YELLOW}run stopped early: {stopped}{RESET}")
+
+
 async def crosswalk_drift(session, source_filter: str | None, days: int = 30) -> None:
     """Categories a supplier has added, renamed or retired since the crosswalk was written.
 
@@ -602,6 +703,8 @@ async def main() -> None:
         await sweep_progress(session, args.source)
         await cycle_history(session, args.source)
         await cycle_budget(session, args.source)
+        await crawler_identity(session, args.source)
+        await robots_health(session, args.source)
         await recent_runs(session, args.source, args.runs)
         await crosswalk_drift(session, args.source)
         await product_details(session, args.source)

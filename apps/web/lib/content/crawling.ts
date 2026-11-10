@@ -11,7 +11,20 @@
  * page.
  */
 
-export type CrawlingSection = { heading: string; body: string[] };
+export type CrawlingSection = {
+  heading: string;
+  body: string[];
+  /** Text to copy as it is (shown preformatted after the body). */
+  snippet?: string;
+};
+
+/**
+ * Our robots.txt product token. The crawler matches robots.txt groups on it
+ * whichever headers it sends (apps/ingestion/worker/robots.py), so this block
+ * stops it on every shop, crawled as a browser or as makhzanbot.
+ */
+export const ROBOTS_TOKEN = "makhzanbot";
+export const ROBOTS_BLOCK = `User-agent: ${ROBOTS_TOKEN}\nDisallow: /`;
 
 /** The "Crawler activity" section: measured figures, read from the API. */
 export type ActivityContent = {
@@ -39,7 +52,7 @@ export type CrawlingContent = {
  * a domain with no mail records, so a shop that wrote in got a bounce — the
  * worst possible answer to "who are you?".
  */
-export const CONTACT_EMAIL = "crawler@merope.dev";
+export const CONTACT_EMAIL = "crawler@makhzan.merope.dev";
 
 export const crawlingContent: CrawlingContent = {
   title: "How we crawl",
@@ -57,14 +70,16 @@ export const crawlingContent: CrawlingContent = {
       body: [
         "Before fetching anything we read the site's robots.txt and obey it. A path a shop asks us not to read is not read.",
         "If a site sets Crawl-delay, we treat it as a floor rather than a target: a shop asking for 20 seconds between requests gets 20, even though our own default is longer than most crawlers use.",
+        "Our robots.txt token is makhzanbot. Rules written for makhzanbot are obeyed on every shop we read, starting now, so a shop can address us by name. To stop us reading your site altogether, add these two lines to your robots.txt:",
       ],
+      snippet: ROBOTS_BLOCK,
     },
     {
       heading: "We go slowly on purpose",
       body: [
         "One request at a time per shop, with a pause of at least 15 seconds between them. A full pass over a supplier's catalogue is spread across about a week rather than run in one burst, so no shop sees a spike of traffic from us.",
         "Each day's run starts early in the morning, Egypt time (03:00 UTC), when shops are quietest. A shop that prefers another hour, a slower pace or fewer pages a day can ask, and gets it.",
-        "Our crawler identifies itself in every request and gives an address to write to, so anyone looking at their server logs can tell who we are.",
+        "Every request carries a From header with an address to write to. We are also moving, one shop at a time, from a browser-style User-Agent to one that names makhzanbot and links to this page. Until a shop is moved, our User-Agent there still looks like a browser.",
       ],
     },
     {

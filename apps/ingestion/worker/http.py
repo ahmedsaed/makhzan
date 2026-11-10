@@ -1,12 +1,15 @@
 """Shared HTTP client for adapters.
 
-Two lessons baked in from real supplier sites:
-  - WAFs reject bare/unusual requests, so we send browser-like headers.
+Lessons baked in from real supplier sites:
+  - Who we say we are is per source (worker/identity.py): the browser headers
+    every source has used so far, or the honest `makhzanbot` identity with Web
+    Bot Auth signatures. `make_client` takes the run's identity, so every
+    request a run sends — pages, retries, redirect hops, robots.txt, product
+    pages — carries the same one.
   - Sites rate-limit, so `get_json` backs off and retries on 429/503 (honoring
     Retry-After), and adapters pace themselves between pages.
-
-Being deliberate about pacing keeps the pragmatic scraping stance (docs/PLAN.md)
-from getting sources blocked.
+  - A host that keeps erroring or timing out is slowed down (`_HEALTH`), not
+    retried harder.
 """
 
 from __future__ import annotations
@@ -24,40 +27,14 @@ from email.utils import parsedate_to_datetime
 import httpx
 from makhzan_schemas.crawl import pacing_stats
 
-# A contact address lives in the header set so we're identifiable without tripping
-# WAFs. Everything else here exists to look like a current browser. This set is
-# shared by every adapter via make_client(), so a fix here covers all sources.
-#
-# The User-Agent version is load-bearing, not decoration: Cloudflare scores a
-# stale browser version as a bot. One supplier's shop returned 429 with a
-# zero-length body to Chrome/124 while serving Chrome/139 normally from the same
-# IP — which looked exactly like rate limiting and cost a long investigation.
-# Bump this when it ages; treat a sudden 429 on a Cloudflare-fronted site as a
-# suspect here before assuming a rate limit.
-#
-# Checking what "current" is does not need a guess: Playwright ships a real
-# Chromium, and `apps/web` pins it. `browser.version()` reported 153.0.8010.12,
-# so 139 was fourteen releases — well over a year — behind.
-CHROME_VERSION = "153"
-
-BROWSER_HEADERS = {
-    "User-Agent": (
-        f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        f"(KHTML, like Gecko) Chrome/{CHROME_VERSION}.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-    # Deliberately omits "br": httpx only decodes brotli when the optional
-    # dependency is installed, and advertising it without that yields raw bytes.
-    "Accept-Encoding": "gzip, deflate",
-    "sec-ch-ua": f'"Chromium";v="{CHROME_VERSION}", "Not;A=Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Linux"',
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "From": "crawler@merope.dev",
-}
+# Re-exported: the header sets live with the identities that send them.
+from worker.identity import (  # noqa: F401
+    BROWSER_HEADERS,
+    CHROME_VERSION,
+    ROBOTS_TOKEN,
+    Identity,
+    current_identity,
+)
 
 #: Default seconds to wait between paginated requests to the same host.
 #: Sized for a weekly refresh cycle rather than a daily one: each run now sweeps
@@ -70,6 +47,100 @@ BROWSER_HEADERS = {
 POLITE_DELAY = 15.0
 
 _RETRYABLE = {429, 503}
+
+#: Responses that say the host is struggling: with timeouts, what counts as an
+#: error for the slowdown below. 429 is here too: without a `Retry-After` it is
+#: the only signal we get.
+_SLOW_DOWN_ON = {429, 500, 502, 503, 504}
+
+#: Consecutive errors before a host's pace is raised, and again for every
+#: further run of this many. One error now and then is noise and changes
+#: nothing; a host failing request after request is told so by a wider gap.
+#: (The research note: "after three consecutive errors".)
+SLOWDOWN_AFTER = 3
+#: Each raise doubles the pace, up to this: 15 s becomes at most 60 s. Low on
+#: purpose: the run's time budget (`pipeline.RUN_TIME_SHARE`) is what bounds a
+#: run against a host that stays slow, and a cap of 8 put a busy source past
+#: the 6 h job timeout on the multiplier alone.
+SLOWDOWN_CAP = 4.0
+#: Consecutive 2xx responses that halve a raised pace. From the cap back to the
+#: plain pace takes 2 × this — quick enough that a recovered host is not left
+#: crawled at a quarter speed, slow enough that one lucky answer is not trusted.
+RECOVER_AFTER = 3
+#: Seconds after the host's last error that its slowdown is forgotten. Runs are
+#: daily, so yesterday's trouble does not slow today's first request.
+SLOWDOWN_FORGET = 3600.0
+
+
+class _Health:
+    __slots__ = ("errors", "successes", "multiplier", "last_trouble")
+
+    def __init__(self) -> None:
+        self.errors = 0  # consecutive
+        self.successes = 0  # consecutive, counted only while slowed
+        self.multiplier = 1.0
+        self.last_trouble = 0.0
+
+
+#: Per host, its recent errors and the pace multiplier they earned. Read by
+#: `_pace_of`, so it acts through `take_turn` on every request to the host and
+#: `stats.pacing` measures the slower gaps it causes (never why: that endpoint
+#: is public).
+_HEALTH: dict[str, _Health] = {}
+
+
+def note_trouble(host: str) -> None:
+    """The host errored or timed out. Every `SLOWDOWN_AFTER`-th error in a row doubles its pace."""
+    health = _HEALTH.setdefault(host, _Health())
+    health.errors += 1
+    health.successes = 0
+    health.last_trouble = _now()
+    if health.errors % SLOWDOWN_AFTER == 0:
+        health.multiplier = min(SLOWDOWN_CAP, health.multiplier * 2)
+
+
+def note_success(host: str) -> None:
+    """A 2xx: the run of errors is over, and `RECOVER_AFTER` in a row halve the pace."""
+    health = _HEALTH.get(host)
+    if health is None:
+        return
+    health.errors = 0
+    if health.multiplier <= 1.0:
+        _HEALTH.pop(host, None)
+        return
+    health.successes += 1
+    if health.successes >= RECOVER_AFTER:
+        health.successes = 0
+        health.multiplier = max(1.0, health.multiplier / 2)
+        if health.multiplier == 1.0:
+            _HEALTH.pop(host, None)
+
+
+def note_response(host: str, status: int) -> None:
+    if status in _SLOW_DOWN_ON:
+        note_trouble(host)
+    elif 200 <= status < 300:
+        note_success(host)
+
+
+def slowdown(host: str) -> float:
+    """The host's current pace multiplier (1 when it has been well)."""
+    health = _HEALTH.get(host)
+    if health is None:
+        return 1.0
+    if _now() - health.last_trouble > SLOWDOWN_FORGET:
+        _HEALTH.pop(host, None)
+        return 1.0
+    return health.multiplier
+
+
+def hold_host(host: str, retry_after: str | None) -> float | None:
+    """Make a `Retry-After` bind every later request to `host`. Returns the seconds asked."""
+    asked = retry_after_seconds(retry_after)
+    if asked is not None:
+        _NOT_BEFORE[host] = time.monotonic() + asked
+    return asked
+
 
 #: The longest `Retry-After` the crawler waits out in place. A host asking for
 #: more is not retried in this run: the request fails, the partition's cursor
@@ -105,6 +176,9 @@ class RequestLog:
         self.times: dict[str, list[float]] = defaultdict(list)
         #: robots.txt fetches among `times`, by host.
         self.robots: Counter[str] = Counter()
+        #: Per host, what robots.txt said for this run (worker/robots.py): read
+        #: fresh, a stale copy standing in, or unavailable. `stats.robots`.
+        self.robots_state: dict[str, dict] = {}
 
     def record(self, host: str, *, robots: bool = False) -> None:
         self.times[host].append((self._clock or _now)())
@@ -119,6 +193,11 @@ class RequestLog:
 #: The log of the run in progress in this task, if any. A context variable, not
 #: a global: the daily refresh runs sources concurrently, one task each.
 _REQUEST_LOG: ContextVar[RequestLog | None] = ContextVar("request_log", default=None)
+
+
+def current_request_log() -> RequestLog | None:
+    """The log of the run in progress in this task, if any."""
+    return _REQUEST_LOG.get()
 
 
 @contextlib.contextmanager
@@ -213,7 +292,8 @@ def set_host_pace(base_url: str | None, seconds: float) -> None:
 
 
 def _pace_of(host: str, *, default: float = 0.0) -> float:
-    """The host's pace: its registered polite delay, with its Crawl-Delay as a floor.
+    """The host's pace: its registered polite delay, with its Crawl-Delay as a floor,
+    multiplied by its slowdown after recent errors.
 
     Reads robots.txt only from the cache: fetching it from here would wait on
     the very gate this computes.
@@ -221,8 +301,8 @@ def _pace_of(host: str, *, default: float = 0.0) -> float:
     from worker.robots import ROBOTS
 
     cached = getattr(ROBOTS, "cached_crawl_delay", None)
-    asked = cached(host, BROWSER_HEADERS["User-Agent"]) if cached else None
-    return max(_HOST_PACE.get(host, default), asked or 0.0)
+    asked = cached(host, ROBOTS_TOKEN) if cached else None
+    return max(_HOST_PACE.get(host, default), asked or 0.0) * slowdown(host)
 
 
 async def take_turn(host: str, *, robots: bool = False) -> None:
@@ -262,13 +342,21 @@ async def _wait_for_host(host: str) -> None:
 MAX_REDIRECTS = 5
 
 
-def make_client(**kwargs) -> httpx.AsyncClient:
+def make_client(*, identity: Identity | None = None, **kwargs) -> httpx.AsyncClient:
+    """A client sending as `identity` — by default the run's (`worker.identity`).
+
+    Its headers, and for a signed identity its `Auth`, apply to every request
+    the client sends, redirect hops included: httpx runs the auth flow on each
+    `send`, so each is signed afresh.
+    """
+    identity = identity or current_identity()
     # Redirects are followed by `_request`, one hop at a time: followed here,
     # httpx sent each hop at once, past the pace gate and missing from the
     # request log, so a shop's server could see two requests a few ms apart
     # under a page that publishes "at least 15 seconds".
     return httpx.AsyncClient(
-        headers=BROWSER_HEADERS,
+        headers=dict(identity.headers),
+        auth=identity.auth,
         timeout=httpx.Timeout(30.0),
         follow_redirects=False,
         **kwargs,
@@ -298,7 +386,7 @@ async def _send_following_redirects(
         if hop is None:
             return resp
         await resp.aclose()
-        if not await ROBOTS.allowed(str(hop.url), BROWSER_HEADERS["User-Agent"]):
+        if not await ROBOTS.allowed(str(hop.url), ROBOTS_TOKEN):
             raise DisallowedByRobots(str(hop.url))
         await take_turn(host_of(hop.url))
         resp = await client.send(hop, follow_redirects=False)
@@ -330,25 +418,34 @@ async def _request(
     `RETRY_AFTER_CAP` is not retried at all in this run.
     """
     # Imported here rather than at module scope: robots.py needs this module's
-    # headers, so a top-level import would be circular.
+    # pace gate, so a top-level import would be circular.
     from worker.robots import ROBOTS, DisallowedByRobots
 
     # robots.txt is checked against the URL actually sent, query string included:
     # rules such as `Disallow: /collections/*sort_by*` live in the query.
     target = httpx.URL(url).copy_merge_params(params) if params else httpx.URL(url)
-    if not await ROBOTS.allowed(str(target), BROWSER_HEADERS["User-Agent"]):
+    if not await ROBOTS.allowed(str(target), ROBOTS_TOKEN):
         raise DisallowedByRobots(str(target))
     host = _host(target)
 
     resp = None
     for attempt in range(retries + 1):
         await take_turn(host)
-        resp = await _send_following_redirects(client, method, url, params, **kwargs)
+        try:
+            resp = await _send_following_redirects(client, method, url, params, **kwargs)
+        except httpx.TimeoutException as exc:
+            # Not retried (a slow host is not helped by more requests), but the
+            # next request to it waits longer.
+            try:
+                note_trouble(host_of(exc.request.url))  # a redirect hop's host
+            except RuntimeError:  # no request attached
+                note_trouble(host)
+            raise
+        # The host that answered: after a redirect, not necessarily the first.
+        note_response(host_of(resp.url), resp.status_code)
         if resp.status_code in _RETRYABLE:
-            asked = retry_after_seconds(resp.headers.get("Retry-After"))
-            if asked is not None:
-                # The host that asked: after a redirect, not necessarily the first.
-                _NOT_BEFORE[host_of(resp.url)] = time.monotonic() + asked
+            # The host that asked: after a redirect, not necessarily the first.
+            asked = hold_host(host_of(resp.url), resp.headers.get("Retry-After"))
             if attempt < retries and (asked is None or asked <= RETRY_AFTER_CAP):
                 # The published pace is a floor here too: a retry is a request
                 # like any other. Above it the backoff still grows, and a

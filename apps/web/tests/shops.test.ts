@@ -135,17 +135,17 @@ describe("supplier requests", () => {
   });
 
   it("builds a mailto with spaces encoded as %20, never +", () => {
-    const href = mailtoHref("crawler@merope.dev", {
+    const href = mailtoHref("crawler@makhzan.merope.dev", {
       subject: "Remove my shop",
       body: "a\nb",
     });
-    expect(href).toBe("mailto:crawler@merope.dev?subject=Remove%20my%20shop&body=a%0Ab");
+    expect(href).toBe("mailto:crawler@makhzan.merope.dev?subject=Remove%20my%20shop&body=a%0Ab");
   });
 
   it.each(supplierRequests)("$id goes to the crawler's address with a subject and body", (r) => {
     const url = new URL(mailtoHref(CONTACT_EMAIL, r));
     expect(url.protocol).toBe("mailto:");
-    expect(url.pathname).toBe("crawler@merope.dev");
+    expect(url.pathname).toBe("crawler@makhzan.merope.dev");
     expect(decodeURIComponent(url.search)).toContain(`subject=${r.subject}`);
     expect(r.body).toMatch(/Shop name:/);
   });

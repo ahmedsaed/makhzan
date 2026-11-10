@@ -9,6 +9,8 @@ dependencies = [
     "pydantic>=2.7,<3.0",
     "alembic>=1.13,<2.0",
     "asyncpg>=0.29,<1.0",
+    # Ed25519 for Web Bot Auth request and key-directory signatures (botauth.py).
+    "cryptography>=44,<51",
 ]
 
 [tool.poetry]

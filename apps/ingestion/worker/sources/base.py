@@ -195,6 +195,13 @@ class SourceAdapter(ABC):
     #: purpose, which the drift check does not report as new.
     ignored_categories: tuple[str, ...] = ()
 
+    #: Who the crawler says it is to this shop: "browser" (the default, what
+    #: every source has always sent) or "makhzanbot" (an honest User-Agent,
+    #: signed with Web Bot Auth when a key is configured). See
+    #: worker/identity.py and docs/crawler-identity.md. Set from a source's
+    #: config by the registry, so any adapter takes it.
+    identity: str = "browser"
+
     def source_categories(self, raw: RawItem) -> list[str]:
         """The source's own category names for this item, normalised.
 
@@ -302,6 +309,16 @@ class SourceAdapter(ABC):
         retried after a backoff. Never return stock counts.
         """
         raise NotImplementedError
+
+    def probe_url(self) -> str | None:
+        """The URL of this source's first page, exactly as `fetch_page` requests it.
+
+        For `python -m worker.probe`, which asks each shop what it thinks of each
+        identity with the request a run would really send. None when the first
+        page is not a plain GET (the probe then falls back to the probe-sites
+        list, else the shop's home page).
+        """
+        return None
 
     def extra_requests(self) -> dict[str, int]:
         """Requests made inside `fetch_page` beyond the page itself, by label.

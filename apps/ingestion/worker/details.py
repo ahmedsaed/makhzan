@@ -29,8 +29,8 @@ sweep would wipe a description that cost a request to read.
 `take_turn` gate, robots.txt on the full URL, the host's pace with its
 Crawl-delay as a floor, and its Retry-After — and is counted under
 `stats.requests.details` and in `stats.pacing`. A host that says to back off
-(`HostBackingOff`), a 429/5xx that outlasted its retries, or a network failure
-ends the stage for the run and blames no listing. A `limit=` run never gets here.
+(`HostBackingOff`), a robots.txt that cannot be read (`RobotsUnavailable`), a
+429/5xx that outlasted its retries, or a network failure ends the stage for the run and blames no listing. A `limit=` run never gets here.
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.http import CycleFetcher, HostBackingOff
 from worker.normalize import clean_description, clean_text
+from worker.robots import RobotsUnavailable
 from worker.richtext import merge_specs
 from worker.sources.base import DetailsSettings, SourceAdapter
 
@@ -280,7 +281,7 @@ async def queue_counts(
 
 
 def _host_trouble(exc: Exception) -> bool:
-    if isinstance(exc, HostBackingOff | httpx.TransportError):
+    if isinstance(exc, HostBackingOff | RobotsUnavailable | httpx.TransportError):
         return True
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in _HOST_TROUBLE
 
