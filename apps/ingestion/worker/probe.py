@@ -142,6 +142,11 @@ async def _robots(identity: Identity, url: str, gate: _Gate) -> Cell:
         cell.note, cell.forbids = "unreadable", True
     elif 400 <= status < 500:
         cell.note = "no rules"
+    else:
+        # A redirecting robots.txt: the crawler follows up to five hops and obeys
+        # where they lead. The probe does not follow redirects, so it has not
+        # read the rules, and asks for nothing it has not cleared.
+        cell.note, cell.forbids = "redirects (not followed)", True
     return cell
 
 

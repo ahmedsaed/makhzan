@@ -165,6 +165,8 @@ One shop at a time, starting with one that does not sit behind a strict WAF.
    On the server this runs `python -m worker.probe` in the ingestion image. The
    `makhzanbot` and `signed` columns must be 200 for that shop, and the
    `robots` column must not say `unreadable` or `DISALLOWS`.
+   - Run it while the shop's crawl is idle: the probe keeps its own 15 s gap,
+     but it runs in a separate container, so it does not share the worker's.
    - The probe sends each source's real first page, using the crawler's own
      client (`make_client`) for each identity. It never uses curl: curl's TLS
      fingerprint, HTTP/2 and header order differ from the crawler's, and
