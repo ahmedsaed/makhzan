@@ -107,7 +107,8 @@ docker compose exec -T db pg_dump -U makhzan -Fc makhzan > seed/makhzan-seed.dum
 scp seed/makhzan-seed.dump <user>@<server>:~/Documents/Projects/makhzan/seed/
 
 # On the server:
-./scripts/restore-seed.sh      # restores the dump + rebuilds the search index
+./scripts/restore-seed.sh      # restore-db.sh on seed/makhzan-seed.dump: restores,
+                               # migrates, rebuilds the search index (asks first)
 ```
 
 (To start empty and scrape instead, skip this and run `./scripts/seed.sh` after
@@ -135,13 +136,14 @@ crawler report from `scripts/status.py`, read from the live database.
 | Deploy latest | `make deploy` (or publish a Release → auto-deploy) |
 | Restart without updating | `SKIP_PULL=1 ./scripts/deploy.sh` |
 | Run migrations only | `./scripts/migrate.sh` |
-| Re-seed from a dump | `./scripts/restore-seed.sh [path]` |
+| Re-seed from a dump | `./scripts/restore-seed.sh [path]` (= `./makhzan restore`, default file `seed/makhzan-seed.dump`) |
 | Full re-scrape + reindex now | `./scripts/seed.sh` |
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
 | What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
-| Back up the DB | `./scripts/backup-db.sh` → `backups/*.sql.gz` |
+| Back up the DB | `./makhzan backup` → `backups/makhzan-<ts>.dump`, read back before it is kept |
+| Restore the DB | `./makhzan restore <file>`: see [Backup and restore](#backup-and-restore) |
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
 | Status | `docker compose -f docker-compose.prod.yml --env-file .env.prod ps` |
 
@@ -232,11 +234,80 @@ keys. Only `MAKHZANBOT_SIGNING_KEY` ever signs requests.
 `…_PREVIOUS` empty, and deploy. Signed requests then use only the new key, and
 the leaked one leaves the directory.
 
-Nightly backup cron:
+## Backup and restore
 
-```
-0 2 * * * ~/Documents/Projects/makhzan/scripts/backup-db.sh >> ~/Documents/Projects/makhzan/backups/backup.log 2>&1
-```
+**Not done yet:** scheduled backups and off-site copies are a separate, pending
+task. Today backups are taken by hand and live only on the server, next to the
+database they protect, so copy them off the box yourself. (Earlier versions of
+this page suggested a nightly cron of `backup-db.sh`; if one was installed, it
+keeps working and now writes `.dump` files. It fails, visibly, if it collides
+with a deploy or restore.)
+
+1. **Take one:** `./makhzan backup` writes `backups/makhzan-<ts>.dump`
+   (`pg_dump -Fc`). It reads the whole file back with `pg_restore` and fails
+   loudly if it cannot, or if it has no `alembic_version` data, so a 0-byte or
+   truncated backup is never kept under its final name. It keeps the 14 newest
+   backups, and separately every `*-pre-restore.dump` safety copy from the
+   last 7 days (never fewer than 3). A pruning failure is only a warning.
+2. **Copy it off the box**, from your laptop:
+   `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
+3. **Test-restore it into a scratch database** now and then, without touching the
+   live one:
+
+   ```bash
+   C="docker compose -f docker-compose.prod.yml --env-file .env.prod"
+   $C exec -T db createdb -U makhzan restore_check
+   $C exec -T db pg_restore -U makhzan -d restore_check --exit-on-error --no-owner < backups/makhzan-<ts>.dump
+   $C exec -T db psql -U makhzan -d restore_check -c "SELECT version_num FROM alembic_version" \
+     -c "SELECT count(*) FROM products WHERE merged_into IS NULL AND delisted_at IS NULL"
+   $C exec -T db dropdb -U makhzan restore_check
+   ```
+
+   If a step fails, the last line still needs running: `restore_check` stays
+   behind otherwise. An older plain-SQL backup (`*.sql.gz`) loads with
+   `gunzip -c F | $C exec -T db psql -U makhzan -d restore_check -v ON_ERROR_STOP=1`.
+4. **Full restore:** pause releases first (publishing one deploys), open `tmux`
+   or `screen`, then `./makhzan restore backups/makhzan-<ts>.dump` (or a legacy
+   `*.sql.gz`). It shows the stack and database and asks you to type the
+   database name (`--yes` skips that), then:
+   - backs up the current database to `backups/makhzan-<ts>-pre-restore.dump`
+     (`--no-safety-backup` skips it; skipped by itself only when the database
+     has no products table or an empty one, as on a fresh server);
+   - stops `api` and `ingestion`;
+   - loads the file into a scratch database `<db>_restoring`, stopping at the
+     first error, and refuses it unless it has one alembic version, products,
+     listings, the core tables' primary keys and foreign keys;
+   - runs the deploy's `migrate` service against the scratch database, so an
+     older backup comes up to the current schema and a broken one fails there;
+   - only then drops the live database and renames the scratch one into place;
+   - rebuilds the search index, starts `api` and `ingestion` again and prints the
+     alembic version, listed products, listings and newest crawl run.
+
+   Everything is also written to `backups/restore-<ts>.log`. A failure before
+   the swap leaves the live database untouched and starts the services again,
+   and that includes Ctrl-C, a dropped SSH session and a kill: the cleanup
+   runs and its report reaches the log even when the terminal is gone. A
+   failure during or after the swap prints what Postgres reports and the exact
+   commands to finish, or to go back to the safety copy.
+
+   Restore, backup, deploy (and the release workflow's `git pull`) and
+   `migrate.sh` share a lock (`backups/.ops.lock`): while one runs, the others
+   refuse to start. `./makhzan start`, `stop` and `crawl on|off` do not take
+   it; do not use them while a restore runs, since starting `api` or
+   `ingestion` mid-restore points them at a database being replaced.
+
+   The crawl resumes from the backup: `source_cursors` come back with everything
+   else, so a sweep in progress continues from the backup's page and the pages
+   swept since are swept again. Runs the backup caught mid-way are closed as
+   interrupted when the worker starts. Nothing needs resetting: cursors and
+   listings are from the same moment. (`db-load.sh`, which loads a server dump into
+   a *dev* database, does reset them.) Products come back as the backup had them;
+   the worker regroups them on its next rebuild, after the next crawl.
+
+`MAKHZAN_ENV_FILE` and `MAKHZAN_COMPOSE_FILE` point `backup-db.sh` and
+`restore-db.sh` at another stack, for trying a restore without production. They
+refuse unless `COMPOSE_PROJECT_NAME` is set too: without it another env file
+still addresses the production containers.
 
 ## Deploying
 
@@ -387,6 +458,6 @@ Two things worth knowing:
   `docker-compose.prod.yml` and set `NEXT_PUBLIC_API_URL` to that URL (rebuild web).
 - **`migrate` fails** → check `DATABASE_URL` matches `POSTGRES_USER/PASSWORD/DB`,
   uses host `db` and the `+asyncpg` driver.
-- **Search empty after restore** → `restore-seed.sh` rebuilds the index; rerun it,
-  or `docker compose ... run --rm --no-deps ingestion python -m worker.reindex`.
+- **Search empty after restore** → `restore-db.sh` rebuilds the index after the
+  swap; if that step failed, `docker compose ... run --rm --no-deps ingestion python -m worker.reindex`.
 - **Resources** → 2 vCPU / 2–4 GB is comfortable. Add swap if the box is small.

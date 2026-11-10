@@ -7,6 +7,7 @@
 #   ./makhzan logs [service] # follow logs (default: ingestion)
 #   ./makhzan stop|start [service]   # whole stack, or one service
 #   ./makhzan backup|migrate
+#   ./makhzan restore FILE [--yes] # replace the database with a backup (restore-db.sh)
 #   ./makhzan retire SOURCE [--yes] # remove a source and its listings (dry run without --yes)
 #   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
 #
@@ -14,10 +15,12 @@
 # itself on DEPLOY_HOST over SSH, using the same .env.local variables as
 # db-pull.sh. Either way the commands act on the server's stack.
 set -euo pipefail
+# backup/restore resolve relative paths against where you ran this from.
+export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -41,6 +44,8 @@ if [ ! -f .env.prod ]; then
 fi
 
 # --- On the server ------------------------------------------------------------
+. scripts/lib/ops.sh
+ops_production_only
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env.prod)
 
 # What the running worker actually believes, which is not necessarily what
@@ -112,7 +117,8 @@ case "$cmd" in
   logs) "${COMPOSE[@]}" logs -f --tail 200 "${@:-ingestion}" ;;
   stop) "${COMPOSE[@]}" stop "$@" ;;
   start) "${COMPOSE[@]}" up -d "$@" ;;
-  backup) exec ./scripts/backup-db.sh ;;
+  backup) exec ./scripts/backup-db.sh "$@" ;;
+  restore) exec ./scripts/restore-db.sh "$@" ;;
   migrate) exec ./scripts/migrate.sh ;;
   retire) "${COMPOSE[@]}" exec -T ingestion python -m worker.sources.retire "$@" ;;
   # The crawler's own client, in the ingestion image; run it while no crawl is
