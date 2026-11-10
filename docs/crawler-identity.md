@@ -161,7 +161,7 @@ means a new directory URL and re-registering with both vendors.
 
 One shop at a time, starting with one that does not sit behind a strict WAF.
 
-1. **Probe first**, from the server: `./scripts/probe-suppliers.sh --source <id>`.
+1. **Probe first**, from the server: `./makhzan probe --source <id>` (from a laptop it runs on the server over SSH).
    On the server this runs `python -m worker.probe` in the ingestion image. The
    `makhzanbot` and `signed` columns must be 200 for that shop, and the
    `robots` column must not say `unreadable` or `DISALLOWS`.

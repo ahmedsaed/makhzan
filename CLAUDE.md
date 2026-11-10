@@ -380,7 +380,7 @@ time after a probe; a shop that refuses makhzanbot gets a registered key and a
 letter, never the browser headers back. `CHROME_VERSION` stays as it is for the
 browser sources that remain; do not bump it to get past a WAF.
 
-`python -m worker.probe` (wrapped by `scripts/probe-suppliers.sh`, `make probe`)
+`python -m worker.probe` (wrapped by `./makhzan probe`, `scripts/probe-suppliers.sh` and `make probe`)
 answers "is it the headers or is it us?". For each source it requests the real
 first page (`SourceAdapter.probe_url`) as browser, as makhzanbot, and as
 makhzanbot signed. It also asks for robots.txt and obeys it. Requests are 15 s
