@@ -51,8 +51,9 @@ and the referral numbers.
 - **Supplier pages:** remove, add or correct a shop, as requests handled by hand for
   now (through code). Self-service comes with the supplier portal.
 - **Price history** on product pages.
-- **Shop details** (location, WhatsApp, opening hours): wanted; they arrive through
-  supplier requests.
+- **Shop details** (location, WhatsApp, opening hours): shown on the shop page since
+  November 2026, as each shop publishes them: entered by hand in `sources.toml` from
+  the shop's own pages, or read by the crawler, and corrected through supplier requests.
 - **Install to home screen** (a progressive web app).
 - **Log searches with no results**, to see demand.
 - **Parts-list import** belongs in the plan, but not in this phase.
