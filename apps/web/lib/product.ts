@@ -161,11 +161,39 @@ export function primaryOffer(offers: Offer[], now: Date = new Date()): Offer | n
  *  not helping anyone choose it. */
 const MAX_PHOTOS = 8;
 
-/** The product's own photo first, then every offer's, each once. */
-export function galleryImages(product: Product): string[] {
+/** A photo and the name of the shop it comes from, for the badge on it. */
+export type GalleryPhoto = { src: string; shop: string | null };
+
+/**
+ * The product's own photo first, then every offer's, each once, each with its
+ * shop: the offer it came from, so a gallery of three shops' photos badges
+ * each with its own. The product's photo is credited to the offer that lists
+ * it, and failing that (no such offer: a withdrawn product) to `image_shop`.
+ */
+export function galleryPhotos(product: Product): GalleryPhoto[] {
+  const shops = new Map<string, string | null>();
+  for (const offer of product.offers) {
+    for (const src of offer.images) {
+      if (src && !shops.has(src)) shops.set(src, offer.supplier?.name ?? null);
+    }
+  }
   const all = [product.image, ...product.offers.flatMap((offer) => offer.images)];
   const unique = [...new Set(all.filter((src): src is string => Boolean(src)))];
-  return unique.slice(0, MAX_PHOTOS);
+  return unique.slice(0, MAX_PHOTOS).map((src) => ({
+    src,
+    shop: shops.get(src) ?? (src === product.image ? (product.image_shop?.name ?? null) : null),
+  }));
+}
+
+/** "SG90 Servo" for the first photo, "SG90 Servo, photo 2" after it. The shop
+ *  is added by the frame ("… — photo from Shop A", PhotoFrame). */
+export function photoNumbered(alt: string, index: number): string {
+  return index === 0 ? alt : `${alt}, photo ${index + 1}`;
+}
+
+/** The gallery's photo URLs alone: structured data, the share image. */
+export function galleryImages(product: Product): string[] {
+  return galleryPhotos(product).map((photo) => photo.src);
 }
 
 // --------------------------------------------------------------------------- //

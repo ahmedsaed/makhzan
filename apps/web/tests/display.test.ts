@@ -89,4 +89,13 @@ describe("a product summary renders as a search hit", () => {
     // "Price on request" must never sort or display as free.
     expect(hitFromSummary({ ...summary, min_price: null, max_price: null }).min_price).toBeNull();
   });
+
+  it("carries whose photo it is, and nothing when an older API leaves it out", () => {
+    const shop = { slug: "shop-b", name: "Shop B" };
+    expect(
+      hitFromSummary({ ...summary, image: "https://x.test/a.jpg", image_shop: shop }).image_shop,
+    ).toEqual(shop);
+    // `summary` has no image_shop key at all: the shape an older response has.
+    expect(hitFromSummary(summary).image_shop).toBeNull();
+  });
 });

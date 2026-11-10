@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { PhotoFrame } from "@/components/photo-frame";
+import { BADGE_MIN_SIZE, PhotoFrame, photoAlt } from "@/components/photo-frame";
 
 // No next/image mock any more: photos load straight from the supplier with a
 // plain <img>, so there is no optimiser to stand in for.
@@ -108,5 +108,107 @@ describe("supplier photos", () => {
       render(<PhotoFrame src="https://example.test/a.jpg" alt="a" />);
       expect(screen.getByAltText("a")).toHaveAttribute("referrerpolicy", "no-referrer");
     });
+  });
+});
+
+describe("the shop badge on a photo", () => {
+  const badge = (container: HTMLElement) => container.querySelector("[data-photo-shop]");
+
+  it("names the shop the photo comes from, over the photo", () => {
+    const { container } = render(
+      <PhotoFrame src="https://example.test/a.jpg" alt="SG90 Servo" shop="Shop A" />,
+    );
+    expect(badge(container)).toHaveTextContent("Shop A");
+    // Laid over the <img>, never part of it: the photo is the shop's own file.
+    expect(screen.getByRole("img")).toHaveAttribute("src", "https://example.test/a.jpg");
+    expect(badge(container)?.tagName).toBe("SPAN");
+  });
+
+  it("is said once: hidden from screen readers, named in the alt text", () => {
+    const { container } = render(
+      <PhotoFrame src="https://example.test/a.jpg" alt="SG90 Servo" shop="Shop A" />,
+    );
+    expect(badge(container)).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByRole("img")).toHaveAttribute("alt", "SG90 Servo — photo from Shop A");
+  });
+
+  it("is not a link or a control", () => {
+    const { container } = render(
+      <PhotoFrame src="https://example.test/a.jpg" alt="x" shop="Shop A" />,
+    );
+    expect(badge(container)?.closest("a, button")).toBeNull();
+    expect(badge(container)?.className).toContain("pointer-events-none");
+  });
+
+  it("is absent from the placeholder: no photo, nothing to credit", () => {
+    const { container } = render(<PhotoFrame src={null} alt="x" shop="Shop A" />);
+    expect(badge(container)).toBeNull();
+  });
+
+  it("goes when the photo fails and the placeholder takes its place", () => {
+    const { container } = render(
+      <PhotoFrame src="https://example.test/gone.jpg" alt="x" shop="Shop A" />,
+    );
+    fireEvent.error(screen.getByRole("img"));
+    expect(badge(container)).toBeNull();
+  });
+
+  it("is absent when the shop is not known (an older API, a product not yet rebuilt)", () => {
+    for (const shop of [undefined, null, "", "  "]) {
+      const { container, unmount } = render(
+        <PhotoFrame src="https://example.test/a.jpg" alt="SG90" shop={shop} />,
+      );
+      expect(badge(container)).toBeNull();
+      expect(screen.getByRole("img")).toHaveAttribute("alt", "SG90");
+      unmount();
+    }
+  });
+
+  it("is left off a small thumbnail, which says whose photo it is in alt and title", () => {
+    const { container } = render(
+      <PhotoFrame src="https://example.test/a.jpg" alt="SG90" shop="Shop A" size={72} />,
+    );
+    expect(badge(container)).toBeNull();
+    const img = screen.getByRole("img");
+    expect(img).toHaveAttribute("alt", "SG90 — photo from Shop A");
+    expect(img).toHaveAttribute("title", "Photo from Shop A");
+  });
+
+  it("is drawn on a fixed frame big enough to read it on", () => {
+    const { container } = render(
+      <PhotoFrame
+        src="https://example.test/a.jpg"
+        alt="SG90"
+        shop="Shop A"
+        size={BADGE_MIN_SIZE}
+      />,
+    );
+    expect(badge(container)).toHaveTextContent("Shop A");
+    expect(screen.getByRole("img")).not.toHaveAttribute("title");
+  });
+
+  it("is compact on a 104px thumbnail and full size on a card", () => {
+    const small = render(
+      <PhotoFrame src="https://example.test/a.jpg" alt="SG90" shop="Shop A" size={104} />,
+    );
+    expect(badge(small.container)).toHaveAttribute("data-photo-shop", "compact");
+    small.unmount();
+    const card = render(<PhotoFrame src="https://example.test/a.jpg" alt="SG90" shop="Shop A" />);
+    expect(badge(card.container)).toHaveAttribute("data-photo-shop", "");
+  });
+
+  it("keeps a decorative photo silent", () => {
+    const { container } = render(
+      <PhotoFrame src="https://example.test/a.jpg" alt="" shop="Shop A" size={52} />,
+    );
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("alt", "");
+    expect(img).not.toHaveAttribute("title");
+  });
+
+  it("composes alt text only when there is both a subject and a shop", () => {
+    expect(photoAlt("SG90", "Shop A")).toBe("SG90 — photo from Shop A");
+    expect(photoAlt("SG90", null)).toBe("SG90");
+    expect(photoAlt("", "Shop A")).toBe("");
   });
 });
