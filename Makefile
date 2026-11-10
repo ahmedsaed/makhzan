@@ -14,7 +14,12 @@ LINT_PATHS = packages apps/api apps/ingestion scripts
 DB_URL ?= postgresql+asyncpg://makhzan:makhzan@localhost:5432/makhzan
 MEILI_URL ?= http://localhost:7700
 MEILI_KEY ?= dev-master-key-change-me
-RUN_ENV = DATABASE_URL="$(DB_URL)" MEILI_URL="$(MEILI_URL)" MEILI_MASTER_KEY="$(MEILI_KEY)"
+# A shop on the makhzanbot identity names the public site in its User-Agent, so
+# the Python commands need it even in development: without it `make sources` and
+# the worker refuse such a shop. Unsigned locally (no key), and only these
+# commands see it, so the local web app keeps its own localhost canonicals.
+CRAWLER_SITE_URL ?= https://makhzan.merope.dev
+RUN_ENV = DATABASE_URL="$(DB_URL)" MEILI_URL="$(MEILI_URL)" MEILI_MASTER_KEY="$(MEILI_KEY)" SITE_URL="$(CRAWLER_SITE_URL)"
 
 # The real supplier configuration is a private checkout beside this one. When it
 # is there, every target uses it — sources, crosswalks, bespoke adapters, and its
