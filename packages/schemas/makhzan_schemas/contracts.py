@@ -27,6 +27,12 @@ from pydantic import (
     model_validator,
 )
 
+from makhzan_schemas.contact import (
+    ShopReach,
+    https_url,
+    resolve_contact,
+    shop_reach,
+)
 from makhzan_schemas.enums import (
     DEFAULT_CURRENCY,
     ListingStatus,
@@ -102,75 +108,20 @@ class NormalizedListing(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def _https(value: object) -> str | None:
-    """A web link a page may show: https only, no whitespace, a sane length."""
-    if not isinstance(value, str):
-        return None
-    url = value.strip()
-    if not url.lower().startswith("https://") or len(url) > 2000 or any(c.isspace() for c in url):
-        return None
-    return url
-
-
-class SupplierContact(BaseModel):
-    """How to reach a shop, as the shop publishes it, with where and when it was read.
-
-    Validated from `Supplier.contact`, which the crawler fills from the shop's
-    own structured data. Text is the shop's own, in whatever language it wrote
-    it; only its shape is checked here.
-    """
-
-    address: str | None = None
-    area: str | None = None
-    governorate: str | None = None
-    phone: str | None = None
-    whatsapp: str | None = None
-    email: str | None = None
-    opening_hours: list[str] = Field(default_factory=list)
-    source_url: str | None = None
-    fetched_at: datetime | None = None
-
-    @field_validator("address", "area", "governorate", "phone", "whatsapp", "email", mode="before")
-    @classmethod
-    def _text(cls, value: object) -> str | None:
-        return _short_text(value) if not isinstance(value, int | float) else None
-
-    @field_validator("opening_hours", mode="before")
-    @classmethod
-    def _hours(cls, value: object) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [h for h in (_short_text(v) for v in value if isinstance(v, str)) if h][:14]
-
-    @field_validator("source_url", mode="before")
-    @classmethod
-    def _url(cls, value: object) -> str | None:
-        return _https(value)
-
-    @field_validator("fetched_at", mode="before")
-    @classmethod
-    def _when(cls, value: object) -> datetime | None:
-        if isinstance(value, datetime):
-            return value
-        try:
-            return datetime.fromisoformat(value) if isinstance(value, str) else None
-        except ValueError:
-            return None
-
-
-def public_contact(value: object) -> SupplierContact | None:
-    """A supplier's stored contact, validated; None when it holds nothing to show."""
-    if not isinstance(value, dict):
-        return None
-    try:
-        contact = SupplierContact.model_validate(value)
-    except ValueError:
-        return None
-    shown = contact.model_dump(exclude={"source_url", "fetched_at"})
-    return contact if any(shown.values()) else None
+#: A web link a page may show: https only, no whitespace, a sane length.
+_https = https_url
 
 
 class SupplierRead(BaseModel):
+    """A shop as an offer or a listing carries it.
+
+    `area`, `governorate` and `contact` are resolved (makhzan_schemas.contact):
+    what a person listed from the shop's own pages, with what the crawler read
+    filling the gaps. `contact` is the compact form, the first phone, WhatsApp
+    and email, so a product page can offer "Contact the shop" without the full
+    block of addresses and hours, which is the shop page's.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -180,13 +131,24 @@ class SupplierRead(BaseModel):
     area: str | None = None
     governorate: str | None = None
     website_url: str | None = None
-    #: The shop's own published contact details (address, phone, hours).
-    contact: SupplierContact | None = None
+    contact: ShopReach | None = None
 
-    @field_validator("contact", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _contact(cls, value: object) -> SupplierContact | None:
-        return public_contact(value)
+    def _from_supplier(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return data
+        resolved = resolve_contact(data)
+        return {
+            "id": getattr(data, "id", None),
+            "slug": getattr(data, "slug", None),
+            "name": getattr(data, "name", None),
+            "name_ar": getattr(data, "name_ar", None),
+            "area": resolved.area if resolved else None,
+            "governorate": resolved.governorate if resolved else None,
+            "website_url": getattr(data, "website_url", None),
+            "contact": shop_reach(resolved),
+        }
 
 
 class CategoryRead(BaseModel):
