@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -501,6 +502,15 @@ class OfferRead(_ShopDetails):
     brand: str | None = None
 
 
+class PhotoShop(BaseModel):
+    """The shop a product's photo comes from: what the badge on the photo names."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    slug: str
+    name: str
+
+
 class ProductSummary(BaseModel):
     """A product without its offers — the shape a result row or rail needs.
 
@@ -518,6 +528,12 @@ class ProductSummary(BaseModel):
     title_ar: str | None = None
     brand: str | None = None
     image: str | None = None
+    #: Whose photo `image` is (`Product.image_supplier`), for the badge on it.
+    #: Null without a photo, or before the product's first rebuild that
+    #: recorded it.
+    image_shop: PhotoShop | None = Field(
+        default=None, validation_alias=AliasChoices("image_shop", "image_supplier")
+    )
     supplier_count: int
     offer_count: int
     min_price: float | None = None

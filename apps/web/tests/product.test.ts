@@ -4,8 +4,10 @@ import type { Category, Offer, Product, StockSignal } from "@/lib/api";
 import {
   categoryTrail,
   galleryImages,
+  galleryPhotos,
   jsonLdText,
   orderOffers,
+  photoNumbered,
   primaryOffer,
   productJsonLd,
   shopsFact,
@@ -177,6 +179,38 @@ describe("gallery", () => {
       }),
     );
     expect(images).toEqual(["one.jpg", "two.jpg"]);
+  });
+
+  it("credits each photo to the shop whose offer it came from", () => {
+    const photos = galleryPhotos(
+      product(
+        [
+          offer("a", 1, "in_stock", { shop: "shop-a", images: ["a1.jpg", "a2.jpg"] }),
+          offer("b", 2, "in_stock", { shop: "shop-b", images: ["b1.jpg"] }),
+        ],
+        // The product's photo is shop B's, and leads the gallery.
+        { image: "b1.jpg" },
+      ),
+    );
+    expect(photos).toEqual([
+      { src: "b1.jpg", shop: "SHOP-B" },
+      { src: "a1.jpg", shop: "SHOP-A" },
+      { src: "a2.jpg", shop: "SHOP-A" },
+    ]);
+  });
+
+  it("falls back to image_shop for a photo no offer lists, and to nothing without it", () => {
+    const shop = { slug: "shop-c", name: "Shop C" };
+    expect(galleryPhotos(product([], { image: "c.jpg", image_shop: shop }))).toEqual([
+      { src: "c.jpg", shop: "Shop C" },
+    ]);
+    // An API older than image_shop: the photo still shows, uncredited.
+    expect(galleryPhotos(product([], { image: "c.jpg" }))).toEqual([{ src: "c.jpg", shop: null }]);
+  });
+
+  it("numbers every photo after the first in its alt text", () => {
+    expect(photoNumbered("Servo", 0)).toBe("Servo");
+    expect(photoNumbered("Servo", 1)).toBe("Servo, photo 2");
   });
 });
 

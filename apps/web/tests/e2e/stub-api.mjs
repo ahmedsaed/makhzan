@@ -18,6 +18,7 @@ import { createServer } from "node:http";
 
 import { crawlerActivity } from "./fixtures/crawler.mjs";
 import { productFixture } from "./fixtures/product.mjs";
+import { photoShopRoute } from "./fixtures/photo-shop.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopName, shopRoute } from "./fixtures/shops.mjs";
 import { FAILING_DEPARTMENT, DEPARTMENT_CATEGORIES, departmentSearch } from "./fixtures/departments.mjs";
@@ -285,6 +286,8 @@ const server = createServer((req, res) => {
 
   const path = url.pathname;
   if (path === "/health") return send(200, { status: "ok" });
+  const credited = photoShopRoute(url, PORT);
+  if (credited) return send(...credited);
   if (path === "/stats") return send(200, { products: 57207, suppliers: 8, categories: 249 });
   if (path === "/categories") {
     const domain = url.searchParams.get("domain");

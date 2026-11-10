@@ -84,6 +84,32 @@ describe.each(Object.entries(THEMES))("S2 · contrast in the %s theme", (_, them
   });
 });
 
+describe.each(Object.entries(THEMES))("S2 · the photo's shop badge in the %s theme", (_, theme) => {
+  /** `top` at `alpha` over `bottom`, as the badge's 80% fill sits on a photo. */
+  function over(top: string, alpha: number, bottom: string): string {
+    const channel = (hex: string, i: number) =>
+      Number.parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+    const mixed = [0, 1, 2].map((i) =>
+      Math.round(channel(top, i) * alpha + channel(bottom, i) * (1 - alpha)),
+    );
+    return `#${mixed.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  // The worst case is the badge over pure white: most shop photos are shot on
+  // white, and the frame itself is white (S5). The class in photo-frame.tsx
+  // must keep this alpha.
+  const PHOTO_SOURCE = readFileSync(join(ROOT, "components/photo-frame.tsx"), "utf8");
+
+  it("is drawn at 80% of photo-tag", () => {
+    expect(PHOTO_SOURCE).toContain("bg-photo-tag/80");
+  });
+
+  it.each(["#ffffff", "#000000", "#808080"])("reaches 4.5:1 over a photo of %s", (photo) => {
+    const fill = over(theme["photo-tag"], 0.8, photo);
+    expect(contrast(theme["photo-tag-ink"], fill)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 /** Every source file under a directory, recursively. */
 function sources(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

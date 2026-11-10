@@ -68,6 +68,7 @@ export function ResultRow({ hit, now, priority = false, hideShop = false }: Resu
       >
         <PhotoFrame
           src={hit.image}
+          shop={hit.image_shop?.name}
           alt={title}
           size={72}
           priority={priority}
@@ -127,6 +128,7 @@ export function ResultCard({ hit, now, priority = false, hideShop = false }: Res
       >
         <PhotoFrame
           src={hit.image}
+          shop={hit.image_shop?.name}
           alt={title}
           priority={priority}
           // The card is the frame; the photo sits flush at its top.

@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { photoNumbered, type GalleryPhoto } from "@/lib/product";
 import { cn } from "@/lib/utils";
 
 import { ArrowButton, jumpStrip, stepStrip, TAP_EXTENSION, useStrip } from "./carousel";
@@ -26,11 +27,11 @@ import { FullSizePhoto } from "./full-size-photo";
  * scrolls the gallery to it.
  */
 export function PhotoViewer({
-  images,
+  photos,
   alt,
   children,
 }: {
-  images: string[];
+  photos: GalleryPhoto[];
   alt: string;
   children: ReactNode;
 }) {
@@ -78,7 +79,7 @@ export function PhotoViewer({
       >
         {start !== null && (
           <Slides
-            images={images}
+            photos={photos}
             alt={alt}
             start={start}
             onIndex={(index) => {
@@ -93,13 +94,13 @@ export function PhotoViewer({
 }
 
 function Slides({
-  images,
+  photos,
   alt,
   start,
   onIndex,
   close,
 }: {
-  images: string[];
+  photos: GalleryPhoto[];
   alt: string;
   start: number;
   onIndex: (index: number) => void;
@@ -108,7 +109,7 @@ function Slides({
   const [track, setTrack] = useState<HTMLDivElement | null>(null);
   const strip = useStrip(track);
   const { index } = strip;
-  const several = images.length > 1;
+  const several = photos.length > 1;
 
   // Before paint, so the viewer opens on the photo that was tapped rather
   // than flashing the first one.
@@ -140,7 +141,7 @@ function Slides({
           aria-live="polite"
           className="rounded-full border border-line bg-surface px-2.5 py-0.5 text-sm text-ink-2 tabular"
         >
-          {Math.min(index, images.length - 1) + 1} / {images.length}
+          {Math.min(index, photos.length - 1) + 1} / {photos.length}
         </span>
         <button
           type="button"
@@ -162,7 +163,7 @@ function Slides({
           ref={setTrack}
           className="flex h-full snap-x snap-mandatory overflow-x-auto overscroll-x-contain"
         >
-          {images.map((src, i) => (
+          {photos.map(({ src, shop }, i) => (
             <div
               key={src}
               data-viewer-slide={i}
@@ -170,7 +171,8 @@ function Slides({
             >
               <FullSizePhoto
                 src={src}
-                alt={i === 0 ? alt : `${alt}, photo ${i + 1}`}
+                alt={photoNumbered(alt, i)}
+                shop={shop}
                 priority={i === start}
                 // As big as the screen allows, square like every frame.
                 className="w-[min(calc(100vw-2rem),calc(100dvh-6rem))] max-w-none"

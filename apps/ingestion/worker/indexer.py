@@ -142,6 +142,12 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
         )
     ).all():
         shops[product_id].add(slug)
+    # The shop each photo comes from, for the badge on it: the handful of
+    # shops, looked up once rather than joined into every product row.
+    photo_shops = {
+        shop.id: {"slug": shop.slug, "name": shop.name}
+        for shop in (await session.execute(select(Supplier))).scalars()
+    }
     docs = [
         build_product_document(
             product,
@@ -150,6 +156,7 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
             cat.domain if cat else None,
             list(shops.get(product.id, ())),
             ancestry(cat.id, tree) if cat else [],
+            photo_shops.get(product.image_supplier_id),
         )
         for product, cat in rows
     ]

@@ -126,6 +126,9 @@ export type SupplierProfile = ShopSummary & {
   top_categories: { ref: string; name_en: string; name_ar: string | null; count: number }[];
 };
 
+/** The shop a product's photo comes from: what the badge on the photo names. */
+export type PhotoShop = { slug: string; name: string };
+
 export type ProductSummary = {
   id: string;
   part_number: string | null;
@@ -133,6 +136,9 @@ export type ProductSummary = {
   title_ar: string | null;
   brand: string | null;
   image: string | null;
+  /** Whose photo `image` is. Optional: absent from an API (or a cached
+   *  response) older than it, and null until the product's next rebuild. */
+  image_shop?: PhotoShop | null;
   supplier_count: number;
   offer_count: number;
   min_price: number | null;
@@ -226,6 +232,8 @@ export type SearchHit = {
   currency: string;
   in_stock: boolean;
   image: string | null;
+  /** Whose photo `image` is; optional, as on ProductSummary. */
+  image_shop?: PhotoShop | null;
   last_verified_at: number | null;
 };
 
@@ -523,6 +531,7 @@ export function hitFromSummary(
     currency: product.currency,
     in_stock: product.in_stock,
     image: product.image,
+    image_shop: product.image_shop ?? null,
     // The index stores epoch seconds; match it.
     last_verified_at: Number.isNaN(verified) ? null : Math.floor(verified / 1000),
   };

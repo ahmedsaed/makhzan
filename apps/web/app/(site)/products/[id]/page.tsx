@@ -33,7 +33,7 @@ import {
   brandOf,
   categoryTrail,
   detailSources,
-  galleryImages,
+  galleryPhotos,
   jsonLdText,
   MAX_DETAIL_SOURCES,
   orderOffers,
@@ -191,12 +191,12 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   // With nothing written by any shop, the wide column would hold only the
   // title; the offers go there instead, as before.
   const split = sources.length > 0;
-  const images = galleryImages(product);
+  const photos = galleryPhotos(product);
   // The main photo is the page's largest element (its LCP) and comes from the
   // shop's server, not ours (decision 0003). Opening that connection while the
   // rest of the page streams saves the DNS, TCP and TLS round trips before the
   // photo can even be requested: 100–300 ms on a phone.
-  const photoOrigin = originOf(images[0]);
+  const photoOrigin = originOf(photos[0]?.src);
   if (photoOrigin) preconnect(photoOrigin);
   const crumbs: Crumb[] | null = !product.category
     ? null
@@ -259,7 +259,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           )}
         >
           <Gallery
-            images={images}
+            photos={photos}
             alt={title}
             // High priority whether or not a phone hides it: the phone shows
             // the same first photo as a thumbnail, so it is one download.
@@ -272,7 +272,8 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           <div className="flex gap-3">
             {several && (
               <PhotoFrame
-                src={images[0] ?? null}
+                src={photos[0]?.src ?? null}
+                shop={photos[0]?.shop}
                 alt={title}
                 size={104}
                 priority
@@ -408,7 +409,7 @@ function NoLongerListed({
   return (
     <Container className="pt-3 pb-8 lg:pt-4 lg:pb-12">
       <div className="flex gap-3 lg:gap-5">
-        <PhotoFrame src={product.image} alt={title} size={104} />
+        <PhotoFrame src={product.image} shop={product.image_shop?.name} alt={title} size={104} />
         <div className="flex min-w-0 flex-col gap-1.5">
           <h1 dir="auto" className="text-xl leading-tight lg:text-[26px]">
             {title}

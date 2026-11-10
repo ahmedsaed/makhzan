@@ -9,6 +9,7 @@ ids, resume points).
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -145,8 +146,12 @@ async def test_a_paused_shop_is_paused_and_says_nothing_more(client, db):
     assert body["totals"]["shops_read_7d"] == 0
     # The run's error never leaves the database, nor does the source's id.
     text = json.dumps(body).lower()
-    for word in ("403", "forbidden", "error", "blocked", "src-quiet", "quiet-shop.test"):
+    for word in ("forbidden", "error", "blocked", "src-quiet", "quiet-shop.test"):
         assert word not in text, word
+    # The status code as a whole token: as a bare substring, "403" also turned up
+    # inside timestamps ("...14:03:00" after a "4"), which failed this test now
+    # and then for nothing.
+    assert not re.search(r"(?<!\d)403(?!\d)", text), text
 
 
 async def test_a_source_with_no_runs_has_nothing_to_report_yet(client, db):

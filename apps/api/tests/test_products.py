@@ -491,3 +491,47 @@ async def test_a_withdrawn_product_still_has_similar_products(client, db):
     body = (await client.get(f"/products/{gone.id}/similar")).json()
 
     assert [item["id"] for item in body] == [str(other.id)]
+
+
+async def test_a_product_names_the_shop_its_photo_comes_from(client, db):
+    """For the badge on the photo: whose photo it is, as slug and name only."""
+    shop = await make_supplier(db, slug="shop-b", name="Shop B")
+    product = await make_product(
+        db, image="https://shop-b.test/sg90.jpg", image_supplier=shop, title_en="SG90"
+    )
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["image_shop"] == {"slug": "shop-b", "name": "Shop B"}
+
+
+async def test_a_photo_whose_shop_is_unknown_has_no_image_shop(client, db):
+    """A product not rebuilt since the column was added: the page shows no badge."""
+    product = await make_product(db, image="https://shop-a.test/lm358.jpg")
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["image"] == "https://shop-a.test/lm358.jpg"
+    assert body["image_shop"] is None
+
+
+async def test_similar_products_name_the_shop_of_each_photo(client, db):
+    servos = await make_category(db, slug="servos")
+    shop = await make_supplier(db, slug="shop-c", name="Shop C")
+    product = await make_product(db, category=servos, min_price="62")
+    await make_product(
+        db,
+        category=servos,
+        title_en="MG996R",
+        min_price="120",
+        image="https://shop-c.test/mg996r.jpg",
+        image_supplier=shop,
+    )
+    await make_product(db, category=servos, title_en="No photo", min_price="130")
+
+    body = (await client.get(f"/products/{product.id}/similar")).json()
+
+    assert [(p["title_en"], p["image_shop"]) for p in body] == [
+        ("MG996R", {"slug": "shop-c", "name": "Shop C"}),
+        ("No photo", None),
+    ]
