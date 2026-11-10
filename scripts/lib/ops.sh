@@ -48,17 +48,42 @@ ops_project() {
 # backup mid-restore would dump one. Fails at once rather than queueing, so a
 # collision is seen. A script run by one that holds the lock (backup-db.sh
 # from restore-db.sh, deploy.sh re-executing itself) inherits it.
+#
+# The lock is fd 9, which every child inherits: anything started while holding
+# it that may outlive the script (git's gc --auto, an ssh ControlPersist master)
+# must be started with 9>&-, or it keeps the lock after the script is gone.
 ops_lock() {
   [ "${MAKHZAN_OPS_LOCK_HELD:-}" = 1 ] && return 0
-  mkdir -p backups
+  # Deploys never needed backups/ before; a root-owned one (made by a backup run
+  # under sudo) would otherwise stop them with a bare "Permission denied".
+  if ! mkdir -p backups 2>/dev/null || ! (: >>backups/.ops.lock) 2>/dev/null; then
+    echo "Cannot write the operations lock $PWD/backups/.ops.lock." >&2
+    echo "Is backups/ owned by another user? Fix: sudo chown -R $(id -un) $PWD/backups" >&2
+    exit 1
+  fi
   exec 9>>backups/.ops.lock
   if ! flock -n 9; then
-    echo "Another backup, restore or deploy is running: $(cat backups/.ops.lock.owner 2>/dev/null || echo unknown)." >&2
-    echo "Wait for it to finish (lock: backups/.ops.lock)." >&2
+    echo "Another backup, restore or deploy holds the lock: $(cat backups/.ops.lock.owner 2>/dev/null || echo unknown)." >&2
+    echo "Wait for it to finish. If that pid is gone, a process it left behind still" >&2
+    echo "holds the lock; find it with: fuser -v backups/.ops.lock (or lsof backups/.ops.lock)" >&2
     exit 1
   fi
   echo "$1 (pid $$, since $(date '+%F %T'))" > backups/.ops.lock.owner
   export MAKHZAN_OPS_LOCK_HELD=1
+}
+
+# ops_production_only: for the commands that only ever act on production
+# (deploy.sh, migrate.sh, ./makhzan). A stray exported MAKHZAN_ENV_FILE,
+# MAKHZAN_COMPOSE_FILE or COMPOSE_PROJECT_NAME from testing another stack must
+# not redirect them; docker compose itself reads the last.
+ops_production_only() {
+  local v
+  for v in MAKHZAN_ENV_FILE MAKHZAN_COMPOSE_FILE COMPOSE_PROJECT_NAME; do
+    if [ -n "${!v:-}" ]; then
+      echo "note: ignoring $v=${!v}; this command acts on production only" >&2
+      unset "$v"
+    fi
+  done
 }
 
 # ops_abspath PATH: PATH made absolute against the directory the operator ran
