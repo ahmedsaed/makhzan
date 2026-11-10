@@ -257,9 +257,10 @@ async def _get_or_create_supplier(
         domain=info.domain,
         name_ar=info.name_ar,
         website_url=info.website_url,
-        area=info.area,
-        governorate=info.governorate,
         source_type=source_type,
+        # The listed contact details, area and governorate among them. After
+        # this, `worker.sources.sync` keeps them in step with sources.toml.
+        **info.contact_columns(),
     )
     session.add(supplier)
     await session.flush()

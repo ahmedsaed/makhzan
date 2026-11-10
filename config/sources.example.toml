@@ -14,7 +14,8 @@
 #              run by hand, but the daily refresh skips it.
 #   supplier   The shop: slug and name, plus optionally website_url, name_ar,
 #              area, governorate and domain (the fallback vertical for listings
-#              the crosswalk does not place; defaults to electronics).
+#              the crosswalk does not place; defaults to electronics), and how
+#              to reach it (below).
 #   crosswalk  Name of a file in MAKHZAN_CROSSWALKS (default config/crosswalks),
 #              without .toml. Its [categories] map the shop's own categories to
 #              ours; its partitions, if any, are the categories to sweep.
@@ -43,11 +44,64 @@
 # change token moved, or read over max_age_days ago (worker/details.py). Off by
 # default; every other adapter refuses the key.
 
+# How to reach a shop, read by a person off the shop's OWN pages (its contact
+# page, footer, Facebook page) and written in its supplier table. The shop page
+# shows them, and a product page offers WhatsApp or a call per offer. All
+# optional; `make sources` (and every deploy) writes them to the shop's row,
+# and a value removed here is cleared there. Where these are missing, what the
+# crawler read from the shop's JSON-LD is shown instead, field by field.
+#
+#   phone          One number, or a list, the one to call first first. Written
+#                  as the shop writes it ("02 2345 6789", "+20 100 …",
+#                  "19xxx"); stored as E.164. One that cannot be dialled fails
+#                  the sync.
+#   whatsapp       One mobile number.
+#   email
+#   address        The main (or only) shop's street address, as the shop words
+#                  it, with area and governorate beside it.
+#   maps_url       The shop's own map link for that address (https).
+#   opening_hours  A list of lines, as the shop words them.
+#   branches       Further places it trades from: [[source.supplier.branches]]
+#                  tables of name, address, area, governorate, phone (one or a
+#                  list) and maps_url; each needs an address or a phone.
+#   contact_source_url, contact_checked_on
+#                  Where the details above were read, and the day (a TOML date).
+#                  Required with any of them: the shop page says where they
+#                  came from and when. area and governorate alone need neither.
+#
+# Write the supplier as a [source.supplier] table, after every other key of the
+# source (a TOML table runs to the next header). Unknown keys are an error.
+#
+# The fixture below carries a full set, obviously fake, so this file shows the
+# shape and the tests check that it builds.
+
 [[source]]
 id = "fixture"
 adapter = "fixture"
 enabled = false
-supplier = { slug = "fixture", name = "Fixture (test source)" }
+
+[source.supplier]
+slug = "fixture"
+name = "Fixture (test source)"
+website_url = "https://shop.example"
+address = "1 Example Street, 2nd floor"
+area = "Bab El Louk"
+governorate = "Cairo"
+maps_url = "https://maps.example/fixture-main"
+phone = ["02 0000 0000", "02 0000 0001"]
+whatsapp = "010 0000 0000"
+email = "sales@shop.example"
+opening_hours = ["Saturday to Thursday 10:00 to 22:00", "Friday closed"]
+contact_source_url = "https://shop.example/contact-us"
+contact_checked_on = 2026-11-10
+
+[[source.supplier.branches]]
+name = "Giza branch"
+address = "2 Example Road"
+area = "Dokki"
+governorate = "Giza"
+phone = "02 0000 0002"
+maps_url = "https://maps.example/fixture-giza"
 
 # [[source]]
 # id = "example-shop"
