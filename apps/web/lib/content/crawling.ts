@@ -11,7 +11,20 @@
  * page.
  */
 
-export type CrawlingSection = { heading: string; body: string[] };
+export type CrawlingSection = {
+  heading: string;
+  body: string[];
+  /** Text to copy as it is (shown preformatted after the body). */
+  snippet?: string;
+};
+
+/**
+ * Our robots.txt product token. The crawler matches robots.txt groups on it
+ * whichever headers it sends (apps/ingestion/worker/robots.py), so this block
+ * stops it on every shop, crawled as a browser or as makhzanbot.
+ */
+export const ROBOTS_TOKEN = "makhzanbot";
+export const ROBOTS_BLOCK = `User-agent: ${ROBOTS_TOKEN}\nDisallow: /`;
 
 /** The "Crawler activity" section: measured figures, read from the API. */
 export type ActivityContent = {
@@ -57,7 +70,9 @@ export const crawlingContent: CrawlingContent = {
       body: [
         "Before fetching anything we read the site's robots.txt and obey it. A path a shop asks us not to read is not read.",
         "If a site sets Crawl-delay, we treat it as a floor rather than a target: a shop asking for 20 seconds between requests gets 20, even though our own default is longer than most crawlers use.",
+        "Our robots.txt token is makhzanbot, so a shop can address us by name. To stop us reading your site altogether, add these two lines to your robots.txt:",
       ],
+      snippet: ROBOTS_BLOCK,
     },
     {
       heading: "We go slowly on purpose",
