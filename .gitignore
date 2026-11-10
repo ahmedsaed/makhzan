@@ -26,6 +26,9 @@ pgdata/
 meili_data/
 backups/
 seed/*.dump
+seed/*.sql
+seed/*.sql.gz
+*.dump.partial
 
 # OS / editor
 .DS_Store

@@ -7,6 +7,7 @@
 #   ./makhzan logs [service] # follow logs (default: ingestion)
 #   ./makhzan stop|start [service]   # whole stack, or one service
 #   ./makhzan backup|migrate
+#   ./makhzan restore FILE [--yes] # replace the database with a backup (restore-db.sh)
 #   ./makhzan retire SOURCE [--yes] # remove a source and its listings (dry run without --yes)
 #
 # Run it on the server, or from a laptop: without a .env.prod here it re-runs
@@ -16,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -111,7 +112,8 @@ case "$cmd" in
   logs) "${COMPOSE[@]}" logs -f --tail 200 "${@:-ingestion}" ;;
   stop) "${COMPOSE[@]}" stop "$@" ;;
   start) "${COMPOSE[@]}" up -d "$@" ;;
-  backup) exec ./scripts/backup-db.sh ;;
+  backup) exec ./scripts/backup-db.sh "$@" ;;
+  restore) exec ./scripts/restore-db.sh "$@" ;;
   migrate) exec ./scripts/migrate.sh ;;
   retire) "${COMPOSE[@]}" exec -T ingestion python -m worker.sources.retire "$@" ;;
   *) echo "unknown command: $cmd" >&2; usage 1 ;;
