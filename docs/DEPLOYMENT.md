@@ -125,7 +125,7 @@ terminate TLS there, and you're live.
 ## Day-2 operations
 
 `./makhzan` (repo root) wraps the common ones: `status`, `deploy`, `crawl on|off`,
-`logs`, `stop`, `start`, `backup`, `migrate`, `retire`. Run it on the server, or from a
+`logs`, `stop`, `start`, `backup`, `migrate`, `retire`, `probe`. Run it on the server, or from a
 laptop with `DEPLOY_HOST` set (it re-runs itself over SSH). `status` is the one
 to reach for first: containers, health, whether the crawl is paused, and the full
 crawler report from `scripts/status.py`, read from the live database.
