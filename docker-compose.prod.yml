@@ -11,6 +11,10 @@
 # is published (WEB_PORT) for your proxy to front; the API is internal and the
 # web service proxies /api to it (Next.js rewrites). db / search / redis are
 # internal-only. Data lives in named volumes (docker volume ls).
+#
+# The services read ${ENV_FILE:-.env.prod}: backup-db.sh and restore-db.sh set
+# ENV_FILE so a throwaway stack (its own COMPOSE_PROJECT_NAME and env file) can
+# be used to try them without touching production.
 
 x-restart: &restart
   restart: unless-stopped
@@ -77,7 +81,7 @@ services:
       dockerfile: apps/ingestion/Dockerfile
       target: prod
     <<: *private-config
-    env_file: .env.prod
+    env_file: ${ENV_FILE:-.env.prod}
     command:
       - sh
       - -c
@@ -99,7 +103,7 @@ services:
       dockerfile: apps/api/Dockerfile
       target: prod
     <<: *restart
-    env_file: .env.prod
+    env_file: ${ENV_FILE:-.env.prod}
     # Not published — the web service proxies /api to it over the internal
     # network (see web.API_INTERNAL_URL). Expose a port here only if you need to
     # reach the API directly from outside.
@@ -124,7 +128,7 @@ services:
       dockerfile: apps/ingestion/Dockerfile
       target: prod
     <<: [*restart, *private-config]
-    env_file: .env.prod
+    env_file: ${ENV_FILE:-.env.prod}
     depends_on:
       db:
         condition: service_healthy

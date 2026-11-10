@@ -107,7 +107,8 @@ docker compose exec -T db pg_dump -U makhzan -Fc makhzan > seed/makhzan-seed.dum
 scp seed/makhzan-seed.dump <user>@<server>:~/Documents/Projects/makhzan/seed/
 
 # On the server:
-./scripts/restore-seed.sh      # restores the dump + rebuilds the search index
+./scripts/restore-seed.sh      # restore-db.sh on seed/makhzan-seed.dump: restores,
+                               # migrates, rebuilds the search index (asks first)
 ```
 
 (To start empty and scrape instead, skip this and run `./scripts/seed.sh` after
@@ -135,13 +136,14 @@ crawler report from `scripts/status.py`, read from the live database.
 | Deploy latest | `make deploy` (or publish a Release → auto-deploy) |
 | Restart without updating | `SKIP_PULL=1 ./scripts/deploy.sh` |
 | Run migrations only | `./scripts/migrate.sh` |
-| Re-seed from a dump | `./scripts/restore-seed.sh [path]` |
+| Re-seed from a dump | `./scripts/restore-seed.sh [path]` (= `./makhzan restore`, default file `seed/makhzan-seed.dump`) |
 | Full re-scrape + reindex now | `./scripts/seed.sh` |
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
 | What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
-| Back up the DB | `./scripts/backup-db.sh` → `backups/*.sql.gz` |
+| Back up the DB | `./makhzan backup` → `backups/makhzan-<ts>.dump`, read back before it is kept |
+| Restore the DB | `./makhzan restore <file>`: see [Backup and restore](#backup-and-restore) |
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |
 | Status | `docker compose -f docker-compose.prod.yml --env-file .env.prod ps` |
 
@@ -150,6 +152,59 @@ Nightly backup cron:
 ```
 0 2 * * * ~/Documents/Projects/makhzan/scripts/backup-db.sh >> ~/Documents/Projects/makhzan/backups/backup.log 2>&1
 ```
+
+## Backup and restore
+
+Backups are taken by hand for now and live only on the server, next to the
+database they protect. Until off-site copies are automated, copy them off the box
+yourself.
+
+1. **Take one:** `./makhzan backup` writes `backups/makhzan-<ts>.dump`
+   (`pg_dump -Fc`) and keeps the 14 newest. It reads the whole file back with
+   `pg_restore` and fails loudly if it cannot, or if it has no `alembic_version`
+   data, so a 0-byte or truncated backup is never kept under its final name.
+2. **Copy it off the box**, from your laptop:
+   `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
+3. **Test-restore it into a scratch database** now and then, without touching the
+   live one:
+
+   ```bash
+   C="docker compose -f docker-compose.prod.yml --env-file .env.prod"
+   $C exec -T db createdb -U makhzan restore_check
+   $C exec -T db pg_restore -U makhzan -d restore_check --exit-on-error --no-owner < backups/makhzan-<ts>.dump
+   $C exec -T db psql -U makhzan -d restore_check -c "SELECT version_num FROM alembic_version" \
+     -c "SELECT count(*) FROM products WHERE merged_into IS NULL AND delisted_at IS NULL"
+   $C exec -T db dropdb -U makhzan restore_check
+   ```
+
+   An older plain-SQL backup (`*.sql.gz`) loads with
+   `gunzip -c F | $C exec -T db psql -U makhzan -d restore_check -v ON_ERROR_STOP=1` instead.
+4. **Full restore:** `./makhzan restore backups/makhzan-<ts>.dump` (or a legacy
+   `*.sql.gz`). It asks you to type the database name (`--yes` skips that), then:
+   backs up the current database to `backups/makhzan-<ts>-pre-restore.dump`
+   (`--no-safety-backup` skips that); stops `api` and `ingestion`; loads the file
+   into a scratch database, stopping at the first error; only then drops the live
+   database and renames the scratch one into its place; runs the deploy's
+   `migrate` service (`alembic upgrade head`, sources sync), so an older backup
+   comes up to the current schema; rebuilds products and the search index; starts
+   `api` and `ingestion` again and prints the alembic version, listed products,
+   listings and newest crawl run.
+
+   If it fails while loading, the live database was not touched and the services
+   are started again. If it fails after the swap (migrations, reindex), it leaves
+   `api` and `ingestion` stopped and prints the commands to finish, or to go back
+   to the safety backup.
+
+   The crawl resumes from the backup: `source_cursors` come back with everything
+   else, so a sweep in progress continues from the backup's page and the pages
+   swept since are swept again. Runs the backup caught mid-way are closed as
+   interrupted when the worker starts. Nothing needs resetting: cursors and
+   listings are from the same moment. (`db-load.sh`, which loads a server dump into
+   a *dev* database, does reset them.)
+
+`COMPOSE_FILE` and `ENV_FILE` point `backup-db.sh` and `restore-db.sh` at
+another stack, e.g. a throwaway one with `COMPOSE_PROJECT_NAME` set, for trying a
+restore without production.
 
 ## Deploying
 
@@ -300,6 +355,6 @@ Two things worth knowing:
   `docker-compose.prod.yml` and set `NEXT_PUBLIC_API_URL` to that URL (rebuild web).
 - **`migrate` fails** → check `DATABASE_URL` matches `POSTGRES_USER/PASSWORD/DB`,
   uses host `db` and the `+asyncpg` driver.
-- **Search empty after restore** → `restore-seed.sh` rebuilds the index; rerun it,
-  or `docker compose ... run --rm --no-deps ingestion python -m worker.reindex`.
+- **Search empty after restore** → `restore-db.sh` rebuilds the index as its last
+  step; if that step failed, `docker compose ... run --rm --no-deps ingestion python -m worker.reindex`.
 - **Resources** → 2 vCPU / 2–4 GB is comfortable. Add swap if the box is small.
