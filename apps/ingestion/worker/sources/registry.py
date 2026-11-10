@@ -22,6 +22,7 @@ from makhzan_schemas.models import Source
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from worker.identity import BROWSER, IDENTITIES
 from worker.sources.base import SourceAdapter, SupplierInfo
 
 log = logging.getLogger(__name__)
@@ -62,9 +63,14 @@ def build_adapter(source: Source) -> SourceAdapter:
     one key resolved on the way is `crosswalk`, a file name, which becomes the
     `categories` table — and, for a source browsed by category, the
     `partition_keys` to sweep, or for a tag-cloud source its `prefer` order.
+    `identity` is read by the pipeline, never the adapter, and must name one
+    of `worker.identity.IDENTITIES`.
     """
     options = dict(source.config or {})
     crosswalk = options.pop("crosswalk", None)
+    identity = options.pop("identity", BROWSER)
+    if identity not in IDENTITIES:
+        raise ValueError(f"identity must be one of {IDENTITIES}, got {identity!r}")
     target_cycle_days = options.pop("target_cycle_days", None)
     if target_cycle_days is not None and (
         isinstance(target_cycle_days, bool)
@@ -101,6 +107,8 @@ def build_adapter(source: Source) -> SourceAdapter:
     if target_cycle_days is not None:
         # Read by the pipeline, never by the adapter: set rather than passed in.
         adapter.target_cycle_days = float(target_cycle_days)
+    # Likewise: the pipeline sends the whole run as this identity.
+    adapter.identity = identity
     return adapter
 
 

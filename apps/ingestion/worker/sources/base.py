@@ -195,6 +195,13 @@ class SourceAdapter(ABC):
     #: purpose, which the drift check does not report as new.
     ignored_categories: tuple[str, ...] = ()
 
+    #: Who the crawler says it is to this shop: "browser" (the default, what
+    #: every source has always sent) or "makhzanbot" (an honest User-Agent,
+    #: signed with Web Bot Auth when a key is configured). See
+    #: worker/identity.py and docs/crawler-identity.md. Set from a source's
+    #: config by the registry, so any adapter takes it.
+    identity: str = "browser"
+
     def source_categories(self, raw: RawItem) -> list[str]:
         """The source's own category names for this item, normalised.
 

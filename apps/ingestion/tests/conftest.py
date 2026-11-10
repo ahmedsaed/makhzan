@@ -90,6 +90,7 @@ def _fresh_host_gate(monkeypatch):
     monkeypatch.setattr(http_mod, "_HOST_PACE", {})
     monkeypatch.setattr(http_mod, "_LAST_SENT", {})
     monkeypatch.setattr(http_mod, "_TURN_LOCKS", {})
+    monkeypatch.setattr(http_mod, "_SLOWDOWN", {})
 
 
 @pytest.fixture

@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from worker.categorize import category_slug_for, seed_categories
 from worker.details import apply_details, carry_details, run_details
 from worker.http import CycleFetcher, RequestLog, logging_requests, set_host_pace
+from worker.identity import Identity, identity_for, using_identity
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker.sources.base import CONTACT_PART, SourceAdapter, SupplierInfo
 
@@ -919,10 +920,15 @@ async def _run(
 
     Every request the run sends — cycle data, every partition's pages, whatever
     the adapter fetches to build a page — is logged with when it went out, so
-    the run's `stats.pacing` is the pace the shop actually saw.
+    the run's `stats.pacing` is the pace the shop actually saw — and sent as
+    the source's identity (`identity` in its config, worker/identity.py), which
+    every client the run makes reads, so no request goes out as anything else.
     """
-    with logging_requests() as log:
-        return await _logged_run(source_id, adapter, partitions, limit=limit, log=log)
+    identity = identity_for(adapter.identity)
+    with logging_requests() as log, using_identity(identity):
+        return await _logged_run(
+            source_id, adapter, partitions, limit=limit, log=log, identity=identity
+        )
 
 
 async def _logged_run(
@@ -932,6 +938,7 @@ async def _logged_run(
     *,
     limit: int | None,
     log: RequestLog,
+    identity: Identity,
 ) -> IngestionRun:
     errors: list[str] = []
     # The least gap between any two requests to this host, retries and
@@ -977,6 +984,7 @@ async def _logged_run(
             if sent:
                 stats["requests"] = sent
             stats["pacing"] = log.pacing()
+            stats["identity"] = identity.describe()
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and
@@ -1044,6 +1052,8 @@ async def _logged_run(
         stats: dict = {}
         if errors:
             stats["errors"] = errors
+        # Who the run said it was, for `make status`. Never on /how-we-crawl.
+        stats["identity"] = identity.describe()
         if limit is not None:
             # A test run: its pages are not part of any cycle (`_cycle_pages_since`).
             stats["limit"] = limit
