@@ -16,6 +16,7 @@ import {
   type CrawlerActivity,
   type SupplierProfile,
 } from "@/lib/api";
+import { missingLine } from "@/lib/contact";
 import { absoluteTime, parseTime, shopActivityLine } from "@/lib/crawler-activity";
 import { formatCount } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
@@ -31,6 +32,7 @@ import { formatDay, hostOf, isStale, departmentShares } from "@/lib/shops";
 import { cn } from "@/lib/utils";
 
 import { DepartmentBar } from "../_components/department-bar";
+import { ShopContactSection } from "../_components/shop-contact";
 
 /**
  * One shop and what makhzan has seen of it.
@@ -99,6 +101,7 @@ export default async function ShopPage({
   const data = await fetchResults(query);
 
   const pathname = routes.shop(supplier.slug);
+  const missing = missingLine(supplier.contact);
   const names = new Map(categories.map((c) => [c.ref, categoryNameOf(c)]));
   const narrow = (key: "category" | "domain", value: string) =>
     withParams(pathname, raw, { [key]: value });
@@ -149,10 +152,9 @@ export default async function ShopPage({
           )}
         </section>
 
-        <p className="text-sm leading-relaxed text-ink-2">
-          {supplier.area || supplier.governorate
-            ? "Phone and opening hours aren't listed yet."
-            : "Address and phone aren't listed yet."}{" "}
+        <p data-contact-missing className="text-sm leading-relaxed text-ink-2">
+          {/* Only what is still missing: a shop with every detail gets the link alone. */}
+          {missing && `${missing} `}
           <Link href={routes.forSuppliers()} className="font-semibold text-link hover:underline">
             Own this shop? Add your details.
           </Link>
@@ -164,7 +166,7 @@ export default async function ShopPage({
 
 /**
  * The band at the top. Phones: one column — name, figures, the stale note,
- * "Visit", search, what they carry. From `lg` it uses the width: the name and
+ * "Visit", search, how to reach the shop, what they carry. From `lg` it uses the width: the name and
  * search on the left, the figures and "Visit" on the right, and the note and
  * the department bar each across the whole band.
  */
@@ -184,7 +186,7 @@ function ShopHeader({
 
   return (
     <section className="border-b border-line bg-surface">
-      <Container className="flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7 lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'carries_carries'_'crawl_crawl']">
+      <Container className="flex flex-col gap-3 py-5 lg:grid lg:grid-cols-[minmax(0,1fr)_34rem] lg:gap-x-12 lg:gap-y-4 lg:py-7 lg:[grid-template-areas:'name_stats'_'search_visit'_'note_note'_'contact_contact'_'carries_carries'_'crawl_crawl']">
         <div className="lg:self-center lg:[grid-area:name]">
           <h1 className="text-2xl leading-tight sm:text-3xl lg:text-4xl">{supplier.name}</h1>
           {location && <p className="mt-1 text-sm text-ink-2">{location}</p>}
@@ -232,6 +234,16 @@ function ShopHeader({
           placeholder={`Search ${supplier.name}`}
           className="mt-2 sm:max-w-xl lg:mt-0 lg:max-w-none lg:[grid-area:search]"
         />
+
+        {supplier.contact && (
+          <ShopContactSection
+            contact={supplier.contact}
+            shop={supplier.slug}
+            shopName={supplier.name}
+            websiteUrl={supplier.website_url}
+            className="mt-2 lg:mt-1 lg:[grid-area:contact]"
+          />
+        )}
 
         {supplier.domains.length > 0 && (
           <Carries

@@ -20,8 +20,75 @@ const CATEGORY = {
 };
 
 function profile(summary, extra) {
-  return { area: null, governorate: null, top_categories: [], ...summary, ...extra };
+  return {
+    area: null,
+    governorate: null,
+    contact: null,
+    top_categories: [],
+    ...summary,
+    ...extra,
+  };
 }
+
+/**
+ * Shop A: every detail, most listed by a person from its contact page, the
+ * WhatsApp and hours read by the crawler, and a second branch.
+ */
+const SHOP_A_CONTACT = {
+  phones: ["+20223456789", "+20223456780"],
+  whatsapp: "+201001234567",
+  email: "sales@shop-a.test",
+  address: "12 Example Street, 2nd floor",
+  area: "Bab El Louk",
+  governorate: "Cairo",
+  maps_url: "https://maps.example/shop-a",
+  opening_hours: ["Saturday to Thursday 10:00 to 22:00", "Friday closed"],
+  branches: [
+    {
+      name: "Giza branch",
+      address: "3 Other Street",
+      area: "Dokki",
+      governorate: "Giza",
+      phones: ["+20233334444"],
+      maps_url: "https://maps.example/shop-a-giza",
+    },
+  ],
+  sources: [
+    {
+      origin: "listed",
+      url: "https://www.shop-a.test/contact-us",
+      checked_on: "2026-11-03",
+      fields: ["phones", "email", "address", "area", "governorate", "maps_url", "branches"],
+    },
+    {
+      origin: "read",
+      url: "https://www.shop-a.test/",
+      checked_on: "2026-11-08",
+      fields: ["whatsapp", "opening_hours"],
+    },
+  ],
+};
+
+/** Stale Shop: only an address, which the crawler read; no phone, no hours. */
+const STALE_SHOP_CONTACT = {
+  phones: [],
+  whatsapp: null,
+  email: null,
+  address: "31 شارع المثال",
+  area: null,
+  governorate: null,
+  maps_url: null,
+  opening_hours: [],
+  branches: [],
+  sources: [
+    {
+      origin: "read",
+      url: "https://stale-shop.test/",
+      checked_on: "2026-08-20",
+      fields: ["address"],
+    },
+  ],
+};
 
 function summaries() {
   return [
@@ -119,12 +186,15 @@ export function shopRoute(path) {
         ? {
             area: "Bab El Louk",
             governorate: "Cairo",
+            contact: SHOP_A_CONTACT,
             top_categories: [
               { ...CATEGORY, count: 60 },
               { ref: "tools:measurement", name_en: "Measuring Tools", name_ar: null, count: 12 },
             ],
           }
-        : {},
+        : shop.slug === "stale-shop"
+          ? { contact: STALE_SHOP_CONTACT }
+          : {},
     ),
   ];
 }
