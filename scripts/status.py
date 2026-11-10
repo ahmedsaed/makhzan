@@ -312,6 +312,62 @@ async def cycle_budget(session, source_filter: str | None, days: int = 14) -> No
         print(line)
 
 
+async def crawler_identity(session, source_filter: str | None) -> None:
+    """Who each source is crawled as: configured, and what its last run actually sent.
+
+    `identity` in a source's config is "browser" (the default) or "makhzanbot"
+    (honest User-Agent, Web Bot Auth signed when MAKHZANBOT_SIGNING_KEY is set);
+    see docs/crawler-identity.md. The last run's `stats.identity` is the
+    evidence: a source switched to makhzanbot whose runs go out unsigned has no
+    key on the worker, and a shop's edge cannot verify it.
+    """
+    from makhzan_schemas import botauth
+
+    query = select(Source.source_id, Source.config, Source.enabled).order_by(Source.source_id)
+    if source_filter:
+        query = query.where(Source.source_id == source_filter)
+    sources = (await session.execute(query)).all()
+    if not sources:
+        return
+    runs = select(IngestionRun.source, IngestionRun.stats["identity"]).where(
+        IngestionRun.stats.has_key("identity")
+    )
+    last: dict[str, dict] = {}
+    for source, identity in (
+        await session.execute(runs.order_by(IngestionRun.started_at.desc()))
+    ).all():
+        last.setdefault(source, identity or {})
+
+    _header("CRAWLER IDENTITY")
+    try:
+        key = botauth.configured_key()
+    except Exception as exc:  # noqa: BLE001 — a bad key must not hide the rest
+        print(f"  {RED}signing key here is unreadable: {exc}{RESET}")
+        key = None
+    if key is not None:
+        print(f"  {DIM}signing key here: keyid {botauth.Signer(key).keyid}{RESET}")
+    else:
+        print(f"  {DIM}no signing key in this environment ({botauth.KEY_ENV}){RESET}")
+    for source_id, config, enabled in sources:
+        configured = (config or {}).get("identity", "browser")
+        seen = last.get(source_id)
+        if seen is None:
+            sent = f"{DIM}no run has recorded it yet{RESET}"
+        else:
+            signed = "signed" if seen.get("signed") else "unsigned"
+            sent = f"last run: {seen.get('name')}, {signed}"
+            if seen.get("keyid"):
+                sent += f" (keyid {seen['keyid'][:12]}…)"
+        line = f"  {source_id:22s} {configured:11s} {sent}"
+        if configured == "makhzanbot" and seen is not None and not seen.get("signed"):
+            line += f"  {YELLOW}unverifiable: no key on the worker{RESET}"
+        if seen is not None and seen.get("name") != configured:
+            line += f"  {YELLOW}changed since the last run{RESET}"
+        if not enabled:
+            line += f"  {DIM}(disabled){RESET}"
+        print(line)
+
+
 async def crosswalk_drift(session, source_filter: str | None, days: int = 30) -> None:
     """Categories a supplier has added, renamed or retired since the crosswalk was written.
 
@@ -602,6 +658,7 @@ async def main() -> None:
         await sweep_progress(session, args.source)
         await cycle_history(session, args.source)
         await cycle_budget(session, args.source)
+        await crawler_identity(session, args.source)
         await recent_runs(session, args.source, args.runs)
         await crosswalk_drift(session, args.source)
         await product_details(session, args.source)
