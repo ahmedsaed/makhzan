@@ -8,8 +8,8 @@ Lessons baked in from real supplier sites:
     pages — carries the same one.
   - Sites rate-limit, so `get_json` backs off and retries on 429/503 (honoring
     Retry-After), and adapters pace themselves between pages.
-  - A host that errors or times out is slowed down (`_SLOWDOWN`), not retried
-    harder.
+  - A host that keeps erroring or timing out is slowed down (`_HEALTH`), not
+    retried harder.
 """
 
 from __future__ import annotations
@@ -48,41 +48,72 @@ POLITE_DELAY = 15.0
 
 _RETRYABLE = {429, 503}
 
-#: Responses that say the host is struggling. Each one (and each timeout)
-#: doubles the host's pace (`_SLOWDOWN`), whether or not it is retried: Google
-#: "decreases the crawl rate" on server errors and raises it again only slowly.
-#: 429 is here too: without a `Retry-After` it is the only signal we get.
+#: Responses that say the host is struggling: with timeouts, what counts as an
+#: error for the slowdown below. 429 is here too: without a `Retry-After` it is
+#: the only signal we get.
 _SLOW_DOWN_ON = {429, 500, 502, 503, 504}
 
-#: The most the pace is multiplied by: 15 s becomes at most 2 minutes. Past
-#: that a struggling host is better served by the run giving up, which the
-#: retry limit and `RETRY_AFTER_CAP` already do.
-SLOWDOWN_CAP = 8.0
-#: Each 2xx takes this factor off the multiplier, down to 1: from the cap back
-#: to the plain pace takes about twenty good responses — a slow recovery.
-SLOWDOWN_DECAY = 0.9
+#: Consecutive errors before a host's pace is raised, and again for every
+#: further run of this many. One error now and then is noise and changes
+#: nothing; a host failing request after request is told so by a wider gap.
+#: (The research note: "after three consecutive errors".)
+SLOWDOWN_AFTER = 3
+#: Each raise doubles the pace, up to this: 15 s becomes at most 60 s. Low on
+#: purpose: the run's time budget (`pipeline.RUN_TIME_BUDGET`) is what bounds a
+#: run against a host that stays slow, and a cap of 8 put a busy source past
+#: the 6 h job timeout on the multiplier alone.
+SLOWDOWN_CAP = 4.0
+#: Consecutive 2xx responses that halve a raised pace. From the cap back to the
+#: plain pace takes 2 × this — quick enough that a recovered host is not left
+#: crawled at a quarter speed, slow enough that one lucky answer is not trusted.
+RECOVER_AFTER = 3
+#: Seconds after the host's last error that its slowdown is forgotten. Runs are
+#: daily, so yesterday's trouble does not slow today's first request.
+SLOWDOWN_FORGET = 3600.0
 
-#: Per host, what its pace is multiplied by after recent errors (absent = 1).
-#: Read by `_pace_of`, so it acts through `take_turn` on every request to the
-#: host and `stats.pacing` measures the slower gaps it causes.
-_SLOWDOWN: dict[str, float] = {}
+
+class _Health:
+    __slots__ = ("errors", "successes", "multiplier", "last_trouble")
+
+    def __init__(self) -> None:
+        self.errors = 0  # consecutive
+        self.successes = 0  # consecutive, counted only while slowed
+        self.multiplier = 1.0
+        self.last_trouble = 0.0
+
+
+#: Per host, its recent errors and the pace multiplier they earned. Read by
+#: `_pace_of`, so it acts through `take_turn` on every request to the host and
+#: `stats.pacing` measures the slower gaps it causes (never why: that endpoint
+#: is public).
+_HEALTH: dict[str, _Health] = {}
 
 
 def note_trouble(host: str) -> None:
-    """The host errored or timed out: double its pace, up to `SLOWDOWN_CAP`."""
-    _SLOWDOWN[host] = min(SLOWDOWN_CAP, _SLOWDOWN.get(host, 1.0) * 2)
+    """The host errored or timed out. Every `SLOWDOWN_AFTER`-th error in a row doubles its pace."""
+    health = _HEALTH.setdefault(host, _Health())
+    health.errors += 1
+    health.successes = 0
+    health.last_trouble = _now()
+    if health.errors % SLOWDOWN_AFTER == 0:
+        health.multiplier = min(SLOWDOWN_CAP, health.multiplier * 2)
 
 
 def note_success(host: str) -> None:
-    """A 2xx from the host: ease its slowdown a little."""
-    current = _SLOWDOWN.get(host)
-    if current is None:
+    """A 2xx: the run of errors is over, and `RECOVER_AFTER` in a row halve the pace."""
+    health = _HEALTH.get(host)
+    if health is None:
         return
-    eased = current * SLOWDOWN_DECAY
-    if eased <= 1.0:
-        _SLOWDOWN.pop(host, None)
-    else:
-        _SLOWDOWN[host] = eased
+    health.errors = 0
+    if health.multiplier <= 1.0:
+        _HEALTH.pop(host, None)
+        return
+    health.successes += 1
+    if health.successes >= RECOVER_AFTER:
+        health.successes = 0
+        health.multiplier = max(1.0, health.multiplier / 2)
+        if health.multiplier == 1.0:
+            _HEALTH.pop(host, None)
 
 
 def note_response(host: str, status: int) -> None:
@@ -94,7 +125,21 @@ def note_response(host: str, status: int) -> None:
 
 def slowdown(host: str) -> float:
     """The host's current pace multiplier (1 when it has been well)."""
-    return _SLOWDOWN.get(host, 1.0)
+    health = _HEALTH.get(host)
+    if health is None:
+        return 1.0
+    if _now() - health.last_trouble > SLOWDOWN_FORGET:
+        _HEALTH.pop(host, None)
+        return 1.0
+    return health.multiplier
+
+
+def hold_host(host: str, retry_after: str | None) -> float | None:
+    """Make a `Retry-After` bind every later request to `host`. Returns the seconds asked."""
+    asked = retry_after_seconds(retry_after)
+    if asked is not None:
+        _NOT_BEFORE[host] = time.monotonic() + asked
+    return asked
 
 
 #: The longest `Retry-After` the crawler waits out in place. A host asking for
@@ -131,6 +176,9 @@ class RequestLog:
         self.times: dict[str, list[float]] = defaultdict(list)
         #: robots.txt fetches among `times`, by host.
         self.robots: Counter[str] = Counter()
+        #: Per host, what robots.txt said for this run (worker/robots.py): read
+        #: fresh, a stale copy standing in, or unavailable. `stats.robots`.
+        self.robots_state: dict[str, dict] = {}
 
     def record(self, host: str, *, robots: bool = False) -> None:
         self.times[host].append((self._clock or _now)())
@@ -145,6 +193,11 @@ class RequestLog:
 #: The log of the run in progress in this task, if any. A context variable, not
 #: a global: the daily refresh runs sources concurrently, one task each.
 _REQUEST_LOG: ContextVar[RequestLog | None] = ContextVar("request_log", default=None)
+
+
+def current_request_log() -> RequestLog | None:
+    """The log of the run in progress in this task, if any."""
+    return _REQUEST_LOG.get()
 
 
 @contextlib.contextmanager
@@ -391,10 +444,8 @@ async def _request(
         # The host that answered: after a redirect, not necessarily the first.
         note_response(host_of(resp.url), resp.status_code)
         if resp.status_code in _RETRYABLE:
-            asked = retry_after_seconds(resp.headers.get("Retry-After"))
-            if asked is not None:
-                # The host that asked: after a redirect, not necessarily the first.
-                _NOT_BEFORE[host_of(resp.url)] = time.monotonic() + asked
+            # The host that asked: after a redirect, not necessarily the first.
+            asked = hold_host(host_of(resp.url), resp.headers.get("Retry-After"))
             if attempt < retries and (asked is None or asked <= RETRY_AFTER_CAP):
                 # The published pace is a floor here too: a retry is a request
                 # like any other. Above it the backoff still grows, and a
