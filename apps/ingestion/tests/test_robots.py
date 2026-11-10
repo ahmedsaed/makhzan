@@ -399,3 +399,11 @@ def test_a_malformed_crawl_delay_is_not_a_rule():
     rules = robots_mod.Rules("User-agent: *\nCrawl-delay: soon\nDisallow: /x\n")
     assert rules.crawl_delay(UA) is None
     assert rules.allowed("https://shop.test/x", UA) is False
+
+
+def test_the_details_stage_treats_an_unreadable_robots_txt_as_host_trouble():
+    """It stops the stage for the run and blames no listing, like a host backing off."""
+    from worker.details import _host_trouble
+
+    assert _host_trouble(RobotsUnavailable("https://shop.test", "robots.txt returned 503"))
+    assert not _host_trouble(DisallowedByRobots("https://shop.test/p/1"))
