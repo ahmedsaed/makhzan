@@ -43,7 +43,8 @@ const SHOP_A_CONTACT = {
   area: "Bab El Louk",
   governorate: "Cairo",
   maps_url: "https://maps.app.goo.gl/shopA",
-  opening_hours: ["Saturday to Thursday 10:00 to 22:00", "Friday closed"],
+  // As schema.org markup has it; the page reads it in plain English.
+  opening_hours: ["Sa,Su,Mo,Tu,We,Th 10:00-22:00"],
   branches: [
     {
       name: "Giza branch",

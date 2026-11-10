@@ -791,6 +791,16 @@ test.describe("contacting the shop", () => {
       "href",
       "mailto:sales@volt-corner.test",
     );
+    // A call first, as on the shop's own page.
+    expect(
+      await links
+        .locator("a[data-contact]")
+        .evaluateAll((all) => all.map((a) => a.dataset.contact)),
+    ).toEqual(["phone", "whatsapp", "email"]);
+    // Its hours, from its profile, in plain English.
+    await expect(links.locator("[data-opening-hours]")).toHaveText(
+      "Opening hours: Sat–Thu 10:00–21:00 · Fri 14:00–21:00",
+    );
     // Beside the Sold by card, not inside its link.
     await expect(page.locator("[data-sold-by] [data-contact]")).toHaveCount(0);
 
@@ -821,6 +831,13 @@ test.describe("contacting the shop", () => {
     await expect(block.getByRole("link", { name: "WhatsApp Volt Corner" })).toHaveAttribute(
       "href",
       "https://wa.me/201001234567",
+    );
+    // Each shop's hours under its ways in: read from markup, or as written.
+    await expect(block.locator('[data-shop-contact-line="volt-corner"]')).toContainText(
+      "Sat–Thu 10:00–21:00 · Fri 14:00–21:00",
+    );
+    await expect(block.locator('[data-shop-contact-line="nile-parts"]')).toContainText(
+      "Daily 9:00 to 18:00",
     );
     const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
     expect(decodeURIComponent((await report.getAttribute("href")) ?? "")).toContain(

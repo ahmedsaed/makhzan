@@ -132,7 +132,8 @@ the page container on desktop; each section is left out when its fetch fails.
   when it closes.
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
   shop page and, under it when the shop publishes one, "Contact {shop} directly":
-  outlined buttons for WhatsApp, "Call 02 2345 6789" and Email, then "Something wrong?
+  outlined buttons for "Call 02 2345 6789", WhatsApp and Email, laid out as on the shop
+  page, then its opening hours as the shop page reads them, then "Something wrong?
   Tell us" (an email to makhzan naming the product and the shop); then what the shop
   wrote. A fixed bottom bar on phones: price, "checked …"
   and **View at {shop}**.
@@ -157,8 +158,8 @@ the page container on desktop; each section is left out when its fetch fails.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
   own title, then shop and freshness, then price and **View**. Under the list,
-  **Contact the shops**: each shop that publishes a way to reach it, once, on its own
-  line ("Nile Parts  Call 19123"), never on the rows (a shop with three offers would
+  **Contact the shops**: each shop that publishes a way to reach it, once, as a small
+  block (its name; "Call 19123 · WhatsApp · Email"; its opening hours), never on the rows (a shop with three offers would
   say it three times, and a row leaving it out because a neighbour said it would break
   P3), then "Something wrong? Tell us". Out-of-stock offers fold
   under "Show N out of stock offers", out-of-date ones (any stock) under "Show N out of
@@ -188,7 +189,8 @@ of what the shop carries and its two counts as figures. A shop page: a header ba
 name, stat tiles (products, in stock, last checked), a plain-language note when its data
 is stale, "Visit {site}", search within the shop and what it carries (a bar by department).
 On desktop the band uses the full width: name and search on the left, tiles and "Visit"
-on the right, the note and the bar across. Below it the page is search scoped to the
+on the right, the note across, then the bar and the crawl line on the left beside
+Contact on the right. Below it the page is search scoped to the
 shop, on the same URL (`/shops/{shop}?category=…`): chips, rail, toolbar, list/grid,
 paging. A shop whose own data is stale shows its products anyway (C2b): the visitor
 asked for that shop and the note already says the data is old, while hiding them would
@@ -197,17 +199,35 @@ chip still hides them (`?stale=hide`). A search within the shop follows the same
 Rows leave out the shop's name, which would only repeat the heading (the one
 exception to C1's "shop name"); a product other shops sell keeps its "N shops" badge.
 "Biggest categories" is a phone list only, since the desktop rail already lists them.
-In the band, under the stale note, **Contact**: the shop's
-numbers as `tel:` links, WhatsApp, email, its address ("Main shop" when it has branches)
-and each branch with the shop's own map link, and its opening hours, in columns from `sm`.
-Numbers read the Egyptian way ("010 0123 4567", "02 2345 6789") and link in E.164.
-Under them, quietly, one sentence on where each came from, grouped by place: "Phone,
-WhatsApp and email from Nile Parts' website and address from Google Maps, all checked 10 Nov
-2026." A page on the shop's own domain (either a subdomain of the other) is "{shop}'s
-website"; Google Maps, Facebook and Instagram are named as such and never called the
-shop's (a Google Maps listing is often unclaimed); anything else by its host. "checked"
-is a person reading the page, "read automatically" the crawler reading the shop's
-structured data. Then "Something wrong? Tell us", an email to makhzan naming the shop. A shop nobody has found anything for has no section. At the foot of the
+**Contact** is a compact block, not a band of its own: from `lg` in the right-hand
+column under "Visit" (beside what the shop carries and the crawl line), on a phone
+straight under "Visit", before the search. One row of outlined buttons: "Call 02 2345
+6789" (the first number), WhatsApp, Email; any other numbers follow the call as plain
+links ("or 02 2345 6780"), worth a glance but not a button's weight. On a phone the call
+takes the width and the rest go in pairs under it, so no row ends in one stray button.
+Then one line each, behind a small icon: the address, without the area and governorate
+the header already shows (or that the address names itself), ending "Open in maps"
+("Main shop: …" when there are branches); each branch, "Giza branch: 3 Other Street,
+Dokki, Giza · 02 3333 4444 · Open in maps"; the opening hours. Numbers read the
+Egyptian way ("010 0123 4567", "02 2345 6789") and link in E.164. **Opening hours** read
+in plain English (`lib/hours.ts`): schema.org strings ("Sa,Su,Mo,Tu,We,Th 10:00-20:30",
+"Fr 14:00-20:00") become "Sat–Thu 10:00–20:30 · Fri 14:00–20:00": the week from
+Saturday, consecutive days as a range, days with the same hours merged, "Daily" for all
+seven, "Open 24 hours", and the days no line names said to be closed. Hours a person
+wrote, and anything else that does not parse, show exactly as written; when one line of
+a shop's hours does not parse, none is rewritten. Phrases joined by " · " wrap whole
+(`components/dotted.tsx`): a dot never ends or opens a line. Last, quietly, one short
+line: "From Nile Parts' website and Google Maps, checked 9–10 Nov · Something wrong?
+Tell us", the places once each, the days as a span, the year only when it is not this
+one. The line opens (a native `<details>`) into where each detail came from: "Phone,
+WhatsApp and email from Nile Parts' website, checked 10 Nov 2026", "Opening hours from
+Nile Parts' website, read automatically 9 Nov 2026", "Address and map link from Google
+Maps, checked 10 Nov 2026". A page on the shop's own domain (either a subdomain of the
+other) is "{shop}'s website"; Google Maps, Facebook and Instagram are named as such and
+never called the shop's (a Google Maps listing is often unclaimed); anything else by its
+host. "checked" is a person reading the page, "read automatically" the crawler reading
+the shop's structured data; the short line says "checked" for both. "Tell us" is an
+email to makhzan naming the shop. A shop nobody has found anything for has no section. At the foot of the
 page one line names only what is still missing ("Phone and opening hours aren't listed
 yet.") before "Own this shop? Add your details.", which stands alone when nothing is.
 At the foot of the band, one line on what the crawler did there: "makhzan read this site
