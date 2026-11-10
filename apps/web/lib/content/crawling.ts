@@ -54,13 +54,6 @@ export type CrawlingContent = {
  */
 export const CONTACT_EMAIL = "crawler@makhzan.merope.dev";
 
-/**
- * Where the crawler's requests come from: the production server's egress
- * address, as `python -m worker.probe` prints it. Published so a shop can
- * check a log line against it. If the server moves, change this the same day.
- */
-export const CRAWLER_IP = "45.95.173.97";
-
 /** Where the Web Bot Auth public keys are published (served by the API). */
 export const KEY_DIRECTORY_PATH = "/.well-known/http-message-signatures-directory";
 
@@ -91,8 +84,7 @@ export const crawlingContent: CrawlingContent = {
     {
       heading: "How to check it is really us",
       body: [
-        `Requests from makhzanbot are signed with Web Bot Auth (RFC 9421 HTTP message signatures), which anyone can verify and nobody else can forge. Our public key is published at ${SITE}${KEY_DIRECTORY_PATH}. We have applied to Cloudflare's directory of verified bots under the name makhzanbot.`,
-        `Our requests come from ${CRAWLER_IP}.`,
+        `Requests from makhzanbot are signed with Web Bot Auth (RFC 9421 HTTP message signatures), which anyone can verify and nobody else can forge, whichever address a request comes from. We do not publish our IP addresses: the signature is the proof. Our public key is published at ${SITE}${KEY_DIRECTORY_PATH}. We have applied to Cloudflare's directory of verified bots under the name makhzanbot.`,
         `On a shop not yet moved, our User-Agent still looks like a browser. Every request, moved or not, carries a From header with ${CONTACT_EMAIL}, an address that reaches a person.`,
       ],
     },

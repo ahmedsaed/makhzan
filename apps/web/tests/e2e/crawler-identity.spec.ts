@@ -42,7 +42,8 @@ test("how-we-crawl says how to recognise and verify us, on the public origin", a
     `makhzanbot/1.0 (+${origin}/how-we-crawl; crawler@makhzan.merope.dev)`,
   );
   await expect(page.getByText(`${origin}${PATH}`)).toBeVisible();
-  await expect(page.getByText("Our requests come from 45.95.173.97.")).toBeVisible();
+  // The signature is the proof; no address is published (the IPs are shared).
+  await expect(page.getByText("45.95.173.97")).toHaveCount(0);
   await expect(page.getByText("{site}")).toHaveCount(0);
   // What we keep, and the promises a shop can hold us to.
   await expect(page.getByText("we do not use shop content to train AI models")).toBeVisible();
