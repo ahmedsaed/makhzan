@@ -38,6 +38,11 @@ export default async function HowWeCrawlPage() {
                 {paragraph}
               </p>
             ))}
+            {section.snippet ? (
+              <pre className="mt-2 overflow-x-auto rounded-card border border-line bg-surface p-3 font-mono text-[13px] text-ink">
+                {section.snippet}
+              </pre>
+            ) : null}
           </section>
         ))}
       </div>
