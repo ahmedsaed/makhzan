@@ -82,6 +82,10 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   const text = await robots.text();
   expect(text).toContain("Disallow: /search");
   expect(text).toContain(`Sitemap: ${SITE}/sitemap.xml`);
+  // SEO backlink crawlers are refused everything; AI and search crawlers are not named.
+  expect(text).toMatch(/User-Agent: SemrushBot\nDisallow: \/\n/);
+  expect(text).toMatch(/User-Agent: SERankingBacklinksBot\nDisallow: \/\n/);
+  expect(text).not.toMatch(/ClaudeBot|Amazonbot|GPTBot|Googlebot/);
 });
 
 test("the head links the icons and the manifest", async ({ page }) => {
