@@ -305,7 +305,8 @@ with a deploy or restore.)
    truncated backup is never kept under its final name. It keeps the 14 newest
    backups, deletes any older than 30 days except the newest (so the server is
    never left with none), and separately keeps every `*-pre-restore.dump`
-   safety copy from the last 7 days (never fewer than 3). A pruning failure is
+   safety copy from the last 7 days (never fewer than 3), but none older
+   than 30 days. A pruning failure is
    only a warning. The 30 days are a promise on /privacy: a dump holds report
    emails and address hashes past their erasure, so a copy may keep them at most
    30 days more (`BACKUP_MAX_DAYS` in `scripts/lib/prune.sh`, `BACKUP_DAYS` in

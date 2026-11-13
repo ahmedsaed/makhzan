@@ -11,7 +11,8 @@
 #     whose backups lapsed is never left with none.
 # Safety copies (*-pre-restore.dump): a week of them, never fewer than the 3
 # newest, so repeated restore attempts never push out the copy taken before
-# the trouble began. They are younger than 30 days by that rule already.
+# the trouble began; but none older than 30 days either, for the same reason
+# as regular backups (even the newest: a safety copy is never the only one).
 #
 # MAKHZAN_KEEP_FILE (a realpath) names one file never to prune: the one being
 # restored. Pruning failures are the caller's to report as warnings.
@@ -51,5 +52,6 @@ prune_backups() {
   done
   prune 1 "$BACKUP_MAX_DAYS" "${regular[@]}" || status=1
   prune 3 7 backups/makhzan-*-pre-restore.dump || status=1
+  prune 0 "$BACKUP_MAX_DAYS" backups/makhzan-*-pre-restore.dump || status=1
   return "$status"
 }
