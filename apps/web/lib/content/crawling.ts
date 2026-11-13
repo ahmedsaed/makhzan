@@ -257,13 +257,13 @@ export const crawlingContent = {
       "copy photos",
       "use what we read for anything but showing it here, with that link",
       "use shop content to train AI models, or sell or license it",
-      "let AI training crawlers take it from our pages: our robots.txt refuses them",
     ],
-    /** The line the old "we do not feed it to AI tools" over-promised: a
-     * visitor's assistant reading a public page that it links back to is
-     * reading, not being fed (robots.txt policy, 2026-11-13). */
+    /** Replaces "we do not feed it to AI tools", which over-promised: a
+     * visitor's assistant reading a public page is reading, not being fed
+     * (robots.txt policy, 2026-11-13). robots.txt is a request, and it names
+     * only the known training crawlers, so the copy says exactly that. */
     readers:
-      "Search engines and AI assistants that link back to the shop may read our pages, as they can read the shop's own.",
+      "Our robots.txt refuses the known AI training crawlers by name and asks every other crawler not to train on our pages. Search engines and AI assistants may read them, as they can read the shop's own.",
     pricesTitle: "Prices here may be out of date.",
     pricesBody:
       "Every listing shows when we last checked it. We do not control supplier pricing and cannot guarantee a price is still current — always confirm on the supplier's own site before buying.",
