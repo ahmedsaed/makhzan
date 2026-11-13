@@ -452,11 +452,19 @@ def test_a_stated_code_stands_in_for_a_title_that_names_nothing(domain):
     assert _first_identifier(domain, "Makita HR2470 Rotary Hammer", attrs) == "HR2470"
 
 
-def test_seals_and_filters_ignore_a_stated_code_for_now():
-    """One shop stocks the department, so no group could form; it reads
-    designations only (`shop_stated_identifiers` is off there)."""
+def test_filters_fall_back_to_the_slug_stated_maker_number():
+    """Seals-bearings reads a stated code when the title names none: the
+    filters filed there are titled by brand alone."""
     attrs = {"mfr_part_number": "LF667"}
-    assert SEALS.identifier_candidates("Oil Filter Fleetguard", attrs) == []
+    found = SEALS.identifier_candidates("Oil Filter Fleetguard", attrs)
+    assert [c.value for c in found] == ["LF667"]
+
+
+def test_a_grit_range_is_refused_but_a_long_p_number_is_a_part_number():
+    for grits in ("P60100", "P80120", "P120240", "P-400-600", "P400/600"):
+        assert stated_identifiers({"mfr_part_number": grits}) == [], grits
+    for part in ("P551808", "P181052", "P550084"):
+        assert [c.value for c in stated_identifiers({"mfr_part_number": part})] == [part]
 
 
 def test_a_slug_stated_code_joins_the_same_product_at_other_shops():
