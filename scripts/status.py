@@ -19,6 +19,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.domains.crosswalks import fold_names, load_crosswalk, normalize_category_name
 from makhzan_schemas.enums import IngestionStatus, ListingStatus, ReviewStatus
 from makhzan_schemas.models import (
     IngestionRun,
@@ -30,7 +31,7 @@ from makhzan_schemas.models import (
     SourceCursor,
     Supplier,
 )
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 DIM, BOLD, RED, YELLOW, GREEN, RESET = (
     "\033[2m",
@@ -413,53 +414,180 @@ async def robots_health(session, source_filter: str | None) -> None:
             print(f"  {'':22s} {YELLOW}run stopped early: {stopped}{RESET}")
 
 
+def _current_crosswalk(config: dict | None) -> tuple[set[str], set[str], str | None]:
+    """The source's crosswalk as it stands now: (mapped, ignored) folded names.
+
+    Read from the file, not from the runs, so a mapping or an `ignore` entry
+    added since a run reported drift takes the name off the report at once.
+    The third value says why the filter could not be applied, if it could not.
+    """
+    name = (config or {}).get("crosswalk")
+    if not name:
+        return set(), set(), "no crosswalk named in the source's config"
+    try:
+        loaded = load_crosswalk(name)
+    except (OSError, ValueError) as exc:
+        return set(), set(), f"crosswalk {name!r} could not be loaded: {exc}"
+    return fold_names(loaded.categories), fold_names(loaded.ignore), None
+
+
+def _cycle_start(stats: dict | None) -> datetime | None:
+    started = ((stats or {}).get("cycle") or {}).get("cycle_started_at")
+    try:
+        return datetime.fromisoformat(started) if started else None
+    except ValueError:
+        return None
+
+
 async def crosswalk_drift(session, source_filter: str | None, days: int = 30) -> None:
     """Categories a supplier has added, renamed or retired since the crosswalk was written.
 
     A crosswalk is a snapshot. When a supplier renames a category the mapping
     stops matching and those listings quietly lose it — which looks exactly like
     the supplier discontinuing stock. This makes the difference visible.
+
+    One run is not the catalogue: a paced source sweeps a slice a day, and a
+    run only reports the names its slice showed. So `unmapped` is the union of
+    every run that checked since the start of the last completed cycle (or over
+    `days`, when there is none), newest count per name. Runs without a
+    `crosswalk` key — before clean checks were recorded, or that saw nothing —
+    add nothing and never count as clean. `unused` comes from the newest run
+    that swept the whole catalogue itself, the only kind that carries the key.
+
+    Both are then filtered by the crosswalk as it stands now: a name since
+    mapped or ignored leaves the report at once, and an entry since removed no
+    longer counts as never matched. "Matches the source" is only said when the
+    runs read cover a completed cycle and no run's stored list was capped;
+    otherwise a clean slice is just that. A run cut off mid-sweep reports the
+    names it saw up to its last page (the pipeline checkpoints them).
     """
     _header("CROSSWALK DRIFT")
     since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Each source's newest completed cycle, looked up on its own: a cycle that
+    # started before `since` must still be read from its start, or its first
+    # runs would be cut off while the window still claimed to cover it.
+    cycle_query = (
+        select(IngestionRun.source, IngestionRun.stats["cycle"])
+        .where(IngestionRun.stats.has_key("cycle"))
+        .order_by(IngestionRun.source, IngestionRun.started_at.desc())
+        .distinct(IngestionRun.source)
+    )
+    if source_filter:
+        cycle_query = cycle_query.where(IngestionRun.source == source_filter)
+    cycle_starts = {
+        source: start
+        for source, cycle in (await session.execute(cycle_query)).all()
+        if (start := _cycle_start({"cycle": cycle}))
+    }
+
+    # Per source, from the earlier of `since` and its own cycle's start: one
+    # source with an old cycle must not drag every other source's read back.
+    # Only the runs that checked, and only the keys this reads.
+    ended = func.coalesce(IngestionRun.finished_at, IngestionRun.started_at)
+    windows = [
+        and_(IngestionRun.source == source, ended >= min(since, start))
+        for source, start in cycle_starts.items()
+    ]
+    windows.append(and_(IngestionRun.source.notin_(list(cycle_starts)), ended >= since))
     query = (
-        select(IngestionRun)
-        .where(IngestionRun.started_at >= since)
+        select(IngestionRun.source, ended, IngestionRun.stats["crosswalk"])
+        .where(IngestionRun.stats.has_key("crosswalk"), or_(*windows))
         .order_by(IngestionRun.started_at.desc())
     )
     if source_filter:
         query = query.where(IngestionRun.source == source_filter)
+    # (ended, crosswalk) per source, newest first.
+    runs_by_source: dict[str, list[tuple[datetime, dict]]] = {}
+    for source, run_ended, drift in (await session.execute(query)).all():
+        if isinstance(drift, dict):
+            runs_by_source.setdefault(source, []).append((run_ended, drift))
+    configs = dict((await session.execute(select(Source.source_id, Source.config))).all())
 
-    latest: dict[str, dict] = {}
-    for run in (await session.execute(query)).scalars().all():
-        drift = (run.stats or {}).get("crosswalk")
-        if drift and run.source not in latest:
-            latest[run.source] = drift
-    if not latest:
-        print(f"  {DIM}no mapped source has reported yet{RESET}")
-        return
+    reported = False
+    for source in sorted(runs_by_source):
+        checked_all = runs_by_source[source]
+        reported = True
 
-    for source, drift in sorted(latest.items()):
-        unmapped = drift.get("unmapped") or {}
-        unused = drift.get("unused") or []
-        if not unmapped and not unused:
-            print(f"  {source:22s} {GREEN}crosswalk matches the source{RESET}")
+        # The window: from the start of the newest completed cycle (a run
+        # belongs to it if it was still going then: the cycle's first cursor is
+        # stamped after its first run starts), else the last `days`.
+        cycle_start = cycle_starts.get(source)
+        start = cycle_start or since
+        checked = [drift for run_ended, drift in checked_all if run_ended >= start]
+        scope = "this cycle" if cycle_start else f"in {days}d, no completed cycle"
+        if not checked:
+            print(f"  {source:22s} 0 runs checked ({scope})")
             continue
-        print(f"  {source:22s} {drift.get('observed', '?')} category names seen")
+        newest = checked[0]
+        covered = cycle_start is not None or "unused" in newest
+
+        mapped, ignored, why_unfiltered = _current_crosswalk(configs.get(source))
+        known = mapped | ignored
+        unmapped: dict[str, int] = {}
+        hidden: tuple[int | None, int] | None = None  # what the newest capped run left out
+        for drift in checked:
+            listed = drift.get("unmapped") or {}
+            for name, count in listed.items():
+                if normalize_category_name(name) not in known:
+                    unmapped.setdefault(name, count)
+            # Runs from before `unmapped_count` was stored say only the listings.
+            total_names = drift.get("unmapped_count")
+            more_names = None if total_names is None else total_names - len(listed)
+            more_listings = (drift.get("unmapped_listings") or 0) - sum(listed.values())
+            if hidden is None and ((more_names or 0) > 0 or more_listings > 0):
+                hidden = (more_names, more_listings)
+
+        complete = next((drift for _, drift in checked_all if "unused" in drift), {})
+        unused = list(complete.get("unused") or [])
+        unused_count = complete.get("unused_count", len(unused))
+        unused_capped = unused_count > len(unused)
+        if not why_unfiltered:
+            unused = [n for n in unused if normalize_category_name(n) in mapped]
+            unused_count = len(unused)
+
+        note = f"    {DIM}not filtered by the current crosswalk: {why_unfiltered}{RESET}"
+        if not unmapped and not unused and hidden is None:
+            if covered:
+                print(f"  {source:22s} {GREEN}crosswalk matches the source{RESET}")
+            else:
+                print(
+                    f"  {source:22s} no unmapped names seen this cycle"
+                    f" {DIM}(no completed cycle in the last {days}d to vouch for the rest){RESET}"
+                )
+            if why_unfiltered:
+                print(note)
+            continue
+        print(f"  {source:22s} {len(checked)} runs checked ({scope})")
+        if why_unfiltered:
+            print(note)
         if unmapped:
+            unmapped = dict(sorted(unmapped.items(), key=lambda kv: -kv[1]))
             print(
                 f"    {YELLOW}{len(unmapped)} unmapped{RESET} "
-                f"({drift.get('unmapped_listings', 0)} listings) — new or renamed:"
+                f"({sum(unmapped.values())} listings) — new or renamed:"
             )
             for name, count in list(unmapped.items())[:6]:
                 print(f"      {count:5d}  {name[:62]}")
-        if unused:
-            # Only reported after a complete cycle, so this really means "gone".
+        if hidden is not None:
+            # A run stored only its biggest names. What it left out is unknown,
+            # so the report never calls this source clean.
+            names, listings = hidden
             print(
-                f"    {YELLOW}{drift.get('unused_count', len(unused))} entries never matched{RESET}"
+                f"    {YELLOW}+{'?' if names is None else names} more names"
+                f" / {listings} listings not listed{RESET}"
+                f" {DIM}(a run's stored list was capped; may include names since mapped){RESET}"
+            )
+        if unused:
+            # Only reported after a complete sweep, so this really means "gone".
+            at_least = "at least " if unused_capped else ""
+            print(
+                f"    {YELLOW}{at_least}{unused_count} entries never matched{RESET}"
                 f" — retired or renamed away:"
             )
             print(f"      {DIM}{', '.join(unused[:6])}{RESET}")
+    if not reported:
+        print(f"  {DIM}no mapped source has reported yet{RESET}")
 
 
 async def product_details(session, source_filter: str | None) -> None:
@@ -582,6 +710,9 @@ async def content_coverage(session) -> dict[str, dict[str, int]]:
 async def catalog(session, source_filter: str | None) -> None:
     """Listings per supplier, with the things that signal a broken crawl."""
     _header("CATALOG")
+    # "Contact for price" is the shop's choice, not a broken crawl, so it is
+    # counted apart. Read as the API reads it: JSON true and no price.
+    on_request = Listing.attributes.contains({"price_on_request": True})
     rows = (
         await session.execute(
             select(
@@ -590,7 +721,8 @@ async def catalog(session, source_filter: str | None) -> None:
                 func.count(Listing.id),
                 func.count(Listing.id).filter(Listing.status == ListingStatus.ARCHIVED),
                 func.count(Listing.id).filter(Listing.category_id.is_(None)),
-                func.count(Listing.id).filter(Listing.price.is_(None)),
+                func.count(Listing.id).filter(Listing.price.is_(None), ~on_request),
+                func.count(Listing.id).filter(Listing.price.is_(None), on_request),
                 func.max(Listing.last_verified_at),
             )
             .join(Listing, Listing.supplier_id == Supplier.id)
@@ -604,9 +736,9 @@ async def catalog(session, source_filter: str | None) -> None:
 
     print(
         f"  {DIM}{'supplier':22s} {'domain':12s} {'total':>7} {'archived':>9}"
-        f" {'uncat':>7} {'no price':>9}  verified{RESET}"
+        f" {'uncat':>7} {'no price':>9} {'on req':>7}  verified{RESET}"
     )
-    for slug, domain, total, archived, uncategorized, unpriced, verified in rows:
+    for slug, domain, total, archived, uncategorized, unpriced, on_req, verified in rows:
         if source_filter and source_filter not in slug:
             continue
         # Uncategorized and unpriced are the two failure modes that look fine in
@@ -615,7 +747,7 @@ async def catalog(session, source_filter: str | None) -> None:
         noprice = f"{YELLOW}{unpriced:>9}{RESET}" if unpriced else f"{unpriced:>9}"
         print(
             f"  {slug:22s} {domain:12s} {total:>7} {archived:>9} {uncat} {noprice}"
-            f"  {_age(verified)}"
+            f" {on_req:>7}  {_age(verified)}"
         )
     await price_history(session)
 
