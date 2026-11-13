@@ -42,9 +42,8 @@ a feed), with their own makhzan page as the pitch; the others later with a short
 and the referral numbers. What happened: the two blocked shops were emailed on
 2026-11-06 and followed up on 2026-11-10, with no reply yet; their follow-up goes through
 other channels around 2026-11-16. First emails went to the reachable shops on
-2026-11-10, before the spot-check (item 5) was done: shop 3, the Odoo shop, shop 2, the
-Shopify shop and the Wix shop by email, shop 5 by WhatsApp (the private outreach notes
-also say "later" for it; to confirm). Shop 1: unclear whether sent, to confirm.
+2026-11-10, before the spot-check (item 5) was done: shop 3, the Odoo shop, shop 1, shop 2, the
+Shopify shop and the Wix shop by email. Shop 5 has not been contacted yet.
 
 ## Decided
 
