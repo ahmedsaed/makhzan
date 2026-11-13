@@ -213,6 +213,7 @@ const SITEMAP_PRODUCTS = [
     id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
     title_en: "SG90 Micro Servo (180°)",
     changed_at: "2026-10-02T08:30:00Z",
+    image: "https://volt-corner.test/img/sg90.jpg?w=800&h=800",
   },
   {
     id: "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b",

@@ -6,6 +6,8 @@ import {
   galleryImages,
   galleryPhotos,
   jsonLdText,
+  JSON_LD_SPECS,
+  offerDetails,
   orderOffers,
   photoNumbered,
   primaryOffer,
@@ -247,12 +249,22 @@ describe("breadcrumb trail", () => {
 
 describe("structured data", () => {
   const URL = "https://makhzan.test/products/p1";
+  const now = new Date(NOW);
+  type Options = Parameters<typeof productJsonLd>[3];
+  const maybe = (p: Product, title = "Thing", options: Options = {}) =>
+    productJsonLd(p, URL, title, { now, ...options });
+  /** The Product node, for a product that has one. */
+  const ld = (p: Product, title = "Thing", options: Options = {}) => {
+    const data = maybe(p, title, options);
+    if (!data) throw new Error("no Product node");
+    return data;
+  };
 
   // makhzan compares other shops' offers; it sells nothing. An Offer would make
   // Google read the page as a merchant listing and ask for shipping, returns
   // and a GTIN (Search Console did, November 2026).
   it("is an AggregateOffer even for one shop, never an Offer", () => {
-    const data = productJsonLd(product([offer("a", 850)]), URL, "Caliper", "A caliper.");
+    const data = ld(product([offer("a", 850)]), "Caliper", { description: "A caliper." });
     expect(data).toMatchObject({
       "@context": "https://schema.org",
       "@type": "Product",
@@ -272,39 +284,205 @@ describe("structured data", () => {
     expect(JSON.stringify(data)).not.toMatch(/"@type":"Offer"|seller|shippingDetails/);
   });
 
-  it("spans several shops, leaving out offers without a price", () => {
-    const data = productJsonLd(
-      product([offer("a", 300, "out_of_stock"), offer("b", 260), offer("c", null)]),
-      URL,
-      "Board",
-    );
+  // The markup repeats the page's summary (compareOffers), not every price
+  // the API returned: Google penalises markup that disagrees with the page.
+  it("states the summary's range and count: the in-stock offers, on request left out", () => {
+    const p = product([
+      offer("a", 300, "out_of_stock", { shop: "shop-a" }),
+      offer("b", 260, "in_stock", { shop: "shop-b" }),
+      offer("c", 280, "low_stock", { shop: "shop-c" }),
+      { ...offer("d", null, "in_stock", { shop: "shop-d" }), price_on_request: true },
+    ]);
+    const data = ld(p, "Board");
+    const summary = summarizeOffers(p.offers, now);
     expect(data.offers).toMatchObject({
-      "@type": "AggregateOffer",
-      priceCurrency: "EGP",
-      lowPrice: 260,
-      highPrice: 300,
-      offerCount: 2,
-      availability: "https://schema.org/InStock",
+      lowPrice: summary.min,
+      highPrice: summary.max,
+      offerCount: summary.offerCount,
     });
+    expect(data.offers).toMatchObject({ lowPrice: 260, highPrice: 280, offerCount: 2 });
     expect(data.offers).not.toHaveProperty("offers");
   });
 
-  it("is out of stock only when every priced offer is", () => {
-    const data = productJsonLd(product([offer("a", 300, "out_of_stock")]), URL, "Board");
-    expect(data.offers).toMatchObject({ availability: "https://schema.org/OutOfStock" });
+  it("leaves out offers the page folds as out of date", () => {
+    const data = ld(
+      product([
+        offer("fresh", 500, "in_stock", { shop: "shop-a", age: 2 }),
+        offer("old", 90, "in_stock", { shop: "shop-b", age: 120 }),
+      ]),
+    );
+    expect(data.offers).toMatchObject({ lowPrice: 500, highPrice: 500, offerCount: 1 });
   });
 
-  it("clamps a long description at a word, and leaves out an empty one", () => {
-    const long = productJsonLd(product([offer("a", 1)]), URL, "x", "word ".repeat(200));
-    expect((long.description as string).length).toBeLessThanOrEqual(500);
-    expect(long.description).toMatch(/word…$/);
-    expect(productJsonLd(product([offer("a", 1)]), URL, "x", "  ")).not.toHaveProperty(
-      "description",
+  it("is out of stock when every shop is, over the same range the page shows", () => {
+    const data = ld(
+      product([
+        offer("a", 300, "out_of_stock", { shop: "shop-a" }),
+        offer("b", 320, "out_of_stock", { shop: "shop-b" }),
+      ]),
+    );
+    expect(data.offers).toMatchObject({
+      lowPrice: 300,
+      highPrice: 320,
+      offerCount: 2,
+      availability: "https://schema.org/OutOfStock",
+    });
+  });
+
+  it("is limited when every shop with stock says low, and claims nothing when unconfirmed", () => {
+    const low = ld(product([offer("a", 300, "low_stock")]));
+    expect(low.offers).toMatchObject({ availability: "https://schema.org/LimitedAvailability" });
+    const unknown = ld(product([offer("a", 300, "unknown")]));
+    expect(unknown.offers).not.toHaveProperty("availability");
+    const made = ld(product([offer("a", 300, "made_to_order")]));
+    expect(made.offers).toMatchObject({ availability: "https://schema.org/MadeToOrder" });
+  });
+
+  it("uses one shop's box: its options widen the range", () => {
+    const single = {
+      ...offer("a", 1700),
+      variants: [
+        { title: "Red", price: 1700, in_stock: true },
+        { title: "Blue", price: 1750, in_stock: true },
+        { title: "Gold", price: 2400, in_stock: false },
+      ],
+    } as Offer;
+    expect(ld(product([single])).offers).toMatchObject({ lowPrice: 1700, highPrice: 1750 });
+  });
+
+  describe("minimum order", () => {
+    const min = (o: Offer, quantity: number): Offer => ({ ...o, min_quantity: quantity });
+
+    it("is the eligible quantity when the one shop has a minimum, at its price of one", () => {
+      const data = ld(product([min(offer("a", 0.15), 10)]));
+      expect(data.offers).toMatchObject({
+        lowPrice: 0.15,
+        highPrice: 0.15,
+        eligibleQuantity: { "@type": "QuantitativeValue", minValue: 10, unitCode: "C62" },
+      });
+    });
+
+    it("is the fewest when every offer in the range has one", () => {
+      const data = ld(
+        product([
+          min(offer("a", 0.15, "in_stock", { shop: "shop-a" }), 10),
+          min(offer("b", 0.2, "in_stock", { shop: "shop-b" }), 5),
+        ]),
+      );
+      expect(data.offers).toMatchObject({ lowPrice: 0.15, highPrice: 0.2 });
+      expect(data.offers?.eligibleQuantity).toMatchObject({ minValue: 5 });
+    });
+
+    // Mixed: the lowest needs 10, another sells one. A minimum on the
+    // aggregate would say nobody sells singly, which the page contradicts.
+    it("claims no minimum when another offer in the range sells singly", () => {
+      const data = ld(
+        product([
+          min(offer("a", 0.15, "in_stock", { shop: "shop-a" }), 10),
+          offer("b", 0.5, "in_stock", { shop: "shop-b" }),
+        ]),
+      );
+      expect(data.offers).toMatchObject({ lowPrice: 0.15, highPrice: 0.5, offerCount: 2 });
+      expect(data.offers).not.toHaveProperty("eligibleQuantity");
+    });
+  });
+
+  // A Product with no offers, review or rating is an invalid item for Google;
+  // and an Offer without a price, or at zero, would be false.
+  it("emits no Product when every price is on request, or there is none", () => {
+    const onRequest = { ...offer("a", null), price_on_request: true };
+    expect(maybe(product([onRequest]))).toBeNull();
+    expect(maybe(product([offer("a", null)]))).toBeNull();
+  });
+
+  it("emits no Product for a withdrawn product", () => {
+    expect(maybe(product([], { status: "delisted", min_price: 120, max_price: 150 }))).toBeNull();
+    expect(maybe(product([offer("a", 120)], { status: "delisted" }))).toBeNull();
+  });
+
+  // The page warns that every price is out of date; markup cannot.
+  it("emits no Product when every offer is out of date", () => {
+    expect(maybe(product([offer("a", 120, "in_stock", { age: 60 })]))).toBeNull();
+  });
+
+  it("names the brand the page shows, and never a GTIN", () => {
+    const data = ld(product([offer("a", 50)], { brand: "Tower Pro" }));
+    expect(data).toMatchObject({ brand: { "@type": "Brand", name: "Tower Pro" } });
+    expect(JSON.stringify(data)).not.toMatch(/gtin/);
+    expect(ld(product([offer("a", 50)]))).not.toHaveProperty("brand");
+  });
+
+  // makhzan's part number is read from titles, often a family prefix
+  // ("ESP32"): only a shop stating a number makes it a manufacturer's.
+  describe("mpn", () => {
+    const stating = (o: Offer, value: string): Offer => ({ ...o, mfr_part_number: value });
+    const a = (price = 50) => offer("a", price, "in_stock", { shop: "shop-a" });
+    const b = (price = 60) => offer("b", price, "in_stock", { shop: "shop-b" });
+
+    it("is never makhzan's extracted number alone", () => {
+      expect(ld(product([a()], { part_number: "ESP32" }))).not.toHaveProperty("mpn");
+    });
+
+    it("is makhzan's number when a shop states it too", () => {
+      const data = ld(product([stating(a(), "sg 90"), b()], { part_number: "SG90" }));
+      expect(data.mpn).toBe("SG90");
+    });
+
+    it("is the number one shop states when it differs from makhzan's", () => {
+      const data = ld(product([stating(a(), "FRC0603F6803TS")], { part_number: "680K" }));
+      expect(data.mpn).toBe("FRC0603F6803TS");
+    });
+
+    it("is none when shops state different numbers", () => {
+      const data = ld(
+        product([stating(a(), "A4988"), stating(b(), "DRV8825")], { part_number: "A4988" }),
+      );
+      expect(data).not.toHaveProperty("mpn");
+    });
+  });
+
+  it("marks up the opening shop's specs as PropertyValues, capped", () => {
+    const specs = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [`Spec ${i}`, `value  ${i}`]),
+    );
+    const details = offerDetails({ ...offer("a", 50), specs });
+    const data = ld(product([offer("a", 50)]), "Thing", { details });
+    expect(data.additionalProperty).toHaveLength(JSON_LD_SPECS);
+    expect(data.additionalProperty?.[0]).toEqual({
+      "@type": "PropertyValue",
+      name: "Spec 0",
+      value: "value 0",
+    });
+    expect(ld(product([offer("a", 50)]), "Thing", { details: null })).not.toHaveProperty(
+      "additionalProperty",
     );
   });
 
-  it("states no offer at all rather than a price of zero", () => {
-    expect(productJsonLd(product([offer("a", null)]), URL, "x")).not.toHaveProperty("offers");
+  // "Fits" is one shop's claim about its own listing: never merged (C4).
+  it("names what it fits only when one offer alone states it", () => {
+    const fits = (o: Offer, models: string[]): Offer => ({ ...o, compatible_with: models });
+    const one = ld(product([fits(offer("a", 50), ["Ender 3", "Ender 3 Pro"]), offer("b", 60)]));
+    expect(one.isAccessoryOrSparePartFor).toEqual([
+      { "@type": "Product", name: "Ender 3" },
+      { "@type": "Product", name: "Ender 3 Pro" },
+    ]);
+    const two = ld(
+      product([
+        fits(offer("a", 50, "in_stock", { shop: "shop-a" }), ["Ender 3"]),
+        fits(offer("b", 60, "in_stock", { shop: "shop-b" }), ["K1"]),
+      ]),
+    );
+    expect(two).not.toHaveProperty("isAccessoryOrSparePartFor");
+    expect(ld(product([offer("a", 50)]))).not.toHaveProperty("isAccessoryOrSparePartFor");
+  });
+
+  it("clamps a long description at a word, and leaves out an empty one", () => {
+    const long = ld(product([offer("a", 1)]), "x", { description: "word ".repeat(200) });
+    expect((long.description as string).length).toBeLessThanOrEqual(500);
+    expect(long.description).toMatch(/word…$/);
+    expect(ld(product([offer("a", 1)]), "x", { description: "  " })).not.toHaveProperty(
+      "description",
+    );
   });
 
   it("cannot close its own script tag", () => {

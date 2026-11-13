@@ -234,25 +234,23 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           },
           { label: product.category.name_en, href: routes.category(product.category.ref) },
         ];
+  // Description and specs from one shop: the one "What the shops say" opens
+  // on. Without its own words, the meta description's summary (Google asks
+  // for a description either way). Null with no current price to state.
+  const structured = productJsonLd(product, absoluteUrl(path), title, {
+    description: sources[0]?.description ?? productDescription(product),
+    details: sources[0]?.details ?? null,
+    now,
+  });
 
   return (
     <Container className="pt-3 pb-8 lg:pt-4 lg:pb-12">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: jsonLdText(
-            productJsonLd(
-              product,
-              absoluteUrl(path),
-              title,
-              // The richest shop's own words, else the same summary the meta
-              // description uses: Google asks for a description either way.
-              sources.find((source) => source.description)?.description ??
-                productDescription(product),
-            ),
-          ),
-        }}
-      />
+      {structured && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: jsonLdText(structured) }}
+        />
+      )}
       {crumbs && (
         <>
           <Breadcrumb trail className="mb-3 lg:mb-4" items={crumbs} />

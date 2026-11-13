@@ -75,6 +75,12 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   expect(productXml).toContain(`<loc>${SITE}/products/6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b</loc>`);
   expect(productXml).toContain(`<loc>${SITE}/products/9f8e7d6c-5b4a-4321-8fed-cba987654321</loc>`);
   expect(productXml).not.toContain("/departments");
+  // The main photo as Google's image extension, on the shop's host, escaped.
+  expect(productXml).toContain('xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"');
+  expect(productXml).toContain(
+    "<image:loc>https://volt-corner.test/img/sg90.jpg?w=800&amp;h=800</image:loc>",
+  );
+  expect(productXml.match(/<image:image>/g)).toHaveLength(1);
   expect((await request.get("/sitemap/2.xml")).status()).toBe(404);
 
   const robots = await request.get("/robots.txt");
@@ -181,8 +187,12 @@ test("the home page describes the site to search engines", async ({ page }) => {
   const data = blocks.flatMap((text) => JSON.parse(text));
   const site = data.find((item: { "@type": string }) => item["@type"] === "WebSite");
   expect(site.url).toBe(`${SITE}/`);
-  expect(site.potentialAction.target.urlTemplate).toBe(`${SITE}/search?q={search_term_string}`);
-  expect(data.some((item: { "@type": string }) => item["@type"] === "Organization")).toBe(true);
+  expect(site.name).toBe("makhzan");
+  // The sitelinks search box is retired; its markup would do nothing.
+  expect(site).not.toHaveProperty("potentialAction");
+  const organization = data.find((item: { "@type": string }) => item["@type"] === "Organization");
+  expect(organization.logo).toBe(`${SITE}/icon-512.png`);
+  expect(site.publisher).toEqual({ "@id": organization["@id"] });
   expect(await meta(page, "description")).toContain("57,207 products from 8 shops");
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", SITE);
 });
