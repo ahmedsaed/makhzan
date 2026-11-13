@@ -597,3 +597,22 @@ async def test_a_daily_ceiling_holds_for_everyone_together(client, db, monkeypat
     assert detail["limit"] == "site" and detail["count"] == 3
     assert 1 <= detail["retry_after_minutes"] <= 24 * 60
     assert len(await _reports(db)) == 3
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "1700000000000." + "é" * 32,  # non-ASCII: compare_digest on str would raise
+        "١٧٠٠٠٠٠٠٠٠٠٠٠." + "0" * 32,  # digits from another script
+        "1700000000000." + "A" * 32,  # upper-case hex is not what we sign
+        "1700000000000." + "0" * 31,
+        "1.2.3",
+        "",
+    ],
+)
+async def test_a_malformed_token_is_dropped_not_a_500(client, db, token):
+    product, _, _ = await _two_shop_product(db)
+    response = await _post(client, {**_body(product, reason="wrong_category"), "token": token})
+    assert response.status_code == 202
+    assert response.json() == {"reference": None}
+    assert await _reports(db) == []
