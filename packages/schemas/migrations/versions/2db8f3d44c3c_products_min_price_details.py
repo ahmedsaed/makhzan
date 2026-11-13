@@ -16,7 +16,7 @@ point at products, and a second path between the two tables would make the
 ORM's joins between them ambiguous.
 
 Revision ID: 2db8f3d44c3c
-Revises: 772533d06b60
+Revises: e64070b70b6d
 Create Date: 2026-11-13 12:54:11.127921
 
 """
@@ -28,7 +28,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "2db8f3d44c3c"
-down_revision: str | Sequence[str] | None = "772533d06b60"
+down_revision: str | Sequence[str] | None = "e64070b70b6d"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
