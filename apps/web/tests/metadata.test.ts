@@ -297,7 +297,11 @@ describe("sitemapEntries", () => {
       "/shops/shop-a",
       "/how-we-crawl",
       "/for-suppliers",
+      "/about",
+      "/faq",
+      "/contact",
       "/privacy",
+      "/terms",
     ]);
   });
 });
