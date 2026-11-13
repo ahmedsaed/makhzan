@@ -102,9 +102,6 @@ class Supplier(TimestampMixin, Base):
     #: Where and when a person read the details above, a page at a time:
     #: [{url, checked_on: "YYYY-MM-DD", fields: [names as in ResolvedContact]}].
     contact_sources: Mapped[list | None] = mapped_column(JSONB)
-    # The table still has `phone`, the single number `phones` replaced, until a
-    # later migration drops it: a release still running while this one migrates
-    # selects it (expand/contract, migration 2b656e4b5adc).
     lat: Mapped[float | None] = mapped_column()
     lng: Mapped[float | None] = mapped_column()
 
