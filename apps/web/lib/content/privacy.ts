@@ -19,7 +19,9 @@
  * and what a person can ask for.
  */
 import { CONTACT_EMAIL } from "@/lib/content/crawling";
+import type { Rich } from "@/lib/content/prose";
 import { EMAIL_KEPT_DAYS, IP_HASH_KEPT_HOURS } from "@/lib/report";
+import { routes } from "@/lib/routes";
 
 export const PRIVACY_UPDATED = "13 November 2026";
 
@@ -32,6 +34,8 @@ export const BACKUP_DAYS = 30;
 
 export type PrivacyBlock =
   | { kind: "p"; text: string }
+  /** A paragraph with a link to one of our pages in it. */
+  | { kind: "rich"; parts: Rich }
   | { kind: "list"; items: string[] }
   | { kind: "table"; rows: { what: string; kept: string }[] };
 
@@ -50,6 +54,14 @@ export const privacySections: PrivacySection[] = [
       {
         kind: "p",
         text: `makhzan is made and run by Merope. For anything about your data, write to ${CONTACT_EMAIL}.`,
+      },
+      {
+        kind: "rich",
+        parts: [
+          "For anything else, ",
+          { link: "Contact", href: routes.contact() },
+          " says where to write.",
+        ],
       },
     ],
   },

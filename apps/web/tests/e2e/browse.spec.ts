@@ -143,17 +143,39 @@ test("the crawling policy is reachable and indexable", async ({ page }) => {
   await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(0);
 });
 
-test("the footer links to the supplier pages", async ({ page }) => {
+test("the footer groups its links: makhzan, for shops, legal", async ({ page }) => {
   await page.goto("/");
   const footer = page.getByRole("contentinfo");
-  await expect(footer.getByRole("link", { name: "How we crawl" })).toHaveAttribute(
-    "href",
-    "/how-we-crawl",
-  );
-  await expect(footer.getByRole("link", { name: "For suppliers" })).toHaveAttribute(
-    "href",
-    "/for-suppliers",
-  );
+  const groups: [string, [string, string][]][] = [
+    [
+      "makhzan",
+      [
+        ["About", "/about"],
+        ["FAQ", "/faq"],
+        ["Contact", "/contact"],
+      ],
+    ],
+    [
+      "For shops",
+      [
+        ["For suppliers", "/for-suppliers"],
+        ["How we crawl", "/how-we-crawl"],
+      ],
+    ],
+    [
+      "Legal",
+      [
+        ["Privacy", "/privacy"],
+        ["Terms", "/terms"],
+      ],
+    ],
+  ];
+  for (const [title, links] of groups) {
+    const nav = footer.getByRole("navigation", { name: title });
+    for (const [name, href] of links) {
+      await expect(nav.getByRole("link", { name, exact: true })).toHaveAttribute("href", href);
+    }
+  }
 });
 
 test("the footer theme control overrides the device", async ({ page }) => {

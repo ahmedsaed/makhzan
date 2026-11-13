@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Prose as RichProse } from "@/components/prose";
 import { Container } from "@/components/section";
 import { CONTACT_EMAIL } from "@/lib/content/crawling";
 import {
@@ -78,6 +79,13 @@ function Block({ block }: { block: PrivacyBlock }) {
     return (
       <p className="mt-3 text-[15px] leading-relaxed text-ink-2">
         <Prose text={block.text} />
+      </p>
+    );
+  }
+  if (block.kind === "rich") {
+    return (
+      <p className="mt-3 text-[15px] leading-relaxed text-ink-2">
+        <RichProse parts={block.parts} />
       </p>
     );
   }

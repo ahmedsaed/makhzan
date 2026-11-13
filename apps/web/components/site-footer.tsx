@@ -4,9 +4,39 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { routes } from "@/lib/routes";
 
 /**
- * The pages a supplier needs — how we crawl, and how to be removed, added or
- * corrected — on every page, because a shop owner can arrive anywhere; and
- * what makhzan keeps about visitors (Privacy).
+ * The footer's links, in three labelled groups (the owner's choice over one
+ * long row, November 2026): makhzan itself; the pages a supplier needs, on
+ * every page because a shop owner can arrive anywhere; and the legal pages.
+ */
+export const FOOTER_GROUPS = [
+  {
+    title: "makhzan",
+    links: [
+      { label: "About", href: routes.about() },
+      { label: "FAQ", href: routes.faq() },
+      { label: "Contact", href: routes.contact() },
+    ],
+  },
+  {
+    title: "For shops",
+    links: [
+      { label: "For suppliers", href: routes.forSuppliers() },
+      { label: "How we crawl", href: routes.howWeCrawl() },
+    ],
+  },
+  {
+    title: "Legal",
+    links: [
+      { label: "Privacy", href: routes.privacy() },
+      { label: "Terms", href: routes.terms() },
+    ],
+  },
+] as const;
+
+/**
+ * On a phone: the logo, two columns of groups, then the theme toggle and
+ * "Made by Merope". From `md`, the groups sit in a row beside the logo and
+ * the toggle moves to the right. Every link is 44 px tall (S4).
  *
  * No data fetching, for the same reason as the header: it renders on error
  * pages and must not depend on the API.
@@ -14,41 +44,43 @@ import { routes } from "@/lib/routes";
 export function SiteFooter() {
   return (
     <footer className="mt-12 border-t border-line bg-surface">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-6 text-sm md:px-6">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-start gap-x-6 gap-y-3 px-4 py-6 text-sm md:px-6">
         <Link
           href={routes.home()}
           aria-label="makhzan, home"
-          className="flex h-11 shrink-0 items-center"
+          className="mt-1 flex h-11 shrink-0 items-center"
         >
           <Logo className="text-lg" />
         </Link>
-        <nav aria-label="About" className="flex flex-wrap items-center gap-x-5">
-          <Link
-            href={routes.forSuppliers()}
-            className="flex h-11 items-center text-ink-2 hover:text-ink"
-          >
-            For suppliers
-          </Link>
-          <Link
-            href={routes.howWeCrawl()}
-            className="flex h-11 items-center text-ink-2 hover:text-ink"
-          >
-            How we crawl
-          </Link>
-          <Link
-            href={routes.privacy()}
-            className="flex h-11 items-center text-ink-2 hover:text-ink"
-          >
-            Privacy
-          </Link>
-        </nav>
-        <ThemeToggle />
-        <p className="text-ink-2 sm:ms-auto">
-          Made by{" "}
-          <a href="https://merope.dev" className="text-link underline">
-            Merope
-          </a>
-        </p>
+        <div className="grid flex-[1_1_100%] grid-cols-2 gap-x-6 gap-y-1 md:flex-[0_1_auto] md:grid-cols-[repeat(3,auto)] md:gap-x-14">
+          {FOOTER_GROUPS.map((group) => (
+            <div key={group.title} data-footer-group={group.title}>
+              <h2 className="mt-2.5 font-sans text-xs font-semibold tracking-[0.06em] text-ink-3 uppercase">
+                {group.title}
+              </h2>
+              <nav aria-label={group.title} className="flex flex-col items-start">
+                {group.links.map((link) => (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className="flex h-11 items-center text-ink-2 hover:text-ink"
+                  >
+                    {link.label}
+                  </Link>
+                ))}
+              </nav>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-[1_1_100%] flex-wrap items-center gap-x-6 gap-y-3 md:flex-[1_1_auto] md:justify-end md:self-center">
+          <ThemeToggle />
+          <p className="text-ink-2">
+            Made by{" "}
+            <a href="https://merope.dev" className="text-link underline">
+              Merope
+            </a>
+          </p>
+        </div>
       </div>
     </footer>
   );

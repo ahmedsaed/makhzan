@@ -49,6 +49,10 @@ export const routes = {
   howWeCrawl: () => "/how-we-crawl",
   forSuppliers: () => "/for-suppliers",
   privacy: () => "/privacy",
+  about: () => "/about",
+  faq: (question?: string) => (question ? `/faq#${question}` : "/faq"),
+  contact: () => "/contact",
+  terms: () => "/terms",
 };
 
 /**
