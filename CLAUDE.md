@@ -507,6 +507,19 @@ so they also match titles that merely *reference* a part — "bracket for SG90",
 "robot arm kit with 4x SG90". Listings sharing an identifier are only merged when
 their **titles** agree they are the same thing (see `grouping._subcluster`).
 
+**Identifier rules are per department, and a model code can be a family.**
+Each `DomainProfile` lists its `identifier_rules` (`makhzan_schemas/identifiers.py`):
+electronics reads MPNs, miniature bearings and hyphenated hobby codes (DT-830);
+tools and chemicals letter-led catalogue codes (ASR-6014); seals-bearings
+designations (6205-2RS with its suffix, O-ring and oil-seal sizes). A shop's
+`mfr_part_number` or "Model" spec is a fallback only. Keys are folded
+(`DT-830` = `DT830`) and scoped to the department. A model code is dropped as
+an identity when one shop lists several different titles under it
+(`grouping.assign_identifiers`) — the catalogue is the evidence, never a list —
+and measurements (AWG-16, NEMA-17, M8, IP65) are refused as `values.SCALE_WORDS`.
+Rules apply at regroup (`rebuild_products(reidentify=True)`, which the worker's
+rebuild and `worker.regroup` use), so a rule change needs no re-crawl.
+
 **Price is not evidence of identity.** It used to be sufficient on its own, and
 that was wrong: an extracted identifier is often a *family* prefix — `ESP32`,
 `ESP8266`, `CR2025` — and within a family everything costs about the same, so
@@ -604,6 +617,7 @@ behind each layout decision, the page tree and URLs, the style tokens, and rules
 `make test`, which is the Python suites. Run them when touching the frontend —
 they catch prop and state changes the build does not.
 
-Known gaps worth naming: identifier extraction exists only for electronics. The
-other 15 domains have their own taxonomies but extract no identifier, so their
-listings group less (`docs/DOMAIN_GENERALIZATION.md`).
+Known gaps worth naming: identifiers are read for electronics, tools, chemicals
+and seals-bearings only. The other 12 domains have their own taxonomies but no
+identifier rules (their codes are family-level or sizes, and each is one shop
+today), so their listings group less (`docs/DOMAIN_GENERALIZATION.md`).

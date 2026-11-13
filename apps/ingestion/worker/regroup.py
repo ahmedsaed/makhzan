@@ -1,9 +1,10 @@
 """Regroup listings into products, then rebuild the search index. Nothing else.
 
 The safe command after a grouping change, or when the index has drifted: it
-reads listings as they are (categories, part numbers, prices untouched),
-recomputes which listings form one product, and reloads Meilisearch from the
-result. Re-runnable; the index is a disposable projection of the database.
+reads listings as they are (categories and prices untouched), re-reads each
+one's identifier with the current rules and family guard
+(`grouping.assign_identifiers`), recomputes which listings form one product,
+and reloads Meilisearch from the result. Re-runnable; the index is a disposable projection of the database.
 
 Product ids are permanent (docs/decisions/0004-stable-product-ids.md): a
 grouping change merges or splits products, each recorded in `product_events`,
@@ -30,7 +31,7 @@ from worker.indexer import get_client, reindex_all
 
 async def main(dry_run: bool = False) -> None:
     async with SessionLocal() as session:
-        grouped = await rebuild_products(session, dry_run=dry_run)
+        grouped = await rebuild_products(session, dry_run=dry_run, reidentify=True)
         print(("would regroup: " if dry_run else "") + describe(grouped), flush=True)
         if dry_run:
             return

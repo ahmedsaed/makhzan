@@ -53,7 +53,7 @@ async def main() -> None:
         )
 
         # Group listings into canonical products (needs part numbers set above).
-        print(describe(await rebuild_products(session)))
+        print(describe(await rebuild_products(session, reidentify=True)))
 
         count = await reindex_all(session, get_client())
         print(f"reindexed {count} documents")

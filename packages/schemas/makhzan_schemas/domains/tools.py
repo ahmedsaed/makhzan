@@ -7,15 +7,18 @@ granular to browse. This tree is deliberately coarse — a few dozen leaves that
 buyer would actually navigate — and source categories are mapped onto it through
 a crosswalk (see `crosswalks/`), not inferred from product titles.
 
-No identifier extraction. Hand tools have no equivalent of an MPN: brands reuse
-model codes freely and most listings would be singletons anyway. Returning None
-means grouping falls back to per-listing singletons, which is the honest outcome
-— a wrong identifier would merge unrelated products across suppliers.
+Identifiers: a letter-led catalogue code (ASR-6014, TU-501, SDL-8611, MR818),
+measured at about 90% precise as an identity in this department. It is
+family-checked — brands do reuse a code across a range, and once one shop lists
+several products under it, it stops being used — and every merge still needs
+the titles to agree. Sizes ("5 inch", "3x140mm"), threads and the broad
+letters-and-digits token are deliberately not read: they are never identity.
 """
 
 from __future__ import annotations
 
 from makhzan_schemas.domains.base import DomainProfile, register_profile
+from makhzan_schemas.identifiers import model_code
 
 TAXONOMY: list[tuple[str, str, str, str | None]] = [
     # Groups
@@ -73,6 +76,8 @@ TOOLS = register_profile(
         # industrial goods actively mis-files — "socket" matches socket wrenches
         # into an electronics connectors leaf — so there is no fallback guessing.
         category_rules=[],
+        identifier_rules=(model_code,),
+        shop_stated_identifiers=True,
         search_attributes=("title_en", "title_ar", "brand"),
         identifier_label_en="Model",
         identifier_label_ar="الموديل",

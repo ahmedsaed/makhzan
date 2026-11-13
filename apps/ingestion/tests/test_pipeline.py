@@ -601,8 +601,9 @@ async def test_category_comes_from_the_crosswalk_not_the_title():
 async def test_item_is_normalized_with_its_own_domain_not_the_suppliers():
     """A marketplace's electronics part must be read by the electronics profile.
 
-    Identifier extraction is per-domain and the tools profile has none, so
-    normalizing against the supplier default would silently drop the part number
+    Identifier extraction is per-domain and the tools profile does not read
+    component part numbers, so normalizing against the supplier default would
+    silently drop the part number
     and stop the listing grouping with the same part from other suppliers.
     """
     await run_source(
@@ -614,9 +615,11 @@ async def test_item_is_normalized_with_its_own_domain_not_the_suppliers():
     assert listing.part_number == "1N4007", "electronics extractor must have been used"
 
 
-async def test_tools_item_gets_no_identifier():
-    """The same adapter, a tools category: no extractor, so no part number."""
-    await run_source("marketplace", MarketplaceAdapter("tape-measures", "LM358 Tape Measure 5m"))
+async def test_tools_item_is_read_by_the_tools_rules():
+    """The same adapter, a tools category: the tools rules, which read a
+    letter-led catalogue code and not a component part number, so "1N4007" —
+    which the electronics rules would read — gives nothing here."""
+    await run_source("marketplace", MarketplaceAdapter("tape-measures", "1N4007 Tape Measure 5m"))
 
     listing = await _marketplace_listing()
     assert listing.domain == "tools"
