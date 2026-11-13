@@ -544,12 +544,20 @@ and one rebuild converges — the next changes nothing. A group's key depends on
 on its membership (named after the member first in natural order), so it is the
 same however the group was reached.
 
-**The marketplace adapter reads `extract_identifier` too** (pending an owner
-decision). The private adapter appends a slug code to a title only when that
-does not change what the title's domain extracts. Before tools had rules every
-tools title qualified, so titles crawled then may end in a shop code that the
-tools rule now reads, until the next crawl rewrites them; from now on a code the
-rule would read is no longer appended, so those listings show the bare title.
+**The marketplace states a manufacturer part number in its URL, not its title.**
+A dozen listings titled "Oil Filter Donaldson" differ only by the code in their
+slug (`oil-filter-p551808-1696`), and across the catalogue those codes are the
+manufacturers' part numbers (Donaldson, Fleetguard, Toptul, Makita, LM7805),
+with no shop-internal series. The private adapter keeps the title as written
+and stores the code as `attributes.mfr_part_number`, so it is read only as the
+stated fallback (`stated_identifiers`): when the title names nothing, family
+checked, title agreement and vetoes intact, and only in departments with
+`shop_stated_identifiers` on (seals-bearings, where the filters are, is one). It used
+to be appended to the title where the department's rules would not read it,
+which made the title depend on the department and, once tools had rules, let
+codes appended earlier be read as title identifiers. Titles stored then still
+end in the code until the next sweep; the private package's
+`strip_appended_codes` (dry run by default) removes it now.
 
 **Price is not evidence of identity.** It used to be sufficient on its own, and
 that was wrong: an extracted identifier is often a *family* prefix — `ESP32`,
