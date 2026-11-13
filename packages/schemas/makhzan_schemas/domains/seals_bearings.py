@@ -11,7 +11,8 @@ inside diameter and someone buying a cordless drill are not the same buyer.
 
 Identifiers are designations: a bearing's (6205-2RS, with the seal and
 clearance suffixes that make it a different product), an O-ring's size and an
-oil seal's dimensions and profile. Only one supplier stocks this domain today,
+oil seal's dimensions and profile; failing those, the part number the shop
+states (a filter's Fleetguard or Donaldson number). Only one supplier stocks this domain today,
 and grouping never merges two listings of one shop, so these create no group
 yet; they start working, every veto intact, the day a second bearings source
 arrives.
@@ -68,6 +69,10 @@ SEALS_BEARINGS = register_profile(
         # through a crosswalk, never inferred from titles.
         category_rules=[],
         identifier_rules=(bearing_designation, o_ring_size, oil_seal_size),
+        # Filters and spares carry a maker's part number (Fleetguard LF667,
+        # Donaldson P551808) that the title often leaves out and the shop states;
+        # family-checked like every stated code.
+        shop_stated_identifiers=True,
         search_attributes=("title_en", "title_ar", "brand"),
         identifier_label_en="Reference",
         identifier_label_ar="المرجع",

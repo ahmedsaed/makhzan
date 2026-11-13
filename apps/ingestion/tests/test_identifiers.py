@@ -414,12 +414,21 @@ def test_mfr_part_number_then_model_when_the_title_names_nothing():
 def test_stated_codes_that_are_sizes_or_readings_are_refused():
     assert stated_identifiers({"specs": {"Model": "18650"}}) == []
     assert stated_identifiers({"mfr_part_number": "AWG-16"}) == []
+    assert stated_identifiers({"specs": {"Model": "M8"}}) == []
+    assert stated_identifiers({"mfr_part_number": "P120"}) == []
     assert stated_identifiers({"specs": {"Supported Models": "CR-10"}}) == []
     assert stated_identifiers({"specs": {"Model": "Standard edition"}}) == []
 
 
-def test_seals_do_not_use_shop_stated_codes():
-    assert SEALS.identifier_candidates("Gland Packing", {"mfr_part_number": "GP-100"}) == []
+def test_seals_fall_back_to_the_part_number_the_shop_states():
+    """Filters are filed here, and their maker's number is often only stated."""
+    found = SEALS.identifier_candidates("Oil Filter Donaldson", {"mfr_part_number": "P551808"})
+    assert [(c.value, c.family_checked) for c in found] == [("P551808", True)]
+    # A designation in the title still wins.
+    titled = SEALS.identifier_candidates("6205-2RS Bearing", {"mfr_part_number": "XYZ123"})
+    assert titled[0].value == "6205-2RS"
+    # The same safeguards: a size is refused.
+    assert SEALS.identifier_candidates("Gland Packing", {"mfr_part_number": "18650"}) == []
 
 
 def test_shop_stated_codes_merge_across_shops_and_are_family_checked():
