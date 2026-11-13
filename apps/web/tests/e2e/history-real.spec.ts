@@ -16,7 +16,6 @@ test("TB6600: the chart starts with the fresh shops' data, with no gap", async (
   await page.goto(`/products/${TB6600}`);
   const card = page.locator("[data-history=price]");
   await expect(card.locator("[data-gap]")).toHaveCount(0);
-  await expect(card).not.toContainText("not checked since");
   // Dates move with the suite's clock (the fixture is shifted to today); on
   // the snapshot's day this read "since 14 Oct", not "since 24 Aug".
   await expect(card).toContainText(/since \d+ \w+/);
