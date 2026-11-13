@@ -426,6 +426,19 @@ describe("tokenToSend", () => {
     expect(sleep).toHaveBeenCalledWith(TOKEN_MIN_AGE_MS);
   });
 
+  it("treats a token from a clock that stepped back as stale, and waits no longer than 3 s", async () => {
+    const fetcher = answer("renewed");
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {});
+    const back = T0 - 10 * 60_000;
+    const token = await tokenToSend(
+      { token: "opened", fetchedAt: T0 },
+      { fetcher, sleep, now: () => back },
+    );
+    expect(token).toEqual({ token: "renewed", fetchedAt: back });
+    expect(sleep).toHaveBeenCalledWith(TOKEN_MIN_AGE_MS);
+    expect(Math.max(...sleep.mock.calls.map(([ms]) => ms))).toBeLessThanOrEqual(TOKEN_MIN_AGE_MS);
+  });
+
   it("asks for one when opening got none, and gives up when it cannot", async () => {
     const sleep = vi.fn(async () => {});
     expect(

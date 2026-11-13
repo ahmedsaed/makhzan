@@ -178,6 +178,8 @@ export function ReportProblem({ context }: { context: ReportContext }) {
     // API would drop the report unseen, so say it was not sent.
     const token = await tokenToSend(await (openedToken.current ?? Promise.resolve(null)));
     openedToken.current = Promise.resolve(token);
+    // Closed (or sent again) during the wait: send nothing for this attempt.
+    if (mine !== attempt.current) return;
     const result = token
       ? await submitReport(buildPayload(form, context, token.token))
       : ({ kind: "error" } as const);

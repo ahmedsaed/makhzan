@@ -102,7 +102,7 @@ export const privacySections: PrivacySection[] = [
       },
       {
         kind: "p",
-        text: `Copies of the database kept as backups can hold this information for up to ${BACKUP_DAYS} more days before they are deleted.`,
+        text: `We back up the database by hand from time to time. Each time, we delete backups more than ${BACKUP_DAYS} days old, keeping only the newest, so a backup can hold this information past the limits above until a newer one replaces it.`,
       },
       {
         kind: "p",
