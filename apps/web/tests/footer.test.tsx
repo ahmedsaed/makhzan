@@ -40,10 +40,18 @@ describe("the site footer", () => {
         .getAllByRole("heading")
         .map((h) => h.textContent),
     ).toEqual(groups.map(([title]) => title));
+    // One landmark for the footer's links, not one per group.
+    const nav = within(footer).getByRole("navigation");
+    expect(nav).toHaveAccessibleName("Footer");
+    expect(
+      within(nav)
+        .getAllByRole("heading", { level: 2 })
+        .map((h) => h.textContent),
+    ).toEqual(groups.map(([title]) => title));
     for (const [title, links] of groups) {
-      const nav = within(footer).getByRole("navigation", { name: title });
+      const list = within(nav).getByRole("list", { name: title });
       expect(
-        within(nav)
+        within(list)
           .getAllByRole("link")
           .map((a) => [a.textContent, a.getAttribute("href")]),
       ).toEqual(links);
@@ -71,8 +79,9 @@ describe("the site footer", () => {
 
   it("makes every link 44 px tall (S4)", () => {
     render(<SiteFooter />);
-    for (const nav of screen.getAllByRole("navigation")) {
-      for (const link of within(nav).getAllByRole("link")) expect(link).toHaveClass("h-11");
-    }
+    const nav = screen.getByRole("navigation", { name: "Footer" });
+    const links = within(nav).getAllByRole("link");
+    expect(links).toHaveLength(7);
+    for (const link of links) expect(link).toHaveClass("h-11");
   });
 });

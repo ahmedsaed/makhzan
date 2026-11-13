@@ -76,6 +76,75 @@ test.describe("the FAQ", () => {
     await expect(page.getByText(/no API or data licence/)).toBeVisible();
   });
 
+  /** Next's router, as a `<Link>` uses it: a client-side navigation. */
+  async function softNavigate(page: Page, href: string) {
+    await page.waitForFunction(() =>
+      Boolean((window as { next?: { router?: unknown } }).next?.router),
+    );
+    await page.evaluate((to) => {
+      (window as unknown as { next: { router: { push: (h: string) => void } } }).next.router.push(
+        to,
+      );
+    }, href);
+  }
+
+  test("opens a linked question reached by client-side navigation from another page", async ({
+    page,
+  }) => {
+    await page.goto("/contact");
+    // A full load would wipe this; a client-side navigation keeps it.
+    await page.evaluate(() => ((window as { soft?: boolean }).soft = true));
+    await softNavigate(page, "/faq#use-data");
+    await expect(page).toHaveURL(/\/faq#use-data$/);
+    const question = page.locator("details#use-data");
+    await expect(question).toHaveAttribute("open");
+    await expect(question).toBeInViewport();
+    expect(await page.evaluate(() => (window as { soft?: boolean }).soft)).toBe(true);
+  });
+
+  test("opens a question linked from the FAQ itself, by a Next link or a plain one", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.goto("/faq");
+    await page.waitForFunction(() =>
+      Boolean((window as { next?: { router?: unknown } }).next?.router),
+    );
+    // Two same-page links: one handled as a Next <Link> handles its click
+    // (default prevented, router push, so no hashchange), one left to the
+    // browser (a plain fragment link, which fires hashchange).
+    await page.evaluate(() => {
+      const add = (id: string, href: string) => {
+        const a = document.createElement("a");
+        a.id = id;
+        a.href = href;
+        a.textContent = id;
+        document.querySelector("h1")!.after(a);
+      };
+      add("next-link", "/faq#contact-us");
+      add("plain-link", "#how-often");
+      document.getElementById("next-link")!.addEventListener("click", (event) => {
+        event.preventDefault();
+        (window as unknown as { next: { router: { push: (h: string) => void } } }).next.router.push(
+          "/faq#contact-us",
+        );
+      });
+      (window as { soft?: boolean }).soft = true;
+    });
+
+    await page.locator("#next-link").click();
+    await expect(page).toHaveURL(/\/faq#contact-us$/);
+    await expect(page.locator("details#contact-us")).toHaveAttribute("open");
+    await expect(page.locator("details#contact-us")).toBeInViewport();
+
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.locator("#plain-link").click();
+    await expect(page).toHaveURL(/\/faq#how-often$/);
+    await expect(page.locator("details#how-often")).toHaveAttribute("open");
+    await expect(page.locator("details#how-often")).toBeInViewport();
+    expect(await page.evaluate(() => (window as { soft?: boolean }).soft)).toBe(true);
+  });
+
   test("carries FAQPage structured data", async ({ page }) => {
     await page.goto("/faq");
     const data = JSON.parse(
@@ -176,7 +245,9 @@ test.describe("the footer on a phone", () => {
     expect(Math.abs(boxes[0].y - boxes[1].y)).toBeLessThan(2);
     expect(boxes[1].x).toBeGreaterThan(boxes[0].x);
     expect(boxes[2].y).toBeGreaterThan(boxes[0].y);
-    for (const link of await footer.getByRole("navigation").getByRole("link").all()) {
+    const links = await footer.getByRole("navigation", { name: "Footer" }).getByRole("link").all();
+    expect(links).toHaveLength(7);
+    for (const link of links) {
       expect((await link.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }
     for (const button of await footer
