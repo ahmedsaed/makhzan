@@ -23,6 +23,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -190,19 +191,44 @@ def _cents(price) -> Decimal | None:
     return None if price is None else Decimal(str(price)).quantize(Decimal("0.01"))
 
 
+#: When the run in progress in this task started, if any (`_logged_run`): a
+#: listing whose `last_checked_at` is at or after it was already counted.
+_RUN_STARTED: ContextVar[datetime | None] = ContextVar("run_started", default=None)
+
+
 def _count_check(listing: Listing, now: datetime, *, changed: bool) -> None:
-    """Add one read to the listing's check log (`checks`, `changes`, `first_checked_at`).
+    """Add one read to the listing's check log (`checks`, `changes`, first/last checked).
 
     The input to a per-listing change-rate estimate (the scheduling plan's T7):
-    n reads and X changes seen since the first. Done here, beside the history
-    row, so it counts exactly the reads that record history — never a `limit=`
-    run's.
+    n reads and X changes seen over the n - 1 intervals between them. Done
+    beside the history row, so it counts exactly the reads that record history
+    — never a `limit=` run's. A stock-only read (out of stock by id) counts:
+    it would see a stock change, though never a price one.
+
+    - The first counted read is never a change, whatever the latest
+      observation says: a listing stored before the log existed compares
+      against a row weeks old, and that change belongs to no measured interval.
+    - At most one counted read per listing per run. The Odoo shop reads a
+      product in each leaf it is filed under and again in its /shop pass,
+      minutes apart, and those reads would crowd the intervals. A later read
+      in the same run still counts a change it finds, unless the run's read
+      already did (`changes` never exceeds `checks - 1`), and leaves
+      `last_checked_at` where the run's first read put it.
     """
+    if listing.first_checked_at is None:
+        changed = False
+    started = _RUN_STARTED.get()
+    if started is not None and listing.last_checked_at is not None:
+        if listing.last_checked_at >= started:
+            if changed and (listing.changes or 0) < (listing.checks or 0) - 1:
+                listing.changes = (listing.changes or 0) + 1
+            return
     listing.checks = (listing.checks or 0) + 1
     if changed:
         listing.changes = (listing.changes or 0) + 1
     if listing.first_checked_at is None:
         listing.first_checked_at = now
+    listing.last_checked_at = now
 
 
 async def _record_changes(
@@ -250,6 +276,7 @@ async def _record_changes(
     for listing in listings:
         current = (_cents(listing.price), listing.currency, listing.stock_signal, True)
         previous = latest.get(listing.id)
+        prev_checked_at = listing.last_checked_at  # before this read moves it
         _count_check(listing, now, changed=previous is not None and previous[:3] != current[:3])
         if previous == current:
             continue
@@ -263,6 +290,7 @@ async def _record_changes(
                 in_stock=listing.stock_signal == StockSignal.IN_STOCK,
                 available=True,
                 via=via,
+                prev_checked_at=prev_checked_at,
             )
         )
         added += 1
@@ -1084,10 +1112,16 @@ async def _run(
     every client the run makes reads, so no request goes out as anything else.
     """
     identity = identity_for(adapter.identity)
-    with logging_requests() as log, using_identity(identity):
-        return await _logged_run(
-            source_id, adapter, partitions, limit=limit, log=log, identity=identity
-        )
+    # Reads before this were earlier runs': a listing's first read in this run
+    # is a check, its later ones are not (`_count_check`).
+    started = _RUN_STARTED.set(datetime.now(timezone.utc))
+    try:
+        with logging_requests() as log, using_identity(identity):
+            return await _logged_run(
+                source_id, adapter, partitions, limit=limit, log=log, identity=identity
+            )
+    finally:
+        _RUN_STARTED.reset(started)
 
 
 async def _logged_run(
@@ -1159,6 +1193,8 @@ async def _logged_run(
             # `unused`: only the finished run can know it saw everything.
             if limit is None and (drift := _crosswalk_drift(adapter, observed, complete=False)):
                 stats["crosswalk"] = drift
+            if limit is None and tally["pages"]:
+                stats["categories"] = {k: categories[k] for k in ("set", "moved", "cleared")}
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and

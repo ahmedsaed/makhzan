@@ -30,25 +30,26 @@ M3  Changes per 1,000 requests. A change is a `price_observations` row in the
     (the lane that read it; only "sweep" until later phases). Shop-wide
     repricing waves dominate this, so compare like weeks with like.
 
-    Check log: per listing `checks` (reads since `first_checked_at`) and
-    `changes` (reads that found a change), cumulative since the log began.
-    Changes per check, and the pooled Cho & Garcia-Molina estimate of the
-    change rate, λ = -ln((n - X + 0.5) / (n + 0.5)) / I, over all the source's
-    checked listings (n checks, X changes, I the mean interval between checks),
-    shown as days between changes.
+    Check log: per listing `checks` (counted reads, at most one a run, from
+    `first_checked_at` to `last_checked_at`) and `changes` (reads that found a
+    change; never the first), cumulative since the log began. A stock-only
+    read (out of stock by id) is a check: it sees stock changes, not price.
+    The pooled Cho & Garcia-Molina estimate of the change rate,
+    λ = -ln((n - X + 0.5) / (n + 0.5)) / I, is over the intervals between
+    reads of listings with 2+ checks: n = Σ(checks - 1), X = Σ changes, and I
+    the mean interval, Σ(last_checked_at - first_checked_at) / n (so weighted
+    by each listing's checks - 1). Shown as days between changes.
 
-M5  Detection delay, an upper bound: for a listing whose check log has seen a
-    change, the mean interval between its checks, (last_verified_at -
-    first_checked_at) / (checks - 1). A change happened somewhere inside one
-    such interval, so the site was wrong for at most that long, and about half
-    of it on average. Median and p90 over those listings. Needs 2+ checks, so
-    it is empty until the check log has run for a cycle.
+M5  Detection delay: for each change row in the window, `observed_at -
+    prev_checked_at`, the listing's previous counted read. The change happened
+    in between, so this is how long the site may have shown the old value.
+    Median and p90. Empty for changes found on a listing's first counted read.
 
-M6  False archivals. Archiving rows (`available` false) in the window whose
-    listing's next row says it is available again within two cycles of the
-    source (twice its median cycle length, 14 days when unknown): archived,
-    then seen again. Shown beside every archiving in the window, and how many
-    came back at all.
+M6  False archivals. An archiving row (`available` false) is judged once two
+    of the source's last cycle lengths (14 days each when unknown) have passed:
+    did the listing's next row bring it back within that time? Judged are the
+    archivings in a window of `--days` ending two cycles ago; those newer than
+    that are printed apart as too recent to judge (window archivings only).
 
 Segments (§0 of the plan). For listings re-read in the window that already had
 a price row before it (their baseline: the row in force at the window's
@@ -71,7 +72,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
-import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -226,12 +226,13 @@ async def staleness(session, source: str | None) -> dict[str, dict]:
 
 
 async def check_log(session, source: str | None) -> dict[str, dict]:
-    """The check log per source (M3's changes per check, the pooled rate) and M5."""
+    """The check log per source: its totals and the pooled change rate (M3)."""
     query = """
         SELECT source, checks, changes,
-               CAST(extract(epoch FROM last_verified_at - first_checked_at) AS float8) / 86400 AS span
+               CAST(extract(epoch FROM last_checked_at - first_checked_at) AS float8) / 86400
+                   AS span
         FROM listings
-        WHERE checks > 0 AND first_checked_at IS NOT NULL
+        WHERE checks > 0 AND first_checked_at IS NOT NULL AND last_checked_at IS NOT NULL
           AND (CAST(:source AS text) IS NULL OR source = :source)
     """
     rows = (await session.execute(text(query), {"source": source})).all()
@@ -240,20 +241,18 @@ async def check_log(session, source: str | None) -> dict[str, dict]:
     for row in rows:
         by_source[row.source].append(row)
     for src, items in by_source.items():
-        n = sum(r.checks for r in items)
-        x = sum(r.changes for r in items)
-        intervals = [r.span / (r.checks - 1) for r in items if r.checks > 1 and r.span]
-        delays = [r.span / (r.checks - 1) for r in items if r.checks > 1 and r.changes and r.span]
-        mean_interval = statistics.fmean(intervals) if intervals else 0.0
-        rate = cho_rate(n, x, mean_interval) if intervals else None
+        # Intervals between reads: the first read of each listing opens one.
+        repeat = [r for r in items if r.checks > 1]
+        n = sum(r.checks - 1 for r in repeat)
+        x = sum(r.changes for r in repeat)
+        span = sum(r.span or 0.0 for r in repeat)
+        rate = cho_rate(n, x, span / n) if n and span > 0 else None
         out[src] = {
             "listings": len(items),
-            "checks": n,
-            "changes": x,
+            "checks": sum(r.checks for r in items),
+            "changes": sum(r.changes for r in items),
+            "intervals": n,
             "days_between_changes": (1 / rate) if rate else None,
-            "delay_p50": _quantile(delays, 0.5),
-            "delay_p90": _quantile(delays, 0.9),
-            "delay_n": len(delays),
         }
     return out
 
@@ -268,17 +267,21 @@ async def _has_column(session, table: str, column: str) -> bool:
 
 
 async def changes(
-    session, since: datetime, source: str | None, *, has_via: bool = True
-) -> dict[str, Counter]:
-    """M3's numerator: change rows in the window per source, by `via`.
+    session, since: datetime, source: str | None, *, has_log: bool = True
+) -> tuple[dict[str, Counter], dict[str, dict]]:
+    """M3's numerator (change rows in the window per source, by `via`) and M5.
 
     Before `via` existed every row was the sweep's, so that is what it reads as.
     """
-    via = "via" if has_via else "CAST('sweep' AS text) AS via"
+    via = "via" if has_log else "CAST('sweep' AS text) AS via"
+    prev = "prev_checked_at" if has_log else "CAST(NULL AS timestamptz) AS prev_checked_at"
     query = f"""
-        SELECT l.source, o.via, count(*) AS n
+        SELECT l.source, o.via,
+               CAST(extract(epoch FROM o.observed_at - o.prev_checked_at) AS float8) / 86400
+                   AS delay
         FROM (
-            SELECT listing_id, observed_at, {via}, available, price, currency, stock_signal,
+            SELECT listing_id, observed_at, {via}, {prev}, available, price, currency,
+                   stock_signal,
                    lag(price) OVER w AS p_price, lag(currency) OVER w AS p_currency,
                    lag(stock_signal) OVER w AS p_stock, lag(observed_at) OVER w AS p_at
             FROM price_observations
@@ -289,18 +292,27 @@ async def changes(
           AND (o.price IS DISTINCT FROM o.p_price OR o.currency <> o.p_currency
                OR o.stock_signal <> o.p_stock)
           AND (CAST(:source AS text) IS NULL OR l.source = :source)
-        GROUP BY l.source, o.via
     """
     out: dict[str, Counter] = defaultdict(Counter)
+    delays: dict[str, list[float]] = defaultdict(list)
     for row in (await session.execute(text(query), {"since": since, "source": source})).all():
-        out[row.source][row.via] += row.n
-    return out
+        out[row.source][row.via] += 1
+        if row.delay is not None:
+            delays[row.source].append(row.delay)
+    m5 = {
+        src: {"n": len(d), "p50": _quantile(d, 0.5), "p90": _quantile(d, 0.9)}
+        for src, d in delays.items()
+    }
+    return dict(out), m5
 
 
 async def false_archivals(
-    session, since: datetime, source: str | None, cycles: dict[str, timedelta]
+    session, now: datetime, days: int, source: str | None, cycles: dict[str, timedelta]
 ) -> dict[str, dict]:
-    """M6: archivings in the window, and how many came back (within two cycles, and at all)."""
+    """M6: judged archivings and how many came back within two cycles; the too recent apart."""
+    window = timedelta(days=days)
+    longest = max([*cycles.values(), DEFAULT_CYCLE])
+    since = now - window - 2 * longest
     query = """
         SELECT l.source, o.observed_at, nxt.observed_at AS back_at
         FROM price_observations o
@@ -313,15 +325,24 @@ async def false_archivals(
         WHERE NOT o.available AND o.observed_at >= :since
           AND (CAST(:source AS text) IS NULL OR l.source = :source)
     """
-    out: dict[str, dict] = defaultdict(lambda: {"archived": 0, "back": 0, "back_within": 0})
+    out: dict[str, dict] = defaultdict(
+        lambda: {"judged": 0, "back_within": 0, "too_recent": 0, "judge_days": None}
+    )
     for row in (await session.execute(text(query), {"since": since, "source": source})).all():
+        horizon = 2 * cycles.get(row.source, DEFAULT_CYCLE)
         entry = out[row.source]
-        entry["archived"] += 1
-        if row.back_at is not None:
-            entry["back"] += 1
-            if row.back_at - row.observed_at <= 2 * cycles.get(row.source, DEFAULT_CYCLE):
-                entry["back_within"] += 1
-    return dict(out)
+        entry["judge_days"] = round(horizon.total_seconds() / 86400, 1)
+        judge_until = now - horizon
+        if row.observed_at > judge_until:
+            if row.observed_at >= now - window:
+                entry["too_recent"] += 1
+            continue
+        if row.observed_at < judge_until - window:
+            continue
+        entry["judged"] += 1
+        if row.back_at is not None and row.back_at - row.observed_at <= horizon:
+            entry["back_within"] += 1
+    return {src: e for src, e in out.items() if e["judged"] or e["too_recent"]}
 
 
 async def segments(session, since: datetime, source: str | None, exclude: list[str]) -> list[dict]:
@@ -438,15 +459,16 @@ async def collect(
     # even when it closed before the window opened.
     runs = await _runs(session, now - timedelta(days=max(days, 60)), source)
     m1 = requests_and_cycles(runs, since, now)
+    # The last completed cycle's length: what "within two cycles" means now.
     cycle_lengths = {
-        src: timedelta(days=statistics.median(entry["cycle_days"]))
+        src: timedelta(days=entry["cycle_days"][-1])
         for src, entry in m1.items()
-        if entry["cycle_days"] and statistics.median(entry["cycle_days"]) > 0
+        if entry["cycle_days"] and entry["cycle_days"][-1] > 0
     }
     # The report also runs against a database older than the check log (to
     # take a baseline before the migration is deployed): those parts are empty.
-    has_log = await _has_column(session, "listings", "checks")
-    has_via = await _has_column(session, "price_observations", "via")
+    has_log = await _has_column(session, "listings", "last_checked_at")
+    found, delays = await changes(session, since, source, has_log=has_log)
     return {
         "days": days,
         "has_check_log": has_log,
@@ -454,8 +476,9 @@ async def collect(
         "requests": m1,
         "staleness": await staleness(session, source),
         "check_log": await check_log(session, source) if has_log else {},
-        "changes": await changes(session, since, source, has_via=has_via),
-        "false_archivals": await false_archivals(session, since, source, cycle_lengths),
+        "changes": found,
+        "detection_delay": delays,
+        "false_archivals": await false_archivals(session, now, days, source, cycle_lengths),
         "segments": await segments(session, since, source, exclude or []),
         "validators": validators(runs, since),
         "categories": category_churn(runs, since),
@@ -524,32 +547,30 @@ def render(data: dict) -> None:
     if not data.get("has_check_log", True):
         print(f"  {DIM}this database has no check log yet (migration e64070b70b6d){RESET}")
 
-    _header("M5 DETECTION DELAY (upper bound: mean interval between checks, changed listings)")
-    print(f"  {DIM}{'source':22s} {'listings':>9} {'p50':>7} {'p90':>7}{RESET}")
-    shown = False
-    for src in sources:
-        log = data["check_log"].get(src, {})
-        if log.get("delay_n"):
-            shown = True
-            print(
-                f"  {src:22s} {log['delay_n']:>9} {_days(log['delay_p50']):>7}"
-                f" {_days(log['delay_p90']):>7}"
-            )
-    if not shown:
-        print(f"  {DIM}no listing has 2+ checks with a change yet{RESET}")
+    _header(f"M5 DETECTION DELAY (change found minus the previous read, {days}d)")
+    print(f"  {DIM}{'source':22s} {'changes':>8} {'p50':>7} {'p90':>7}{RESET}")
+    if not data["detection_delay"]:
+        print(f"  {DIM}no change in the window was found after a counted read yet{RESET}")
+    for src, d in sorted(data["detection_delay"].items()):
+        print(f"  {src:22s} {d['n']:>8} {_days(d['p50']):>7} {_days(d['p90']):>7}")
 
-    _header(f"M6 FALSE ARCHIVALS (archived in the last {days}d, then seen again)")
+    _header("M6 FALSE ARCHIVALS (back within two cycles of being archived)")
     print(
-        f"  {DIM}{'source':22s} {'archived':>9} {'back <=2 cycles':>16} {'back at all':>12}{RESET}"
+        f"  {DIM}{'source':22s} {'judged':>7} {'back':>6} {'share':>7}"
+        f" {'too recent':>11}  two cycles{RESET}"
     )
     if not data["false_archivals"]:
-        print(f"  {DIM}nothing archived in the window{RESET}")
+        print(f"  {DIM}nothing archived to judge{RESET}")
     for src, e in sorted(data["false_archivals"].items()):
         print(
-            f"  {src:22s} {e['archived']:>9}"
-            f" {e['back_within']:>8} ({_pct(e['back_within'], e['archived']):>6})"
-            f" {e['back']:>12}"
+            f"  {src:22s} {e['judged']:>7} {e['back_within']:>6}"
+            f" {_pct(e['back_within'], e['judged']):>7} {e['too_recent']:>11}"
+            f"  {_days(e['judge_days'])}"
         )
+    print(
+        f"  {DIM}judged: archived in the {days}d before two cycles ago;"
+        f" too recent: archived in the last {days}d, under two cycles ago{RESET}"
+    )
 
     _header(f"SEGMENTS (re-read in the last {days}d, against the row in force before it)")
     print(
