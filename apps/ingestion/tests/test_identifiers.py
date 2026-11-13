@@ -438,6 +438,69 @@ def test_seals_fall_back_to_the_part_number_the_shop_states():
     assert SEALS.identifier_candidates("Gland Packing", {"mfr_part_number": "18650"}) == []
 
 
+# The marketplace states a generic title's manufacturer part number only in its
+# URL slug ("Oil Filter Donaldson", `oil-filter-p551808-1696`); its adapter keeps
+# the title as written and puts the code in `mfr_part_number`. These pin down
+# what that stated code may and may not do.
+
+
+@pytest.mark.parametrize("domain", ["electronics", "tools", "chemicals"])
+def test_a_stated_code_stands_in_for_a_title_that_names_nothing(domain):
+    attrs = {"mfr_part_number": "HR2460"}
+    assert _first_identifier(domain, "Rotary Hammer 780w 24mm Makita", attrs) == "HR2460"
+    # The title's own code still wins.
+    assert _first_identifier(domain, "Makita HR2470 Rotary Hammer", attrs) == "HR2470"
+
+
+def test_filters_fall_back_to_the_slug_stated_maker_number():
+    """Seals-bearings reads a stated code when the title names none: the
+    filters filed there are titled by brand alone."""
+    attrs = {"mfr_part_number": "LF667"}
+    found = SEALS.identifier_candidates("Oil Filter Fleetguard", attrs)
+    assert [c.value for c in found] == ["LF667"]
+
+
+def test_a_grit_range_is_refused_but_a_long_p_number_is_a_part_number():
+    for grits in ("P60100", "P80120", "P120240", "P-400-600", "P400/600"):
+        assert stated_identifiers({"mfr_part_number": grits}) == [], grits
+    for part in ("P551808", "P181052", "P550084"):
+        assert [c.value for c in stated_identifiers({"mfr_part_number": part})] == [part]
+
+
+def test_a_slug_stated_code_joins_the_same_product_at_other_shops():
+    listings = [
+        _listing("ECG Module Heart Pulse Rate Sensor", "market", attributes={
+            "mfr_part_number": "AD8232"}),
+        _listing("ECG Module AD8232 Heart Rate", "shop-a"),
+        _listing("Heart Rate Monitor ECG AD8232", "shop-b"),
+    ]  # fmt: skip
+    (group,) = _merged(listings)
+    assert len(group) == 3
+
+
+def test_a_stated_code_of_a_part_the_product_uses_does_not_merge_with_that_part():
+    """The slug of a battery holder names the cell it holds; the holder is not
+    the battery, and the titles say so."""
+    listings = [
+        _listing("Battery Holder 2 Pin - Dip", "market", attributes={"mfr_part_number": "CR2032"}),
+        _listing("CR2032 Lithium Coin Battery 3V", "shop-a"),
+        _listing("CR2032 3V Button Cell Battery", "shop-b"),
+    ]
+    assert all(
+        not any(listing.source == "market" for listing in group) for group in _merged(listings)
+    )
+
+
+def test_slug_tokens_that_are_grits_grades_or_sizes_are_not_a_stated_code():
+    """Real marketplace slug codes: a grit pair (P60/P100), a steel grade, a
+    pneumatic regulator's code, a cell size. AC4010 is refused only because "AC"
+    is a scale word: the same shop's TC4010 and AW4000 pass, and only the
+    same-shop and value vetoes keep those apart. (Sizes glued together,
+    "60L2300W", the stated fallback would accept: the adapter drops those.)"""
+    for value in ("P60100", "SS316", "AC4010", "18650"):
+        assert stated_identifiers({"mfr_part_number": value}) == []
+
+
 def test_shop_stated_codes_merge_across_shops_and_are_family_checked():
     listings = [
         _listing("Linear Bearing Block SCS12UU (Closed – 12mm Dia)", "shop-a", price=130),
