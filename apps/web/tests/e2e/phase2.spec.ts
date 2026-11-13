@@ -377,6 +377,7 @@ test.describe("price history", () => {
     await expect(card.locator("[data-gap]")).toHaveCount(1);
     await expect(card).toContainText("none in stock");
     await expect(card.locator("[data-weeks]")).toContainText("(at one shop or more)");
+    await expect(card).toContainText("Shaded: no shop in stock. Offers on request are not drawn.");
     await card.getByText("Show as a table").click();
     const rows = card.locator("[data-history-table] tbody tr");
     await expect(rows).toHaveCount(5);
@@ -416,6 +417,34 @@ test.describe("price history", () => {
     await expect(card.locator("[data-chart]")).toHaveCount(0);
     await expect(page.locator("[data-fact=history]")).toHaveText(
       "in stock every week of the last 12 · Stock history",
+    );
+  });
+
+  test("a lowest from a shop now out of date says so (owner's rule)", async ({ page }) => {
+    await page.goto("/products/p2-volume");
+    await expect(page.locator("[data-history-lowest]")).toContainText(
+      "at Mansoura Electronics (now out of date),",
+    );
+    await expect(page.locator("[data-fact=history]")).toContainText(
+      "Lowest in 90 days EGP 48 (now out of date)",
+    );
+    await page.goto("/products/p2-multi");
+    await expect(page.locator("[data-history-lowest]")).toContainText("EGP 419");
+    await expect(page.locator("[data-history-lowest]")).not.toContainText("out of date");
+  });
+
+  test("the history endpoint failing leaves the page whole, without the card", async ({ page }) => {
+    const response = await page.goto("/products/p2-minorder");
+    expect(response?.status()).toBe(200);
+    await expect(page.locator("h1")).toBeVisible();
+    await expect(page.locator("[data-history]")).toHaveCount(0);
+    await expect(page.locator("[data-fact=history]")).toHaveCount(0);
+  });
+
+  test("the card says it follows listing prices", async ({ page }) => {
+    await page.goto("/products/p2-options");
+    await expect(page.locator("[data-history=price]")).toContainText(
+      "It follows each shop's listing price: option prices are not recorded yet.",
     );
   });
 

@@ -506,7 +506,8 @@ export const PHASE2_HISTORY = {
     "o2-tb-delta": [pt(22, 425, true)],
     "o2-tb-sphinx": [pt(60, 550, true)],
     "o2-tb-cairo": [pt(60, 435, true), pt(5, 435, false)],
-    "o2-tb-bazaar": [pt(100, 400, true)],
+    // Its offer today: EGP 504, out of stock, last checked 81 days ago.
+    "o2-tb-bazaar": [pt(100, 504, false)],
   },
   // For more than two weeks no shop had it in stock: a shaded gap.
   "p2-histmulti": {
@@ -565,6 +566,8 @@ function historyOf(id) {
 
 export function phase2Fixture(path) {
   const historyId = path.match(/^\/products\/([^/]+)\/history$/)?.[1];
+  // The history endpoint failing: the page must render without the card.
+  if (historyId === "p2-minorder") return [500, { detail: "history unavailable" }];
   if (historyId && PHASE2[historyId]) return [200, historyOf(historyId)];
   const productId = path.match(/^\/products\/([^/]+)$/)?.[1];
   if (productId && PHASE2[productId]) return [200, PHASE2[productId]];

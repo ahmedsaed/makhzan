@@ -8,6 +8,8 @@ import type { Product, ProductHistory } from "@/lib/api";
 import {
   buildHistory,
   dayMonth,
+  gapLabel,
+  gapText,
   lowestLabel,
   monthTicks,
   priceScale,
@@ -39,6 +41,14 @@ function historyOf(id: string): ProductHistory {
 const built = (id: string) => buildHistory(historyOf(id), CASES[id].offers, now);
 const priced = (id: string) => built(id) as PriceHistory;
 const daysAgo = (ms: number) => Math.round((now.getTime() - ms) / DAY);
+const point = (days: number, price: number | null, inStock: boolean) => ({
+  observed_at: new Date(now.getTime() - days * DAY).toISOString(),
+  price,
+  currency: "EGP",
+  stock_signal: (inStock ? "in_stock" : "out_of_stock") as "in_stock" | "out_of_stock",
+  in_stock: inStock,
+  available: true,
+});
 
 describe("when there is a card", () => {
   it("none without history", () => {
@@ -58,7 +68,7 @@ describe("when there is a card", () => {
     expect(lowestLabel(h)).toBe(`Lowest since ${dayMonth(h.start)}`);
     expect(h.weeks).toBeNull();
     expect(h.lowest).toMatchObject({ price: 45, shop: null });
-    expect(h.now).toBe(47);
+    expect(h.current.price).toBe(47);
   });
 
   it("from 90 days: 'Lowest in 90 days' and the strip", () => {
@@ -85,7 +95,7 @@ describe("one shop", () => {
 
   it("counts only in-stock prices as the lowest", () => {
     expect(h.lowest?.price).toBe(1650);
-    expect(h.now).toBe(1700);
+    expect(h.current.price).toBe(1700);
   });
 
   it("counts weeks with stock", () => {
@@ -114,21 +124,57 @@ describe("several shops", () => {
     expect(weeksText(h.weeks!)).toBe("in stock 10 of the last 12 weeks");
   });
 
-  it("a stale offer counts only up to its last check", () => {
+  it("a stale offer counts only up to its last check, and its Lowest says so", () => {
     const h = priced("p2-volume");
-    expect(h.lowest).toMatchObject({ price: 48, shop: "Mansoura Electronics" });
+    // Owner's rule: it still counts as the lowest, flagged as now out of date.
+    expect(h.lowest).toMatchObject({ price: 48, shop: "Mansoura Electronics", outOfDate: true });
     const after = h.segments.find((s) => s.shop === "Giza Robotics")!;
     expect(daysAgo(after.from)).toBe(81);
-    expect(h.now).toBe(55);
+    expect(h.current.price).toBe(55);
   });
 
-  it("an out-of-date shop's price is not carried to today (TB6600)", () => {
+  it("a fresh shop's Lowest is not flagged", () => {
+    expect(priced("p2-histmulti").lowest?.outOfDate).toBe(false);
+  });
+
+  it("TB6600: the lowest moves between shops, as the mockup draws it", () => {
     const h = priced("p2-multi");
-    // Bazaar Hub's 400 (stale, checked 81 days ago) leads only until then.
-    expect(h.segments[0]).toMatchObject({ price: 400, shop: "Bazaar Hub" });
-    expect(daysAgo(h.segments[0].to)).toBe(81);
-    expect(h.segments.at(-1)).toMatchObject({ price: 425 });
-    expect(h.lowest?.price).toBe(400);
+    expect(h.segments.map((s) => [s.price, s.shop])).toEqual([
+      [440, "Nile Parts"],
+      [430, "Nile Parts"],
+      [425, "Giza Robotics"],
+      [419, "Giza Robotics"],
+      [429, "Giza Robotics"],
+      [425, "Delta Components"],
+    ]);
+    expect(h.lowest).toMatchObject({ price: 419, shop: "Giza Robotics", outOfDate: false });
+  });
+
+  it("at an equal price the shop already shown keeps the line, never API order", () => {
+    const [a, b] = CASES["p2-mixedmin"].offers;
+    const pts = (price: number) => [point(100, price, true)];
+    const forward = {
+      ...historyOf("p2-mixedmin"),
+      offers: [
+        { listing_id: a.id, since: "", points: pts(5) },
+        { listing_id: b.id, since: "", points: [point(100, 7, true), point(50, 5, true)] },
+      ],
+    };
+    const backward = { ...forward, offers: [...forward.offers].reverse() };
+    for (const history of [forward, backward]) {
+      const h = buildHistory(history, [a, b], now) as PriceHistory;
+      expect(h.segments.map((s) => s.shop)).toEqual(["Cairo Makers"]);
+    }
+    // Delta shown first keeps the line when Cairo Makers comes down to its price.
+    const swapped = {
+      ...forward,
+      offers: [
+        { listing_id: a.id, since: "", points: [point(100, 7, true), point(50, 5, true)] },
+        { listing_id: b.id, since: "", points: pts(5) },
+      ],
+    };
+    const h = buildHistory(swapped, [a, b], now) as PriceHistory;
+    expect(h.segments.map((s) => s.shop)).toEqual(["Delta Components"]);
   });
 
   it("offers on request are never drawn", () => {
@@ -170,6 +216,73 @@ describe("several shops", () => {
   });
 });
 
+describe("why a stretch has no line", () => {
+  const offer = CASES["p2-breaks"].offers[0];
+  const one = (points: ReturnType<typeof point>[], extra: Partial<typeof offer> = {}) =>
+    buildHistory(
+      {
+        product_id: "x",
+        since: "",
+        offers: [{ listing_id: offer.id, since: "", points }],
+      },
+      [{ ...offer, ...extra }],
+      now,
+    ) as PriceHistory;
+
+  it("one shop out of date: 'not checked since', never 'on request' or 'none in stock'", () => {
+    const checked = new Date(now.getTime() - 60 * DAY).toISOString();
+    const h = one([point(100, 40, true)], { last_verified_at: checked });
+    expect(h.segments.map((s) => [s.price, s.gap])).toEqual([
+      [40, null],
+      [null, "unchecked"],
+    ]);
+    expect(gapText(h.current, true)).toBe(`Not checked since ${dayMonth(Date.parse(checked))}`);
+    expect(gapLabel(h.current, true)).toMatch(/^not checked since /);
+  });
+
+  it("an archived stretch is a gap, 'not listed', never a dashed line at the old price", () => {
+    const h = one([
+      point(100, 40, true),
+      { ...point(60, 40, false), available: false },
+      point(40, 42, true),
+    ]);
+    expect(h.segments.map((s) => [s.price, s.gap])).toEqual([
+      [40, null],
+      [null, "unlisted"],
+      [42, null],
+    ]);
+    expect(gapText(h.segments[1], true)).toBe("Not listed");
+  });
+
+  it("in stock on request: Now reads 'Price on request'", () => {
+    const h = one([point(100, 40, true), point(40, null, true)]);
+    expect(h.current).toMatchObject({ price: null, gap: "on-request" });
+    expect(gapText(h.current, true)).toBe("Price on request");
+  });
+
+  it("several shops: none in stock reads so", () => {
+    const h = priced("p2-histmulti");
+    const gap = h.segments.find((s) => s.price === null)!;
+    expect(gap.gap).toBe("out-of-stock");
+    expect(gapText(gap, false)).toBe("None in stock");
+  });
+
+  it("a truncated history began before its first point: the full window", () => {
+    const h = buildHistory(
+      {
+        product_id: "x",
+        since: "",
+        offers: [
+          { listing_id: offer.id, since: "", points: [point(50, 40, true)], truncated: true },
+        ],
+      },
+      [offer],
+      now,
+    ) as PriceHistory;
+    expect(h.full).toBe(true);
+  });
+});
+
 describe("axes", () => {
   it("months start on the first, inside the chart", () => {
     const start = Date.UTC(2026, 7, 15);
@@ -178,16 +291,38 @@ describe("axes", () => {
       ["Sept", "Oct", "Nov"].map((m) =>
         new Date(Date.UTC(2026, ["Sept", "Oct", "Nov"].indexOf(m) + 8, 1)).toLocaleDateString(
           "en-GB",
-          { month: "short", timeZone: "UTC" },
+          { month: "short", timeZone: "Africa/Cairo" },
         ),
       ),
     );
   });
 
   it("the price scale pads a flat line off the frame", () => {
-    const flat = priceScale([{ from: 0, to: 1, price: 100, inStock: true, shop: null }]);
+    const seg = {
+      from: 0,
+      to: 1,
+      inStock: true,
+      shop: null,
+      gap: null,
+      checked: null,
+      outOfDate: false,
+    };
+    const flat = priceScale([{ ...seg, price: 100 }]);
     expect(flat.ticks).toEqual([100]);
     expect(flat.lo).toBeLessThan(100);
     expect(flat.hi).toBeGreaterThan(100);
+    // The middle tick is the round number its label prints.
+    expect(
+      priceScale([
+        { ...seg, price: 315 },
+        { ...seg, price: 340 },
+      ]).ticks,
+    ).toEqual([315, 328, 340]);
+    expect(
+      priceScale([
+        { ...seg, price: 0.15 },
+        { ...seg, price: 0.2 },
+      ]).ticks,
+    ).toEqual([0.15, 0.18, 0.2]);
   });
 });

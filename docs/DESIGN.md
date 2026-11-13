@@ -252,12 +252,27 @@ the page container on desktop; each section is left out when its fetch fails.
     tokens (`link` line, `ink-3` dashed, `line` gaps and grid); a tooltip (from, price,
     shop) is the only part that needs JavaScript, and the table says the same.
   - One shop: its own price, dashed while out of stock. Several: the lowest **in-stock**
-    price among the shops at each moment, naming whose it was; when no shop had it in
-    stock there is no line, only a shaded gap labelled "none in stock". "In stock N of the
-    last 12 weeks" counts weeks with at least one shop in stock ("(at one shop or more)").
+    price among the shops at each moment, naming whose it was; at an equal price the shop
+    already shown keeps the line, else the first by name, never the API's order. "In
+    stock N of the last 12 weeks" counts weeks with at least one shop in stock ("(at one
+    shop or more)").
+  - Every stretch without a line is a shaded gap that says why, in the gap, the table
+    and "Now": "none in stock" (one shop: "out of stock"), "price on request" (in stock,
+    no price), "not listed" (the shop had stopped listing it: an archived stretch is a
+    gap, never a dashed line at its old price) or "not checked since 14 Sept" (past an
+    out-of-date offer's last check).
   - "Lowest" counts in-stock prices only. Offers on request are never drawn. An offer
     counts only up to its last check when it is out of date (C2b): its old price is not
-    carried to today. With a minimum order in play the prices are prices of one, "each".
+    carried to today. A lowest from before that check still counts (the owner's decision,
+    November 2026), but wherever it names a shop now out of date it says so: "at Mansoura
+    Electronics (now out of date), 15 Aug" on the card, "Lowest in 90 days EGP 48 (now
+    out of date)" on the facts line. With a minimum order in play the prices are prices
+    of one, "each".
+  - History follows each shop's **listing** price, not its options' (option prices are
+    not recorded yet), and the card says so. A stopgap: an offer priced by an option on
+    the page is drawn at its listing price until option prices are recorded.
+  - Dates read in Cairo time. The chart's label for screen readers carries Now and the
+    lowest.
   - **Recording span**: no card and no facts line until 30 days are recorded (nothing is
     drawn empty); "Lowest since 24 Aug" and "since 24 Aug" until 90 days; the stock strip
     and its count only once 12 weeks are recorded.

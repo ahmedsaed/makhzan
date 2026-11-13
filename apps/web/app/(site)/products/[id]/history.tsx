@@ -3,6 +3,8 @@ import { ChevronDown } from "lucide-react";
 import { formatPrice } from "@/lib/format";
 import {
   dayMonth,
+  gapLabel,
+  gapText,
   HISTORY_DAYS,
   lowestLabel,
   monthTicks,
@@ -58,6 +60,14 @@ export function PriceHistoryCard({
   const each = history.each ? (
     <span className="ms-1 text-xs font-medium text-ink-2">each</span>
   ) : null;
+  const current = history.current;
+  const nowText =
+    current.price !== null
+      ? `${formatPrice(current.price, currency)}${history.each ? " each" : ""}${current.inStock ? "" : ", out of stock"}`
+      : gapText(current, history.single);
+  const lowestText = history.lowest
+    ? `${lowestLabel(history)} ${formatPrice(history.lowest.price, currency)}${history.lowest.shop ? ` at ${history.lowest.shop}${outOfDate(history)}` : ""}, ${dayMonth(history.lowest.at)}`
+    : null;
   return (
     <section id="history" data-history="price" aria-labelledby="history-heading" className={CARD}>
       <Header
@@ -67,13 +77,20 @@ export function PriceHistoryCard({
       <div className="mt-2.5 mb-1.5 flex flex-wrap gap-x-7 gap-y-3">
         <div data-history-now>
           <small className="block text-xs text-ink-2">Now</small>
-          {history.now !== null ? (
+          {current.price !== null ? (
             <>
-              <span className="figure text-xl text-ink">{formatPrice(history.now, currency)}</span>
+              <span className="figure text-xl text-ink">
+                {formatPrice(current.price, currency)}
+              </span>
               {each}
+              {!current.inStock && (
+                <div className="text-xs text-ink-2">{history.single ? "out of stock" : ""}</div>
+              )}
             </>
           ) : (
-            <span className="text-sm font-medium text-ink-2">None in stock</span>
+            <span className="text-sm font-medium text-ink-2">
+              {gapText(current, history.single)}
+            </span>
           )}
         </div>
         {history.lowest && (
@@ -85,25 +102,39 @@ export function PriceHistoryCard({
             {each}
             <div className="text-xs text-ink-2">
               {history.lowest.shop
-                ? `at ${history.lowest.shop}, ${dayMonth(history.lowest.at)}`
+                ? `at ${history.lowest.shop}${outOfDate(history)}, ${dayMonth(history.lowest.at)}`
                 : dayMonth(history.lowest.at)}
             </div>
           </div>
         )}
       </div>
-      <Chart history={history} currency={currency} label={`${what}, step chart`} />
+      <Chart
+        history={history}
+        currency={currency}
+        label={`${what}, step chart. Now: ${nowText}.${lowestText ? ` ${lowestText}.` : ""}`}
+      />
       {history.weeks && <WeekStrip weeks={history.weeks} suffix={anyShop} />}
       <p className="mt-2 text-xs text-ink-3">
         {what}. makhzan records a point only when a price or stock changes
         {history.full
           ? ""
           : `; recording began ${dayMonth(history.start)}, so there are fewer than ${HISTORY_DAYS} days yet`}
-        . {history.single ? "Dashed: out of stock." : "Shaded: no shop in stock."} Offers on request
-        are not drawn.
+        {`. ${history.single ? "Dashed: out of stock." : "Shaded: no shop in stock."}`}
+        {" Offers on request are not drawn. It follows each shop's listing price:"}
+        {" option prices are not recorded yet."}
       </p>
       <HistoryTable history={history} currency={currency} />
     </section>
   );
+}
+
+/**
+ * " (now out of date)" when the lowest is a named shop's price from before its
+ * offer went out of date (owner's rule, November 2026): it still counts, as
+ * the price it was then, but never reads as one to be had today.
+ */
+function outOfDate(history: PriceHistory): string {
+  return history.lowest?.shop && history.lowest.outOfDate ? " (now out of date)" : "";
 }
 
 const CARD =
@@ -170,9 +201,7 @@ function Chart({
     date: dayMonth(s.from),
     text:
       s.price === null
-        ? history.single
-          ? "No price"
-          : "No shop in stock"
+        ? gapText(s, history.single)
         : `${formatPrice(s.price, currency)}${history.each ? " each" : ""}${s.inStock ? "" : " · out of stock"}`,
     shop: s.shop,
   }));
@@ -246,7 +275,7 @@ function Chart({
               className="absolute top-1 -translate-x-1/2 text-[10px] whitespace-nowrap text-ink-2"
               style={{ left: pct((x(s.from) + x(s.to)) / 2) }}
             >
-              {history.single ? "no price" : "none in stock"}
+              {gapLabel(s, history.single)}
             </span>
           ) : null,
         )}
@@ -370,9 +399,7 @@ function HistoryTable({ history, currency }: { history: PriceHistory; currency: 
                 </td>
                 <td>
                   {s.price === null
-                    ? history.single
-                      ? "Price on request"
-                      : "None in stock"
+                    ? gapText(s, history.single)
                     : s.inStock
                       ? "In stock"
                       : "Out of stock"}
@@ -401,7 +428,7 @@ export function historyFactParts(
   }
   return {
     lowest: history.lowest
-      ? `${lowestLabel(history)} ${formatPrice(history.lowest.price, currency)}${history.each ? " each" : ""}`
+      ? `${lowestLabel(history)} ${formatPrice(history.lowest.price, currency)}${history.each ? " each" : ""}${outOfDate(history)}`
       : null,
     weeks: history.weeks ? weeksText(history.weeks) : null,
     link: "Price history",
