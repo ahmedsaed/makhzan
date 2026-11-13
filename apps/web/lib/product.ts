@@ -49,7 +49,7 @@ export function splitOffers(
   outOfStock: Offer[];
   stale: Offer[];
 } {
-  const ordered = orderOffers(offers);
+  const ordered = orderOffers(offers, now);
   const fresh = preferFresh(ordered, now);
   const stale = fresh === ordered ? [] : ordered.filter((offer) => isStaleOffer(offer, now));
   const outOfStock = fresh.filter(isOutOfStock);
@@ -83,7 +83,7 @@ export function summaryText(summary: OfferSummary): string {
  */
 export function primaryOffer(offers: Offer[], now: Date = new Date()): Offer | null {
   const linkable = preferFresh(
-    orderOffers(offers).filter((offer) => offer.source_url && offer.supplier),
+    orderOffers(offers, now).filter((offer) => offer.source_url && offer.supplier),
     now,
   );
   return (
