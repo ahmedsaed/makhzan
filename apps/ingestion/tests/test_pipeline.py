@@ -494,12 +494,24 @@ def test_drift_compares_names_folded_as_the_lookup_does():
     )
     observed = Counter({"leds": 5, "RASPBERRY  PI": 3, "Diodes – General Purpose": 2})
 
-    assert _crosswalk_drift(adapter, observed, complete=True) is None
+    # Checked and clean is recorded, so status can tell it from "not checked".
+    assert _crosswalk_drift(adapter, observed, complete=True) == {
+        "observed": 3,
+        "unmapped": {},
+        "unmapped_count": 0,
+        "unmapped_listings": 0,
+        "unused": [],
+        "unused_count": 0,
+    }
 
     observed["Teensy Board"] = 4
     drift = _crosswalk_drift(adapter, observed, complete=True)
     assert drift["unmapped"] == {"Teensy Board": 4}
-    assert "unused" not in drift
+    assert drift["unused"] == []
+    # A run that could not see the whole catalogue says nothing about retirements.
+    assert "unused" not in _crosswalk_drift(adapter, observed, complete=False)
+    # Nothing observed is not a check at all.
+    assert _crosswalk_drift(adapter, Counter(), complete=True) is None
 
 
 def test_names_left_unmapped_on_purpose_are_not_drift():

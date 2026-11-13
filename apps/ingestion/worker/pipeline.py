@@ -917,6 +917,11 @@ async def _page_budget(session: AsyncSession, adapter: SourceAdapter) -> dict:
     return out
 
 
+#: Unmapped names kept per run. Status unions a cycle's runs, so this only has
+#: to hold one run's slice; 15 was hit on every run of the biggest source.
+UNMAPPED_STORED = 100
+
+
 def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: bool) -> dict | None:
     """Compare the categories a sweep actually saw against the crosswalk.
 
@@ -931,6 +936,12 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     nothing — reporting it would cry wolf on every recovery from a failure. The
     same is true of a paced source, where the run that closes the cycle has only
     visited its own slice of the partitions; see the caller.
+
+    A clean check is recorded too (`unmapped` empty; `unused` empty when the
+    run was complete, absent when it could not say), and None means "not
+    checked" — no crosswalk, or nothing observed — so status can tell the two
+    apart. A clean result speaks only for the names this run saw: on a paced
+    source that is one slice, and status unions the cycle's runs.
     """
     if not adapter.categories or not observed:
         return None
@@ -943,21 +954,25 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     unmapped = {
         name: n for name, n in observed.items() if normalize_category_name(name) not in known
     }
-    drift: dict = {"observed": len(observed)}
-    if unmapped:
-        # Biggest first — a rename of a busy category matters more than a new
-        # one-product corner.
-        drift["unmapped"] = dict(Counter(unmapped).most_common(15))
-        drift["unmapped_listings"] = sum(unmapped.values())
+    # Biggest first — a rename of a busy category matters more than a new
+    # one-product corner. Capped to keep the row small; `unmapped_count` and
+    # `unmapped_listings` cover every name, so status can say what the cap hid.
+    drift: dict = {
+        "observed": len(observed),
+        "unmapped": dict(Counter(unmapped).most_common(UNMAPPED_STORED)),
+        "unmapped_count": len(unmapped),
+        "unmapped_listings": sum(unmapped.values()),
+    }
     if complete:
         seen = fold_names(observed)
         unused = sorted(
             name for name in adapter.categories if normalize_category_name(name) not in seen
         )
-        if unused:
-            drift["unused"] = unused[:25]
-            drift["unused_count"] = len(unused)
-    return drift if len(drift) > 1 else None
+        # Present (even empty) only when this run could speak for retirements,
+        # so status can tell "none retired" from "not in a position to know".
+        drift["unused"] = unused[:25]
+        drift["unused_count"] = len(unused)
+    return drift
 
 
 async def _partitions_for_this_run(
@@ -1075,6 +1090,11 @@ async def _logged_run(
             stats["identity"] = identity.describe()
             if log.robots_state:
                 stats["robots"] = dict(log.robots_state)
+            # The names seen so far, so a run cut off mid-sweep (its cursors
+            # already advanced past these pages) still reports them. Never
+            # `unused`: only the finished run can know it saw everything.
+            if limit is None and (drift := _crosswalk_drift(adapter, observed, complete=False)):
+                stats["crosswalk"] = drift
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and
@@ -1205,7 +1225,10 @@ async def _logged_run(
             observed,
             complete=bool(cycle) and not resumed and swept_every_partition,
         )
-        if drift:
+        # Recorded only for a real sweep: a `limit=` test run is ephemeral and
+        # must not speak for the catalogue (a clean result would read as a
+        # check), and a run its host stopped before any page saw nothing.
+        if drift is not None and limit is None and not (stopped and not tally["pages"]):
             stats["crosswalk"] = drift
         run.stats = stats
 
