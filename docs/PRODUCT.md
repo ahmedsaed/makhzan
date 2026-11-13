@@ -4,36 +4,46 @@ Where makhzan goes after the November 2026 redesign: what has been decided, what
 been proposed and not yet discussed, and in what order. `docs/PLAN.md` is the original
 plan; `docs/DESIGN.md` is how it looks; this is what it becomes.
 
-Last updated 2026-11-06. Decisions are Ahmed's; "proposed" items are suggestions
+Last updated 2026-11-13. Decisions are Ahmed's; "proposed" items are suggestions
 recorded so the discussion can resume, not commitments.
 
 ## Now: polish, then ask the suppliers
 
 The project depends on suppliers tolerating the crawl, so that is tested before
-anything large is built. Six of the eight current shops are crawled without trouble;
+anything large is built. Seven of the nine current shops are crawled without trouble;
 two (over half the catalogue) block the production host's address, which may be a
-default security setting rather than a decision about makhzan. Nobody has refused.
+default security setting rather than a decision about makhzan. Both were emailed on
+2026-11-06 and 2026-11-10 and have not replied; the reachable shops were first written to
+on 2026-11-10. Nobody has refused.
 
 The current site is polished just enough to show, then the shops are asked. The
 redesign continues in parallel: it does not depend on who says yes.
 
-Before the emails go out:
+Before the emails go out (state on 2026-11-13; the emails have since gone out, see
+below):
 
-1. **A working contact address.** The crawler's `From` header and the crawling page
+1. ✓ **A working contact address.** The crawler's `From` header and the crawling page
    named `crawler@makhzan.eg`, a domain with no mail records: a shop that wrote would
-   get a bounce.
-2. **Fresh data for the reachable shops.** The crawl is paused; a shop owner checks
-   their own products first.
-3. **A "For suppliers" page**: remove my shop, add my shop, correct my details. Even a
+   get a bounce. Done: `crawler@makhzan.merope.dev` receives mail.
+2. ✓ **Fresh data for the reachable shops.** The crawl was paused; a shop owner checks
+   their own products first. Done: the seven reachable shops are read daily again.
+3. ✓ **A "For suppliers" page**: remove my shop, add my shop, correct my details. Even a
    plain form or mail link. Shops have to see they can leave before they agree to stay.
-4. **Links to shops carry `ref=makhzan`**, and clicks per shop are counted, so "we
-   sent you N visitors" can be said with numbers.
-5. **Each shop's own page on makhzan, spot-checked**: prices, links, photos, categories.
-6. **No half-finished Arabic** anywhere visible (the redesign is English only).
+   Done: `/for-suppliers`.
+4. ✓ **Links to shops carry `ref=makhzan`**, and clicks per shop are counted, so "we
+   sent you N visitors" can be said with numbers. Done: every shop link carries it and
+   sends an Umami `shop-click` event.
+5. ✗ **Each shop's own page on makhzan, spot-checked**: prices, links, photos, categories.
+   Not done, and not done before the emails went out.
+6. ✓ **No half-finished Arabic** anywhere visible (the redesign is English only).
 
 Then: the two blocked shops first (the ask is specific: allowlist one address, or send
 a feed), with their own makhzan page as the pitch; the others later with a short note
-and the referral numbers.
+and the referral numbers. What happened: the two blocked shops were emailed on
+2026-11-06 and followed up on 2026-11-10, with no reply yet; their follow-up goes through
+other channels around 2026-11-16. First emails went to the reachable shops on
+2026-11-10, before the spot-check (item 5) was done: shop 3, the Odoo shop, shop 1, shop 2, the
+Shopify shop and the Wix shop by email. Shop 5 has not been contacted yet.
 
 ## Decided
 
@@ -83,6 +93,10 @@ request". The per-shop findings and costs are in the private configuration's
 change, switched on shop by shop (see "Decided" above).
 
 Phase 2 shows it, decided 2026-11-09:
+
+(In progress on 2026-11-13. Done: shop contact details, crawler activity, price history
+recorded and served by the API. Not done: everything on the product page below, price
+history on the site, and both grouping changes. `docs/ROADMAP.md` keeps the table.)
 
 - **Product page:** minimum order ("EGP 0.25 each · min. 10 (EGP 2.50)"), the
   manufacturer part number, an options table (each option with its own price, stock
