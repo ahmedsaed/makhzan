@@ -54,7 +54,14 @@ from worker.richtext import (
     videos_from_html,
     without_sections,
 )
-from worker.sources.base import CONTACT_PART, Confirmation, Page, SourceAdapter, SupplierInfo
+from worker.sources.base import (
+    CONTACT_PART,
+    Confirmation,
+    ConfirmStopped,
+    Page,
+    SourceAdapter,
+    SupplierInfo,
+)
 from worker.sources.short_page import SHADOW, ShortPageEnd
 from worker.util import strip_html
 
@@ -312,7 +319,10 @@ class WooCommerceAdapter(SourceAdapter):
                 {"per_page": PER_PAGE, "page": page, "stock_status": partition},
             )
         products = response.json()
-        products = products if isinstance(products, list) else []
+        if not isinstance(products, list):
+            # Never read as an empty page: that would end the partition, and a
+            # completed cycle would then archive whatever it had not reached.
+            raise ValueError(f"the Store API returned {type(products).__name__}, not a list")
         items = [self._to_raw(p, availability) for p in products]
         # An empty page is today's end. A short one, or the header saying this
         # is the last, says the same a request earlier (T1).
@@ -376,9 +386,14 @@ class WooCommerceAdapter(SourceAdapter):
         ids = [i for i in ids if i.isdigit()]
         for start in range(0, len(ids), PER_PAGE):
             batch = ids[start : start + PER_PAGE]
-            response = await fetcher.get(
-                CONFIRM_LABEL, url, {"include": ",".join(batch), "per_page": PER_PAGE}
-            )
+            try:
+                response = await fetcher.get(
+                    CONFIRM_LABEL, url, {"include": ",".join(batch), "per_page": PER_PAGE}
+                )
+            except ConfirmStopped as exc:
+                # The run may send no more: the rest are unasked, and wait.
+                out.notes["stopped"] = str(exc)[:200]
+                break
             rows = response.json()
             if not isinstance(rows, list):
                 raise ValueError(f"include returned {type(rows).__name__}, not a list")
