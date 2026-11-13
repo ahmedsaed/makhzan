@@ -809,14 +809,9 @@ test.describe("contacting the shop", () => {
     // Beside the Sold by card, not inside its link.
     await expect(page.locator("[data-sold-by] [data-contact]")).toHaveCount(0);
 
-    // And a way to say something is wrong, naming the shop and the product.
-    const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
-    const href = decodeURIComponent((await report.getAttribute("href")) ?? "");
-    expect(href).toMatch(/^mailto:crawler@makhzan\.merope\.dev\?subject=/);
-    expect(href).toContain(
-      "subject=Something wrong: Digital Caliper 150mm x 0.01mm IP54 at Volt Corner",
-    );
-    expect(href).toContain("Page: https://makhzan.test/products/p-single");
+    // Something wrong is reported with the button by the title
+    // (tests/e2e/report.spec.ts), not an email under the contacts.
+    await expect(page.locator("[data-report]")).toHaveCount(0);
   });
 
   test("several shops: each shop once, under the offers, never on the rows", async ({ page }) => {
@@ -844,10 +839,7 @@ test.describe("contacting the shop", () => {
     await expect(block.locator('[data-shop-contact-line="nile-parts"]')).toContainText(
       "Daily 9:00 to 18:00",
     );
-    const report = page.locator("[data-report]").getByRole("link", { name: "Tell us" });
-    expect(decodeURIComponent((await report.getAttribute("href")) ?? "")).toContain(
-      "subject=Something wrong: ESP32 Development Board 30 pin at ",
-    );
+    await expect(page.locator("[data-report]")).toHaveCount(0);
   });
 });
 

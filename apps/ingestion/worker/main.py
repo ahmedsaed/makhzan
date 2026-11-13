@@ -9,7 +9,8 @@ vanished products get archived. Every source job, however it ends, asks for a
 product rebuild and reindex (`rebuild_and_reindex`), deduplicated so sources
 finishing close together share one; the first rebuild of each day then retires
 redirects unused for a year. Idempotent upserts mean re-runs update in
-place. Run the worker:  arq worker.main.WorkerSettings
+place. A cron every 10 minutes (`purge_reports`) erases what the privacy page says is
+not kept from visitors' reports. Run the worker:  arq worker.main.WorkerSettings
 """
 
 import asyncio
@@ -22,6 +23,7 @@ from arq import cron
 from arq.connections import RedisSettings
 from arq.worker import func
 from makhzan_schemas import crawl
+from makhzan_schemas.reports import purge_personal_data
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
 from makhzan_schemas.grouping import rebuild_products
@@ -300,6 +302,29 @@ async def refresh_all(ctx: dict) -> list[dict]:
     return queued
 
 
+async def purge_reports(ctx: dict) -> dict:
+    """Cron task, every 10 minutes: erase reporters' data past its time
+    (makhzan_schemas.reports).
+
+    An email 90 days after its report was sent, an address's hash 24 hours
+    after it: what /privacy promises. Every 10 minutes, so an address's hash
+    never outlives its 24 hours by more than that. Two small updates: the
+    hash one uses the (ip_hash, created_at) index; the email one scans the
+    table, which is fine at the number of reports a person can review, so it
+    has no index of its own. Not behind CRAWL_ENABLED: a paused crawl must not
+    pause a privacy promise.
+    """
+    async with SessionLocal() as session:
+        counts = await purge_personal_data(session)
+    if counts["emails"] or counts["ip_hashes"]:
+        log.info("reports: erased %(emails)d emails and %(ip_hashes)d address hashes", counts)
+    return counts
+
+
+#: When `purge_reports` runs: every 10 minutes, off the hour.
+PURGE_MINUTES = {7, 17, 27, 37, 47, 57}
+
+
 class WorkerSettings:
     functions = [
         # Not retried: a run cut off (a deploy, the timeout) resumes from its
@@ -309,7 +334,16 @@ class WorkerSettings:
         run_source,
         run_partition,
     ]
-    cron_jobs = [cron(refresh_all, hour=REFRESH_HOUR, minute=0, timeout=timedelta(minutes=5))]
+    cron_jobs = [
+        cron(refresh_all, hour=REFRESH_HOUR, minute=0, timeout=timedelta(minutes=5)),
+        # Every 10 minutes, off the hour so it never queues behind the daily refresh.
+        cron(
+            purge_reports,
+            minute=PURGE_MINUTES,
+            timeout=timedelta(minutes=5),
+            run_at_startup=True,
+        ),
+    ]
     # Also for run_source / run_partition jobs enqueued by hand.
     job_timeout = JOB_TIMEOUT
     # Up to MAX_CONCURRENT_SOURCES sources at once, plus one slot so a rebuild

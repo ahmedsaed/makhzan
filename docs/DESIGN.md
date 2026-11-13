@@ -59,10 +59,11 @@ Measured on 60.9k active listings (November 2026).
 ├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
 │   └── /shops/{shop}           Freshness, what they carry, its products as scoped results
 ├── /how-we-crawl               The crawling policy, written for suppliers, and what the crawler did (#activity)
-└── /for-suppliers              Remove, add or correct a shop (requests, by email)
+├── /for-suppliers              Remove, add or correct a shop (requests, by email)
+└── /privacy                    What makhzan keeps about visitors, why and for how long (PDPL, Law 151 of 2020)
 
 Everywhere: header (logo, search, Departments, Shops), footer (For suppliers,
-How we crawl, theme toggle, Made by Merope), 404 and error pages.
+How we crawl, Privacy, theme toggle, Made by Merope), 404 and error pages.
 ```
 
 - **No language in URLs.** `/en/…` and `/ar/…` redirect permanently to the same path
@@ -117,6 +118,19 @@ the page container on desktop; each section is left out when its fetch fails.
 **Product.**
 - Breadcrumb (department › group › category), photo (contained, white frame), title, part
   number when known.
+- **Report a problem** (the approved mockup of November 2026, variant F): one outlined
+  button, a flag and "Report a problem", at the far right of the title's row; on a phone a
+  44px flag-only square named "Report a problem", so the title keeps its width. It is the
+  page's only way to report anything: no button on the offer rows, and no "Something
+  wrong? Tell us" email under the contacts (the shop page keeps its own). It opens a Base
+  UI dialog (a sheet from the bottom on a phone): step 1, what is wrong (offers aren't the
+  same product, only with 2+ offers; the same as another product; wrong price or stock;
+  wrong category; wrong details; a shop's contact details; something else); step 2, what
+  that reason needs, every offer listed to tick or pick (folded ones included), an
+  optional note (1,000 characters) and an optional email, a note on what is kept linking
+  /privacy; then sending, thanks with the reference, "wasn't sent" and "too many
+  reports", each keeping what was written and offering it by email.
+  `components/report-problem.tsx`, `lib/report.ts`; the API's `POST /reports`.
 - **makhzan's facts first.** The title, description and specs are copied from the
   shops (on 98.6% of pages from one shop), so what makhzan adds leads, under the title:
   unique value first, for a buyer and for a search engine. Each line only when its data
@@ -133,8 +147,7 @@ the page container on desktop; each section is left out when its fetch fails.
 - One shop: price, stock, freshness note when stale, a "Sold by" card linking to the
   shop page and, under it when the shop publishes one, "Contact {shop} directly":
   outlined buttons for "Call 02 2345 6789", WhatsApp and Email, laid out as on the shop
-  page, then its opening hours as the shop page reads them, then "Something wrong?
-  Tell us" (an email to makhzan naming the product and the shop); then what the shop
+  page, then its opening hours as the shop page reads them; then what the shop
   wrote. A fixed bottom bar on phones: price, "checked …"
   and **View at {shop}**.
 - **Shop terms (Phase 2, the approved mockup of November 2026).** What a shop states
@@ -201,7 +214,7 @@ the page container on desktop; each section is left out when its fetch fails.
   **Contact the shops**: each shop that publishes a way to reach it, once, as a small
   block (its name; "Call 19123 · WhatsApp · Email"; its opening hours), never on the rows (a shop with three offers would
   say it three times, and a row leaving it out because a neighbour said it would break
-  P3), then "Something wrong? Tell us". Out-of-stock offers fold
+  P3). Out-of-stock offers fold
   under "Show N out of stock offers", out-of-date ones (any stock) under "Show N out of
   date offers". The summary counts the recently checked offers, and the bottom bar
   points to the cheapest of them. When every offer is out of date nothing folds for
@@ -494,7 +507,7 @@ Each is meant to be checked by a test.
 - **P1** Every result opens the product page; nothing in a result links straight to a shop.
 - **P2** The comparison list appears only with 2+ offers.
 - **P3** All of a product's offers share one list, each row led by its own title (variants differ). Rows must not depend on their neighbours, so variant groups can wrap them later.
-- **P4** The only link out of makhzan is to a shop's own page, and it carries `ref=makhzan`. The one exception is a way to reach a shop, as its details are published (its site, its Facebook, its Google Maps listing): `tel:`, `mailto:`, `https://wa.me/<its number>` and a Google or Apple Maps link, plus the "Something wrong? Tell us" email to makhzan. These carry no `ref` (it would break them) and are marked `data-contact`. Files and videos a shop links from its listing are links out too, shown only in that shop's panel: datasheets go through the shop link (with `ref`, as before), videos open their host (YouTube, Vimeo …) with no `ref`, which would mean nothing there, and are marked `data-video`.
+- **P4** The only link out of makhzan is to a shop's own page, and it carries `ref=makhzan`. The one exception is a way to reach a shop, as its details are published (its site, its Facebook, its Google Maps listing): `tel:`, `mailto:`, `https://wa.me/<its number>` and a Google or Apple Maps link, plus the "Something wrong? Tell us" email to makhzan (shop pages) and the report form's "email it to us" fallback. These carry no `ref` (it would break them) and are marked `data-contact`. Files and videos a shop links from its listing are links out too, shown only in that shop's panel: datasheets go through the shop link (with `ref`, as before), videos open their host (YouTube, Vimeo …) with no `ref`, which would mean nothing there, and are marked `data-video`.
 
 **Style and accessibility**
 - **S1** Colours come only from the tokens above; no literal colours in components.
