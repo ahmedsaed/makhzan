@@ -569,6 +569,8 @@ export type SitemapProduct = {
   title_ar?: string | null;
   part_number?: string | null;
   changed_at: string;
+  /** The page's main photo, on the shop's host. Optional: an older API has none. */
+  image?: string | null;
 };
 
 export type SitemapPage = {

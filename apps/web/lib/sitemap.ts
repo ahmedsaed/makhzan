@@ -106,7 +106,18 @@ export async function productChunk(
   return [];
 }
 
-/** A product's sitemap entry: its readable URL, and when its content changed. */
+/**
+ * A product's sitemap entry: its readable URL, when its content changed, and
+ * its main photo as an `<image:image>`.
+ *
+ * The photo follows Google's image sitemap guidance
+ * (developers.google.com/search/docs/crawling-indexing/sitemaps/image-sitemaps):
+ * `image:loc` may be on another host, as every product photo is (they are the
+ * shops' own, hotlinked, decision 0003). Only an absolute http(s) URL is
+ * listed. Next writes the URL into the XML as given, unescaped, so it is
+ * escaped here: a shop's photo URL with `&` in its query would otherwise make
+ * the whole file invalid XML.
+ */
 export function productEntries(products: SitemapProduct[]): MetadataRoute.Sitemap {
   return products.map((product) => ({
     // The same slug the product page builds, so the listed URL is the one it
@@ -119,7 +130,20 @@ export function productEntries(products: SitemapProduct[]): MetadataRoute.Sitema
       ),
     ),
     lastModified: product.changed_at,
+    // `href` percent-encodes what a URL may not hold raw (spaces, Arabic file
+    // names), as a sitemap's URLs must be; escapeXml then makes it XML.
+    ...(isWebUrl(product.image) && { images: [escapeXml(new URL(product.image).href)] }),
   }));
+}
+
+function isWebUrl(url: string | null | undefined): url is string {
+  if (!url) return false;
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 /** The URL Next serves sitemap `id` at (`generateSitemaps`: /sitemap/{id}.xml). */

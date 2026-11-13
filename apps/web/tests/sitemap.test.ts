@@ -111,6 +111,28 @@ describe("productEntries", () => {
     ]);
   });
 
+  it("lists the main photo, escaped for XML, and only a web URL", () => {
+    vi.stubEnv("SITE_URL", "https://makhzan.example");
+    const id = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
+    const [arabic] = productEntries([
+      { id, title_en: "SG90", changed_at: "2026-10-02", image: "https://shop-a.test/صورة 1.jpg" },
+    ]);
+    expect(arabic.images).toEqual(["https://shop-a.test/%D8%B5%D9%88%D8%B1%D8%A9%201.jpg"]);
+    const [photo, none, junk] = productEntries([
+      {
+        id,
+        title_en: "SG90",
+        changed_at: "2026-10-02",
+        image: "https://cdn.shop-a.test/sg90.jpg?w=800&h=800",
+      },
+      { id, title_en: "SG90", changed_at: "2026-10-02", image: null },
+      { id, title_en: "SG90", changed_at: "2026-10-02", image: "data:image/png;base64,AAAA" },
+    ]);
+    expect(photo.images).toEqual(["https://cdn.shop-a.test/sg90.jpg?w=800&amp;h=800"]);
+    expect(none).not.toHaveProperty("images");
+    expect(junk).not.toHaveProperty("images");
+  });
+
   // The page slugs from titleOf(product) || part_number; the sitemap must
   // list that same URL, or Google is handed one that redirects.
   it("slugs as the product page does: the Arabic title's Latin words, then the part number", () => {
