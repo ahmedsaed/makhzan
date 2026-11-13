@@ -498,6 +498,7 @@ def test_drift_compares_names_folded_as_the_lookup_does():
     assert _crosswalk_drift(adapter, observed, complete=True) == {
         "observed": 3,
         "unmapped": {},
+        "unmapped_count": 0,
         "unmapped_listings": 0,
         "unused": [],
         "unused_count": 0,

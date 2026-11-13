@@ -115,6 +115,73 @@ async def test_unused_comes_from_the_newest_run_that_could_speak_for_it(capsys):
     assert "crosswalk matches the source" in out
 
 
+def _closing(minutes_ago: int, cycle_started_minutes_ago: int, crosswalk=CLEAN) -> IngestionRun:
+    run = _run("shop", minutes_ago, crosswalk)
+    run.stats["cycle"] = {
+        "cycle_started_at": (
+            datetime.now(UTC) - timedelta(minutes=cycle_started_minutes_ago)
+        ).isoformat()
+    }
+    return run
+
+
+async def test_a_cycle_that_started_before_the_window_is_read_from_its_start(capsys):
+    """The 30-day cutoff must not truncate the cycle it claims to cover: a slice
+    swept on day 1 of a cycle that started 40 days ago still counts."""
+    day = 24 * 60
+    out = await _drift_report(capsys, [_run("shop", 35 * day, DRIFTED), _closing(5, 40 * day)])
+    assert "Cooling Solutions" in out
+    assert "matches the source" not in out
+
+
+async def test_no_run_checked_this_cycle_is_said_not_called_a_match(capsys):
+    out = await _drift_report(capsys, [_run("shop", 120, DRIFTED), _closing(5, 60, None)])
+    assert "0 runs checked (this cycle)" in out
+    assert "matches the source" not in out
+
+
+async def test_a_capped_list_is_said_and_never_called_a_match(capsys, tmp_path, monkeypatch):
+    """A run stores only its biggest unmapped names. Even when every listed one
+    is since ignored, the tail it left out is unknown, so no "matches"."""
+    _crosswalk_file(tmp_path, monkeypatch, 'ignore = ["Fans"]\n\n[categories]\n"A" = "x:y"\n')
+    capped = {"observed": 9, "unmapped": {"Fans": 50}, "unmapped_count": 3, "unmapped_listings": 80}
+    out = await _drift_report(capsys, [_source_row(), _closing(5, 60, capped)])
+    assert "+2 more names / 30 listings not listed" in out
+    assert "Fans" not in out.replace("+2 more names", "")
+    assert "matches the source" not in out
+
+
+async def test_a_capped_unused_list_is_at_least(capsys):
+    complete = {**CLEAN, "unused": ["Teensy Board"], "unused_count": 30}
+    out = await _drift_report(capsys, [_run("shop", 5, complete)])
+    assert "at least 30 entries never matched" in out
+
+
+async def test_a_run_cut_off_mid_sweep_has_already_recorded_what_it_saw():
+    """The per-page checkpoint carries the names seen so far: a run killed after
+    its cursors moved past a page must not lose that page's names."""
+    from sqlalchemy import select
+
+    await _seed_taxonomy()
+    seen: list[dict | None] = []
+
+    class Watched(CategoryAdapter):
+        async def fetch_page(self, partition, page):
+            if partition == "cat-later":
+                async with SessionLocal() as other:
+                    row = (
+                        await other.execute(select(IngestionRun).where(IngestionRun.source == SRC))
+                    ).scalar_one()
+                    seen.append((row.stats or {}).get("crosswalk"))
+            return await super().fetch_page(partition, page)
+
+    await run_source(
+        SRC, Watched(["cat-new", "cat-later"], {"cat-x": ("electronics", "resistors")})
+    )
+    assert seen and seen[0]["unmapped"] == {"cat-new": 1}
+    assert "unused" not in seen[0]
+
+
 def _crosswalk_file(tmp_path, monkeypatch, body: str) -> None:
     (tmp_path / "shop_x.toml").write_text(body)
     monkeypatch.setenv("MAKHZAN_CROSSWALKS", str(tmp_path))

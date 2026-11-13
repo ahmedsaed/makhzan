@@ -457,13 +457,34 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
     Both are then filtered by the crosswalk as it stands now: a name since
     mapped or ignored leaves the report at once, and an entry since removed no
     longer counts as never matched. "Matches the source" is only said when the
-    runs read cover a completed cycle; otherwise a clean slice is just that.
+    runs read cover a completed cycle and no run's stored list was capped;
+    otherwise a clean slice is just that. A run cut off mid-sweep reports the
+    names it saw up to its last page (the pipeline checkpoints them).
     """
     _header("CROSSWALK DRIFT")
     since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Each source's newest completed cycle, looked up on its own: a cycle that
+    # started before `since` must still be read from its start, or its first
+    # runs would be cut off while the window still claimed to cover it.
+    cycle_query = (
+        select(IngestionRun.source, IngestionRun.stats)
+        .where(IngestionRun.stats.has_key("cycle"))
+        .order_by(IngestionRun.source, IngestionRun.started_at.desc())
+        .distinct(IngestionRun.source)
+    )
+    if source_filter:
+        cycle_query = cycle_query.where(IngestionRun.source == source_filter)
+    cycle_starts = {
+        source: start
+        for source, stats in (await session.execute(cycle_query)).all()
+        if (start := _cycle_start(stats))
+    }
+    floor = min([since, *cycle_starts.values()])
+
     query = (
         select(IngestionRun)
-        .where(IngestionRun.started_at >= since)
+        .where(func.coalesce(IngestionRun.finished_at, IngestionRun.started_at) >= floor)
         .order_by(IngestionRun.started_at.desc())
     )
     if source_filter:
@@ -476,40 +497,53 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
     reported = False
     for source in sorted(runs_by_source):
         runs = runs_by_source[source]  # newest first
-        checked = [r for r in runs if isinstance((r.stats or {}).get("crosswalk"), dict)]
-        if not checked:
+        checked_all = [r for r in runs if isinstance((r.stats or {}).get("crosswalk"), dict)]
+        if not checked_all:
             continue
         reported = True
-        checked_all = checked
 
-        # The window: from the start of the newest completed cycle. A run
-        # belongs to it if it was still going then (the cycle's first cursor is
-        # stamped after its first run starts).
-        cycle_start = next((s for r in runs if (s := _cycle_start(r.stats))), None)
-        if cycle_start is not None:
-            checked = [r for r in checked if (r.finished_at or r.started_at) >= cycle_start]
-        newest = checked[0].stats["crosswalk"] if checked else {}
+        # The window: from the start of the newest completed cycle (a run
+        # belongs to it if it was still going then: the cycle's first cursor is
+        # stamped after its first run starts), else the last `days`.
+        cycle_start = cycle_starts.get(source)
+        start = cycle_start or since
+        checked = [r for r in checked_all if (r.finished_at or r.started_at) >= start]
+        scope = "this cycle" if cycle_start else f"in {days}d, no completed cycle"
+        if not checked:
+            print(f"  {source:22s} 0 runs checked ({scope})")
+            continue
+        newest = checked[0].stats["crosswalk"]
         covered = cycle_start is not None or "unused" in newest
 
         mapped, ignored, why_unfiltered = _current_crosswalk(configs.get(source))
         known = mapped | ignored
         unmapped: dict[str, int] = {}
+        hidden: tuple[int | None, int] | None = None  # what the newest capped run left out
         for run in checked:
-            for name, count in (run.stats["crosswalk"].get("unmapped") or {}).items():
+            drift = run.stats["crosswalk"]
+            listed = drift.get("unmapped") or {}
+            for name, count in listed.items():
                 if normalize_category_name(name) not in known:
                     unmapped.setdefault(name, count)
+            # Runs from before `unmapped_count` was stored say only the listings.
+            total_names = drift.get("unmapped_count")
+            more_names = None if total_names is None else total_names - len(listed)
+            more_listings = (drift.get("unmapped_listings") or 0) - sum(listed.values())
+            if hidden is None and ((more_names or 0) > 0 or more_listings > 0):
+                hidden = (more_names, more_listings)
 
         complete = next(
             (r.stats["crosswalk"] for r in checked_all if "unused" in r.stats["crosswalk"]), {}
         )
         unused = list(complete.get("unused") or [])
         unused_count = complete.get("unused_count", len(unused))
+        unused_capped = unused_count > len(unused)
         if not why_unfiltered:
             unused = [n for n in unused if normalize_category_name(n) in mapped]
             unused_count = len(unused)
 
         note = f"    {DIM}not filtered by the current crosswalk: {why_unfiltered}{RESET}"
-        if not unmapped and not unused:
+        if not unmapped and not unused and hidden is None:
             if covered:
                 print(f"  {source:22s} {GREEN}crosswalk matches the source{RESET}")
             else:
@@ -520,7 +554,6 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
             if why_unfiltered:
                 print(note)
             continue
-        scope = "this cycle" if cycle_start else f"in {days}d, no completed cycle"
         print(f"  {source:22s} {len(checked)} runs checked ({scope})")
         if why_unfiltered:
             print(note)
@@ -532,10 +565,20 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
             )
             for name, count in list(unmapped.items())[:6]:
                 print(f"      {count:5d}  {name[:62]}")
+        if hidden is not None:
+            # A run stored only its biggest names. What it left out is unknown,
+            # so the report never calls this source clean.
+            names, listings = hidden
+            print(
+                f"    {YELLOW}+{'?' if names is None else names} more names"
+                f" / {listings} listings not listed{RESET}"
+                f" {DIM}(a run's stored list was capped; may include names since mapped){RESET}"
+            )
         if unused:
             # Only reported after a complete sweep, so this really means "gone".
+            at_least = "at least " if unused_capped else ""
             print(
-                f"    {YELLOW}{unused_count} entries never matched{RESET}"
+                f"    {YELLOW}{at_least}{unused_count} entries never matched{RESET}"
                 f" — retired or renamed away:"
             )
             print(f"      {DIM}{', '.join(unused[:6])}{RESET}")
