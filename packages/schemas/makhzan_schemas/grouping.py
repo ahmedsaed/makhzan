@@ -96,6 +96,14 @@ def _without_identifier(title: str | None, mpn: str | None) -> str:
     return _identifier_re(mpn).sub(" ", text) if mpn else text
 
 
+def _stated_only(listing: Listing) -> bool:
+    """Whether the listing's identifier is absent from its title: it came from
+    what the shop states beside it, not from what the title says."""
+    mpn = listing.part_number
+    title = (listing.title_en or listing.title_ar or "").lower()
+    return bool(mpn) and _identifier_re(mpn).search(title) is None
+
+
 def _sig_tokens(title: str | None, mpn: str | None, domain: str | None = None) -> set[str]:
     noise = get_profile(domain).noise_tokens
     text = _without_identifier(title, mpn)
@@ -300,12 +308,18 @@ def _subcluster(
        rule change joins two existing products).
     3. **Newcomers** — no product yet, alone in theirs, or evicted in pass 1 —
        join the cluster they best match without contradicting it, or start one.
+       Only those whose title names the identifier, here.
     4. The merge of pass 2 once more, over everything, largest first: so the
        result does not depend on which listings had products, a rebuild from
        scratch gives the same groups, and one rebuild converges — the next
        changes nothing.
+    5. **Stated-only newcomers** — whose identifier is absent from the title,
+       read from a slug code or a "Model" row — placed as in pass 3, then the
+       merge once more. Placed earlier, one sitting in a cluster silent on a
+       value (a 30 V diode among titles that state no voltage) kept that
+       cluster from merging with the rest of its product.
 
-    On a first build nobody has a product, so passes 3 and 4 only.
+    On a first build nobody has a product, so passes 3 to 5 only.
 
     A group's key depends only on its membership (it is named after the member
     first in natural order), so reaching the same groups another way gives the
@@ -381,25 +395,23 @@ def _subcluster(
     # Pass 2: existing products that the current rules say are one.
     clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
 
-    # Pass 3: newcomers, in the plain order.
+    # Pass 3: newcomers, in the plain order. Those whose title names the
+    # identifier are placed and merged first (pass 4); those that have it only
+    # as a stated fallback (a "Model" row, a slug code) say less about which part
+    # they are, so they come after (pass 5), or one could sit in a cluster silent
+    # on a value and keep it from merging with the rest of its product.
     newcomers += [listing for listing in ordered if listing.id not in placed]
-    for listing in sorted(newcomers, key=_natural_order):
-        ev = evidence[listing.id]
-        # The best-matching cluster, not the first that will have it: with a
-        # shop's variants now kept apart, a listing can be admissible to several
-        # sibling clusters and should join the one it most resembles.
-        best = None
-        for cluster in clusters:
-            score = cluster.similarity(listing, ev, threshold, max_ratio, strict)
-            if score is not None and (best is None or score > best[0]):
-                best = (score, cluster)
-        if best is not None:
-            best[1].add(listing, ev)
-        else:
-            clusters.append(_new_cluster(listing, ev))
+    titled = [m for m in newcomers if not _stated_only(m)]
+    stated = [m for m in newcomers if _stated_only(m)]
+    _place(clusters, titled, evidence, threshold, max_ratio, strict)
 
     # Pass 4: the same merge over everything, so one rebuild converges.
     clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+
+    # Pass 5: the stated-only newcomers, then the merge once more.
+    if stated:
+        _place(clusters, stated, evidence, threshold, max_ratio, strict)
+        clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
 
     # Keys depend on membership alone: named after the member first in natural
     # order, whichever member happened to seed the cluster, and assigned in that
@@ -454,6 +466,25 @@ def _merge_clusters(
         else:
             merged.append(cluster)
     return merged
+
+
+def _place(clusters, listings, evidence, threshold, max_ratio, strict) -> None:
+    """Each listing, in the plain order, joins the cluster it best matches
+    without contradicting it, or starts one."""
+    for listing in sorted(listings, key=_natural_order):
+        ev = evidence[listing.id]
+        # The best-matching cluster, not the first that will have it: with a
+        # shop's variants now kept apart, a listing can be admissible to several
+        # sibling clusters and should join the one it most resembles.
+        best = None
+        for cluster in clusters:
+            score = cluster.similarity(listing, ev, threshold, max_ratio, strict)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, cluster)
+        if best is not None:
+            best[1].add(listing, ev)
+        else:
+            clusters.append(_new_cluster(listing, ev))
 
 
 def _natural_order(listing: Listing) -> tuple[str, str]:

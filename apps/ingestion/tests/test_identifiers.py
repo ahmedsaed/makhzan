@@ -493,7 +493,9 @@ def test_a_stated_code_of_a_part_the_product_uses_does_not_merge_with_that_part(
 
 def test_slug_tokens_that_are_grits_grades_or_sizes_are_not_a_stated_code():
     """Real marketplace slug codes: a grit pair (P60/P100), a steel grade, a
-    pneumatic series cut from its port size, a cell size. (Sizes glued together,
+    pneumatic regulator's code, a cell size. AC4010 is refused only because "AC"
+    is a scale word: the same shop's TC4010 and AW4000 pass, and only the
+    same-shop and value vetoes keep those apart. (Sizes glued together,
     "60L2300W", the stated fallback would accept: the adapter drops those.)"""
     for value in ("P60100", "SS316", "AC4010", "18650"):
         assert stated_identifiers({"mfr_part_number": value}) == []
