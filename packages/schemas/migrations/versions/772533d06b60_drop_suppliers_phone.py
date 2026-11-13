@@ -5,10 +5,10 @@ The contract step for 2b656e4b5adc, which replaced the single `phone` with
 still selected it. The live release (f9b1f1c) no longer maps it in either the
 api or the ingestion image, so nothing that runs while this migrates reads it.
 
-Not reversible in data: the downgrade re-adds `phone` as a nullable column, and
-every row comes back null. Nothing ever wrote it (2b656e4b5adc copied any value
-into `phones`, which `worker.sources.sync` now rewrites from sources.toml on
-every deploy), so there is nothing to restore it from.
+The downgrade re-adds `phone` as a nullable column and fills it from the first
+entry of `phones` (which 2b656e4b5adc added and which still exists then), as the
+old single-number column held. Nothing has written `phone` itself since
+2b656e4b5adc copied it into `phones`.
 
 Revision ID: 772533d06b60
 Revises: 68056d5bce6b
@@ -34,5 +34,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Downgrade schema: the column only, empty (see the docstring)."""
+    """Downgrade schema: the column back, holding each shop's first number."""
     op.add_column("suppliers", sa.Column("phone", sa.String(length=40), nullable=True))
+    op.execute(
+        "UPDATE suppliers SET phone = LEFT(phones->>0, 40) "
+        "WHERE phones IS NOT NULL AND jsonb_typeof(phones) = 'array' "
+        "AND jsonb_array_length(phones) > 0"
+    )
