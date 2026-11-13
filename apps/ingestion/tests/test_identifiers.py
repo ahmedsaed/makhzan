@@ -416,6 +416,9 @@ def test_stated_codes_that_are_sizes_or_readings_are_refused():
     assert stated_identifiers({"mfr_part_number": "AWG-16"}) == []
     assert stated_identifiers({"specs": {"Model": "M8"}}) == []
     assert stated_identifiers({"mfr_part_number": "P120"}) == []
+    assert stated_identifiers({"mfr_part_number": "DIP-4P"}) == []
+    assert stated_identifiers({"specs": {"Model": "M8X1.25"}}) == []
+    assert stated_identifiers({"mfr_part_number": "P551808"})[0].value == "P551808"
     assert stated_identifiers({"specs": {"Supported Models": "CR-10"}}) == []
     assert stated_identifiers({"specs": {"Model": "Standard edition"}}) == []
 

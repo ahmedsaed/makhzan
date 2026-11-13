@@ -644,3 +644,74 @@ def test_two_existing_products_the_rules_now_join_merge():
         _diode("ram", "1N5817 Schottky Diode", second),
     ]
     assert _members_by_shop(_group_listings(listings)) == [["ampere", "makers", "most", "ram"]]
+
+
+def test_a_misfit_does_not_seed_the_product_it_sorts_first_in():
+    """The member that contradicts the most others is evicted, not made the
+    seed: the consistent majority keeps the product."""
+    product = uuid.uuid4()
+    listings = [
+        _diode("aaa", "1N5817 Schottky Diode 1A 30V", product),
+        _diode("bbb", "1N5817 Schottky Diode", product),
+        _diode("ccc", "1N5817 Schottky Diode 1A 20V", product),
+        _diode("ddd", "1N5817 Schottky Diode 20V 1A", product),
+        _diode("eee", "1N5817 Schottky Diode", product),
+    ]
+    assert _members_by_shop(_group_listings(listings)) == [
+        ["aaa"],
+        ["bbb", "ccc", "ddd", "eee"],
+    ]
+
+
+def test_existing_products_do_not_merge_across_a_veto():
+    # The same shop on both sides.
+    first, second = uuid.uuid4(), uuid.uuid4()
+    same_shop = [
+        _diode("ampere", "1N5817 Schottky Diode", first),
+        _diode("makers", "1N5817 Schottky Diode", first),
+        _diode("ampere", "1N5817 Schottky Diode DO-41", second),
+        _diode("ram", "1N5817 Schottky Diode", second),
+    ]
+    assert len(_group_listings(same_shop)) == 2
+    # Two products that state different values.
+    third, fourth = uuid.uuid4(), uuid.uuid4()
+    values = [
+        _diode("ampere", "1N5817 Schottky Diode 20V", third),
+        _diode("makers", "1N5817 Schottky Diode 20V", third),
+        _diode("most", "1N5817 Schottky Diode 40V", fourth),
+        _diode("ram", "1N5817 Schottky Diode 40V", fourth),
+    ]
+    assert _members_by_shop(_group_listings(values)) == [["ampere", "makers"], ["most", "ram"]]
+
+
+def test_incumbency_follows_products_through_merges():
+    """`current` resolves a listing's product through `merged_into`: two
+    listings still pointing at an absorbed id and its survivor are one product."""
+    survivor, absorbed = uuid.uuid4(), uuid.uuid4()
+    listings = [_diode(src, title) for src, title in _SETTLED]
+    listings[0].product_id = absorbed
+    for listing in listings[1:]:
+        listing.product_id = survivor
+    listings.append(_diode("aaa-marketplace", "1N5817 Schottky Diode 1A 30V"))
+    current = {
+        listing.id: (survivor if listing.product_id == absorbed else listing.product_id)
+        for listing in listings
+    }
+    assert _members_by_shop(_group_listings(listings, current)) == [
+        ["aaa-marketplace"],
+        ["ampere", "makers", "most", "ram"],
+    ]
+
+
+def test_a_second_grouping_from_the_first_changes_nothing():
+    """Convergence: group from scratch, give each listing its group as a
+    product, group again — the same groups."""
+    listings = [_diode(src, title) for src, title in _SETTLED]
+    listings.append(_diode("aaa-marketplace", "1N5817 Schottky Diode 1A 30V"))
+    listings.append(_diode("zzz", "1N5817 Schottky Diode 1A 20V DO-41"))
+    first = _group_listings(listings)
+    for key, items in first.items():
+        for listing in items:
+            listing.product_id = uuid.uuid5(uuid.NAMESPACE_URL, key)
+    second = _group_listings(listings)
+    assert _members_by_shop(second) == _members_by_shop(first)

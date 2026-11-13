@@ -243,9 +243,11 @@ SCALE_WORDS: frozenset[str] = frozenset(
         *("M", "UNC", "UNF", "NPT", "BSP", "BSPT", "BSPP", "DN", "PN", "SCH"),
         # drive and tip sizes, collet system, abrasive grit. "P" stays: of 107
         # tools and chemicals titles with a P-number, 64 are sanding grits
-        # (P80, P120), shared by every brand's sheets. It costs codes such as
-        # Ceta Form's P22-150 and Donaldson's P551808. "SW" does not: it named a
-        # wrench size no title used, and refused SW-420 sensors.
+        # (P80, P120), shared by every brand's sheets. In titles it costs codes
+        # such as Ceta Form's P22-150 and Donaldson's P551808; a long P-number a
+        # shop *states* as its part number is still read
+        # (`identifiers._stated`). "SW" does not stay: it named a wrench size no
+        # title used, and refused SW-420 sensors.
         *("PH", "PZ", "SDS", "HEX", "TX", "TORX", "ER", "P"),
         # a count or magnification ("x250", "X10")
         "X",

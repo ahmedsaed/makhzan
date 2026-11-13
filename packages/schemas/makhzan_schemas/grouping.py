@@ -256,7 +256,10 @@ def _new_cluster(listing: Listing, ev: _Evidence) -> _Cluster:
 
 
 def _subcluster(
-    mpn_key: str, items: list[Listing], domain: str | None = None
+    mpn_key: str,
+    items: list[Listing],
+    domain: str | None = None,
+    current: dict[uuid.UUID, uuid.UUID | None] | None = None,
 ) -> dict[str, list[Listing]]:
     """Split a shared-identifier group into sub-products by corroborating evidence.
 
@@ -281,19 +284,33 @@ def _subcluster(
     members silent on their difference. Placed in plain (source, external id)
     order, one newcomer whose title contradicts a settled product — the
     marketplace's "1N5817 1A 30V" against a four-shop 1N5817 (a 20 V part) —
-    sorted ahead of it and broke it in three. So listings are placed in three
-    passes, each in a fixed order:
+    sorted ahead of it and broke it in three. So listings are placed in passes,
+    each in a fixed order:
 
     1. **Incumbents**: every product that already holds two or more of these
-       listings is rebuilt as a cluster from its own members, largest first.
-       Each member must still pass every veto against the others, so a wrong
-       merge from before still splits: what will not fit becomes a newcomer.
+       listings (`current`, each listing's product followed through any merge;
+       its stored `product_id` when not given) is rebuilt as a cluster from its
+       own members, largest first. Members are placed fewest conflicts first
+       (the seed is the one that contradicts the fewest others), so a wrong
+       product keeps its consistent majority, and each must still pass every
+       veto against those placed: a wrong merge from before still splits, and
+       what will not fit becomes a newcomer.
     2. Those clusters merge with one another where every veto allows it (how a
        rule change joins two existing products).
     3. **Newcomers** — no product yet, alone in theirs, or evicted in pass 1 —
        join the cluster they best match without contradicting it, or start one.
+    4. The merge of pass 2 once more, over everything, largest first: so the
+       result does not depend on which listings had products, a rebuild from
+       scratch gives the same groups, and one rebuild converges — the next
+       changes nothing.
 
-    On a first build nobody has a product, so only pass 3 runs: the old order.
+    On a first build nobody has a product, so passes 3 and 4 only.
+
+    A group's key comes from its seed's words, so a different seed (a misfit
+    evicted, two products merged) can change the key of a group whose id
+    survives. Ids are matched by membership (`plan_identity`), so that is
+    harmless, except that undoing a merge matches the absorbed product's stored
+    key: after a key change, an undo mints a new id instead of reviving the old.
     """
     profile = get_profile(domain)
     threshold = profile.cluster_threshold
@@ -319,8 +336,9 @@ def _subcluster(
     # Pass 1: incumbents, each existing product rebuilt from its own members.
     by_product: dict[uuid.UUID, list[Listing]] = defaultdict(list)
     for listing in ordered:
-        if listing.product_id is not None:
-            by_product[listing.product_id].append(listing)
+        product_id = current.get(listing.id) if current is not None else listing.product_id
+        if product_id is not None:
+            by_product[product_id].append(listing)
     incumbents = sorted(
         (members for members in by_product.values() if len(members) > 1),
         key=lambda members: (-len(members), _natural_order(members[0])),
@@ -329,20 +347,30 @@ def _subcluster(
     newcomers: list[Listing] = []
     placed: set[uuid.UUID] = set()
     for members in incumbents:
+        # The members that contradict the fewest others go first, the seed
+        # among them, so a misfit is what fails, not the majority it sorts
+        # ahead of; the natural key breaks ties.
+        members = sorted(
+            members,
+            key=lambda m: (
+                sum(_vetoed(m, other, evidence, strict) for other in members if other is not m),
+                _natural_order(m),
+            ),
+        )
         cluster = _new_cluster(members[0], evidence[members[0].id])
         pending = members[1:]
         # Repeat until nothing more fits: a member may only match the product
         # through one placed after it.
         while pending:
-            rest = [
-                listing
-                for listing in pending
-                if cluster.similarity(listing, evidence[listing.id], threshold, max_ratio, strict)
-                is None
-            ]
+            rest = []
+            # One at a time: each is checked against every member already in,
+            # including those added earlier in this sweep.
             for listing in pending:
-                if listing not in rest:
-                    cluster.add(listing, evidence[listing.id])
+                ev = evidence[listing.id]
+                if cluster.similarity(listing, ev, threshold, max_ratio, strict) is None:
+                    rest.append(listing)
+                else:
+                    cluster.add(listing, ev)
             if len(rest) == len(pending):
                 break
             pending = rest
@@ -351,18 +379,7 @@ def _subcluster(
         clusters.append(cluster)
 
     # Pass 2: existing products that the current rules say are one.
-    merged: list[_Cluster] = []
-    for cluster in clusters:
-        best: tuple[float, _Cluster] | None = None
-        for target in merged:
-            score = target.accepts(cluster, threshold, max_ratio, strict)
-            if score is not None and (best is None or score > best[0]):
-                best = (score, target)
-        if best is not None:
-            best[1].absorb(cluster)
-        else:
-            merged.append(cluster)
-    clusters = merged
+    clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
 
     # Pass 3: newcomers, in the plain order.
     newcomers += [listing for listing in ordered if listing.id not in placed]
@@ -381,6 +398,9 @@ def _subcluster(
         else:
             clusters.append(_new_cluster(listing, ev))
 
+    # Pass 4: the same merge over everything, so one rebuild converges.
+    clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+
     result: dict[str, list[Listing]] = {}
     for cluster in clusters:
         members = cluster.members
@@ -397,6 +417,36 @@ def _subcluster(
             key += "~" + hashlib.sha1(natural.encode()).hexdigest()[:10]
         result[key] = members
     return result
+
+
+def _vetoed(a: Listing, b: Listing, evidence: dict, strict: frozenset[str]) -> bool:
+    """Whether a veto keeps two listings apart (same shop, values, form)."""
+    ea, eb = evidence[a.id], evidence[b.id]
+    return (
+        a.supplier_id == b.supplier_id
+        or values_conflict(ea.values, eb.values)
+        or _forms_conflict(ea.form, eb.form, strict)
+    )
+
+
+def _merge_clusters(
+    clusters: list[_Cluster], threshold: float, ratio: float, strict: frozenset[str]
+) -> list[_Cluster]:
+    """Merge clusters every veto allows to merge, largest first, then by their
+    seed's natural key; each joins the earlier cluster it best matches."""
+    merged: list[_Cluster] = []
+    ordered = sorted(clusters, key=lambda c: (-len(c.members), _natural_order(c.members[0])))
+    for cluster in ordered:
+        best: tuple[float, _Cluster] | None = None
+        for target in merged:
+            score = target.accepts(cluster, threshold, ratio, strict)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, target)
+        if best is not None:
+            best[1].absorb(cluster)
+        else:
+            merged.append(cluster)
+    return merged
 
 
 def _natural_order(listing: Listing) -> tuple[str, str]:
@@ -425,7 +475,9 @@ def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:
     return next((i for i in items if i.images), None)
 
 
-def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
+def _group_listings(
+    listings: list[Listing], current: dict[uuid.UUID, uuid.UUID | None] | None = None
+) -> dict[str, list[Listing]]:
     """Two-phase grouping: base key, then sub-cluster ambiguous family groups."""
     base: dict[str, list[Listing]] = defaultdict(list)
     for listing in listings:
@@ -444,7 +496,7 @@ def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
         # construction — SG90 and CR10 were never on it, and there is no reason
         # to expect the next one to be either.
         if key.startswith("mpn:") and len(items) > 1:
-            groups.update(_subcluster(key, items, domain))
+            groups.update(_subcluster(key, items, domain, current))
         else:
             groups[key] = items
     return groups
@@ -781,13 +833,13 @@ async def rebuild_products(
         .all()
     )
     reidentified = assign_identifiers(listings) if reidentify else 0
-    groups = _group_listings(listings)
-
     products = {p.id: p for p in (await session.execute(select(Product))).scalars().all()}
     merged_into = {p.id: p.merged_into for p in products.values() if p.merged_into is not None}
     matchable = {p.id: p.created_at for p in products.values() if p.merged_into is None}
     delisted = {p.id for p in products.values() if p.merged_into is None and p.delisted_at}
     current = {listing.id: _resolve(listing.product_id, merged_into) for listing in listings}
+    # Grouping reads the products listings belong to now (incumbency).
+    groups = _group_listings(listings, current)
     dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] = defaultdict(list)
     for p in products.values():
         if p.merged_into is not None:
