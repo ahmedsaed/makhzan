@@ -23,6 +23,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -190,8 +191,53 @@ def _cents(price) -> Decimal | None:
     return None if price is None else Decimal(str(price)).quantize(Decimal("0.01"))
 
 
+#: When the run in progress in this task started, if any (`_logged_run`): a
+#: listing whose `last_checked_at` is at or after it was already counted.
+_RUN_STARTED: ContextVar[datetime | None] = ContextVar("run_started", default=None)
+
+
+def _count_check(listing: Listing, now: datetime, *, changed: bool) -> None:
+    """Add one read to the listing's check log (`checks`, `changes`, first/last checked).
+
+    The input to a per-listing change-rate estimate (the scheduling plan's T7):
+    n reads and X changes seen over the n - 1 intervals between them. Done
+    beside the history row, so it counts exactly the reads that record history
+    — never a `limit=` run's. A stock-only read (out of stock by id) counts:
+    it would see a stock change, though never a price one.
+
+    - The first counted read is never a change, whatever the latest
+      observation says: a listing stored before the log existed compares
+      against a row weeks old, and that change belongs to no measured interval.
+    - At most one counted read per listing per run. The Odoo shop reads a
+      product in each leaf it is filed under and again in its /shop pass,
+      minutes apart, and those reads would crowd the intervals. A later read
+      in the same run still counts a change it finds, unless the run's read
+      already did (`changes` never exceeds `checks - 1`), and leaves
+      `last_checked_at` where the run's first read put it.
+    """
+    if listing.first_checked_at is None:
+        changed = False
+    started = _RUN_STARTED.get()
+    if started is not None and listing.last_checked_at is not None:
+        if listing.last_checked_at >= started:
+            if changed and (listing.changes or 0) < (listing.checks or 0) - 1:
+                listing.changes = (listing.changes or 0) + 1
+            return
+    listing.checks = (listing.checks or 0) + 1
+    if changed:
+        listing.changes = (listing.changes or 0) + 1
+    if listing.first_checked_at is None:
+        listing.first_checked_at = now
+    listing.last_checked_at = now
+
+
 async def _record_changes(
-    session: AsyncSession, listings: list[Listing], now: datetime, *, new: bool = False
+    session: AsyncSession,
+    listings: list[Listing],
+    now: datetime,
+    *,
+    new: bool = False,
+    via: str = "sweep",
 ) -> int:
     """Add a `PriceObservation` for each listing whose price or stock changed.
 
@@ -200,6 +246,11 @@ async def _record_changes(
     change must still be recorded by the next real run rather than lost. A listing
     with no observation yet (new, or archived before history began) gets its
     first. A recheck that changes nothing writes nothing. Returns rows added.
+
+    Each listing's read is also counted in its check log (`_count_check`): a
+    change is the price, currency or stock differing from the latest row — not
+    a first row, and not a return from archiving at the same values. `via`
+    names the kind of read on the rows written (`PriceObservation.via`).
 
     Every listing passed here was just seen by its source, so it is available:
     one whose latest row is its archiving (`available` false) gets a row on
@@ -224,7 +275,10 @@ async def _record_changes(
     added = 0
     for listing in listings:
         current = (_cents(listing.price), listing.currency, listing.stock_signal, True)
-        if latest.get(listing.id) == current:
+        previous = latest.get(listing.id)
+        prev_checked_at = listing.last_checked_at  # before this read moves it
+        _count_check(listing, now, changed=previous is not None and previous[:3] != current[:3])
+        if previous == current:
             continue
         session.add(
             PriceObservation(
@@ -235,6 +289,8 @@ async def _record_changes(
                 stock_signal=listing.stock_signal,
                 in_stock=listing.stock_signal == StockSignal.IN_STOCK,
                 available=True,
+                via=via,
+                prev_checked_at=prev_checked_at,
             )
         )
         added += 1
@@ -294,12 +350,16 @@ async def _ingest_item(
     observed: Counter | None = None,
     *,
     record_history: bool = True,
+    categories: Counter | None = None,
 ) -> str | None:
     """Normalize and upsert one item, or route it to review. Raises on bad items.
 
     Returns why the item was skipped as not a product, if it was. A skipped
     entry is never upserted, so one already stored stops being verified and is
     archived when the cycle completes — the same path as stock the shop dropped.
+
+    `categories` counts how this item changed a stored listing's category
+    (`_count_category_change`).
     """
     default_domain = adapter.supplier.domain
 
@@ -345,6 +405,7 @@ async def _ingest_item(
     listing, created = await _upsert_listing(
         session, adapter, supplier_id, norm, record_history=record_history
     )
+    stored_category = listing.category_id
 
     knows = adapter.knows_category(raw)
     if knows and mapped is None and adapter.authoritative_categories:
@@ -382,11 +443,34 @@ async def _ingest_item(
         listing.domain = default_domain
     # Otherwise this pass carries no category signal — leave the existing one
     # alone rather than erasing what a category partition established.
+    if categories is not None and not created:
+        _count_category_change(categories, stored_category, listing.category_id)
     if created:
         run.items_created += 1
     else:
         run.items_updated += 1
     return None
+
+
+def _count_category_change(categories: Counter, before, after) -> None:
+    """Count a stored listing's category being set, moved or cleared by this read.
+
+    `stats.categories`, for judging how often a sweep that carries a category
+    changes one (decision D4 of the scheduling plan: could the Odoo shop's leaf
+    categories be swept every Nth cycle, with the whole-shop pass alone keeping
+    price and stock?). Counted on our category (`category_id`), not the shop's
+    own name for it: two leaves the crosswalk maps alike are no move, while a
+    product filed in two leaves mapped differently flips here each time, which
+    is exactly the churn an Nth-cycle sweep would leave standing longer.
+    """
+    if before == after:
+        return
+    if before is None:
+        categories["set"] += 1
+    elif after is None:
+        categories["cleared"] += 1
+    else:
+        categories["moved"] += 1
 
 
 def _without_stock_counts(attributes: dict) -> dict:
@@ -588,8 +672,11 @@ async def _sweep_partition(
     run_page_budget: int | None = None,
     deadline: float | None = None,
     halt: list[str] | None = None,
+    categories: Counter | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
+
+    `categories` counts category changes to stored listings (`_ingest_item`).
 
     `run_page_budget` caps the pages of the whole run (`tally["pages"]`), across
     partitions: the adaptive budget of a source with `target_cycle_days`.
@@ -676,6 +763,7 @@ async def _sweep_partition(
                     raw,
                     observed,
                     record_history=not ephemeral,  # a `limit=` run leaves no history
+                    categories=None if ephemeral else categories,
                 )
                 if skipped and not_products is not None:
                     not_products[f"{raw.title} ({skipped})"] += 1
@@ -1024,10 +1112,16 @@ async def _run(
     every client the run makes reads, so no request goes out as anything else.
     """
     identity = identity_for(adapter.identity)
-    with logging_requests() as log, using_identity(identity):
-        return await _logged_run(
-            source_id, adapter, partitions, limit=limit, log=log, identity=identity
-        )
+    # Reads before this were earlier runs': a listing's first read in this run
+    # is a check, its later ones are not (`_count_check`).
+    started = _RUN_STARTED.set(datetime.now(timezone.utc))
+    try:
+        with logging_requests() as log, using_identity(identity):
+            return await _logged_run(
+                source_id, adapter, partitions, limit=limit, log=log, identity=identity
+            )
+    finally:
+        _RUN_STARTED.reset(started)
 
 
 async def _logged_run(
@@ -1071,6 +1165,8 @@ async def _logged_run(
         resumed: list[bool] = []
         not_products: Counter = Counter()
         tally: Counter = Counter()
+        #: How this run's reads changed stored listings' categories (`stats.categories`).
+        categories: Counter = Counter()
 
         def checkpoint(more: Counter | None = None) -> None:
             """Put what the run has sent so far on its row, for the next commit.
@@ -1090,11 +1186,15 @@ async def _logged_run(
             stats["identity"] = identity.describe()
             if log.robots_state:
                 stats["robots"] = dict(log.robots_state)
+            if validators := log.validator_stats():
+                stats["validators"] = validators
             # The names seen so far, so a run cut off mid-sweep (its cursors
             # already advanced past these pages) still reports them. Never
             # `unused`: only the finished run can know it saw everything.
             if limit is None and (drift := _crosswalk_drift(adapter, observed, complete=False)):
                 stats["crosswalk"] = drift
+            if limit is None and tally["pages"]:
+                stats["categories"] = {k: categories[k] for k in ("set", "moved", "cleared")}
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and
@@ -1136,6 +1236,7 @@ async def _logged_run(
                 run_page_budget=run_page_budget,
                 deadline=deadline,
                 halt=halt,
+                categories=categories,
             )
             fetch_failed = fetch_failed or failed
             if halt:
@@ -1206,6 +1307,15 @@ async def _logged_run(
         stats["pacing"] = log.pacing()
         if report := adapter.run_report():
             stats["source_report"] = report
+        if validators := log.validator_stats():
+            # How many answers carried ETag / Last-Modified, per host (T11:
+            # measure before building conditional requests). Counts only, and
+            # never in `stats.pacing`, which /how-we-crawl publishes.
+            stats["validators"] = validators
+        if limit is None and tally["pages"]:
+            # Recorded even when nothing changed: a zero here is a measurement,
+            # its absence (older runs, `limit=` runs) is not.
+            stats["categories"] = {k: categories[k] for k in ("set", "moved", "cleared")}
         if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:
             # Kept as out of stock rather than archived; "unknown" ones were
             # never stored, and a route with no price or photo creates nothing.

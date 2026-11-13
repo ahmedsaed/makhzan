@@ -2,6 +2,7 @@
 # Everyday production actions in one place.
 #
 #   ./makhzan status         # containers, health, crawl flag, crawler progress
+#   ./makhzan freshness [--days N]  # requests, staleness, changes found (read-only)
 #   ./makhzan deploy         # update, pull images, migrate, restart (deploy.sh)
 #   ./makhzan crawl off|on   # pause / resume the daily crawl, surviving deploys
 #   ./makhzan logs [service] # follow logs (default: ingestion)
@@ -20,7 +21,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -85,6 +86,12 @@ cmd_status() {
   "${COMPOSE[@]}" exec -T ingestion python - "$@" < scripts/status.py
 }
 
+# Like status.py, streamed in from the checkout; it opens a READ ONLY
+# transaction and rolls it back, so it can change nothing.
+cmd_freshness() {
+  "${COMPOSE[@]}" exec -T ingestion python - "$@" < scripts/freshness.py
+}
+
 cmd_crawl() {
   local value
   case "${1:-}" in
@@ -112,6 +119,7 @@ cmd_crawl() {
 cmd="$1"; shift
 case "$cmd" in
   status) cmd_status "$@" ;;
+  freshness) cmd_freshness "$@" ;;
   deploy) exec ./scripts/deploy.sh "$@" ;;
   crawl) cmd_crawl "$@" ;;
   logs) "${COMPOSE[@]}" logs -f --tail 200 "${@:-ingestion}" ;;

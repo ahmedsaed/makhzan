@@ -517,6 +517,16 @@ async def test_the_new_figures_leak_nothing_private(client, db):
             "cycle": {"cycle_seconds": 86400, "cycle_partitions": 9, "cycle_pages": 77},
             "requests": {"pages": 12},
             "pacing": _paced(15, 15, 15),
+            # Measurements for tuning the crawl, never for the shop's page.
+            "validators": {
+                "https://busy.test": {
+                    "responses": 12,
+                    "etag": 12,
+                    "etag_weak": 12,
+                    "last_modified": 3,
+                }
+            },
+            "categories": {"set": 1, "moved": 2, "cleared": 0},
         },
     )
     body = await _activity(client)
@@ -549,6 +559,11 @@ async def test_the_new_figures_leak_nothing_private(client, db):
         "cycle_pages",
         "src-busy",
         "busy.test",
+        "validators",
+        "etag",
+        "last_modified",
+        "categories",
+        "moved",
     ):
         assert word not in text, word
     assert not re.search(r"(?<!\d)503(?!\d)", text), text

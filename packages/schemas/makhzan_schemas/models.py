@@ -232,6 +232,25 @@ class Listing(TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    # The check log: what estimating a listing's change rate needs (n checks, X
+    # changes seen, since when), which `price_observations` alone cannot give,
+    # because an unchanged re-read writes no row there. Bumped by
+    # `worker.pipeline._record_changes`, so only by a read that also records
+    # history (never a `limit=` run), and at most once per run. Listings stored
+    # before the log existed start at 0 with no `first_checked_at`, and count
+    # from their next read. A stock-only read (a shop listing out-of-stock
+    # products by id) is a check too: it would see a stock change, not a price.
+    #: Reads of the listing's price or stock since `first_checked_at`, that one included.
+    checks: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
+    #: How many of those reads found the price, currency or stock different from
+    #: the listing's latest observation. The first read is never a change, so
+    #: this counts changes over the `checks - 1` intervals between reads.
+    changes: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
+    first_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The latest counted read. Not `last_verified_at`, which a stock-only read
+    #: leaves alone: spans between checks are measured on this.
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     supplier: Mapped[Supplier] = relationship(back_populates="listings")
     category: Mapped[Category | None] = relationship()
     product: Mapped[Product | None] = relationship(back_populates="listings")
@@ -429,6 +448,18 @@ class PriceObservation(Base):
     #: False from the moment the listing was archived (the shop stopped listing
     #: it) until it is seen again. Clip "in stock N of 12 weeks" on it.
     available: Mapped[bool] = mapped_column(default=True, server_default=true(), nullable=False)
+    #: Which kind of read wrote the row: "sweep" (the cycle's list pages, and
+    #: the archiving that closes a cycle) for now; later lanes add their own
+    #: ("recheck", "modified", "sentinel"), so changes found per request can be
+    #: split by lane. Rows from before the column read "sweep", which is true.
+    via: Mapped[str] = mapped_column(
+        String(16), default="sweep", server_default="sweep", nullable=False
+    )
+    #: The listing's previous counted read (`Listing.last_checked_at`) when this
+    #: row was written: the change happened after it, so `observed_at` minus
+    #: this is how long the site may have shown the old value (detection delay).
+    #: NULL for a first row, an archiving row, and rows from before the log.
+    prev_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     #: Many-to-one only: lets a row be added beside a listing not yet flushed.
     listing: Mapped[Listing] = relationship()
