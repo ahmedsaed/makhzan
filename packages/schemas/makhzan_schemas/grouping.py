@@ -293,11 +293,12 @@ def _subcluster(
     each in a fixed order:
 
     1. **Incumbents**: every product that already holds two or more of these
-       listings (`current`, each listing's product followed through any merge;
-       its stored `product_id` when not given) is rebuilt as a cluster from its
-       own members, largest first. Members are placed fewest conflicts first
-       (the seed is the one that contradicts the fewest others; on a tie, the
-       natural key decides), so a wrong product keeps its consistent majority,
+       listings, not counting stated-only ones (pass 5), is rebuilt as a
+       cluster from its own members, largest first (`current` gives each
+       listing's product, followed through any merge; its stored `product_id`
+       when not given). Members are placed fewest conflicts first (the seed
+       is the one that contradicts the fewest others; on a tie, the natural
+       key decides), so a wrong product keeps its consistent majority,
        and each must still pass every veto against those placed: a wrong merge
        from before still splits, and what will not fit becomes a newcomer.
        Conflicts are counted, not weighed: when the wrong side of a product
@@ -306,18 +307,24 @@ def _subcluster(
        their own product — but it can move an id to the wrong side.
     2. Those clusters merge with one another where every veto allows it (how a
        rule change joins two existing products).
-    3. **Newcomers** — no product yet, alone in theirs, or evicted in pass 1 —
+    3. **Newcomers** — no product yet, alone in theirs (stated-only members
+       aside), or evicted in pass 1 —
        join the cluster they best match without contradicting it, or start one.
        Only those whose title names the identifier, here.
-    4. The merge of pass 2 once more, over everything, largest first: so the
-       result does not depend on which listings had products, a rebuild from
-       scratch gives the same groups, and one rebuild converges — the next
-       changes nothing.
-    5. **Stated-only newcomers** — whose identifier is absent from the title,
-       read from a slug code or a "Model" row — placed as in pass 3, then the
-       merge once more. Placed earlier, one sitting in a cluster silent on a
-       value (a 30 V diode among titles that state no voltage) kept that
-       cluster from merging with the rest of its product.
+    4. The merge of pass 2 once more, over everything, largest first.
+    5. **Stated-only listings** — whose identifier is absent from the title,
+       read from a slug code or a "Model" row — whether or not they have a
+       product, placed as in pass 3, then the merge once more. Placed earlier,
+       one sitting in a cluster silent on a value (a 30 V diode among titles
+       that state no voltage) kept that cluster from merging with the rest of
+       its product.
+
+    One rebuild converges: the next changes nothing. A rebuild from scratch
+    gives the same groups as one from stored product ids when those ids came
+    from these rules over these listings; otherwise incumbency deliberately
+    lets history win (a contradicting newcomer loses to a settled product). A
+    product whose only corroboration is a stated-only member is not settled:
+    a newcomer whose title names the part can take its titled member.
 
     On a first build nobody has a product, so passes 3 to 5 only.
 
@@ -351,7 +358,10 @@ def _subcluster(
     by_product: dict[uuid.UUID, list[Listing]] = defaultdict(list)
     for listing in ordered:
         product_id = current.get(listing.id) if current is not None else listing.product_id
-        if product_id is not None:
+        # A stated-only listing gets no incumbency: it always waits for pass 5,
+        # or a product it joined early would keep it against titles that
+        # name the part outright.
+        if product_id is not None and not _stated_only(listing):
             by_product[product_id].append(listing)
     incumbents = sorted(
         (members for members in by_product.values() if len(members) > 1),
@@ -408,7 +418,8 @@ def _subcluster(
     # Pass 4: the same merge over everything, so one rebuild converges.
     clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
 
-    # Pass 5: the stated-only newcomers, then the merge once more.
+    # Pass 5: every stated-only listing, with a product or not, then the merge
+    # once more.
     if stated:
         _place(clusters, stated, evidence, threshold, max_ratio, strict)
         clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
