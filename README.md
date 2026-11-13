@@ -2,14 +2,17 @@
 
 **One place to find project materials in Egypt.**
 
-makhzan is a directory of Egyptian hardware and electronics suppliers. Instead of hunting across dozens of shops, it brings their
+makhzan is an English-language directory of Egyptian hardware and electronics
+suppliers. Instead of hunting across dozens of shops, it brings their
 products and prices into one searchable catalogue, then hands you off to the
 supplier to buy. It is a **directory, not a store**: no cart, no payment, no
 delivery.
 
-Live at **[makhzan.merope.dev](https://makhzan.merope.dev)**: about 58,000
-products from 8 suppliers, across 16 departments (electronics, tools, piping,
-welding, seals and bearings, timber, and more).
+Live at **[makhzan.merope.dev](https://makhzan.merope.dev)**: about 59,600
+products from 9 suppliers, across 16 departments (electronics, tools, piping,
+welding, seals and bearings, timber, and more). Seven suppliers are read daily;
+two block our server's address and are paused until they reply, so their
+listings date from August 2026.
 
 ## How makhzan crawls
 
@@ -26,6 +29,12 @@ it:
 - **A full pass is spread across about a week.** Each daily run takes only a
   slice of a catalogue, so a shop sees a steady trickle, not a spike.
 - **The crawler identifies itself** in every request (`From: crawler@makhzan.merope.dev`).
+  Shops are moving one at a time to its own name, `makhzanbot`, with every request
+  signed (Web Bot Auth); the key is published at
+  `/.well-known/http-message-signatures-directory`.
+- **What the crawler did is public**: when each shop was last read, how many
+  requests it sent and how far apart, at
+  [`/how-we-crawl#activity`](https://makhzan.merope.dev/how-we-crawl#activity).
 - **No circumvention.** If a site blocks us, we ask its owner; we do not route
   around a control they chose to switch on.
 - **Suppliers can ask us to stop, slow down, or change anything**, and we will.
@@ -44,14 +53,14 @@ separate private repository.
 
 A clone therefore runs with no suppliers, only a built-in test source. To crawl
 real shops, write your own `sources.toml`; `config/sources.example.toml`
-documents the format. WooCommerce, Shopify and Odoo shops need no code, only an
-entry. Anything else is an adapter class, which `sources.toml` can name by import
+documents the format. WooCommerce, Shopify, Odoo and Wix Stores shops need no
+code, only an entry. Anything else is an adapter class, which `sources.toml` can name by import
 path from your own package.
 
 ## Architecture
 
 ```
-apps/web          Next.js frontend: search, departments, product and shop pages; dark mode
+apps/web          Next.js frontend (English only): search, departments, product and shop pages; dark mode
 apps/api          FastAPI, read-only, over Postgres and Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalise -> upsert -> group -> index
 packages/schemas  SQLAlchemy models, migrations, taxonomies, grouping, search contract
@@ -88,6 +97,7 @@ make api        # http://localhost:8000
 make web        # http://localhost:3000
 make test       # Python test suites
 make lint       # exactly what CI checks
+make status     # crawler progress, recent runs, catalogue health
 ```
 
 `make help` lists every target. [docs/DEV.md](docs/DEV.md) walks through the
@@ -97,7 +107,9 @@ local workflow, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers production.
 
 - [docs/PLAN.md](docs/PLAN.md): what makhzan is for, and the original plan
 - [docs/ROADMAP.md](docs/ROADMAP.md): what is done and what is next
-- [docs/DESIGN.md](docs/DESIGN.md): the frontend's design language
+- [docs/PRODUCT.md](docs/PRODUCT.md): product decisions, and what comes next
+- [docs/DESIGN.md](docs/DESIGN.md): the frontend's specification (the November 2026 redesign)
+- [docs/crawler-identity.md](docs/crawler-identity.md): makhzanbot and request signing
 - [docs/DOMAIN_GENERALIZATION.md](docs/DOMAIN_GENERALIZATION.md): how verticals are modelled
 - [docs/decisions/](docs/decisions/): decision records
 - [CLAUDE.md](CLAUDE.md): working notes on ingestion, taxonomy and matching,
