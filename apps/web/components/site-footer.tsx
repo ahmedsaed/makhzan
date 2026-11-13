@@ -5,7 +5,8 @@ import { routes } from "@/lib/routes";
 
 /**
  * The pages a supplier needs — how we crawl, and how to be removed, added or
- * corrected — on every page, because a shop owner can arrive anywhere.
+ * corrected — on every page, because a shop owner can arrive anywhere; and
+ * what makhzan keeps about visitors (Privacy).
  *
  * No data fetching, for the same reason as the header: it renders on error
  * pages and must not depend on the API.
@@ -33,6 +34,12 @@ export function SiteFooter() {
             className="flex h-11 items-center text-ink-2 hover:text-ink"
           >
             How we crawl
+          </Link>
+          <Link
+            href={routes.privacy()}
+            className="flex h-11 items-center text-ink-2 hover:text-ink"
+          >
+            Privacy
           </Link>
         </nav>
         <ThemeToggle />

@@ -4,11 +4,12 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { preconnect } from "react-dom";
 
 import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
-import { ContactButtons, ReportLink, ShopContactList } from "@/components/contact-links";
+import { ContactButtons, ShopContactList } from "@/components/contact-links";
 import { Freshness, StaleNote } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { PhotoFrame } from "@/components/photo-frame";
 import { PriceRange } from "@/components/price";
+import { ReportProblem } from "@/components/report-problem";
 import { ResultCard } from "@/components/result";
 import { Container } from "@/components/section";
 import { ShopLink } from "@/components/shop-link";
@@ -57,6 +58,7 @@ import {
   unitPriceText,
 } from "@/lib/offers";
 import { buildHistory, HISTORY_DAYS } from "@/lib/history";
+import { reportContextOf } from "@/lib/report";
 import { productIdFrom, routes } from "@/lib/routes";
 import { absoluteUrl } from "@/lib/site";
 import { departmentLabel } from "@/lib/departments";
@@ -303,17 +305,36 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
                 className="lg:hidden"
               />
             )}
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <h1
-                dir="auto"
-                className={
-                  several
-                    ? "text-lg leading-tight lg:text-[26px]"
-                    : "text-xl leading-tight lg:text-[26px]"
-                }
-              >
-                {title}
-              </h1>
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              {/* The title, and at the far right of its row the one way to
+                  report anything wrong on the page (variant F of the
+                  approved mockup): a labelled button, a flag alone on a
+                  phone so the title keeps its width. */}
+              <div className="flex items-start justify-between gap-3">
+                <h1
+                  dir="auto"
+                  className={cn(
+                    "min-w-0 flex-1",
+                    several
+                      ? "text-lg leading-tight lg:text-[26px]"
+                      : "text-xl leading-tight lg:text-[26px]",
+                  )}
+                >
+                  {title}
+                </h1>
+                <div className="ms-auto mt-0.5 shrink-0">
+                  <ReportProblem
+                    context={reportContextOf({
+                      productId: product.id || id,
+                      title,
+                      offers: product.offers,
+                      category: crumbs ? crumbs.map((crumb) => crumb.label).join(" › ") : null,
+                      page: absoluteUrl(path),
+                      now,
+                    })}
+                  />
+                </div>
+              </div>
               <PartNumberLines partNumber={product.part_number} offers={product.offers} />
               {brand && (
                 <p data-brand className="text-[13px] text-ink-2 lg:text-sm">
@@ -344,13 +365,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
             <>
               <Summary product={product} primary={primary} narrow={split} now={now} />
               <Offers {...splitOffers(product.offers, now)} productTitle={title} now={now} />
-              <ShopsContact
-                product={product}
-                title={title}
-                page={absoluteUrl(path)}
-                hoursOf={hoursOf}
-                now={now}
-              />
+              <ShopsContact product={product} hoursOf={hoursOf} now={now} />
             </>
           ) : (
             <OneOffer
@@ -358,8 +373,6 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               now={now}
               listingCount={shop?.listing_count}
               hours={shop?.contact?.opening_hours}
-              title={title}
-              page={absoluteUrl(path)}
             />
           )}
           {/* Without the shops' text the wide column holds the offers, and
@@ -508,17 +521,12 @@ function OneOffer({
   now,
   listingCount,
   hours,
-  title,
-  page,
 }: {
   offer: Offer;
   now: Date;
   listingCount?: number;
   /** The shop's opening hours, as its profile has them. */
   hours?: string[];
-  /** The product's title and its page's absolute URL, for "Something wrong?". */
-  title: string;
-  page: string;
 }) {
   const verified = parseVerified(offer.last_verified_at);
   const stale = verified !== null && freshnessTier(verified, now) === "warn";
@@ -621,24 +629,16 @@ function OneOffer({
           <ChevronRight aria-hidden="true" className="size-[18px] shrink-0 text-ink-2" />
         </Link>
       )}
-      {/* Beside the card, not in it: the card is one link to the shop page. */}
+      {/* Beside the card, not in it: the card is one link to the shop page.
+          Something wrong is reported with the button by the title. */}
       {supplier && (
-        <>
-          <ContactButtons
-            reach={supplier.contact}
-            shop={supplier.slug}
-            shopName={supplier.name}
-            hours={hours}
-            className="mt-3"
-          />
-          <ReportLink
-            shop={supplier.slug}
-            shopName={supplier.name}
-            product={title}
-            page={page}
-            className="mt-1"
-          />
-        </>
+        <ContactButtons
+          reach={supplier.contact}
+          shop={supplier.slug}
+          shopName={supplier.name}
+          hours={hours}
+          className="mt-3"
+        />
       )}
     </>
   );
@@ -673,20 +673,17 @@ function Each({ className }: { className?: string }) {
 
 /**
  * Several shops: each, once, with how to reach it, under the offers (rather
- * than on every row of a shop with several), and the way to report anything
- * wrong on the page. In the offers' own order (price of one, then the folded
- * ones), so the shop at the top of the list is the first one named here.
+ * than on every row of a shop with several). In the offers' own order (price
+ * of one, then the folded ones), so the shop at the top of the list is the
+ * first one named here. Anything wrong on the page is reported with the
+ * button by the title, which lists every offer.
  */
 function ShopsContact({
   product,
-  title,
-  page,
   hoursOf,
   now,
 }: {
   product: Product;
-  title: string;
-  page: string;
   /** Each shop's opening hours, by slug, as its profile has them. */
   hoursOf: Map<string, readonly string[]>;
   now: Date;
@@ -713,13 +710,6 @@ function ShopsContact({
           reach: reach?.contact,
           hours: [...(hoursOf.get(slug) ?? [])],
         }))}
-      />
-      <ReportLink
-        shop={list[0].slug}
-        shopName={list.map((s) => s.name).join(", ")}
-        product={title}
-        page={page}
-        className="mt-1"
       />
     </div>
   );

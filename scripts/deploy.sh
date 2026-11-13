@@ -55,6 +55,15 @@ if [ -z "$site_url" ]; then
   echo "e.g. SITE_URL=https://makhzan.example.com: docs/DEPLOYMENT.md." >&2
   exit 1
 fi
+# "Report a problem" counts each sender under a salted hash of their address,
+# and the salt is this secret. Unset, the API refuses every report (503) rather
+# than store reports it cannot rate-limit: docs/DEPLOYMENT.md.
+report_salt="$(set -a; . ./.env.prod; echo "${REPORT_IP_SALT:-}")"
+if [ -z "$report_salt" ]; then
+  echo "REPORT_IP_SALT is not set in .env.prod. Set it to a random secret," >&2
+  echo "e.g. REPORT_IP_SALT=\$(openssl rand -base64 32): docs/DEPLOYMENT.md." >&2
+  exit 1
+fi
 if [ "${SKIP_PULL:-0}" != "1" ]; then
   echo "==> Updating the configuration in ${config_dir}"
   git -C "$config_dir" pull --ff-only 9>&-

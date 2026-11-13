@@ -99,6 +99,56 @@ Edit `.env.prod`:
   runtime, never from request headers). `deploy.sh` stops if it is unset,
   because the fallback is `http://localhost:3000`
 - `WEB_ORIGINS` — CORS allow-list; unused in the default same-origin topology
+- `REPORT_IP_SALT` — a random secret (`openssl rand -base64 32`). "Report a
+  problem" (`POST /reports`) counts each sender under an HMAC of their address
+  with it, kept 24 hours, never the address itself. `deploy.sh` stops if it is
+  unset, and the API refuses reports without it. Changing it resets every
+  sender's count, nothing else.
+- `TRUSTED_PROXY_HOPS` — how many entries at the right of `X-Forwarded-For`
+  our own proxies wrote (default 1). The API sees only the web container as its
+  peer, so the visitor's address, for the report rate limit, is the entry that
+  many from the right of that header, believed only when the peer is on a
+  private network (`TRUSTED_PROXY_NETWORKS`, default loopback and the private
+  ranges). Next's rewrite passes the header through unchanged. See "Visitor
+  addresses behind the proxy" below for what the proxy must do.
+
+#### Visitor addresses behind the proxy
+
+The report rate limit is only as good as the address it counts, and in
+production that address is decided by the reverse proxy, not by the app:
+
+```
+visitor -> Cloudflare -> Nginx Proxy Manager (host) -> 172.17.0.1:3000 web -> api
+```
+
+- **The proxy host restores the visitor's address.** Its nginx config has
+  `real_ip_header CF-Connecting-IP;` with `set_real_ip_from` for each of
+  Cloudflare's published ranges, so `$remote_addr` is the visitor, not a
+  Cloudflare edge. Then `proxy_set_header X-Forwarded-For
+  $proxy_add_x_forwarded_for;` appends it, and `TRUSTED_PROXY_HOPS=1` reads
+  exactly that entry.
+- **If those directives go, nothing errors.** `$remote_addr` becomes the edge,
+  and everyone who reaches makhzan through one Cloudflare edge shares a single
+  limit of 5 reports an hour. Setting `TRUSTED_PROXY_HOPS=2` instead is *not*
+  the fix: the entry left of the edge is whatever arrived in the request's own
+  `X-Forwarded-For`, which a visitor can write. Restore the visitor at the
+  proxy, from the CDN's header, for the CDN's ranges only.
+- **Keep the ranges current.** A Cloudflare range missing from
+  `set_real_ip_from` makes its visitors look like that edge; a range listed that
+  is not Cloudflare's lets anyone there send `CF-Connecting-IP` and pick their
+  address.
+- **The web port must not be reachable except through the proxy.** The API
+  trusts `X-Forwarded-For` from the web container, and Next's rewrite forwards
+  whatever a request carries, so a request straight to the web port picks the
+  address the rate limit counts. Bind or firewall it so only the proxy reaches it.
+
+This document is internal. /how-we-crawl does not name the CDN; /privacy
+names Cloudflare as handling every request (the owner's decision, November
+2026), and promises that **the web server's access log, with IP addresses, is
+deleted after 30 days**. That promise is kept on the proxy host, not in this
+repository: its log rotation must delete access logs older than 30 days
+(`ACCESS_LOG_DAYS` in `apps/web/lib/content/privacy.ts`). Change one, change
+both.
 
 ### 3. Seed the data
 
@@ -130,7 +180,7 @@ terminate TLS there, and you're live.
 ## Day-2 operations
 
 `./makhzan` (repo root) wraps the common ones: `status`, `deploy`, `crawl on|off`,
-`logs`, `stop`, `start`, `backup`, `migrate`, `retire`, `probe`. Run it on the server, or from a
+`logs`, `stop`, `start`, `backup`, `migrate`, `retire`, `probe`, `reports`. Run it on the server, or from a
 laptop with `DEPLOY_HOST` set (it re-runs itself over SSH). `status` is the one
 to reach for first: containers, health, whether the crawl is paused, and the full
 crawler report from `scripts/status.py`, read from the live database.
@@ -145,6 +195,8 @@ crawler report from `scripts/status.py`, read from the live database.
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
 | What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
+| Review visitors' reports | `./makhzan reports` lists new ones, oldest first, each with the offers as the page showed them; `./makhzan reports show 12` adds the reporter's email; `./makhzan reports accept 12 13` / `reject 14` set `status` and `reviewed_at`. Nothing else happens on accept yet: correct the page by hand. |
+| Erase reporters' data past its time | Automatic: the worker's `purge_reports` cron, every 10 minutes, erases an email 90 days after its report was sent (reviewed or not) and an address hash 24 hours after it, as /privacy says. By hand: `./makhzan reports purge` |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
 | Back up the DB | `./makhzan backup` → `backups/makhzan-<ts>.dump`, read back before it is kept |
 | Restore the DB | `./makhzan restore <file>`: see [Backup and restore](#backup-and-restore) |
@@ -251,8 +303,19 @@ with a deploy or restore.)
    (`pg_dump -Fc`). It reads the whole file back with `pg_restore` and fails
    loudly if it cannot, or if it has no `alembic_version` data, so a 0-byte or
    truncated backup is never kept under its final name. It keeps the 14 newest
-   backups, and separately every `*-pre-restore.dump` safety copy from the
-   last 7 days (never fewer than 3). A pruning failure is only a warning.
+   backups, deletes any older than 30 days except the newest (so the server is
+   never left with none), and separately keeps every `*-pre-restore.dump`
+   safety copy from the last 7 days (never fewer than 3), but none older
+   than 30 days. A pruning failure is
+   only a warning. The 30 days are a promise on /privacy: a dump holds report
+   emails and address hashes past their erasure, so a copy may keep them at most
+   30 days more (`BACKUP_MAX_DAYS` in `scripts/lib/prune.sh`, `BACKUP_DAYS` in
+   `apps/web/lib/content/privacy.ts`). Since pruning runs only when a backup is
+   taken, take one at least monthly, or delete old dumps by hand; and a copy
+   taken off the box (step 2) must be deleted within 30 days too, and so must
+   a production snapshot pulled to a laptop with `make db-pull` (written under
+   `seed/`, never pruned automatically). /privacy says what this means plainly:
+   a backup can hold the data past its limits until a newer one replaces it.
 2. **Copy it off the box**, from your laptop:
    `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
 3. **Test-restore it into a scratch database** now and then, without touching the

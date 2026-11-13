@@ -32,7 +32,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -76,8 +76,12 @@ lint:  ## Lint and format-check exactly what CI checks
 fmt:  ## Auto-format Python
 	$(RUFF) format $(LINT_PATHS)
 
+# "Report a problem" refuses reports without a salt to hash senders with; any
+# value does locally.
+REPORT_IP_SALT ?= dev-report-salt-change-me
+
 api:  ## Run the API on :8000
-	cd apps/api && $(RUN_ENV) poetry run uvicorn app.main:app --reload
+	cd apps/api && $(RUN_ENV) REPORT_IP_SALT="$(REPORT_IP_SALT)" poetry run uvicorn app.main:app --reload
 
 web:  ## Run the Next.js app on :3000
 	cd apps/web && NEXT_PUBLIC_API_URL=http://localhost:8000 pnpm dev
@@ -114,6 +118,9 @@ regroup-dry-run:  ## What a regroup would do to product ids (kept/merged/split/e
 
 retire-redirects:  ## Drop product redirects unused for a year: make retire-redirects [ARGS=--dry-run]
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.retire_redirects $(ARGS)
+
+reports:  ## Review visitors' reports: make reports [ARGS="show 12" | "accept 12 13" | "reject 14"]
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.reports $(ARGS)
 
 # Working against real data locally. db-pull is read-only against production;
 # db-load only ever touches localhost. Set DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH

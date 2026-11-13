@@ -293,6 +293,23 @@ const server = createServer((req, res) => {
 
   const path = url.pathname;
   if (path === "/health") return send(200, { status: "ok" });
+  // "Report a problem" (tests/e2e/report.spec.ts): takes any report, as the
+  // API does a good one. The states the API can answer with otherwise (429,
+  // 500) are set per test with page.route, so they cannot leak between tests.
+  if (path === "/reports/token") return send(200, { token: "stub-token" });
+  if (path === "/reports" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        JSON.parse(body);
+      } catch {
+        return send(422, { detail: "not JSON" });
+      }
+      send(202, { reference: "R-101" });
+    });
+    return;
+  }
   const credited = photoShopRoute(url, PORT);
   if (credited) return send(...credited);
   if (path === "/stats") return send(200, { products: 57207, suppliers: 8, categories: 249 });

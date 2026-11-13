@@ -115,7 +115,7 @@ test("the product page's controls", async ({ page }) => {
   await page.goto("/products/p-multi");
   await expectTappable(page, {
     "shop contact link": page.locator("[data-shop-contact-line] a[data-contact]").first(),
-    "report link": page.locator("[data-report] a"),
+    "report a problem": page.locator("[data-report-button]"),
   });
 });
 

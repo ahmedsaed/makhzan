@@ -27,7 +27,7 @@ export function sitemapEntries(
 ): MetadataRoute.Sitemap {
   const page = (
     path: string,
-    changeFrequency: "daily" | "weekly" | "monthly",
+    changeFrequency: "daily" | "weekly" | "monthly" | "yearly",
     priority: number,
     lastModified?: string,
   ) => ({
@@ -51,6 +51,7 @@ export function sitemapEntries(
     ),
     page(routes.howWeCrawl(), "monthly", 0.3),
     page(routes.forSuppliers(), "monthly", 0.3),
+    page(routes.privacy(), "yearly", 0.1),
   ];
 }
 
