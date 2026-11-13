@@ -220,7 +220,11 @@ function lowestValue(all: Track[], t: number, previous: string | null): Value {
   if (points.some(stocked)) return gap("on-request");
   if (points.some((p) => p?.available)) return gap("out-of-stock");
   if (points.some((p) => p !== null)) return gap("unlisted");
-  return gap("unchecked", Math.max(...all.map((track) => track.until)));
+  // Nobody has a value: the shops that had one are past their last check.
+  // The date is the latest of *those* checks, never a shop that has not
+  // started yet (whose `until` is today).
+  const ended = all.filter((track) => track.points[0].at <= t && t >= track.until);
+  return gap("unchecked", ended.length ? Math.max(...ended.map((track) => track.until)) : null);
 }
 
 const same = (a: Value, b: Value) =>
@@ -248,9 +252,15 @@ export function buildHistory(
   const all = tracks(history, offers, now);
   if (all.length === 0) return null;
   const end = now.getTime();
-  // A truncated track began before its first point: recording covers the window.
+  // When recording began, read from the offers that count (C2b): the fresh
+  // ones when any is fresh. A stale offer's lone point (its seeded baseline,
+  // dated at its last check months ago) must not stretch the chart back to a
+  // time when no counted shop had a point: that stretch would be all gap. A
+  // truncated track began before its first point: recording covers the window.
+  const fresh = all.filter((track) => !track.stale);
+  const counted = fresh.length > 0 ? fresh : all;
   const recorded = Math.min(
-    ...all.map((track) => (track.truncated ? -Infinity : track.points[0].at)),
+    ...counted.map((track) => (track.truncated ? -Infinity : track.points[0].at)),
   );
   if (end - recorded < RECORDING_MIN_DAYS * DAY) return null;
   const windowStart = end - HISTORY_DAYS * DAY;

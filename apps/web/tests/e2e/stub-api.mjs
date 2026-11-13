@@ -18,11 +18,16 @@ import { createServer } from "node:http";
 
 import { crawlerActivity } from "./fixtures/crawler.mjs";
 import { phase2Fixture } from "./fixtures/phase2.mjs";
+import { realHistoryFixture } from "./fixtures/real-history.mjs";
 import { productFixture } from "./fixtures/product.mjs";
 import { photoShopRoute } from "./fixtures/photo-shop.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
 import { shopName, shopRoute } from "./fixtures/shops.mjs";
-import { FAILING_DEPARTMENT, DEPARTMENT_CATEGORIES, departmentSearch } from "./fixtures/departments.mjs";
+import {
+  FAILING_DEPARTMENT,
+  DEPARTMENT_CATEGORIES,
+  departmentSearch,
+} from "./fixtures/departments.mjs";
 
 const PORT = Number(process.env.STUB_PORT ?? 8787);
 
@@ -350,6 +355,9 @@ const server = createServer((req, res) => {
   }
   const photoProduct = PHOTO_PRODUCTS[path.replace(/^\/products\//, "")];
   if (photoProduct) return send(200, photoProduct);
+
+  const real = realHistoryFixture(path);
+  if (real) return send(...real);
 
   const phase2 = phase2Fixture(path);
   if (phase2) return send(...phase2);
