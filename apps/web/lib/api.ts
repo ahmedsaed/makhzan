@@ -400,7 +400,17 @@ export type ShopCrawlActivity = {
   requests_7d_partial: boolean;
   min_gap_s: number | null;
   median_gap_s: number | null;
+  /** The last 7 UTC days, oldest first. `requests` is null for a day one of
+   *  whose runs did not record its count: never drawn as zero. */
+  requests_by_day: { date: string; requests: number | null }[];
+  /** Who the latest run said it was, or null before that was recorded. */
+  identity: { name: "makhzanbot" | "browser"; signed: boolean } | null;
+  /** How many days the last completed full pass took, or null before one. */
+  last_cycle_days: number | null;
 };
+
+/** One bucket of the week's gaps, all shops together. `max_s` null: open-ended. */
+export type GapBucket = { min_s: number; max_s: number | null; count: number };
 
 export type CrawlerActivity = {
   generated_at: string;
@@ -414,6 +424,8 @@ export type CrawlerActivity = {
     requests_7d_partial: boolean;
     min_gap_s: number | null;
     median_gap_s: number | null;
+    /** Null when no gap was measured this week. */
+    gap_histogram: GapBucket[] | null;
     robots_txt_honoured: boolean;
   };
   schedule: {
