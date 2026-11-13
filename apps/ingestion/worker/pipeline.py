@@ -933,10 +933,10 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     visited its own slice of the partitions; see the caller.
 
     A clean check is recorded too (`unmapped` empty; `unused` empty when the
-    run was complete, absent when it could not say), and None
-    means "not checked" — no crosswalk, or nothing observed. Storing nothing on
-    a clean run left status showing the last run that *did* drift, so drift
-    fixed by a mapping or an `ignore` entry lingered for weeks.
+    run was complete, absent when it could not say), and None means "not
+    checked" — no crosswalk, or nothing observed — so status can tell the two
+    apart. A clean result speaks only for the names this run saw: on a paced
+    source that is one slice, and status unions the cycle's runs.
     """
     if not adapter.categories or not observed:
         return None
@@ -1213,7 +1213,10 @@ async def _logged_run(
             observed,
             complete=bool(cycle) and not resumed and swept_every_partition,
         )
-        if drift is not None:
+        # Recorded only for a real sweep: a `limit=` test run is ephemeral and
+        # must not speak for the catalogue (a clean result would read as a
+        # check), and a run its host stopped before any page saw nothing.
+        if drift is not None and limit is None and not (stopped and not tally["pages"]):
             stats["crosswalk"] = drift
         run.stats = stats
 

@@ -19,6 +19,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.domains.crosswalks import fold_names, load_crosswalk, normalize_category_name
 from makhzan_schemas.enums import IngestionStatus, ListingStatus, ReviewStatus
 from makhzan_schemas.models import (
     IngestionRun,
@@ -413,6 +414,31 @@ async def robots_health(session, source_filter: str | None) -> None:
             print(f"  {'':22s} {YELLOW}run stopped early: {stopped}{RESET}")
 
 
+def _current_crosswalk(config: dict | None) -> tuple[set[str], set[str], str | None]:
+    """The source's crosswalk as it stands now: (mapped, ignored) folded names.
+
+    Read from the file, not from the runs, so a mapping or an `ignore` entry
+    added since a run reported drift takes the name off the report at once.
+    The third value says why the filter could not be applied, if it could not.
+    """
+    name = (config or {}).get("crosswalk")
+    if not name:
+        return set(), set(), "no crosswalk named in the source's config"
+    try:
+        loaded = load_crosswalk(name)
+    except (OSError, ValueError) as exc:
+        return set(), set(), f"crosswalk {name!r} could not be loaded: {exc}"
+    return fold_names(loaded.categories), fold_names(loaded.ignore), None
+
+
+def _cycle_start(stats: dict | None) -> datetime | None:
+    started = ((stats or {}).get("cycle") or {}).get("cycle_started_at")
+    try:
+        return datetime.fromisoformat(started) if started else None
+    except ValueError:
+        return None
+
+
 async def crosswalk_drift(session, source_filter: str | None, days: int = 30) -> None:
     """Categories a supplier has added, renamed or retired since the crosswalk was written.
 
@@ -420,13 +446,18 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
     stops matching and those listings quietly lose it — which looks exactly like
     the supplier discontinuing stock. This makes the difference visible.
 
-    Each source shows its newest run that checked: a clean check is recorded as
-    an empty `unmapped`, so a fix (a mapping, an `ignore` entry) clears the
-    report on the next run instead of the last drifted run lingering. Runs from
-    before clean checks were recorded carry no `crosswalk` key and are skipped —
-    absence means "not checked", never "clean". `unused` comes from the newest
-    run that could speak for retirements (one that swept the whole catalogue
-    itself), which is the only kind that carries the key.
+    One run is not the catalogue: a paced source sweeps a slice a day, and a
+    run only reports the names its slice showed. So `unmapped` is the union of
+    every run that checked since the start of the last completed cycle (or over
+    `days`, when there is none), newest count per name. Runs without a
+    `crosswalk` key — before clean checks were recorded, or that saw nothing —
+    add nothing and never count as clean. `unused` comes from the newest run
+    that swept the whole catalogue itself, the only kind that carries the key.
+
+    Both are then filtered by the crosswalk as it stands now: a name since
+    mapped or ignored leaves the report at once, and an entry since removed no
+    longer counts as never matched. "Matches the source" is only said when the
+    runs read cover a completed cycle; otherwise a clean slice is just that.
     """
     _header("CROSSWALK DRIFT")
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -437,42 +468,79 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
     )
     if source_filter:
         query = query.where(IngestionRun.source == source_filter)
-
-    latest: dict[str, dict] = {}
-    retired: dict[str, dict] = {}
+    runs_by_source: dict[str, list] = {}
     for run in (await session.execute(query)).scalars().all():
-        drift = (run.stats or {}).get("crosswalk")
-        if not isinstance(drift, dict):
-            continue
-        latest.setdefault(run.source, drift)
-        if "unused" in drift:
-            retired.setdefault(run.source, drift)
-    if not latest:
-        print(f"  {DIM}no mapped source has reported yet{RESET}")
-        return
+        runs_by_source.setdefault(run.source, []).append(run)
+    configs = dict((await session.execute(select(Source.source_id, Source.config))).all())
 
-    for source, drift in sorted(latest.items()):
-        unmapped = drift.get("unmapped") or {}
-        complete = retired.get(source, {})
-        unused = complete.get("unused") or []
-        if not unmapped and not unused:
-            print(f"  {source:22s} {GREEN}crosswalk matches the source{RESET}")
+    reported = False
+    for source in sorted(runs_by_source):
+        runs = runs_by_source[source]  # newest first
+        checked = [r for r in runs if isinstance((r.stats or {}).get("crosswalk"), dict)]
+        if not checked:
             continue
-        print(f"  {source:22s} {drift.get('observed', '?')} category names seen")
+        reported = True
+        checked_all = checked
+
+        # The window: from the start of the newest completed cycle. A run
+        # belongs to it if it was still going then (the cycle's first cursor is
+        # stamped after its first run starts).
+        cycle_start = next((s for r in runs if (s := _cycle_start(r.stats))), None)
+        if cycle_start is not None:
+            checked = [r for r in checked if (r.finished_at or r.started_at) >= cycle_start]
+        newest = checked[0].stats["crosswalk"] if checked else {}
+        covered = cycle_start is not None or "unused" in newest
+
+        mapped, ignored, why_unfiltered = _current_crosswalk(configs.get(source))
+        known = mapped | ignored
+        unmapped: dict[str, int] = {}
+        for run in checked:
+            for name, count in (run.stats["crosswalk"].get("unmapped") or {}).items():
+                if normalize_category_name(name) not in known:
+                    unmapped.setdefault(name, count)
+
+        complete = next(
+            (r.stats["crosswalk"] for r in checked_all if "unused" in r.stats["crosswalk"]), {}
+        )
+        unused = list(complete.get("unused") or [])
+        unused_count = complete.get("unused_count", len(unused))
+        if not why_unfiltered:
+            unused = [n for n in unused if normalize_category_name(n) in mapped]
+            unused_count = len(unused)
+
+        note = f"    {DIM}not filtered by the current crosswalk: {why_unfiltered}{RESET}"
+        if not unmapped and not unused:
+            if covered:
+                print(f"  {source:22s} {GREEN}crosswalk matches the source{RESET}")
+            else:
+                print(
+                    f"  {source:22s} no unmapped names seen this cycle"
+                    f" {DIM}(no completed cycle in the last {days}d to vouch for the rest){RESET}"
+                )
+            if why_unfiltered:
+                print(note)
+            continue
+        scope = "this cycle" if cycle_start else f"in {days}d, no completed cycle"
+        print(f"  {source:22s} {len(checked)} runs checked ({scope})")
+        if why_unfiltered:
+            print(note)
         if unmapped:
+            unmapped = dict(sorted(unmapped.items(), key=lambda kv: -kv[1]))
             print(
                 f"    {YELLOW}{len(unmapped)} unmapped{RESET} "
-                f"({drift.get('unmapped_listings', 0)} listings) — new or renamed:"
+                f"({sum(unmapped.values())} listings) — new or renamed:"
             )
             for name, count in list(unmapped.items())[:6]:
                 print(f"      {count:5d}  {name[:62]}")
         if unused:
-            # Only reported after a complete cycle, so this really means "gone".
+            # Only reported after a complete sweep, so this really means "gone".
             print(
-                f"    {YELLOW}{complete.get('unused_count', len(unused))} entries never matched{RESET}"
+                f"    {YELLOW}{unused_count} entries never matched{RESET}"
                 f" — retired or renamed away:"
             )
             print(f"      {DIM}{', '.join(unused[:6])}{RESET}")
+    if not reported:
+        print(f"  {DIM}no mapped source has reported yet{RESET}")
 
 
 async def product_details(session, source_filter: str | None) -> None:

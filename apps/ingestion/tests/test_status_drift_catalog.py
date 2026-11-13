@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import SourceType
-from makhzan_schemas.models import IngestionRun, Listing, Supplier
+from makhzan_schemas.models import IngestionRun, Listing, Source, Supplier
 from test_pipeline import SRC, CategoryAdapter, _seed_taxonomy
 from test_status_details import _status
 from worker.pipeline import run_source
@@ -43,16 +43,37 @@ async def _drift_report(capsys, runs: list[IngestionRun]) -> str:
     return capsys.readouterr().out
 
 
-async def test_a_clean_run_after_a_drifted_one_clears_the_report(capsys):
-    """Drift fixed by a mapping or an `ignore` entry must not linger for weeks."""
+async def test_a_clean_slice_does_not_hide_another_slices_drift(capsys):
+    """A paced source sweeps a slice a day; a clean slice speaks only for its own
+    names. Without a completed cycle to vouch for the rest, it is not "clean"."""
     out = await _drift_report(capsys, [_run("shop", 120, DRIFTED), _run("shop", 5, CLEAN)])
+    assert "1 unmapped" in out and "Cooling Solutions" in out
+    assert "matches the source" not in out
+
+
+async def test_a_clean_slice_alone_is_not_called_a_match(capsys):
+    out = await _drift_report(capsys, [_run("shop", 5, CLEAN)])
+    assert "matches the source" not in out
+    assert "no unmapped names seen this cycle" in out
+
+
+async def test_drift_from_before_the_last_completed_cycle_is_dropped(capsys):
+    """The window starts at the newest completed cycle: a name unmapped in an
+    earlier cycle and not seen since is no longer reported."""
+    closing = _run("shop", 5, CLEAN)
+    closing.stats["cycle"] = {
+        "cycle_started_at": (datetime.now(UTC) - timedelta(minutes=60)).isoformat()
+    }
+    out = await _drift_report(
+        capsys, [_run("shop", 120, DRIFTED), _run("shop", 30, CLEAN), closing]
+    )
     assert "Cooling Solutions" not in out
     assert "crosswalk matches the source" in out
 
 
-async def test_drift_fixed_by_an_ignore_entry_clears_on_the_next_run(capsys):
-    """End to end: the pipeline must record the clean check, or status falls back
-    to the last run that drifted."""
+async def test_a_complete_clean_sweep_clears_drift_end_to_end(capsys):
+    """End to end: the pipeline must record the clean check of a full sweep, or
+    status falls back to the last run that drifted."""
     await _seed_taxonomy()
     crosswalk = {"cat-resistors": ("electronics", "resistors")}
     parts = ["cat-resistors", "cat-brand"]
@@ -82,7 +103,8 @@ async def test_a_run_without_the_key_is_not_taken_as_clean(capsys):
 
 async def test_unused_comes_from_the_newest_run_that_could_speak_for_it(capsys):
     """A resumed or paced run carries no `unused`, so it neither clears nor
-    invents retirements; a later complete run with an empty list clears them."""
+    invents retirements; a later complete run with an empty list clears them.
+    (No Source row here, so no current crosswalk filters them.)"""
     complete_drift = {**CLEAN, "unused": ["Teensy Board"], "unused_count": 1}
     out = await _drift_report(capsys, [_run("shop", 120, complete_drift), _run("shop", 5, CLEAN)])
     assert "1 entries never matched" in out and "Teensy Board" in out
@@ -91,6 +113,58 @@ async def test_unused_comes_from_the_newest_run_that_could_speak_for_it(capsys):
     out = await _drift_report(capsys, [_run("shop", 1, complete_clean)])
     assert "Teensy Board" not in out
     assert "crosswalk matches the source" in out
+
+
+def _crosswalk_file(tmp_path, monkeypatch, body: str) -> None:
+    (tmp_path / "shop_x.toml").write_text(body)
+    monkeypatch.setenv("MAKHZAN_CROSSWALKS", str(tmp_path))
+
+
+def _source_row(crosswalk: str = "shop_x") -> Source:
+    return Source(
+        source_id="shop",
+        adapter="fixture",
+        enabled=True,
+        supplier={"slug": "shop", "name": "shop"},
+        config={"crosswalk": crosswalk},
+    )
+
+
+async def test_a_name_ignored_since_leaves_the_report_at_once(capsys, tmp_path, monkeypatch):
+    """Filtered by the crosswalk as it stands now, not by the next run."""
+    _crosswalk_file(
+        tmp_path,
+        monkeypatch,
+        'ignore = ["cooling   solutions"]\n\n[categories]\n"Sensors" = "electronics:sensors"\n',
+    )
+    out = await _drift_report(capsys, [_source_row(), _run("shop", 120, DRIFTED)])
+    assert "Cooling Solutions" not in out
+    assert "not filtered" not in out
+
+
+async def test_unused_is_filtered_by_the_current_crosswalk(capsys, tmp_path, monkeypatch):
+    _crosswalk_file(tmp_path, monkeypatch, '[categories]\n"Teensy Board" = "electronics:boards"\n')
+    complete = {**CLEAN, "unused": ["Teensy Board", "Removed Since"], "unused_count": 2}
+    out = await _drift_report(capsys, [_source_row(), _run("shop", 5, complete)])
+    assert "1 entries never matched" in out and "Teensy Board" in out
+    assert "Removed Since" not in out
+
+
+async def test_an_unloadable_crosswalk_is_said_and_drift_still_shown(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("MAKHZAN_CROSSWALKS", str(tmp_path))
+    out = await _drift_report(capsys, [_source_row("missing"), _run("shop", 5, DRIFTED)])
+    assert "Cooling Solutions" in out
+    assert "not filtered by the current crosswalk" in out and "'missing'" in out
+
+
+async def test_a_limit_run_records_no_crosswalk_check():
+    """`limit=` runs are ephemeral: a clean result there would read as a check."""
+    await _seed_taxonomy()
+    run = await run_source(
+        SRC, CategoryAdapter(["cat-brand"], {"cat-x": ("electronics", "resistors")}), limit=1
+    )
+    assert run.stats.get("limit") == 1
+    assert "crosswalk" not in run.stats
 
 
 async def test_catalog_counts_price_on_request_apart_from_no_price(capsys):
