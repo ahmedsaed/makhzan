@@ -131,7 +131,7 @@ emails went out.
   Vitest and 226 Playwright cases in `apps/web` (not part of `make test`).
   The 879 include the private configuration's crosswalk tests, which `make test`
   runs when it finds the private checkout; public CI runs the public ones only
-  (about 750, not counted exactly). CI runs lint, both Python suites, and web
+  (750; the private configuration adds 129). CI runs lint, both Python suites, and web
   lint, typecheck, build and tests.
 - Each test session gets a database of its own, so suites can run in parallel.
 - Sweeps are resumable and checkpointed per page; archiving is cycle-gated.
