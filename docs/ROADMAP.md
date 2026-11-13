@@ -58,12 +58,14 @@ The site calls them **departments** (`/departments/{department}`).
   `docs/crawler-identity.md`). Identity is per source; makhzanbot names itself,
   sends no browser hints and signs every request (RFC 9421, Ed25519), with the key
   directory published by the API. The Wix shop was switched first and its runs are
-  signed. Two more, the Shopify shop and shop 5, are being switched on 2026-11-13;
-  the other three crawled shops are still on the browser identity.
+  signed. The Shopify shop and shop 5 were switched and deployed on 2026-11-13;
+  their first signed runs are due on 2026-11-14. The other four crawled shops
+  (shops 1, 2 and 3 and the Odoo shop) are still on the browser identity.
   **Not done:** the application to Cloudflare's verified bots directory was
   submitted on 2026-11-10 and came back on 2026-11-12 asking for a registered
-  business, which the operator does not have yet. It is pending. (Shopify needs
-  only the signature, no registration.) `python -m worker.probe` (`./makhzan
+  business, which the operator does not have yet. It is pending. For Shopify,
+  see the Shopify section of `docs/crawler-identity.md`: a signed 429 may mean
+  the registration is not yet activated. `python -m worker.probe` (`./makhzan
   probe`) compares the identities from the server with the crawler's own client.
 - **Shop contact details** (2026-11-10): phone, WhatsApp, email, address, map
   link, opening hours and branches on each shop page, each field saying where it
@@ -82,7 +84,7 @@ The site calls them **departments** (`/departments/{department}`).
 - **The details stage** (2026-11-09, `worker/details.py`): descriptions, specs,
   documents and photos that only a product page has, read a few pages a run and
   again only on change. On for the Odoo shop and the Wix shop, 20 pages a run;
-  the Odoo shop's backfill of 2,822 pages takes about 144 days at that pace.
+  the Odoo shop's backfill of 2,822 pages takes about 141 days at that pace.
 - **Ingestion hardening:** each source is its own job with its own timeout (the
   old 300 s arq timeout had been cancelling the Odoo shop's runs); a finished
   partition is not re-swept in a cycle; `target_cycle_days` can plan a cycle's
@@ -106,9 +108,14 @@ Phase 1 (collecting more of what shops already publish) has shipped. Phase 2
 | Grouping on the manufacturer part numbers shops state | not done |
 | Grouping by material for products sold per colour | not done (needs the options table) |
 
-### Before contacting the shops
+### The polish list, and contacting the shops
 
-The polish list in `docs/PRODUCT.md`:
+The polish list in `docs/PRODUCT.md`. The blocked two were emailed on 2026-11-06;
+first emails went to the reachable shops on 2026-11-10: shop 3, the Odoo shop,
+shop 2, the Shopify shop and the Wix shop by email, shop 5 by WhatsApp (the
+private outreach notes also say "later" for it; to confirm). Shop 1: unclear
+whether sent, to confirm. The per-shop spot-check (the fifth item) was **not done** before those
+emails went out.
 
 - A working contact address — done (`crawler@makhzan.merope.dev`).
 - Fresh data for the reachable shops — done (the crawl runs daily again since
@@ -122,7 +129,10 @@ The polish list in `docs/PRODUCT.md`:
 
 - Tests, as run on 2026-11-13: 879 ingestion and 228 API (`make test`), 695
   Vitest and 226 Playwright cases in `apps/web` (not part of `make test`).
-  CI runs lint, both Python suites, and web lint, typecheck, build and tests.
+  The 879 include the private configuration's crosswalk tests, which `make test`
+  runs when it finds the private checkout; public CI runs the public ones only
+  (about 750, not counted exactly). CI runs lint, both Python suites, and web
+  lint, typecheck, build and tests.
 - Each test session gets a database of its own, so suites can run in parallel.
 - Sweeps are resumable and checkpointed per page; archiving is cycle-gated.
 - A cycle spans about a week: the cron stays daily and each run takes a slice.
@@ -148,21 +158,23 @@ Kept short; `git log` has the detail.
 
 ## Next
 
-### 1. In this order
+### 1. Open, not yet ordered
 
 1. **Shop data Phase 2 mockups**: the product page with the options table,
    minimum order, quantity breaks, badges and price history, designed before it
    is built.
-2. **The `/how-we-crawl` redesign.** The page names the token, the block
-   snippet and the activity record; it does not yet explain the signature or the
-   key directory to a shop.
+2. **The `/how-we-crawl` redesign.** A presentation redesign (cards, tabs and
+   additions to the activity record); the content, Web Bot Auth and the key
+   directory included, is already on the page. The mockup is approved and it is
+   being built.
 3. **A crawler scheduling plan.** Drafted; the owner is reviewing it.
 4. **A caching and rendering review** of the web app and API.
 5. **A bot traffic policy** for makhzan's own site.
 
 ### 2. The last polish item
-The spot-check of each shop's makhzan page (prices, links, photos, categories),
-before the shops that have not been written to are contacted.
+The spot-check of each shop's makhzan page (prices, links, photos, categories).
+It was meant to come before the emails and did not: every reachable shop except
+possibly shop 1 has already been written to (see "The polish list, and contacting the shops").
 
 ### 3. Domain generalization
 Phases 1–3 are done (`DomainProfile`, data-driven suppliers from a `sources`
@@ -208,8 +220,8 @@ paused (`enabled = false`) rather than retried daily, and are never crawled from
 another address to get past the block. Archiving is cycle-gated, so nothing is
 lost; the cost is freshness, and their data is now from 2026-08-24.
 
-Both shops were emailed on 2026-11-06 and again on 2026-11-10, asking them to
-allow the crawler. **Neither has replied.** The next step, around 2026-11-16, is
+Both shops were emailed on 2026-11-06 and followed up on 2026-11-10, asking them
+to allow the crawler. **Neither has replied.** The next step, around 2026-11-16, is
 to follow up through their other channels (phone, WhatsApp, social). The details
 and options are tracked in the private configuration (`docs/live-issues.md`).
 

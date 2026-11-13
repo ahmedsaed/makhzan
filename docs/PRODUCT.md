@@ -13,12 +13,14 @@ The project depends on suppliers tolerating the crawl, so that is tested before
 anything large is built. Seven of the nine current shops are crawled without trouble;
 two (over half the catalogue) block the production host's address, which may be a
 default security setting rather than a decision about makhzan. Both were emailed on
-2026-11-06 and 2026-11-10 and have not replied; nobody has refused.
+2026-11-06 and 2026-11-10 and have not replied; the reachable shops were first written to
+on 2026-11-10. Nobody has refused.
 
 The current site is polished just enough to show, then the shops are asked. The
 redesign continues in parallel: it does not depend on who says yes.
 
-Before the emails go out (state on 2026-11-13):
+Before the emails go out (state on 2026-11-13; the emails have since gone out, see
+below):
 
 1. ✓ **A working contact address.** The crawler's `From` header and the crawling page
    named `crawler@makhzan.eg`, a domain with no mail records: a shop that wrote would
@@ -32,13 +34,17 @@ Before the emails go out (state on 2026-11-13):
    sent you N visitors" can be said with numbers. Done: every shop link carries it and
    sends an Umami `shop-click` event.
 5. ✗ **Each shop's own page on makhzan, spot-checked**: prices, links, photos, categories.
-   Not done.
+   Not done, and not done before the emails went out.
 6. ✓ **No half-finished Arabic** anywhere visible (the redesign is English only).
 
 Then: the two blocked shops first (the ask is specific: allowlist one address, or send
 a feed), with their own makhzan page as the pitch; the others later with a short note
-and the referral numbers. The blocked shops were written to first, as planned; with no
-reply, the follow-up goes through their other channels around 2026-11-16.
+and the referral numbers. What happened: the two blocked shops were emailed on
+2026-11-06 and followed up on 2026-11-10, with no reply yet; their follow-up goes through
+other channels around 2026-11-16. First emails went to the reachable shops on
+2026-11-10, before the spot-check (item 5) was done: shop 3, the Odoo shop, shop 2, the
+Shopify shop and the Wix shop by email, shop 5 by WhatsApp (the private outreach notes
+also say "later" for it; to confirm). Shop 1: unclear whether sent, to confirm.
 
 ## Decided
 
