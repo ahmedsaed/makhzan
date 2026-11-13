@@ -642,6 +642,29 @@ async def test_a_sweep_keeps_the_identifier_the_regroup_wrote():
     assert (await _marketplace_listing()).part_number == "SET-BY-REGROUP"
 
 
+class StatedPartNumberAdapter(MarketplaceAdapter):
+    """An adapter that knows the part number itself, as `RawItem.part_number`."""
+
+    async def fetch_page(self, partition, page):
+        found = await super().fetch_page(partition, page)
+        for item in found.items:
+            item.part_number = "1N4007-ADAPTER"
+        return found
+
+
+async def test_an_adapters_own_part_number_overwrites_the_stored_one():
+    await run_source("marketplace", MarketplaceAdapter("zener-diodes", "1N4007 Diode 1A"))
+    async with SessionLocal() as s:
+        stored = await s.get(Listing, (await _marketplace_listing()).id)
+        stored.part_number = "SET-BY-REGROUP"
+        await s.commit()
+
+    await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    listing = await _marketplace_listing()
+    assert listing.part_number == "1N4007-ADAPTER"
+    assert listing.attributes["adapter_part_number"] == "1N4007-ADAPTER", "kept for the regroup"
+
+
 async def test_unmapped_category_stays_uncategorized():
     """A crosswalk miss must not fall back to guessing from the title."""
     await run_source("marketplace", MarketplaceAdapter("not-in-crosswalk", "Resistor 10k"))

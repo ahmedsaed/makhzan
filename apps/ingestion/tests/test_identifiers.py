@@ -593,13 +593,57 @@ def test_sizes_of_one_product_are_not_a_family():
     assert {listing.title_en for listing in merged[0]} == {"RELIFE RL-3020 Soldering Wick 3mm"}
 
 
-def test_a_title_that_only_adds_words_is_not_another_product():
+def test_a_shop_wording_one_product_two_ways_still_makes_a_family():
+    """Conservative on purpose: a title that only adds words is another product
+    as often as not, so TU-501 described two ways by one shop is not used, and
+    neither listing merges with another shop's TU-501."""
     listings = [
         _listing("TNI-U Wire Cutter – TU501 Side Snips for Electronics", "shop-a", "tools"),
         _listing('5 inch Wire Cutter "TNI-U TU-501"', "shop-a", "tools"),
+        _listing("TNI-U TU-501 Wire Cutter Side Snips", "shop-b", "tools"),
+    ]
+    assert _merged(listings) == []
+    assert {listing.part_number for listing in listings} == {None}
+
+
+def test_a_title_that_is_only_the_code_is_no_evidence_of_a_family():
+    listings = [
+        _listing("TB-2512", "shop-a"),
+        _listing("TB-2512 Fixed Barrier Terminal Block 12pin", "shop-a"),
+        _listing("TB-2512 Fixed Barrier Terminal Block 12pin", "shop-b"),
     ]
     assign_identifiers(listings)
-    assert {listing.part_number for listing in listings} == {"TU501", "TU-501"}
+    assert {listing.part_number for listing in listings} == {"TB-2512"}
+
+
+def test_a_printer_and_its_hotend_from_one_shop_are_a_family():
+    """Otherwise shop A's printer would merge with shop B's printer bed."""
+    listings = [
+        _listing("Creality CR-10 3D Printer", "shop-a", price=20000),
+        _listing("Creality CR-10 3D Printer Hotend", "shop-a", price=19000),
+        _listing("Creality CR-10 3D Printer Bed", "shop-b", price=18000),
+    ]
+    assert _merged(listings) == []
+
+
+def test_a_bundle_stays_apart_from_the_bare_tool():
+    listings = [
+        _listing("CAYKEN SCY-2550 Diamond Core Drill", "shop-a", "tools", price=9000),
+        _listing("CAYKEN SCY-2550 Diamond Core Drill + 2 Core Drill Bits", "shop-a", "tools", 9500),
+        _listing("CAYKEN SCY-2550 Diamond Core Drill + 2 Core Drill Bits", "shop-b", "tools", 9400),
+    ]
+    assert _merged(listings) == []
+
+
+def test_values_that_differ_without_conflicting_make_a_family():
+    """ "100A/1V" against "100A/50mA": volts on one side, nothing on the other,
+    so the value veto cannot tell them apart and the code cannot be trusted."""
+    listings = [
+        _listing("Split-core Current Transformer SCT-013 100A/1V", "shop-a"),
+        _listing("Split-core Current Transformer SCT-013 100A/50mA", "shop-a"),
+        _listing("Split-core Current Transformer SCT-013 100A", "shop-b"),
+    ]
+    assert _merged(listings) == []
 
 
 def test_regrouping_twice_changes_nothing_the_second_time():

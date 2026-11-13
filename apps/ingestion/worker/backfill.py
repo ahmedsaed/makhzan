@@ -1,12 +1,13 @@
-"""DESTRUCTIVE: re-infer every listing's category and part number from its title.
+"""DESTRUCTIVE: re-infer every listing's category from its title, then regroup.
 
 !!! Not for regrouping or reindexing: that is `python -m worker.regroup`. !!!
 
 This overwrites `category_id` on every listing with a keyword guess from the
 title, which erases every category a crosswalk set: a source browsed by
 category loses all of them, and a tag-cloud shop's mapped tags give way to
-inference. Only a re-crawl of each source puts them back. It also re-extracts
-part numbers. It dates from before crosswalks, when inference was all there was.
+inference. Only a re-crawl of each source puts them back. Identifiers are re-read
+by the regroup that follows, as every regroup does. It dates from before
+crosswalks, when inference was all there was.
 
 Run:  python -m worker.backfill --i-understand-this-erases-crosswalk-categories
 """
@@ -19,7 +20,6 @@ import sys
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.grouping import describe, rebuild_products
 from makhzan_schemas.models import Listing
-from makhzan_schemas.domains import get_profile
 from sqlalchemy import select
 
 from worker.categorize import category_slug_for, seed_categories
@@ -32,7 +32,6 @@ async def main() -> None:
         listings = (await session.execute(select(Listing))).scalars().all()
 
         assigned = 0
-        with_pn = 0
         for listing in listings:
             slug = category_slug_for(listing.attributes, listing.title_en or listing.title_ar)
             cat = cat_index.get(slug) if slug else None
@@ -40,19 +39,12 @@ async def main() -> None:
             if cat:
                 assigned += 1
 
-            profile = get_profile(listing.domain)
-            listing.part_number = profile.extract_identifier(listing.title_en or listing.title_ar)
-            if listing.part_number:
-                with_pn += 1
-
         await session.commit()
         n = len(listings)
-        print(
-            f"categorized {assigned}/{n} ({100 * assigned / max(n, 1):.1f}%) · "
-            f"part numbers {with_pn}/{n} ({100 * with_pn / max(n, 1):.1f}%)"
-        )
+        print(f"categorized {assigned}/{n} ({100 * assigned / max(n, 1):.1f}%)")
 
-        # Group listings into canonical products (needs part numbers set above).
+        # Group listings into canonical products. The regroup re-reads every
+        # identifier itself: it is the only writer of `part_number`.
         print(describe(await rebuild_products(session, reidentify=True)))
 
         count = await reindex_all(session, get_client())

@@ -516,9 +516,10 @@ oil-seal sizes). A shop's `mfr_part_number` or "Model" spec is a fallback only.
 Keys are folded (`DT-830` = `DT830`, `J58 210` = `J58-210`) and scoped to the
 department as `mpn:<domain>:<ID>`; electronics keys stay bare (`mpn:<ID>`).
 A model code is dropped as an identity when one shop lists it under titles that
-each say something the other does not, values aside (FC-40 male / female, not
-WD-40 200 ml / 330 ml) — `grouping.assign_identifiers`; the catalogue is the
-evidence, never a list. Measurements (AWG-16, NEMA-17, M8, IP65, HSS-10) are
+differ in any word, values aside (FC-40 male / female, a printer and "the
+printer hotend", a drill and "+ 2 bits"; not WD-40 200 ml / 330 ml, which the
+value veto separates), or whose values differ without conflicting —
+`grouping.assign_identifiers`; the catalogue is the evidence, never a list. Measurements (AWG-16, NEMA-17, M8, IP65, HSS-10) are
 refused as `values.SCALE_WORDS`.
 
 **The regroup is the only writer of a stored listing's `part_number`.** It

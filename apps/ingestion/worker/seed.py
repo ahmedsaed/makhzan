@@ -30,7 +30,7 @@ async def main() -> None:
             flush=True,
         )
     async with SessionLocal() as session:
-        print(describe(await rebuild_products(session)), flush=True)
+        print(describe(await rebuild_products(session, reidentify=True)), flush=True)
         count = await reindex_all(session, get_client())
         print(f"reindexed {count} documents", flush=True)
 
