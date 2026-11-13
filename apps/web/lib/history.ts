@@ -220,7 +220,12 @@ function lowestValue(all: Track[], t: number, previous: string | null): Value {
   if (points.some(stocked)) return gap("on-request");
   if (points.some((p) => p?.available)) return gap("out-of-stock");
   if (points.some((p) => p !== null)) return gap("unlisted");
-  return gap("unchecked", Math.max(...all.map((track) => track.until)));
+  // No shop has a value here. The chart starts at the first counted point, so
+  // some shop had one before: it is past its last check now. The gap is dated
+  // with the latest of *those* checks, never with a shop that has not started
+  // yet (whose `until` is today).
+  const ended = all.filter((track) => track.points[0].at <= t && t >= track.until);
+  return gap("unchecked", ended.length ? Math.max(...ended.map((track) => track.until)) : null);
 }
 
 const same = (a: Value, b: Value) =>
@@ -248,13 +253,24 @@ export function buildHistory(
   const all = tracks(history, offers, now);
   if (all.length === 0) return null;
   const end = now.getTime();
-  // A truncated track began before its first point: recording covers the window.
-  const recorded = Math.min(
-    ...all.map((track) => (track.truncated ? -Infinity : track.points[0].at)),
-  );
-  if (end - recorded < RECORDING_MIN_DAYS * DAY) return null;
   const windowStart = end - HISTORY_DAYS * DAY;
-  const start = Math.max(recorded, windowStart);
+  // An offer counts toward when recording began only if it ever has a value
+  // in the window: a point before its last check, and that check inside the
+  // window. A stale offer's lone baseline (seeded at its last check, so never
+  // before it) has none, and must not stretch the chart back to a time when no
+  // shop had a point; a stale shop's real history before its last check
+  // counts, so a new shop joining never hides history already shown.
+  const counted = all.filter(
+    (track) => track.points[0].at < track.until && track.until > windowStart,
+  );
+  if (counted.length === 0) return null;
+  const firstPoint = Math.min(...counted.map((track) => track.points[0].at));
+  // A truncated track began before its first point: recording covers the
+  // window, though the chart still starts at the first point it has (the
+  // stretch before it is no data, not a gap).
+  const recorded = counted.some((track) => track.truncated) ? -Infinity : firstPoint;
+  if (end - recorded < RECORDING_MIN_DAYS * DAY) return null;
+  const start = Math.max(firstPoint, windowStart);
   const full = recorded <= windowStart;
   const single = offers.length === 1;
   const weeks = end - recorded >= STRIP_WEEKS * 7 * DAY ? weeksOf(all, end) : null;
