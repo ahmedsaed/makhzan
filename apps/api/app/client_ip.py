@@ -14,9 +14,13 @@ visitor can send, so it is believed only this far:
 - Only the entry our own proxies wrote. A proxy that appends (nginx's
   `$proxy_add_x_forwarded_for`) puts the address it saw at the right-hand
   end, after whatever the visitor sent, so the visitor's own entries are to
-  the left and never read. `TRUSTED_PROXY_HOPS` is how many proxies in front
-  of the web app append one (1: your reverse proxy alone; 2 with a CDN in front
-  of it), and the entry that many from the right is the visitor.
+  the left and never read. `TRUSTED_PROXY_HOPS` is how many entries at the
+  right our proxies wrote, and the entry that many from the right is the
+  visitor. In production it is 1, and that holds only because the reverse
+  proxy's `$remote_addr` is the visitor: behind a CDN the proxy restores it
+  from the CDN's header for the CDN's own ranges (docs/DEPLOYMENT.md). Drop
+  that and the entry is a CDN edge, so everyone behind one edge shares a
+  limit.
 
 The web app adds no entry of its own: Next's rewrite passes the header through
 unchanged, and sets one only when there is none (its own peer, the reverse
