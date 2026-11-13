@@ -149,7 +149,13 @@ visitor -> Cloudflare -> Nginx Proxy Manager (host) -> 172.17.0.1:3000 web -> ap
 - **The web port must not be public** (`WEB_BIND`, above): a request straight
   to it skips all of this.
 
-This document is internal; the public pages do not name the CDN.
+This document is internal. /how-we-crawl does not name the CDN; /privacy
+names Cloudflare as handling every request (the owner's decision, November
+2026), and promises that **the web server's access log, with IP addresses, is
+deleted after 30 days**. That promise is kept on the proxy host, not in this
+repository: its log rotation must delete access logs older than 30 days
+(`ACCESS_LOG_DAYS` in `apps/web/lib/content/privacy.ts`). Change one, change
+both.
 
 ### 3. Seed the data
 
@@ -197,7 +203,7 @@ crawler report from `scripts/status.py`, read from the live database.
 | What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
 | Review visitors' reports | `./makhzan reports` lists new ones, oldest first, each with the offers as the page showed them; `./makhzan reports show 12` adds the reporter's email; `./makhzan reports accept 12 13` / `reject 14` set `status` and `reviewed_at`. Nothing else happens on accept yet: correct the page by hand. |
-| Erase reporters' data past its time | Automatic: the worker's hourly `purge_reports` cron erases an email 90 days after its report was closed and an address hash 24 hours after the report was sent, as /privacy says. By hand: `./makhzan reports purge` |
+| Erase reporters' data past its time | Automatic: the worker's `purge_reports` cron, every 10 minutes, erases an email 90 days after its report was sent (reviewed or not) and an address hash 24 hours after it, as /privacy says. By hand: `./makhzan reports purge` |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
 | Back up the DB | `./makhzan backup` → `backups/makhzan-<ts>.dump`, read back before it is kept |
 | Restore the DB | `./makhzan restore <file>`: see [Backup and restore](#backup-and-restore) |

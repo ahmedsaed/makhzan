@@ -2,12 +2,17 @@
  * The privacy page's copy (/privacy), kept as prose apart from its markup, like
  * the crawling page's.
  *
- * It must stay true. Each figure here is enforced in code: the 90 days and 24
- * hours by the worker's hourly purge (`makhzan_schemas/reports.py`), the
- * scrambled address by the API (`apps/api/app/routers/reports.py`), "no
- * cookie" by there being none. Change the code, change this page, and the
- * other way round. tests/privacy.test.ts holds the figures equal to
- * lib/report.ts's.
+ * It must stay true. Each figure here is enforced in code or in operations:
+ * the 90 days and 24 hours by the worker's purge, every 10 minutes
+ * (`makhzan_schemas/reports.py`); the scrambled address by the API
+ * (`apps/api/app/routers/reports.py`); "no cookie" by there being none of
+ * ours; the 30-day access log by the web server's log rotation on the
+ * production host (docs/DEPLOYMENT.md). Change the code, change this page,
+ * and the other way round. tests/privacy.test.ts holds the figures equal to
+ * lib/report.ts's and the worker's.
+ *
+ * It names both processors, Cloudflare and our own server (the owner's
+ * decision, November 2026). /how-we-crawl still does not name Cloudflare.
  *
  * Plain words, for Egypt's Personal Data Protection Law (Law No. 151 of 2020):
  * who is responsible, what is collected, why, for how long, who else sees it,
@@ -18,6 +23,9 @@ import { EMAIL_KEPT_DAYS, IP_HASH_KEPT_HOURS } from "@/lib/report";
 
 export const PRIVACY_UPDATED = "13 November 2026";
 
+/** How long our web server's access log, with IP addresses, is kept. */
+export const ACCESS_LOG_DAYS = 30;
+
 export type PrivacyBlock =
   | { kind: "p"; text: string }
   | { kind: "list"; items: string[] }
@@ -26,7 +34,7 @@ export type PrivacyBlock =
 export type PrivacySection = { id: string; title: string; blocks: PrivacyBlock[] };
 
 export const privacyLead = [
-  "makhzan is a free directory of Egyptian hardware and electronics shops. You can use it without an account, and it sets no cookies.",
+  "makhzan is a free directory of Egyptian hardware and electronics shops. You can use it without an account, and makhzan sets no cookies.",
   "This page says what makhzan keeps about you, why, and for how long. It is written for Egypt’s Personal Data Protection Law (Law No. 151 of 2020).",
 ];
 
@@ -48,7 +56,9 @@ export const privacySections: PrivacySection[] = [
       {
         kind: "list",
         items: [
-          "No account, no sign-in and no cookies.",
+          "No account, no sign-in, and no cookies of ours.",
+          `Every visit to makhzan passes through Cloudflare, which provides our content delivery and security. So Cloudflare handles every request to makhzan, reports included, and sees your IP address, as any such service must. It may set a cookie of its own when it checks for bots.`,
+          `Our web server keeps an access log of the requests it receives, with IP addresses, for ${ACCESS_LOG_DAYS} days, then deletes it. We use it to keep the site running and to deal with abuse.`,
           "We count page views, and clicks through to shops, with Umami, which we run ourselves. It sets no cookie and does not store your IP address. It records the page, the site that sent you here, your browser and device type, and your rough location (country or city). If your browser asks sites not to track it, it counts nothing.",
           "Your choice of light or dark theme, and of list or grid results, is kept in your own browser and never sent to us.",
           "Product photos load straight from each shop’s own website, so your browser asks that shop for the picture, as it would on their site.",
@@ -74,11 +84,11 @@ export const privacySections: PrivacySection[] = [
         rows: [
           {
             what: "Your email, if you give one",
-            kept: `Used only to reply about your report. Deleted ${EMAIL_KEPT_DAYS} days after we close the report.`,
+            kept: `Used only to reply about your report. Deleted ${EMAIL_KEPT_DAYS} days after you send it.`,
           },
           {
             what: "A scrambled form of your IP address",
-            kept: `Used only to stop spam, by limiting how many reports one connection can send. Deleted after ${IP_HASH_KEPT_HOURS} hours. We never store the address itself.`,
+            kept: `Used only to stop spam, by limiting how many reports one connection can send. Deleted after ${IP_HASH_KEPT_HOURS} hours. The reports themselves never hold your address, only this scrambled form; the access log above keeps addresses for ${ACCESS_LOG_DAYS} days.`,
           },
           {
             what: "The report itself, without your email",
@@ -88,7 +98,7 @@ export const privacySections: PrivacySection[] = [
       },
       {
         kind: "p",
-        text: "The form loads nothing from anyone else and has no CAPTCHA. Your report goes only to our server.",
+        text: "The form loads nothing from anyone else and has no CAPTCHA. Your report travels through Cloudflare, like every request to makhzan, and is stored only on our server.",
       },
     ],
   },
@@ -98,7 +108,7 @@ export const privacySections: PrivacySection[] = [
     blocks: [
       {
         kind: "p",
-        text: "No one. We do not sell, rent or share what you send us, and we do not use it for advertising. Shops do not see reports or who sent them; if a report shows a shop’s listing is wrong, we may tell the shop what is wrong, never who said so.",
+        text: "Cloudflare handles your requests on our behalf, as described above. Beyond that, no one: we do not sell, rent or share what you send us, and we do not use it for advertising. Shops do not see reports or who sent them; if a report shows a shop’s listing is wrong, we may tell the shop what is wrong, never who said so.",
       },
     ],
   },

@@ -4,8 +4,9 @@ import { expect, test, type Page } from "@playwright/test";
  * "Report a problem" in a real browser: the button beside the title (variant
  * F of the approved mockup), the Base UI dialog it opens (focus trapped, Esc,
  * focus back on the button), every state of the form, phone and desktop, the
- * keyboard alone, and no layout shift. The stub API takes reports
- * (tests/e2e/stub-api.mjs); the refusals are set per test with page.route.
+ * keyboard alone, and no layout shift. The stub API takes reports and signs
+ * no real tokens (tests/e2e/stub-api.mjs); the API's own checks are tested in
+ * apps/api. The refusals are set per test with page.route.
  *
  * Products are the stub's: `p-multi` has seven offers at three shops,
  * `p-single` one.
@@ -22,14 +23,6 @@ async function open(page: Page, path = "/products/p-multi") {
   await button(page).click();
   await expect(dialog(page)).toBeVisible();
   return dialog(page);
-}
-
-/** Past the 3 s the API asks of a person, without waiting for it. */
-async function pastTheBotCheck(page: Page) {
-  await page.evaluate(() => {
-    const real = performance.now.bind(performance);
-    performance.now = () => real() + 60_000;
-  });
 }
 
 test.describe("the button", () => {
@@ -209,7 +202,6 @@ test.describe("every state", () => {
 
     await box.getByRole("checkbox", { name: /38-Pin – Micro USB/ }).check();
     await box.getByLabel(/Email/).fill("buyer@example.com");
-    await pastTheBotCheck(page);
     const request = page.waitForRequest((r) => r.url().endsWith("/api/reports"));
     await box.getByRole("button", { name: "Send report" }).click();
     const body = (await request).postDataJSON();
@@ -220,7 +212,9 @@ test.describe("every state", () => {
       email: "buyer@example.com",
       website: "",
     });
-    expect(body.elapsed_ms).toBeGreaterThan(3000);
+    // The opened-at token the API signed when the dialog opened (the stub's).
+    expect(body.token).toBe("stub-token");
+    expect(body).not.toHaveProperty("elapsed_ms");
     const thanks = box.getByRole("status");
     await expect(thanks).toContainText("Thanks — we review every report");
     await expect(thanks).toContainText("We’ll reply to buyer@example.com");
@@ -238,7 +232,6 @@ test.describe("every state", () => {
     await box.getByRole("radio", { name: /with CP2102 Type-C/ }).check();
     await box.getByRole("radio", { name: "The price" }).check();
     await box.getByLabel(/Price on the shop’s site/).fill("310");
-    await pastTheBotCheck(page);
     const request = page.waitForRequest((r) => r.url().endsWith("/api/reports"));
     await box.getByRole("button", { name: "Send report" }).click();
     expect((await request).postDataJSON()).toMatchObject({
@@ -286,7 +279,6 @@ test.describe("every state", () => {
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
     await expect(box.locator("[data-report-picked]")).toContainText("ESP32-WROOM-32 DevKit V1");
-    await pastTheBotCheck(page);
     const request = page.waitForRequest((r) => r.url().endsWith("/api/reports"));
     await box.getByRole("button", { name: "Send report" }).click();
     expect((await request).postDataJSON()).toMatchObject({
@@ -353,7 +345,7 @@ test.describe("every state", () => {
     await box.getByRole("radio", { name: /Wrong category/ }).check();
     await box.getByRole("button", { name: "Continue" }).click();
     const note = box.locator("[data-report-privacy]");
-    await expect(note).toContainText("deleted 90 days after we close the report");
+    await expect(note).toContainText("deleted 90 days after you send it");
     await expect(note.getByRole("link", { name: /Privacy policy/ })).toHaveAttribute(
       "href",
       "/privacy",
@@ -387,7 +379,6 @@ test.describe("on a phone", () => {
     await expect(box.getByRole("heading", { name: "Wrong category" })).toBeFocused();
     await page.keyboard.press("Tab");
     await page.keyboard.type("Dev boards");
-    await pastTheBotCheck(page);
     await page.keyboard.press("Enter");
     await expect(box.getByRole("status")).toContainText("Thanks");
 
@@ -422,10 +413,15 @@ test.describe("the privacy page", () => {
     await page.getByRole("contentinfo").getByRole("link", { name: "Privacy" }).click();
     await expect(page).toHaveURL(/\/privacy$/);
     await expect(page.getByRole("heading", { level: 1, name: "Privacy" })).toBeVisible();
-    await expect(page.locator("[data-retention]")).toContainText("Deleted 90 days after");
+    await expect(page.locator("[data-retention]")).toContainText(
+      "Deleted 90 days after you send it.",
+    );
     await expect(page.locator("[data-retention]")).toContainText("Deleted after 24 hours");
     await expect(page.getByText(/Law No\. 151 of 2020/)).toBeVisible();
-    expect(await page.locator("body").innerHTML()).not.toMatch(/cloudflare/i);
+    // Both processors, plainly (the owner's decision); /how-we-crawl stays
+    // free of the name (tests/e2e/crawler-identity.spec.ts).
+    await expect(page.getByText(/passes through Cloudflare/)).toBeVisible();
+    await expect(page.getByText(/access log of the requests it receives/)).toBeVisible();
   });
 
   test("nothing scrolls sideways on a phone", async ({ page }) => {
