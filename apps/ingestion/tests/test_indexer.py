@@ -299,3 +299,35 @@ async def test_documents_name_the_shop_each_photo_comes_from():
     # Not rebuilt since the column was added: no badge rather than a guess.
     assert docs["unknown"]["image_shop"] is None
     assert docs["bare"]["image_shop"] is None
+
+
+async def test_documents_name_the_shop_whose_offer_sets_the_lowest_price():
+    shop_a, shop_b = _supplier("shop-a"), _supplier("shop-b")
+    shop_b.name = "Shop B"
+    priced = Product(
+        id=uuid.uuid4(),
+        group_key="mpn:esp32",
+        title_en="priced",
+        min_price=320,
+        max_price=340,
+        min_price_supplier_id=shop_b.id,
+        min_price_option="Without headers",
+    )
+    unpriced = Product(id=uuid.uuid4(), group_key="single:u", title_en="unpriced")
+    await _seed(
+        shop_a,
+        shop_b,
+        priced,
+        unpriced,
+        _listing(shop_a, priced),
+        _listing(shop_b, priced),
+        _listing(shop_a, unpriced),
+    )
+
+    docs = await _reindex()
+
+    assert docs["priced"]["min_price_shop"] == {"slug": "shop-b", "name": "Shop B"}
+    assert docs["priced"]["min_price_option"] == "Without headers"
+    assert docs["unpriced"]["min_price_shop"] is None
+    assert docs["unpriced"]["price_on_request"] is None
+    assert docs["unpriced"]["on_request_count"] == 0

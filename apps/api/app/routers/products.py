@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Listing, Product, ProductRedirect
+from makhzan_schemas.pricing import unit_price
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +36,11 @@ async def get_product(
     product = await session.get(
         Product,
         product_id,
-        options=[selectinload(Product.category), selectinload(Product.image_supplier)],
+        options=[
+            selectinload(Product.category),
+            selectinload(Product.image_supplier),
+            selectinload(Product.min_price_supplier),
+        ],
     )
     if product is None or product.merged_into is not None:
         raise HTTPException(status_code=404, detail="product not found")
@@ -53,8 +58,19 @@ async def get_product(
         .scalars()
         .all()
     )
-    # Cheapest first; priceless offers last.
-    offers = sorted(offers, key=lambda o: (o.price is None, o.price or 0))
+
+    # Cheapest first by the price of one, an in-stock option's included
+    # (makhzan_schemas.pricing, as min_price is); priceless offers last.
+    def cheapest(offer: Listing) -> tuple:
+        unit = unit_price(offer)
+        return (unit is None, unit[0] if unit else 0)
+
+    offers = sorted(offers, key=cheapest)
+
+    # The low end names an offer as of the last rebuild. If that offer is no
+    # longer among these (archived since), what it said about it is not said:
+    # the range itself stays, as on a withdrawn product.
+    names_an_offer = product.min_price_listing_id in {o.id for o in offers}
 
     return ProductRead(
         id=product.id,
@@ -68,6 +84,12 @@ async def get_product(
         offer_count=product.offer_count,
         min_price=product.min_price,
         max_price=product.max_price,
+        min_price_offer_id=product.min_price_listing_id if names_an_offer else None,
+        min_price_shop=product.min_price_supplier if names_an_offer else None,
+        min_price_option=product.min_price_option if names_an_offer else None,
+        min_price_quantity=product.min_price_quantity if names_an_offer else None,
+        price_each=product.price_each,
+        on_request_count=product.on_request_count,
         currency=product.currency,
         in_stock=product.in_stock,
         last_verified_at=product.last_verified_at,
@@ -182,7 +204,11 @@ async def similar_products(
             await session.execute(
                 select(Product)
                 .where(scope, Product.id != product_id, Product.is_listed())
-                .options(selectinload(Product.category), selectinload(Product.image_supplier))
+                .options(
+                    selectinload(Product.category),
+                    selectinload(Product.image_supplier),
+                    selectinload(Product.min_price_supplier),
+                )
                 .order_by(*order)
                 .limit(limit)
             )
