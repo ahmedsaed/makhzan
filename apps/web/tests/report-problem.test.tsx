@@ -40,6 +40,8 @@ type Init = { method?: string; body: string };
 let fetchMock: Mock<(url: string, init: Init) => Promise<Response>>;
 let tokenMock: Mock<(url: string) => Promise<Response>>;
 let clock = 0;
+/** How far this page's clock has moved past the real one. */
+let skew = 0;
 
 beforeEach(() => {
   fetchMock = vi.fn();
@@ -49,7 +51,10 @@ beforeEach(() => {
     String(url).endsWith("/reports/token") ? tokenMock(url) : fetchMock(url, init as Init),
   );
   clock = 0;
+  skew = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const realNow = Date.now.bind(Date);
+  vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
 });
 
 afterEach(() => {
@@ -69,6 +74,10 @@ async function openDialog(context = CONTEXT) {
   const button = screen.getByRole("button", { name: "Report a problem" });
   fireEvent.click(button);
   const dialog = await screen.findByRole("dialog");
+  // The visitor takes 10 s over it, so the token asked for on opening is old
+  // enough for the API's 3 s and sending need not wait.
+  await waitFor(() => expect(tokenMock).toHaveBeenCalled());
+  skew += 10_000;
   return { button, dialog };
 }
 
@@ -412,10 +421,23 @@ describe("the opened-at token", () => {
     const { dialog } = await toStepTwo(/Wrong category/);
     expect(tokenMock).toHaveBeenCalledTimes(1);
     fireEvent.click(within(dialog).getByRole("button", { name: "Send report" }));
-    await within(dialog).findByRole("status");
+    // The new token is waited on until the API would take it (3 s and a bit).
+    expect(await within(dialog).findByText("Sending…")).toBeInTheDocument();
+    await within(dialog).findByRole("status", {}, { timeout: 6_000 });
     expect(tokenMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).token).toBe("tok-1");
-  });
+  }, 10_000);
+
+  it("is renewed when the dialog has been open for hours", async () => {
+    fetchMock.mockResolvedValue(reply(202, { reference: "R-10" }));
+    const { dialog } = await toStepTwo(/Wrong category/);
+    tokenMock.mockResolvedValue(reply(200, { token: "tok-2" }));
+    skew += 5 * 60 * 60 * 1000;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send report" }));
+    await within(dialog).findByRole("status", {}, { timeout: 6_000 });
+    expect(tokenMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).token).toBe("tok-2");
+  }, 10_000);
 
   it("says not sent, and sends nothing, when no token can be had", async () => {
     tokenMock.mockResolvedValue(reply(503, {}));

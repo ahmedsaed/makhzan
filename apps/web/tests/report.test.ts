@@ -11,6 +11,9 @@ import {
   candidateMeta,
   emailFallback,
   fetchOpenedToken,
+  TOKEN_MIN_AGE_MS,
+  TOKEN_REFRESH_MS,
+  tokenToSend,
   type FormState,
   limitedTitle,
   priceValue,
@@ -380,5 +383,54 @@ describe("the ceiling for everyone", () => {
     expect(limitedTitle({ limit: "site", count: 500, minutes: 300 })).toBe(
       "makhzan has had more reports than it can take today.",
     );
+  });
+});
+
+describe("tokenToSend", () => {
+  const T0 = 1_700_000_000_000;
+  const answer = (token: string | null) =>
+    vi
+      .fn()
+      .mockResolvedValue(
+        token
+          ? new Response(JSON.stringify({ token }), { status: 200 })
+          : new Response("{}", { status: 503 }),
+      );
+
+  it("sends the token from opening when it is old enough and not stale", async () => {
+    const fetcher = answer("new");
+    const sleep = vi.fn(async () => {});
+    const token = await tokenToSend(
+      { token: "opened", fetchedAt: T0 },
+      { fetcher, sleep, now: () => T0 + 60_000 },
+    );
+    expect(token?.token).toBe("opened");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("waits out the rest of the 3 s when sent at once", async () => {
+    const sleep = vi.fn(async () => {});
+    await tokenToSend({ token: "opened", fetchedAt: T0 }, { sleep, now: () => T0 + 1_000 });
+    expect(sleep).toHaveBeenCalledWith(TOKEN_MIN_AGE_MS - 1_000);
+  });
+
+  it("renews a token near the API's 6 hours, and waits before using it", async () => {
+    const fetcher = answer("renewed");
+    const sleep = vi.fn(async () => {});
+    const token = await tokenToSend(
+      { token: "opened", fetchedAt: T0 },
+      { fetcher, sleep, now: () => T0 + TOKEN_REFRESH_MS },
+    );
+    expect(token).toEqual({ token: "renewed", fetchedAt: T0 + TOKEN_REFRESH_MS });
+    expect(sleep).toHaveBeenCalledWith(TOKEN_MIN_AGE_MS);
+  });
+
+  it("asks for one when opening got none, and gives up when it cannot", async () => {
+    const sleep = vi.fn(async () => {});
+    expect(
+      (await tokenToSend(null, { fetcher: answer("late"), sleep, now: () => T0 }))?.token,
+    ).toBe("late");
+    expect(await tokenToSend(null, { fetcher: answer(null), sleep, now: () => T0 })).toBeNull();
   });
 });

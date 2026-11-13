@@ -419,6 +419,52 @@ export function limitedTitle(limited: Limited): string {
     : `You’ve sent ${limited.count} reports in the last day.`;
 }
 
+/** A token, and when this page received it (its own clock: the token's
+ *  stamp is the server's, and the two clocks need not agree). */
+export type OpenedToken = { token: string; fetchedAt: number };
+
+/** The API refuses a token older than 6 hours; the form renews its own after 5. */
+export const TOKEN_REFRESH_MS = 5 * 60 * 60 * 1000;
+/** The API drops a report sent sooner than 3 s after its token; a little more. */
+export const TOKEN_MIN_AGE_MS = 3_250;
+
+/** Ask for a token now, and note when it came. */
+export async function openToken(
+  fetcher: typeof fetch = fetch,
+  now: () => number = Date.now,
+): Promise<OpenedToken | null> {
+  const token = await fetchOpenedToken(fetcher);
+  return token ? { token, fetchedAt: now() } : null;
+}
+
+/**
+ * The token to send a report with, so an honest visitor is never dropped:
+ * the one asked for when the dialog opened, unless there is none or it is
+ * close to the API's 6-hour limit (a dialog left open). Then a fresh one,
+ * and a wait until it is old enough for the API's 3 s, since a token used at
+ * once would be dropped as a bot while the form said "sent". Null when none
+ * can be had.
+ */
+export async function tokenToSend(
+  cached: OpenedToken | null,
+  {
+    fetcher = fetch,
+    now = Date.now,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  }: {
+    fetcher?: typeof fetch;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<OpenedToken | null> {
+  const fresh = (t: OpenedToken | null) => t !== null && now() - t.fetchedAt < TOKEN_REFRESH_MS;
+  const token = fresh(cached) ? cached : await openToken(fetcher, now);
+  if (!token) return null;
+  const young = TOKEN_MIN_AGE_MS - (now() - token.fetchedAt);
+  if (young > 0) await sleep(young);
+  return token;
+}
+
 /**
  * When the form opened, signed by the API (`GET /reports/token`): the API
  * drops a report sent under 3 s after it, so the time is the server's word,
