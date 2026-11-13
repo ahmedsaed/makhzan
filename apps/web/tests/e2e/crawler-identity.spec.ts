@@ -55,7 +55,7 @@ test("how-we-crawl says how to recognise and verify us, on the public origin", a
   await expect(page.getByText("{site}")).toHaveCount(0);
   // What we keep, and the promises a shop can hold us to.
   await expect(page.getByText("use shop content to train AI models")).toBeVisible();
-  await expect(page.getByText("our robots.txt refuses them")).toBeVisible();
+  await expect(page.getByText("refuses the known AI training crawlers by name")).toBeVisible();
   await expect(page.getByText("feed it to AI tools")).toHaveCount(0);
   await expect(page.getByText("copy photos", { exact: true })).toBeVisible();
   await expect(page.getByText("we will stop, keeping only the name, price")).toBeVisible();
