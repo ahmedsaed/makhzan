@@ -37,8 +37,8 @@ from decimal import Decimal
 
 from makhzan_schemas.domains import get_profile
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
-from makhzan_schemas.freshness import fresh_since
 from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
+from makhzan_schemas.pricing import summarize_prices
 from makhzan_schemas.values import value_tokens, values_conflict
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -568,7 +568,6 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         group_product[key] = product
 
         rep = _representative(items)
-        prices = [i.price for i in items if i.price is not None]
         product.group_key = key
         product.part_number = items[0].part_number if key.startswith("mpn:") else None
         product.domain = rep.domain
@@ -585,21 +584,21 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         product.image_supplier_id = pictured.supplier_id if pictured else None
         product.offer_count = len(items)
         product.supplier_count = len({i.supplier_id for i in items})
-        # The price a result card shows, sorts and filters by: the fresh offers'
-        # when any has a price, so a card never quotes a stale shop's cheaper
-        # price while the product page leads with the fresh one. All offers'
-        # only when none is fresh (the page then warns that it is out of date).
-        cutoff = fresh_since(now)
-        fresh = [
-            i.price
-            for i in items
-            if i.price is not None
-            and i.last_verified_at is not None
-            and i.last_verified_at.timestamp() > cutoff
-        ]
-        shown = fresh or prices
-        product.min_price = min(shown) if shown else None
-        product.max_price = max(shown) if shown else None
+        # The price a result card shows, sorts and filters by, and what the
+        # page says about its low end: one pass, makhzan_schemas.pricing. Fresh
+        # in-stock offers by their price of one (cheapest in-stock option
+        # included, on request left out); out-of-date ones only when no offer
+        # is fresh, so a card never quotes a stale shop's cheaper price while
+        # the product page leads with the fresh one.
+        priced = summarize_prices(items, now)
+        product.min_price = priced.min_price
+        product.max_price = priced.max_price
+        product.min_price_listing_id = priced.listing_id
+        product.min_price_supplier_id = priced.supplier_id
+        product.min_price_option = priced.option
+        product.min_price_quantity = priced.quantity
+        product.price_each = priced.each
+        product.on_request_count = priced.on_request
         product.in_stock = any(i.stock_signal == StockSignal.IN_STOCK for i in items)
         verified = [i.last_verified_at for i in items if i.last_verified_at]
         product.last_verified_at = max(verified) if verified else None
@@ -734,6 +733,7 @@ def _visible(product: Product) -> tuple:
         product.title_en,
         product.min_price,
         product.max_price,
+        product.on_request_count,
         product.in_stock,
         product.offer_count,
         product.supplier_count,
