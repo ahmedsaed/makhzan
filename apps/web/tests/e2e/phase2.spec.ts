@@ -349,3 +349,94 @@ test.describe("without JavaScript", () => {
     await expect(page.locator("[data-offer] [data-option]")).toHaveCount(3);
   });
 });
+
+test.describe("price history", () => {
+  test.use({ viewport: DESKTOP });
+
+  test("one shop: facts line and card, server-rendered", async ({ page }) => {
+    await page.goto("/products/p2-options");
+    await expect(page.locator("[data-fact=history]")).toHaveText(
+      "Lowest in 90 days EGP 1,650 · in stock 10 of the last 12 weeks · Price history",
+    );
+    const card = page.locator("[data-history=price]");
+    await expect(card.getByRole("heading", { name: "Price history" })).toBeVisible();
+    await expect(card).toContainText("last 90 days");
+    await expect(card.locator("[data-history-now]")).toContainText("EGP 1,700");
+    await expect(card.locator("[data-history-lowest]")).toContainText("EGP 1,650");
+    await expect(card.locator('[data-step="out"]')).toHaveCount(2);
+    await expect(card.locator("[data-weeks]")).toContainText("In stock 10 of the last 12 weeks");
+    await expect(card).toContainText("Dashed: out of stock.");
+  });
+
+  test("several shops: the lowest names its shop, gaps shaded, the table says it all", async ({
+    page,
+  }) => {
+    await page.goto("/products/p2-histmulti");
+    const card = page.locator("[data-history=price]");
+    await expect(card.locator("[data-history-lowest]")).toContainText("at Delta Components");
+    await expect(card.locator("[data-gap]")).toHaveCount(1);
+    await expect(card).toContainText("none in stock");
+    await expect(card.locator("[data-weeks]")).toContainText("(at one shop or more)");
+    await card.getByText("Show as a table").click();
+    const rows = card.locator("[data-history-table] tbody tr");
+    await expect(rows).toHaveCount(5);
+    await expect(rows.nth(2)).toContainText("None in stock");
+    await expect(rows.nth(1)).toContainText("Delta Components");
+  });
+
+  test("the tooltip names the price and the shop (JavaScript only)", async ({ page }) => {
+    await page.goto("/products/p2-histmulti");
+    const plot = page.locator("[data-chart] svg");
+    await plot.scrollIntoViewIfNeeded();
+    const box = (await plot.boundingBox())!;
+    // Until hydration the plot has no handler: keep moving until the tip shows.
+    await expect(async () => {
+      await page.mouse.move(box.x + box.width - 10, box.y + box.height / 2);
+      await page.mouse.move(box.x + box.width - 4, box.y + box.height / 2);
+      await expect(page.locator("[data-chart-tip]")).toBeVisible({ timeout: 500 });
+    }).toPass();
+    await expect(page.locator("[data-chart-tip]")).toContainText("Delta Components");
+    await expect(page.locator("[data-chart-tip]")).toContainText("EGP 320");
+  });
+
+  test("before 90 days: 'Lowest since', no strip", async ({ page }) => {
+    await page.goto("/products/p2-breaks");
+    const card = page.locator("[data-history=price]");
+    await expect(card.locator("[data-history-lowest]")).toContainText(/Lowest since \d+ \w+/);
+    await expect(card.locator("[data-weeks]")).toHaveCount(0);
+    await expect(page.locator("[data-fact=history]")).toHaveText(
+      /^Lowest since \d+ \w+ EGP 45 · Price history$/,
+    );
+  });
+
+  test("nothing priced: a stock history only", async ({ page }) => {
+    await page.goto("/products/p2-allpor");
+    const card = page.locator("[data-history=stock]");
+    await expect(card.getByRole("heading", { name: "Stock history" })).toBeVisible();
+    await expect(card.locator("[data-chart]")).toHaveCount(0);
+    await expect(page.locator("[data-fact=history]")).toHaveText(
+      "in stock every week of the last 12 · Stock history",
+    );
+  });
+
+  test("no card, and no line, without history or under 30 days of it", async ({ page }) => {
+    for (const id of ["p2-por", "p2-mfrs", "p-single"]) {
+      await page.goto(`/products/${id}`);
+      await expect(page.locator("[data-history]")).toHaveCount(0);
+      await expect(page.locator("[data-fact=history]")).toHaveCount(0);
+    }
+  });
+
+  test("works at 375px without JavaScript and without sideways scroll", async ({ browser }) => {
+    const context = await browser.newContext({ javaScriptEnabled: false, viewport: PHONE });
+    const page = await context.newPage();
+    for (const id of ["p2-options", "p2-histmulti", "p2-multi", "p2-volume"]) {
+      await page.goto(`/products/${id}`);
+      await expect(page.locator("[data-history=price] [data-chart] svg")).toBeVisible();
+      await page.locator("[data-history-table] summary").click();
+      await expect(page.locator("[data-history-table] tbody tr").first()).toBeVisible();
+      await noSideScroll(page);
+    }
+    await context.close();
+  });
+});

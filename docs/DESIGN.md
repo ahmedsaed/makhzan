@@ -239,6 +239,31 @@ the page container on desktop; each section is left out when its fetch fails.
   - An out-of-date offer (C2b) folds and counts nowhere, even when it is the lowest.
   - "Ships from abroad" stays on its row; the button and the bar repeat it when theirs
     is that offer.
+- **Price history** (`apps/web/lib/history.ts`, from `GET /products/{id}/history?days=90`),
+  on any product with enough of it, in the wide column above "What the shops say" (after
+  the offers when no shop wrote anything):
+  - A facts line under the title: "Lowest in 90 days EGP 1,650 · in stock 10 of the last
+    12 weeks · Price history", linking down to the card.
+  - The card: "Price history · last 90 days", then **Now** and **Lowest in 90 days** (with
+    "at {shop}, 2 Oct" when several shops), a step chart, the 12-week stock strip, a line
+    on how to read it, and "Show as a table" (a `<details>` with every step: from, price,
+    stock, and shop). The chart is server-rendered SVG stretched to its box with
+    non-scaling strokes, its labels and markers HTML placed by percentage, its colours the
+    tokens (`link` line, `ink-3` dashed, `line` gaps and grid); a tooltip (from, price,
+    shop) is the only part that needs JavaScript, and the table says the same.
+  - One shop: its own price, dashed while out of stock. Several: the lowest **in-stock**
+    price among the shops at each moment, naming whose it was; when no shop had it in
+    stock there is no line, only a shaded gap labelled "none in stock". "In stock N of the
+    last 12 weeks" counts weeks with at least one shop in stock ("(at one shop or more)").
+  - "Lowest" counts in-stock prices only. Offers on request are never drawn. An offer
+    counts only up to its last check when it is out of date (C2b): its old price is not
+    carried to today. With a minimum order in play the prices are prices of one, "each".
+  - **Recording span**: no card and no facts line until 30 days are recorded (nothing is
+    drawn empty); "Lowest since 24 Aug" and "since 24 Aug" until 90 days; the stock strip
+    and its count only once 12 weeks are recorded.
+  - Nothing priced (every shop gives its price on request): no chart and no "lowest", only
+    "Stock history · last 12 weeks" with the strip, once 12 weeks are recorded, and a
+    facts line "in stock N of the last 12 weeks · Stock history".
 
 **Department and category.** Header (name, count, "Search in {department}"); groups as object
 tiles; the selected group's categories as smaller object tiles; then results with the

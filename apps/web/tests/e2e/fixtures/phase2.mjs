@@ -470,7 +470,102 @@ const DESCRIPTIONS = {
 };
 
 /** `[status, body]` for a path this fixture owns, or null. */
+/** A change point `days` ago: price (null on request) and whether in stock. */
+const pt = (days, price, inStock) => ({
+  observed_at: daysAgo(days),
+  price,
+  currency: "EGP",
+  stock_signal: inStock ? "in_stock" : "out_of_stock",
+  in_stock: inStock,
+  available: true,
+});
+
+/**
+ * Each case's recorded changes, by listing, as `GET /products/{id}/history`
+ * returns them. A point older than 90 days is the value in force when the
+ * window opened (recording covers the whole window). Products not listed
+ * here have no history, and the page shows no card.
+ */
+export const PHASE2_HISTORY = {
+  // One shop, 90 days: in and out of stock twice, lowest 1,650.
+  "p2-options": {
+    "o2-opt": [
+      pt(100, 1650, true),
+      pt(73, 1650, false),
+      pt(55, 1700, true),
+      pt(24, 1700, false),
+      pt(17, 1700, true),
+    ],
+  },
+  // Recording began 81 days ago: "Lowest since …", no 12-week strip.
+  "p2-breaks": { "o2-brk": [pt(81, 45, true), pt(28, 47, true)] },
+  // The lowest moved between shops; the stale shop counts only up to its last check.
+  "p2-multi": {
+    "o2-tb-nile": [pt(100, 440, true), pt(75, 430, true)],
+    "o2-tb-giza": [pt(54, 425, true), pt(42, 419, true), pt(30, 429, true)],
+    "o2-tb-delta": [pt(22, 425, true)],
+    "o2-tb-sphinx": [pt(60, 550, true)],
+    "o2-tb-cairo": [pt(60, 435, true), pt(5, 435, false)],
+    "o2-tb-bazaar": [pt(100, 400, true)],
+  },
+  // For more than two weeks no shop had it in stock: a shaded gap.
+  "p2-histmulti": {
+    "o2-h-nile": [pt(100, 330, true), pt(72, 335, true), pt(58, 335, false), pt(30, 335, true)],
+    "o2-h-delta": [pt(100, 320, false), pt(72, 315, true), pt(58, 315, false), pt(32, 320, true)],
+    "o2-h-giza": [pt(100, 345, false), pt(41, 340, true), pt(20, 345, false)],
+  },
+  // Priced offers drawn; the offers on request are not.
+  "p2-somepor": {
+    "o2-sp-giza": [pt(100, 1500, true), pt(40, 1450, true)],
+    "o2-sp-nile": [pt(100, 1500, true)],
+    "o2-sp-sphinx": [pt(100, null, true)],
+    "o2-sp-bazaar": [pt(100, null, false)],
+  },
+  // Nothing priced: a stock record only.
+  "p2-allpor": {
+    "o2-ap-sphinx": [pt(100, null, true), pt(50, null, false), pt(46, null, true)],
+    "o2-ap-giza": [pt(100, null, false), pt(60, null, true)],
+    "o2-ap-bazaar": [pt(100, null, false)],
+  },
+  // The stale shop's 48 was the lowest until its last check, 81 days ago.
+  "p2-volume": {
+    "o2-v-giza": [pt(100, 60, true), pt(50, 55, true)],
+    "o2-v-delta": [pt(100, 65, true)],
+    "o2-v-cairo": [pt(100, 90, true)],
+    "o2-v-alex": [pt(100, 80, false)],
+    "o2-v-mans": [pt(100, 48, true)],
+  },
+  // A minimum order: the line is the price of one, "each".
+  "p2-mixedmin": {
+    "o2-mm-cairo": [pt(100, 0.18, true), pt(40, 0.15, true)],
+    "o2-mm-delta": [pt(100, 1.25, true)],
+    "o2-mm-nile": [pt(100, 2, true)],
+  },
+  // Recorded for 20 days only: under the minimum span, so no card yet.
+  "p2-mfrs": {
+    "o2-mf-cairo": [pt(20, 5.5, true)],
+    "o2-mf-delta": [pt(20, 6, true)],
+    "o2-mf-nile": [pt(20, 7.5, true)],
+  },
+};
+
+function historyOf(id) {
+  const listings = PHASE2_HISTORY[id] ?? {};
+  return {
+    product_id: id,
+    since: daysAgo(90),
+    offers: PHASE2[id].offers.map((offer) => ({
+      listing_id: offer.id,
+      since: daysAgo(90),
+      points: listings[offer.id] ?? [],
+      truncated: false,
+    })),
+  };
+}
+
 export function phase2Fixture(path) {
+  const historyId = path.match(/^\/products\/([^/]+)\/history$/)?.[1];
+  if (historyId && PHASE2[historyId]) return [200, historyOf(historyId)];
   const productId = path.match(/^\/products\/([^/]+)$/)?.[1];
   if (productId && PHASE2[productId]) return [200, PHASE2[productId]];
   const similar = path.match(/^\/products\/([^/]+)\/similar$/)?.[1];

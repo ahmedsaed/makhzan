@@ -154,6 +154,9 @@ export type ProductSummary = {
  * API by the same rules as lib/offers.ts (price of one, cheapest in-stock
  * option, on-request offers left out). All optional: an API older than them
  * must still render, and the product page computes its own from the offers.
+ * The offer, option, quantity and shop may be null even with `min_price` set
+ * (on /products/{id} in particular): whoever reads them looks the offer up in
+ * `offers` and falls back when it is not there.
  */
 type PriceOfOneSummary = {
   min_price_offer_id?: string | null;
@@ -427,6 +430,51 @@ export function fetchProduct(id: string): Promise<Product | null> {
 export async function fetchProductRedirect(id: string): Promise<string | null> {
   const moved = await getOrNull<{ id: string }>(`/products/${encodeURIComponent(id)}/redirect`);
   return moved?.id ?? null;
+}
+
+/**
+ * A listing's price and stock from `observed_at` until its next point: a
+ * point is a change, not a check, so the last one holds until now.
+ */
+export type PricePoint = {
+  observed_at: string;
+  /** Null is "price on request". */
+  price: number | null;
+  currency: string;
+  stock_signal: StockSignal;
+  /** False while archived as well as while out of stock. */
+  in_stock: boolean;
+  /** False while the shop had stopped listing it. */
+  available?: boolean;
+};
+
+/** One offer's change points, oldest first. The first may predate `since`:
+ *  it is the value in force when the window opened. */
+export type ListingHistory = {
+  listing_id: string;
+  since: string;
+  points: PricePoint[];
+  truncated?: boolean;
+};
+
+export type ProductHistory = {
+  product_id: string;
+  since: string;
+  offers: ListingHistory[];
+};
+
+/**
+ * Every offer's price and stock changes over the last `days`, or null when
+ * the API cannot give them: history is garnish, and the page renders without.
+ */
+export async function fetchProductHistory(id: string, days = 90): Promise<ProductHistory | null> {
+  try {
+    return await get<ProductHistory>(
+      `/products/${encodeURIComponent(id)}/history${query({ days })}`,
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function fetchSimilar(id: string, limit = 8): Promise<ProductSummary[]> {
