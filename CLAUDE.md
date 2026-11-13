@@ -54,6 +54,8 @@ looks wrong: it reports per-source partition progress and resume points, each
 source's crawler identity and whether its last run was signed, recent runs with
 their errors, uncategorized/unpriced counts per supplier, the review
 queue, and whether the search index has drifted from the database.
+Before investigating a line that looks wrong, read `docs/status-known-normals.md`
+in the private configuration: what status shows that is normal, and when it is not.
 
 ## How ingestion works
 
@@ -580,5 +582,6 @@ behind each layout decision, the page tree and URLs, the style tokens, and rules
 `make test`, which is the Python suites. Run them when touching the frontend —
 they catch prop and state changes the build does not.
 
-Known gaps worth naming: the taxonomy and identifier extraction are electronics-only
-(`docs/DOMAIN_GENERALIZATION.md`).
+Known gaps worth naming: identifier extraction exists only for electronics. The
+other 15 domains have their own taxonomies but extract no identifier, so their
+listings group less (`docs/DOMAIN_GENERALIZATION.md`).
