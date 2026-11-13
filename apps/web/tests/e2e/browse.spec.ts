@@ -135,7 +135,7 @@ test("the crawling policy is reachable and indexable", async ({ page }) => {
   // not be noindex — being findable is half its purpose.
   await page.goto("/how-we-crawl");
   await expect(page.getByRole("heading", { level: 1, name: "How we crawl" })).toBeVisible();
-  await expect(page.getByText(/we read the site's robots\.txt/)).toBeVisible();
+  await expect(page.getByText("Read robots.txt first")).toBeVisible();
   await expect(page.getByRole("link", { name: "crawler@makhzan.merope.dev" })).toHaveAttribute(
     "href",
     "mailto:crawler@makhzan.merope.dev",

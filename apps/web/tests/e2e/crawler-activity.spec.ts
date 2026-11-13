@@ -30,18 +30,75 @@ test.describe("on a desktop", () => {
     const table = section.getByRole("table");
     await expect(table).toBeVisible();
     const shopA = table.locator('[data-activity-shop="shop-a"]');
-    await expect(shopA.getByRole("rowheader")).toHaveText("Shop A");
+    await expect(shopA.getByRole("rowheader")).toHaveText("Shop Amakhzanbot · signed");
+    await expect(shopA.locator("[data-identity]")).toHaveText("makhzanbot · signed");
     await expect(shopA.locator("time")).toHaveText("3 hours ago");
     // The absolute time is the tooltip.
     await expect(shopA.locator("time")).toHaveAttribute(
       "title",
       /^\d{1,2} \w{3} \d{4}, \d{2}:\d{2} UTC$/,
     );
-    await expect(shopA.locator("td")).toHaveText(["3 hours ago", "412", "15 s", "16 s", "Active"]);
+    await expect(shopA.locator("[data-last-pass]")).toHaveText("last full pass: 6 days");
+    await expect(shopA.locator("td")).toHaveText([
+      "3 hours agolast full pass: 6 days",
+      "412",
+      "15 s",
+      "16 s",
+      "Active",
+    ]);
 
     // Never read: nothing measured, and it says so plainly.
     const fresh = table.locator('[data-activity-shop="new-shop"]');
     await expect(fresh.locator("td")).toHaveText(["Not yet", "0", "—", "—", "Active"]);
+    await expect(fresh.locator("[data-identity], [data-last-pass], [data-sparkline]")).toHaveCount(
+      0,
+    );
+  });
+
+  test("requests per day: a line per shop, an unrecorded day left out", async ({ page }) => {
+    await page.goto("/how-we-crawl");
+    const table = page.locator("#activity table");
+    const spark = table.locator('[data-activity-shop="shop-a"] [data-sparkline]');
+    await expect(spark).toHaveAttribute("role", "img");
+    const label = await spark.getAttribute("aria-label");
+    expect(label).toMatch(/^Requests per day, last 7 days\. /);
+    expect(label).toContain("not recorded");
+    expect(label?.match(/: \d+/g)).toHaveLength(6);
+    // Two runs of recorded days either side of the unrecorded one: two lines,
+    // not one drawn through a zero.
+    await expect(spark.locator("polyline")).toHaveCount(2);
+    // Nothing to draw for a shop that sent nothing this week.
+    await expect(table.locator('[data-activity-shop="stale-shop"] [data-sparkline]')).toHaveCount(
+      0,
+    );
+  });
+
+  test("every shop's gaps together, as a histogram", async ({ page }) => {
+    await page.goto("/how-we-crawl");
+    const histogram = page.locator("#activity [data-gap-histogram]");
+    await expect(
+      histogram.getByRole("heading", { name: "How far apart our requests were this week" }),
+    ).toBeVisible();
+    await expect(histogram.locator("dt")).toHaveText([
+      "under 15 s",
+      "15 s",
+      "16 s",
+      "17 s",
+      "18–19 s",
+      "20–29 s",
+      "30–59 s",
+      "60 s or more",
+    ]);
+    await expect(histogram.locator("dd.tabular")).toHaveText([
+      "0%",
+      "61%",
+      "19%",
+      "7%",
+      "5%",
+      "6%",
+      "<1%",
+      "<1%",
+    ]);
   });
 
   test("a paused shop shows Paused, and no reason", async ({ page }) => {
@@ -49,6 +106,7 @@ test.describe("on a desktop", () => {
     const row = page.locator('#activity table [data-activity-shop="stale-shop"]');
     await expect(row.locator("[data-status]")).toHaveText("Paused");
     await expect(row.locator("td")).toHaveText([/ago$/, "0", "—", "—", "Paused"]);
+    await expect(row.locator("[data-identity]")).toHaveText("browser User-Agent");
   });
 
   test("nothing in the section speaks of errors, blocks or status codes", async ({ page }) => {
@@ -96,6 +154,11 @@ test.describe("on a phone", () => {
     await expect(card).toBeVisible();
     await expect(card.locator("[data-status]")).toHaveText("Paused");
     await expect(card).toContainText("Shortest gap—");
+    await expect(card).toContainText("Last full pass—");
+    const shopA = section.locator('li[data-activity-shop="shop-a"]');
+    await expect(shopA.locator("[data-identity]")).toHaveText("makhzanbot · signed");
+    await expect(shopA).toContainText("Last full pass6 days");
+    await expect(shopA.locator("[data-sparkline]")).toBeVisible();
   });
 
   test("the section does not scroll sideways at 320px (S4)", async ({ page }) => {
