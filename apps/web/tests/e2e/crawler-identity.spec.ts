@@ -36,7 +36,10 @@ test("how-we-crawl says how to recognise and verify us, on the public origin", a
   // a moved shop sees names this page there, never the copy's placeholder.
   const origin = "https://makhzan.test";
   const userAgent = `makhzanbot/1.0 (+${origin}/how-we-crawl; crawler@makhzan.merope.dev)`;
-  await expect(page.locator(`pre[aria-label="makhzanbot's User-Agent"]`)).toHaveText(userAgent);
+  await expect(page.locator("#panel-user-agent pre")).toHaveText(userAgent);
+  await expect(
+    page.getByRole("figure", { name: "What a request from makhzanbot looks like" }),
+  ).toBeVisible();
   // The annotated request: the User-Agent, the From header and the signature
   // headers, the Signature-Agent naming our own origin.
   const request = page.locator("[data-example-request]");
@@ -92,14 +95,33 @@ test("without JavaScript every panel shows and nothing pretends to copy", async 
   }
   await expect(page.getByText("Our robots.txt token is makhzanbot")).toBeVisible();
   await expect(page.getByText(`https://makhzan.test${PATH}`)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Copy" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Copy/ })).toHaveCount(0);
   // The questions open without it too: they are <details>.
   await page.getByText("How do I stop makhzanbot reading my site?").click();
   await expect(page.getByRole("link", { name: "The two lines →" })).toBeVisible();
   await context.close();
 });
 
-test("with JavaScript the snippets get a copy button", async ({ page }) => {
+test("with JavaScript each snippet gets a copy button that says what it copies", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/how-we-crawl");
-  await expect(page.locator("#block").getByRole("button", { name: "Copy" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy User-Agent", exact: true })).toBeVisible();
+  for (const tab of ["robots.txt", "Web Bot Auth"]) {
+    await page.getByRole("tab", { name: tab }).click();
+  }
+  await expect(page.getByRole("button", { name: "Copy key directory URL" })).toBeVisible();
+  await page.getByRole("tab", { name: "robots.txt" }).click();
+  await expect(page.getByRole("button", { name: "Copy robots.txt token" })).toBeVisible();
+
+  const copy = page.getByRole("button", { name: "Copy robots.txt block" });
+  await copy.click();
+  // The outcome is announced by a status beside the button; the button keeps its name.
+  await expect(page.locator("#block").getByRole("status")).toHaveText("Copied robots.txt block");
+  await expect(copy).toHaveAccessibleName("Copy robots.txt block");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "User-agent: makhzanbot\nDisallow: /",
+  );
 });

@@ -26,7 +26,7 @@ cycle), and every shop's gaps together as a histogram in fixed buckets.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from app.deps import get_session
 from fastapi import APIRouter, Depends
@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["crawler"])
 
-#: The window the request counts and gaps cover.
+#: The window the request counts and gaps cover: this many UTC days, today included.
 WINDOW = timedelta(days=7)
 
 _PACING = IngestionRun.stats["pacing"]
@@ -125,9 +125,12 @@ def _days(seconds: object) -> float | None:
 async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict:
     """Per shop we crawl: status, last read, requests and gaps over the last 7 days."""
     now = datetime.now(timezone.utc)
-    since = now - WINDOW
     today = now.date()
     days = [today - timedelta(days=back) for back in range(WINDOW.days - 1, -1, -1)]
+    # The window is the 7 UTC days the per-day series shows, today included:
+    # from midnight UTC six days ago. A rolling now-minus-7-days reached into an
+    # eighth calendar day, so the week's total counted runs no day showed.
+    since = datetime.combine(days[0], time.min, tzinfo=timezone.utc)
 
     sources = (await session.execute(select(Source))).scalars().all()
     slugs = {s.supplier.get("slug") for s in sources if isinstance(s.supplier, dict)}

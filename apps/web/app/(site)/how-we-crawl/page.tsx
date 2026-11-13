@@ -106,9 +106,18 @@ function Card({
   );
 }
 
-function Kicker({ children, className }: { children: React.ReactNode; className?: string }) {
+function Kicker({
+  children,
+  className,
+  id,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  id?: string;
+}) {
   return (
     <p
+      id={id}
       className={cn("mb-1.5 text-xs font-semibold tracking-wider text-ink-3 uppercase", className)}
     >
       {children}
@@ -245,10 +254,12 @@ function Recognise({ withSite }: { withSite: (text: string) => string }) {
   ];
   return (
     <Section id={SECTION.verify} heading={verify.heading} lead={verify.lead}>
-      <Kicker>{verify.requestLabel}</Kicker>
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+      <Kicker id="example-request">{verify.requestLabel}</Kicker>
+      <figure
+        aria-labelledby="example-request"
+        className="m-0 grid gap-3 md:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
+      >
         <pre
-          aria-label="An example request"
           data-example-request
           className="rounded-card border border-line bg-ground p-3 font-mono text-[12.5px] leading-[1.65] break-all whitespace-pre-wrap text-ink-2"
         >
@@ -277,7 +288,7 @@ function Recognise({ withSite }: { withSite: (text: string) => string }) {
             </li>
           ))}
         </ol>
-      </div>
+      </figure>
 
       <Tabs
         label={verify.tabsLabel}
@@ -288,7 +299,7 @@ function Recognise({ withSite }: { withSite: (text: string) => string }) {
             content: (
               <div className="text-[15px] text-ink-2">
                 <p>{tabs.userAgent.lead}</p>
-                <Snippet text={withSite(tabs.userAgent.snippet)} label="makhzanbot's User-Agent" />
+                <Snippet text={withSite(tabs.userAgent.snippet)} name="User-Agent" />
                 <p className="mt-2.5">{tabs.userAgent.notMoved}</p>
               </div>
             ),
@@ -299,7 +310,7 @@ function Recognise({ withSite }: { withSite: (text: string) => string }) {
             content: (
               <div className="text-[15px] text-ink-2">
                 <p>{tabs.robots.body}</p>
-                <Snippet text={tabs.robots.snippet} label="Our robots.txt token" />
+                <Snippet text={tabs.robots.snippet} name="robots.txt token" />
                 <p className="mt-2.5">
                   <a
                     href={tabs.robots.more.href}
@@ -318,7 +329,7 @@ function Recognise({ withSite }: { withSite: (text: string) => string }) {
               <div className="text-[15px] text-ink-2">
                 <p>{tabs.signature.body}</p>
                 <p className="mt-2.5">{tabs.signature.keyLead}</p>
-                <Snippet text={withSite(tabs.signature.snippet)} label="Our key directory" />
+                <Snippet text={withSite(tabs.signature.snippet)} name="key directory URL" />
               </div>
             ),
           },
@@ -385,7 +396,7 @@ function Robots() {
       <Card id={SECTION.block} className="mt-3 scroll-mt-[72px] lg:scroll-mt-6">
         <h3 className="text-base text-ink">{robots.blockHeading}</h3>
         <p className="mt-1 text-[14.5px] text-ink-2">{robots.blockLead}</p>
-        <Snippet text={robots.block} label="robots.txt lines that stop makhzanbot" />
+        <Snippet text={robots.block} name="robots.txt block" />
       </Card>
     </Section>
   );

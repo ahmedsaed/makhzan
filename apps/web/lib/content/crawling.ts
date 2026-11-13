@@ -268,12 +268,12 @@ export const crawlingContent = {
     heading: "Crawler activity",
     lead: "What our crawler did on each shop's site over the last 7 days, recorded as each request was sent. If you run one of these shops, you can check it against your own server logs.",
     gapNote:
-      "A gap is the time between one request to a site and the next. The shortest and the typical (median) gap are both measured, not set. “—” means nothing was recorded for that shop this week: we began recording the gaps in November 2026. The line beside a count is requests per day (UTC); a day whose count was not recorded is left out of it.",
+      "A gap is the time between one request to a site and the next. The shortest and the typical (median) gap are both measured, not set. “—” means nothing was recorded for that shop this week: we began recording the gaps in November 2026. The line beside a count is requests per day (UTC); a day whose count was not recorded is left out of it, and a run counts on the day it started.",
     unavailable: "These figures can't be shown right now. Please check back in a few minutes.",
     noNextRun: "Not scheduled at the moment",
     histogramHeading: "How far apart our requests were this week",
     histogramLead:
-      "Every gap between two requests to one shop, all shops together, floored to the second.",
+      "Every gap between two requests to one site, all shops together, floored to the second.",
   } satisfies ActivityContent,
 
   suppliers: {
