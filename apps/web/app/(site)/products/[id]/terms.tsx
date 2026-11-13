@@ -1,13 +1,14 @@
 import { ChevronDown, Globe, Plug } from "lucide-react";
 
 import type { Offer, Variant } from "@/lib/api";
-import { formatPrice, plural } from "@/lib/format";
+import { formatCount, formatPrice, plural } from "@/lib/format";
 import {
   breaksText,
   fitsLabel,
   FITS_INLINE,
   minimumText,
   OPTIONS_SHOWN,
+  optionsCurrent,
   optionsInStock,
   priceBreakRows,
   quantityLabel,
@@ -83,7 +84,9 @@ export function FitsPill({ models }: { models: string[] }) {
       <summary
         className={cn(
           PILL,
-          "cursor-pointer list-none group-open/fits:border-ink-2 [&::-webkit-details-marker]:hidden",
+          // Drawn 30px tall; the invisible band above and below takes a
+          // finger's 44px on a phone (S4).
+          "relative cursor-pointer list-none group-open/fits:border-ink-2 before:absolute before:inset-x-0 before:-inset-y-2 lg:before:hidden [&::-webkit-details-marker]:hidden",
         )}
       >
         <Plug aria-hidden="true" className="size-3.5 shrink-0 text-ink-2" />
@@ -151,22 +154,34 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
   );
 }
 
-/** Fixed columns, so the rows behind "Show N more" line up with the first six. */
+/**
+ * Fixed columns, so the rows behind "Show N more" line up with the first six.
+ * Narrow price and stock columns on a phone, so the option's name gets the room.
+ */
 function OptionCols() {
   return (
     <colgroup>
       <col />
-      <col className="w-[7.5rem]" />
-      <col className="w-[8.5rem]" />
+      <col className="w-[6.25rem] sm:w-[7.5rem]" />
+      <col className="w-[5.5rem] sm:w-[8.5rem]" />
     </colgroup>
   );
 }
 
-function OptionRow({ variant, currency }: { variant: Variant; currency: string }) {
+function OptionRow({
+  variant,
+  currency,
+  stale,
+}: {
+  variant: Variant;
+  currency: string;
+  /** Read over 45 days ago: its stock is said quietly, never in bold. */
+  stale: boolean;
+}) {
   const stock =
     variant.in_stock === true
       ? variant.stock_quantity
-        ? `${variant.stock_quantity} in stock`
+        ? `${formatCount(variant.stock_quantity)} in stock`
         : "In stock"
       : variant.in_stock === false
         ? "Out of stock"
@@ -188,7 +203,7 @@ function OptionRow({ variant, currency }: { variant: Variant; currency: string }
       <td
         className={cn(
           "px-3 py-2",
-          variant.in_stock === true ? "font-semibold text-ink" : "text-ink-2",
+          variant.in_stock === true && !stale ? "font-semibold text-ink" : "text-ink-2",
           stock === null && "text-ink-3",
         )}
       >
@@ -201,27 +216,33 @@ function OptionRow({ variant, currency }: { variant: Variant; currency: string }
 function OptionTable({
   variants,
   currency,
+  stale,
   head = true,
 }: {
   variants: Variant[];
   currency: string;
+  stale: boolean;
+  /** False for the rows behind "Show N more": their head is for screen readers only. */
   head?: boolean;
 }) {
   return (
     <table className="w-full table-fixed border-collapse text-sm">
       <OptionCols />
-      {head && (
-        <thead>
-          <tr>
-            <Th>Option</Th>
-            <Th className="text-end">Price</Th>
-            <Th>Stock</Th>
-          </tr>
-        </thead>
-      )}
+      <thead className={head ? undefined : "sr-only"}>
+        <tr>
+          <Th>Option</Th>
+          <Th className="text-end">Price</Th>
+          <Th>Stock</Th>
+        </tr>
+      </thead>
       <tbody>
         {variants.map((variant, i) => (
-          <OptionRow key={`${variant.title}-${i}`} variant={variant} currency={currency} />
+          <OptionRow
+            key={`${variant.title}-${i}`}
+            variant={variant}
+            currency={currency}
+            stale={stale}
+          />
         ))}
       </tbody>
     </table>
@@ -240,6 +261,7 @@ export function OptionsSection({ offer, shop, now }: { offer: Offer; shop: strin
   const first = variants.slice(0, OPTIONS_SHOWN);
   const rest = variants.slice(OPTIONS_SHOWN);
   const unpriced = variants.some((variant) => variant.price === null);
+  const stale = !optionsCurrent(offer, now);
   return (
     <section data-options aria-labelledby="options-heading" className="mt-[18px]">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-2.5">
@@ -248,11 +270,18 @@ export function OptionsSection({ offer, shop, now }: { offer: Offer; shop: strin
         </h2>
         <span className="text-[13px] text-ink-2">
           at {shop}
-          {read && ` · read ${read}`}
+          {read && (
+            <>
+              {" · "}
+              <span data-options-read className={stale ? "text-age-muted" : undefined}>
+                {stale ? `as read ${read}` : `read ${read}`}
+              </span>
+            </>
+          )}
         </span>
       </div>
       <div className="overflow-hidden rounded-card border border-line bg-surface">
-        <OptionTable variants={first} currency={offer.currency} />
+        <OptionTable variants={first} currency={offer.currency} stale={stale} />
         {rest.length > 0 && (
           <details data-options-more className="group/more">
             <summary className="flex h-11 cursor-pointer list-none items-center gap-1.5 border-t border-line px-3 text-sm font-medium text-link [&::-webkit-details-marker]:hidden">
@@ -263,7 +292,7 @@ export function OptionsSection({ offer, shop, now }: { offer: Offer; shop: strin
               <ChevronDown aria-hidden="true" className="size-4 group-open/more:rotate-180" />
             </summary>
             <div className="border-t border-line">
-              <OptionTable variants={rest} currency={offer.currency} head={false} />
+              <OptionTable variants={rest} currency={offer.currency} stale={stale} head={false} />
             </div>
           </details>
         )}
@@ -272,6 +301,7 @@ export function OptionsSection({ offer, shop, now }: { offer: Offer; shop: strin
         {optionsInStock(offer)} of {variants.length} in stock.
         {unpriced && " “see shop”: the shop shows no separate price for that option."}
         {` Prices and stock as read${read ? ` ${read}` : ""}; confirm on the shop's site.`}
+        {stale && " They are over 45 days old, so they set no price on this page."}
       </p>
     </section>
   );
@@ -282,16 +312,21 @@ export function OptionsFold({ offer, now }: { offer: Offer; now: Date }) {
   const variants = offer.variants ?? [];
   if (variants.length === 0) return null;
   const read = shortDate(offer.variants_checked_at, now);
+  const stale = !optionsCurrent(offer, now);
   return (
     <details data-options className="group/opts">
-      <summary className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-link [&::-webkit-details-marker]:hidden">
+      <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1 font-medium text-link lg:min-h-8 [&::-webkit-details-marker]:hidden">
         {plural(variants.length, "option")} · {optionsInStock(offer)} in stock
         <ChevronDown aria-hidden="true" className="size-4 group-open/opts:rotate-180" />
       </summary>
       <div className="mt-1 overflow-hidden rounded-card border border-line bg-surface text-[13px] [&_td]:px-2.5 [&_td]:py-1.5 [&_th]:px-2.5 [&_th]:py-1.5">
-        <OptionTable variants={variants} currency={offer.currency} />
+        <OptionTable variants={variants} currency={offer.currency} stale={stale} />
       </div>
-      {read && <p className="mt-1 text-xs text-ink-3">Options read {read}</p>}
+      {read && (
+        <p className={cn("mt-1 text-xs", stale ? "text-age-muted" : "text-ink-3")}>
+          Options {stale ? "as read" : "read"} {read}
+        </p>
+      )}
     </details>
   );
 }
@@ -305,7 +340,7 @@ export function OptionsFold({ offer, now }: { offer: Offer; now: Date }) {
 export function RowTerms({ offer, now }: { offer: Offer; now: Date }) {
   const bits: { key: string; node: React.ReactNode }[] = [];
   if (offer.stock_quantity && offer.stock_signal !== "out_of_stock") {
-    bits.push({ key: "count", node: `${offer.stock_quantity} in stock` });
+    bits.push({ key: "count", node: `${formatCount(offer.stock_quantity)} in stock` });
   }
   const minimum = minimumText(offer);
   if (minimum) bits.push({ key: "minimum", node: minimum });

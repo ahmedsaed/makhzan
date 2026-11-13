@@ -510,7 +510,9 @@ test("the breadcrumb walks department › group › category, all links", async 
 
 test("an offer with no price stays visible and is not shown as free", async ({ page }) => {
   await page.goto("/products/prod-1");
-  await expect(page.locator("[data-offer]").getByText("Price on request")).toBeVisible();
+  // This stub offer has no price and no `price_on_request` flag: the shop never
+  // said "on request", so it is not called that (Phase 2 shows it for p2-por).
+  await expect(page.locator("[data-offer]").getByText("No price listed")).toBeVisible();
   await expect(page.getByText(/EGP\s*0(\.00)?\b/)).toHaveCount(0);
 });
 

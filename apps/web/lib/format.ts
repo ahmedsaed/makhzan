@@ -20,6 +20,9 @@ export function formatAmount(amount: number): string {
 
 export const PRICE_ON_REQUEST = "Price on request";
 
+/** An offer with no price and no word from its shop that it is on request. */
+export const NO_PRICE = "No price listed";
+
 /** "EGP 850". */
 export function formatPrice(amount: number, currency = "EGP"): string {
   return `${currency} ${formatAmount(amount)}`;

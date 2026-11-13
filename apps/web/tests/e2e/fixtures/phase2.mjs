@@ -418,6 +418,42 @@ export const PHASE2 = {
     ],
     { part_number: "XY-MD02" },
   ),
+  // Not a mockup case: the layout's stress test. Long and Arabic option names,
+  // more than six of them, read over 45 days ago (so they set no price and
+  // their stock is said quietly).
+  "p2-options-long": product("p2-options-long", "PETG Filament 1.75mm 1KG", FILAMENT, [
+    offer("o2-ol", SPHINX, "PETG Filament 1.75mm 1KG", 950, "in_stock", 2, {
+      variants: [
+        variant(
+          "Translucent Fluorescent Green with Glitter (limited batch, 1 kg spool)",
+          990,
+          true,
+        ),
+        variant("أسود مطفي", 950, true, 1200),
+        variant("أبيض ناصع اللون", 950, false),
+        variant("Silk Rainbow Gradient", 1100, true),
+        variant("Natural", 900, true),
+        variant("Red", 950, true),
+        variant("Orange", 950, null),
+        variant("Glow in the dark", null, true),
+        variant("Carbon-fibre reinforced matte black", 1350, false),
+      ],
+      variants_checked_at: daysAgo(50),
+    }),
+  ]),
+  // Not a mockup case: the bottom bar with long notes beside the way out.
+  "p2-longnotes": product("p2-longnotes", "ESP32 DevKit V1 30 Pin", BOARDS, [
+    offer("o2-ln-cairo", CAIRO, "ESP32 DevKit V1 30 Pin", 260, "in_stock", 2, {
+      min_quantity: 10,
+      ships_from_abroad: true,
+      variants: [
+        variant("Pre-soldered headers with CH340C USB-C and antenna connector", 240, true),
+        variant("Plain", 260, true),
+      ],
+      variants_checked_at: daysAgo(3),
+    }),
+    offer("o2-ln-nile", NILE, "ESP32 DevKit V1", 300, "in_stock", 1),
+  ]),
 };
 
 /** The lead offer's words, so "What the shops say" has a panel. */

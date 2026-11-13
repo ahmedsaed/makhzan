@@ -1,4 +1,5 @@
 import type { StockSignal } from "@/lib/api";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const LABELS: Record<StockSignal, string> = {
@@ -34,7 +35,7 @@ export function StockBadge({
     <span
       className={cn("text-[13px]", positive ? "font-semibold text-ink" : "text-ink-2", className)}
     >
-      {counted ? `${quantity} in stock` : LABELS[signal]}
+      {counted ? `${formatCount(quantity)} in stock` : LABELS[signal]}
     </span>
   );
 }

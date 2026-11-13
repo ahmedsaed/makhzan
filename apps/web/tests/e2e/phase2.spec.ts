@@ -260,6 +260,80 @@ test.describe("phones", () => {
   }
 });
 
+test.describe("layout under stress", () => {
+  for (const width of [320, 375]) {
+    test(`long and Arabic option names keep their room at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/products/p2-options-long");
+      const options = page.locator("section[data-options]");
+      await expect(options.locator("[data-option]:visible")).toHaveCount(6);
+      await options.getByText("Show 3 more options").click();
+      await expect(options.locator("[data-option]:visible")).toHaveCount(9);
+      // The name column is the widest: price and stock stay narrow on a phone.
+      const name = await options.locator("[data-option] td").first().boundingBox();
+      const stock = await options.locator("[data-option] td").nth(2).boundingBox();
+      expect(name!.width).toBeGreaterThan(stock!.width);
+      await expect(options.getByText("أسود مطفي")).toHaveAttribute("dir", "auto");
+      await noSideScroll(page);
+    });
+  }
+
+  test("options read over 45 days ago: a quiet cue, no bold stock, no price set", async ({
+    page,
+  }) => {
+    await page.goto("/products/p2-options-long");
+    const options = page.locator("section[data-options]");
+    await expect(options.locator("[data-options-read]")).toHaveText(/^as read \d+ \w+/);
+    await expect(options).toContainText("over 45 days old");
+    const inStock = options.locator("[data-option] td", { hasText: "1,200 in stock" });
+    await expect(inStock).toHaveCSS("font-weight", "400");
+    // The headline is the listing price alone: stale options widen nothing.
+    await expect(page.locator("[data-buy] [data-price]").first()).toHaveText("EGP 950");
+  });
+
+  test("the rows behind 'Show more' have a head for screen readers", async ({ page }) => {
+    await page.goto("/products/p2-options-long");
+    await expect(page.locator("[data-options-more] thead")).toHaveClass(/sr-only/);
+  });
+
+  for (const width of [320, 375]) {
+    test(`the bottom bar keeps "View at" readable beside long notes at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto("/products/p2-longnotes");
+      const bar = page.locator("[data-bottom-bar]");
+      const button = await bar.getByRole("link", { name: /View at/ }).boundingBox();
+      expect(button!.width).toBeGreaterThanOrEqual(150);
+      const notes = bar.locator("[data-bar-notes]");
+      await expect(notes).toContainText("min. 10 (EGP 2,400)");
+      await expect(notes).toContainText("ships from abroad");
+      const box = await notes.boundingBox();
+      // Two lines of 12px text at most.
+      expect(box!.height).toBeLessThanOrEqual(36);
+      await noSideScroll(page);
+    });
+  }
+
+  test("one shop with a minimum: the box and the bar say the same price", async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await page.goto("/products/p2-minorder");
+    const box = page.locator("[data-buy]");
+    const bar = page.locator("[data-bottom-bar]");
+    await expect(box.locator("[data-price]").first()).toHaveText("EGP 0.15");
+    await expect(bar.locator("[data-price]")).toHaveText("EGP 0.15");
+    await expect(bar.locator("[data-each]")).toHaveText("each");
+    await expect(bar.locator("[data-bar-notes]")).toHaveText("min. 10 (EGP 1.50)");
+  });
+
+  test("all offers on request: no 'lowest price first'", async ({ page }) => {
+    await page.goto("/products/p2-allpor");
+    await expect(page.getByText("lowest price first")).toHaveCount(0);
+    await page.goto("/products/p2-somepor");
+    await expect(page.getByText("lowest price first")).toHaveCount(1);
+  });
+});
+
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false, viewport: PHONE });
 
