@@ -45,11 +45,11 @@ from decimal import Decimal
 from functools import lru_cache
 
 from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
-from makhzan_schemas.identifiers import fold_identifier, identifier_pattern
+from makhzan_schemas.identifiers import Identifier, fold_identifier, identifier_pattern
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
 from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
 from makhzan_schemas.pricing import summarize_prices
-from makhzan_schemas.values import value_tokens, values_conflict
+from makhzan_schemas.values import value_tokens, values_conflict, without_values
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -62,7 +62,9 @@ def identity_key(part_number: str, domain: str | None = None) -> str:
 
     Matching stays within a department (an owner decision): a tools listing and
     an electronics listing that happen to share a code are never candidates.
-    Electronics keeps the bare form it always had, so its keys do not move.
+    Electronics keys stay bare (no domain segment), as they always were; those
+    whose identifier has separators do change with the fold ("mpn:HC-SR04" is
+    now "mpn:HCSR04"), which product ids survive like any regroup.
     """
     folded = fold_identifier(part_number)
     domain = domain or DEFAULT_DOMAIN
@@ -351,6 +353,13 @@ def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
     return groups
 
 
+def _different_products(titles: set[frozenset[str]]) -> bool:
+    """Whether a shop's titles under one code name two products: two of them
+    each carry a word the other lacks."""
+    ordered = sorted(titles, key=sorted)
+    return any(not (a <= b or b <= a) for i, a in enumerate(ordered) for b in ordered[i + 1 :])
+
+
 def assign_identifiers(listings: list[Listing]) -> int:
     """Set every listing's `part_number` from its department's rules; returns how
     many changed.
@@ -365,26 +374,44 @@ def assign_identifiers(listings: list[Listing]) -> int:
     3D-printer shop names after the CR-10 they fit. A shop lists two SKUs because
     they differ, so two of its listings carrying one code under different titles
     prove the code covers more than one product, and no shop may then group on
-    it. The same title listed twice is a duplicate, not a family. Only model
-    codes are checked (`Identifier.family_checked`): a bearing designation or an
-    O-ring size names one product by a published standard.
+    it. Titles are compared with their values and the code taken out
+    (`values.without_values`): "WD-40 Spray 200ml" and "WD-40 Spray 330ml" are
+    one product in two sizes, which the value veto keeps apart, not a family.
+    Nor is one title that only adds words to another ("TU-501 Wire Cutter" and
+    "TNI-U Wire Cutter TU501 Side Snips"): that is one product described more
+    or less fully, or listed twice. Only titles that each say something the
+    other does not (FC-40 *male* / *female*) make a family. Only model codes are checked
+    (`Identifier.family_checked`): a bearing designation or an O-ring size names
+    one product by a published standard.
 
-    It needs the whole catalogue, so it runs at regroup time over every active
-    listing; the `part_number` set at ingest is the title's reading without it.
+    A part number the adapter itself supplied (`attributes.adapter_part_number`)
+    is used as it is, ahead of every rule.
+
+    This is the only writer of `part_number` on a stored listing (a sweep keeps
+    the stored value), so on an unchanged catalogue it changes nothing.
     """
     candidates: dict[uuid.UUID, tuple[str, list]] = {}
-    titles: dict[tuple[str, str, uuid.UUID], set[str]] = defaultdict(set)
+    titles: dict[tuple[str, str, uuid.UUID], set[frozenset[str]]] = defaultdict(set)
     for listing in listings:
         domain = listing.domain or DEFAULT_DOMAIN
         title = listing.title_en or listing.title_ar
-        found = get_profile(domain).identifier_candidates(title, listing.attributes)
+        attributes = listing.attributes if isinstance(listing.attributes, dict) else {}
+        given = attributes.get("adapter_part_number")
+        if isinstance(given, str) and given.strip():
+            candidates[listing.id] = (domain, [Identifier(given.strip())])
+            continue
+        found = get_profile(domain).identifier_candidates(title, attributes)
         candidates[listing.id] = (domain, found)
-        folded_title = " ".join(_TOKEN.findall((title or "").lower()))
         # Every listing naming the code is evidence, whichever rule read it;
         # only a family-checked identifier is ever refused on that evidence.
         for identifier in found:
-            titles[(domain, identifier.key, listing.supplier_id)].add(folded_title)
-    families = {(domain, key) for (domain, key, _), seen in titles.items() if len(seen) > 1}
+            words = frozenset(
+                _TOKEN.findall(without_values(_without_identifier(title, identifier.value)))
+            )
+            titles[(domain, identifier.key, listing.supplier_id)].add(words)
+    families = {
+        (domain, key) for (domain, key, _), seen in titles.items() if _different_products(seen)
+    }
 
     changed = 0
     for listing in listings:

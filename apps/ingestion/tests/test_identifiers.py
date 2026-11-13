@@ -139,9 +139,9 @@ def test_readings_references_and_words_are_not_model_codes(title):
 
 
 def test_scale_words_are_measurement_vocabulary():
-    for word in ("AWG", "NEMA", "IP", "M", "DN", "PN", "PH", "P", "SS", "DIN", "TO"):
+    for word in ("AWG", "NEMA", "IP", "M", "DN", "PN", "PH", "P", "HSS", "SS", "DIN", "TO"):
         assert is_scale_word(word)
-    for maker_code in ("DT", "CR", "RL", "TB", "KY", "ASR"):
+    for maker_code in ("DT", "CR", "RL", "TB", "KY", "ASR", "SW"):
         assert not is_scale_word(maker_code)
 
 
@@ -354,7 +354,7 @@ def test_tools_catalogue_codes_are_read(title, code):
         "Socket Set 6Piece",
         "Total Test Pencil 3x140mm",
         "Hex Bolt M8x20",
-        "Sanding Paper P120",
+        "Drill Bit HSS-10",
         "Wire Stripper for AWG-16",
         "Phillips Bit PH2 50mm",
     ],
@@ -492,3 +492,132 @@ async def test_a_regroup_reads_new_identifiers_without_a_recrawl():
         ).all()
     assert {row.part_number for row in rows} == {"CP-2515"}
     assert len({row.product_id for row in rows}) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes (November 2026)
+# --------------------------------------------------------------------------- #
+
+
+def test_shop_spellings_of_grams_are_values():
+    """ "XG-50 Solder Paste 42Gm" and "35gm" were merged: "gm" was not a unit."""
+    assert values_conflict(value_tokens("XG-50 Solder Paste 42Gm"), value_tokens("XG-50 35gm"))
+    for spelling in ("20g", "20 gr", "20grm", "20 gms", "20gm"):
+        assert value_tokens(spelling) == {"mass": frozenset({Decimal(20)})}
+    assert value_tokens("2 kgs")["mass"] == frozenset({Decimal(2000)})
+    assert value_tokens("100 mls")["volume"] == frozenset({Decimal(100)})
+
+
+def test_ranges_with_one_floor_and_far_ceilings_conflict():
+    """An SSR switching 5-60 VDC is not one switching 5-200 VDC."""
+    a = value_tokens("SSR-40DD Solid State Relay (3-32Vdc / 5-60Vdc)")
+    b = value_tokens("Solid State Relay SSR-40 DD 3V~32VDC to 5V~200VDC")
+    assert values_conflict(a, b)
+    # Envelopes described loosely stay compatible, as does silence.
+    assert not values_conflict(value_tokens("Buck 9-42V"), value_tokens("Buck 8-40V"))
+    assert not values_conflict(a, value_tokens("SSR-40DD Solid State Relay"))
+    # Two values that are not one dimension are not a range.
+    assert value_tokens("DC Power Supply 30V-5A") == {
+        "volt": frozenset({Decimal(30)}),
+        "amp": frozenset({Decimal(5)}),
+    }
+
+
+def test_a_fixed_value_still_conflicts_with_a_range_written_with_both_units():
+    assert values_conflict(
+        value_tokens("LM2596 (+5V, 3A) Step-Down Regulator"),
+        value_tokens("Step-Down Regulator with Display LM2596 3.2V-35V 3A"),
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        'Pipe Wrench12" Hardwell',
+        'Hand File10"',
+        'Total Bolt Cutter14"',
+        "Total Chuck Key13 Mm",
+        "Bosch Gop Accessories Universal Set13 Pcs For Multi-tool",
+        "Drill bit SDS Plus10*450",
+        "Circumference Rule, ø 20-300mm, Circ.60-950mm Vogel",
+        'Claber Flexyfort Green d.5/8" mt.30',
+        "Drill Bit HSS-10 Cobalt",
+    ],
+)
+def test_tools_words_and_sizes_glued_to_numbers_are_not_codes(title):
+    assert model_code(title) is None
+
+
+def test_the_best_code_in_a_title_wins_not_the_first():
+    assert model_code("Power Organizer Box-13 11 ASR-2064").value == "ASR-2064"
+    assert model_code("Wheel Nut Wrench17×19×21×22 Mm, Ceta Form, N23-011").value == "N23-011"
+
+
+def test_a_closing_quote_is_not_an_inch_mark():
+    assert model_code('5 inch Wire Cutter "TNI-U TU-501"').value == "TU-501"
+    assert model_code("Delta Organizer 5” ASR-5050").value == "ASR-5050"
+
+
+def test_sw_is_a_code_and_p_is_a_grit():
+    """SW-420 is a sensor, not a wrench size. "P" stays a scale: most P-numbers
+    in tools titles are sanding grits (P80, P120), at the cost of P-led codes."""
+    assert hyphenated_model_code("Vibration Sensor Blue SW-420 20mA 12V").value == "SW-420"
+    assert model_code("10 x P120 grit circular sanding sheets (125mm diameter)") is None
+    assert model_code("150cm Spirit Level – Ceta Form, Model P22-150") is None
+
+
+def test_separators_between_digits_are_one_hyphen():
+    assert fold_identifier("J58 210") == fold_identifier("J58-210") == fold_identifier("j58_210")
+    assert fold_identifier("AMS1117 3.3") == fold_identifier("AMS1117-3.3")
+
+
+def test_electronics_reads_a_bearing_only_when_it_states_its_seal():
+    assert ELECTRONICS.extract_identifier("Ball Bearing 624ZZ 4X13X5MM") == "624-ZZ"
+    assert ELECTRONICS.extract_identifier("775 Motor with Ball Bearing") is None
+    assert ELECTRONICS.extract_identifier("2020 Bearing Wheel for V-slot") is None
+    assert SEALS.extract_identifier("6321 Deep Groove Ball Bearing") == "6321"
+
+
+def test_sizes_of_one_product_are_not_a_family():
+    """One shop's 2 mm and 3 mm wick is one product in two sizes: the value veto
+    keeps the sizes apart, and the code stays usable."""
+    listings = [
+        _listing("RELIFE RL-3020 Soldering Wick 2mm", "shop-a"),
+        _listing("RELIFE RL-3020 Soldering Wick 3mm", "shop-a"),
+        _listing("RELIFE RL-3020 Soldering Wick 3mm", "shop-b"),
+    ]
+    assign_identifiers(listings)
+    assert {listing.part_number for listing in listings} == {"RL-3020"}
+    merged = _merged(listings)
+    assert len(merged) == 1
+    assert {listing.title_en for listing in merged[0]} == {"RELIFE RL-3020 Soldering Wick 3mm"}
+
+
+def test_a_title_that_only_adds_words_is_not_another_product():
+    listings = [
+        _listing("TNI-U Wire Cutter – TU501 Side Snips for Electronics", "shop-a", "tools"),
+        _listing('5 inch Wire Cutter "TNI-U TU-501"', "shop-a", "tools"),
+    ]
+    assign_identifiers(listings)
+    assert {listing.part_number for listing in listings} == {"TU501", "TU-501"}
+
+
+def test_regrouping_twice_changes_nothing_the_second_time():
+    listings = [
+        _listing("IDC FC-40 Male Connector", "shop-a"),
+        _listing("IDC FC-40 Female Connector", "shop-a"),
+        _listing("WAGO LT-223-4 Connector", "shop-b", attributes={"specs": {"Model": "LT-223-4"}}),
+        _listing("Chip Resistor 0603", "shop-c", attributes={"mfr_part_number": "CR0603JA0121G"}),
+    ]
+    assert assign_identifiers(listings) > 0
+    assert assign_identifiers(listings) == 0
+
+
+def test_an_adapter_supplied_part_number_is_kept():
+    listing = _listing(
+        "ESP32 DevKit V1 Development Board",
+        "shop-a",
+        attributes={"adapter_part_number": "ESP32-WROOM-32"},
+    )
+    assign_identifiers([listing])
+    assert listing.part_number == "ESP32-WROOM-32"

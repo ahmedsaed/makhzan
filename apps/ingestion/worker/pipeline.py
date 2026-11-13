@@ -166,6 +166,11 @@ async def _upsert_listing(
         last_seen_at=now,
     )
     fields = apply_details(fields)
+    if existing is not None and not (attributes or {}).get("adapter_part_number"):
+        # The regroup owns a stored listing's identifier (family guard, specs
+        # from the product page); re-reading the card here would flip it back
+        # on every sweep.
+        fields.pop("part_number")
 
     if existing:
         for key, value in fields.items():

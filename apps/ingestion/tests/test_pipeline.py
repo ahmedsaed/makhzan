@@ -626,6 +626,22 @@ async def test_tools_item_is_read_by_the_tools_rules():
     assert listing.part_number is None
 
 
+async def test_a_sweep_keeps_the_identifier_the_regroup_wrote():
+    """The regroup owns `part_number` (family guard, product-page specs); a sweep
+    re-reading the card must not flip it back, or every rebuild would rewrite it."""
+    adapter = MarketplaceAdapter("zener-diodes", "1N4007 Rectifier Diode 1A 1000V")
+    await run_source("marketplace", adapter)
+    listing = await _marketplace_listing()
+    assert listing.part_number == "1N4007", "a new listing gets the title's reading"
+    async with SessionLocal() as s:
+        stored = await s.get(Listing, listing.id)
+        stored.part_number = "SET-BY-REGROUP"
+        await s.commit()
+
+    await run_source("marketplace", adapter)
+    assert (await _marketplace_listing()).part_number == "SET-BY-REGROUP"
+
+
 async def test_unmapped_category_stays_uncategorized():
     """A crosswalk miss must not fall back to guessing from the title."""
     await run_source("marketplace", MarketplaceAdapter("not-in-crosswalk", "Resistor 10k"))

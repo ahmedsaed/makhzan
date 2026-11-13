@@ -167,8 +167,9 @@ def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing
         description_en=None if desc_is_ar else description,
         description_ar=description if desc_is_ar else None,
         # Prefer an adapter-provided MPN; otherwise the title's identifier, then
-        # what the shop states. The family guard needs the whole catalogue, so
-        # it is applied at regroup (`grouping.assign_identifiers`), not here.
+        # what the shop states. Only a new listing keeps this: the regroup
+        # (`grouping.assign_identifiers`), which needs the whole catalogue for
+        # its family guard, is what writes `part_number` from then on.
         part_number=raw.part_number or _first_identifier(domain, title, raw.raw),
         brand=raw.brand,
         price=price,
@@ -177,7 +178,13 @@ def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing
         stock_signal=stock,
         category_slug=None,  # category mapping is a later step
         images=raw.images,
-        attributes=raw.raw,
+        # An adapter-supplied part number is remembered, so the regroup that
+        # owns `part_number` (grouping.assign_identifiers) keeps it.
+        attributes=(
+            {**(raw.raw or {}), "adapter_part_number": raw.part_number}
+            if raw.part_number
+            else raw.raw
+        ),
         confidence=confidence,
         review_reasons=reasons,
     )

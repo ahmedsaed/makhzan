@@ -10,9 +10,11 @@ are pulled out of the title *before* any noise stripping and compared on their o
 Each value is reduced to (dimension, magnitude in the base unit), so "0.75kW"
 and "750 W" are the same value and "12v" and "12 Volt" agree.
 
-Only **single** values are kept. A range ("9-42V", "380…500 V") is an operating
-envelope that two listings of the same part describe slightly differently; a
-single value ("12V fan", "4-channel") is what a shop picks a variant by.
+A single value ("12V fan", "4-channel") is what a shop picks a variant by. A
+range ("9-42V", "380…500 V") is an operating envelope that two listings of the
+same part describe slightly differently, so ranges are kept apart and conflict
+only when unmistakable: the same floor and very different ceilings (an SSR
+switching 5-60 VDC against one switching 5-200 VDC).
 
 Two titles conflict when both state a dimension and they share no value of it.
 Silence is not a conflict — "MG996R Servo" says nothing about rotation — with one
@@ -55,9 +57,10 @@ _unit("length", "1", "mm")
 _unit("length", "10", "cm")
 _unit("length", "1000", "m", "meter", "meters", "metre", "metres")
 _unit("length", "25.4", "inch", "inches", '"')
-_unit("mass", "1", "g", "gram", "grams")
-_unit("mass", "1000", "kg")
-_unit("volume", "1", "ml")
+# Shops spell grams "gm", "gr", "grm" and "gms" as often as "g".
+_unit("mass", "1", "g", "gram", "grams", "gm", "gms", "gr", "grm", "grms")
+_unit("mass", "1000", "kg", "kgs")
+_unit("volume", "1", "ml", "mls")
 _unit("volume", "1000", "l", "ltr", "liter", "liters", "litre", "litres")
 _unit("frequency", "1", "hz")
 _unit("frequency", "1000", "khz")
@@ -89,9 +92,13 @@ _RIGHT = r"(?![a-z0-9])"
 _VALUE = re.compile(
     rf"{_LEFT}({_NUM})(?:\s*-?\s*({_UNIT_ALT})|({_GLUED_ALT})){_RIGHT}", re.IGNORECASE
 )
-# "9-42V", "380…500 V", "12/24V", "3 to 5 V": an envelope, not a variant.
+# "9-42V", "380…500 V", "12/24V", "3 to 5 V", "5V~60VDC": an envelope, not a
+# variant. The first number may carry the unit too, but only the same dimension's
+# ("30V-5A" is two values, not a range).
+_ANY_UNIT = rf"(?:{_UNIT_ALT}|{_GLUED_ALT})"
 _RANGE = re.compile(
-    rf"{_LEFT}{_NUM}\s*(?:-|~|–|…|\.{{2,3}}|/|to)\s*{_NUM}\s*-?\s*(?:{_UNIT_ALT}|{_GLUED_ALT}){_RIGHT}",
+    rf"{_LEFT}({_NUM})(?:\s*-?\s*({_ANY_UNIT}))?\s*(?:-|~|–|…|\.{{2,3}}|/|to)\s*({_NUM})"
+    rf"\s*-?\s*({_ANY_UNIT}){_RIGHT}",
     re.IGNORECASE,
 )
 # Words that state a value without a digit.
@@ -107,11 +114,30 @@ _PHRASES: list[tuple[re.Pattern[str], str, Decimal]] = [
 _DEFAULT_QUANTITY = frozenset({Decimal(1)})
 
 
-def value_tokens(title: str | None) -> dict[str, frozenset[Decimal]]:
-    """Every single value a title states, as {dimension: {magnitudes}}."""
-    text = (title or "").lower()
-    text = _RANGE.sub(" ", text)
-    found: dict[str, set[Decimal]] = {}
+def _ranges(text: str, found: dict[str, set] | None = None) -> str:
+    """Take the ranges out of `text`, recording each as `range:<dimension>`."""
+
+    def take(match: re.Match[str]) -> str:
+        lo, first_unit, hi, unit = match.groups()
+        dimension, multiplier = _UNITS[unit.lower()]
+        if first_unit and _UNITS[first_unit.lower()][0] != dimension:
+            return match.group(0)
+        if found is not None:
+            low = Decimal(lo) * (_UNITS[first_unit.lower()][1] if first_unit else multiplier)
+            span = (low.normalize(), (Decimal(hi) * multiplier).normalize())
+            found.setdefault(f"range:{dimension}", set()).add(span)
+        # "3.2V-35V", each end with its unit, also states its ends as values,
+        # as it always has: a fixed "5V" regulator is not a "3.2V-35V" one.
+        return match.group(0) if first_unit else " "
+
+    return _RANGE.sub(take, text)
+
+
+def value_tokens(title: str | None) -> dict[str, frozenset]:
+    """Every value a title states: {dimension: {magnitudes}} for single values,
+    and {"range:<dimension>": {(low, high)}} for envelopes."""
+    found: dict[str, set] = {}
+    text = _ranges((title or "").lower(), found)
     for match in _VALUE.finditer(text):
         number, unit = match.group(1), (match.group(2) or match.group(3)).lower()
         dimension, multiplier = _UNITS[unit]
@@ -123,20 +149,61 @@ def value_tokens(title: str | None) -> dict[str, frozenset[Decimal]]:
     return {dimension: frozenset(values) for dimension, values in found.items()}
 
 
-def values_conflict(a: dict[str, frozenset[Decimal]], b: dict[str, frozenset[Decimal]]) -> bool:
+def _close(x: Decimal, y: Decimal, tolerance: Decimal = Decimal("0.1")) -> bool:
+    return abs(x - y) <= tolerance * max(abs(x), abs(y))
+
+
+def _ranges_conflict(left: frozenset, right: frozenset) -> bool:
+    """Two envelopes from the same floor to very different ceilings.
+
+    Ranges are described loosely ("9-42V" and "8-40V" are one converter), so only
+    the unmistakable case conflicts: the same low end and a high end more than
+    1.5x apart — an SSR switching 5-60 VDC is not one switching 5-200 VDC — and
+    neither title states the other's range as well.
+    """
+
+    def matched(span, spans) -> bool:
+        return any(_close(span[0], s[0]) and _close(span[1], s[1]) for s in spans)
+
+    for a in left:
+        for b in right:
+            if a[0] != b[0] or not a[1] or not b[1]:
+                continue
+            ratio = max(a[1], b[1]) / min(a[1], b[1])
+            if ratio > Decimal("1.5") and not matched(a, right) and not matched(b, left):
+                return True
+    return False
+
+
+def values_conflict(a: dict[str, frozenset], b: dict[str, frozenset]) -> bool:
     """Whether two titles state different values of the same thing.
 
     Both must state the dimension and share none of its values; a title that is
     silent on it does not conflict. Quantity is the exception — silence there
-    means one unit, so "3Pcs" against a plain title is a conflict.
+    means one unit, so "3Pcs" against a plain title is a conflict. Ranges
+    conflict only in the narrow case `_ranges_conflict` describes.
     """
     for dimension in a.keys() | b.keys():
         left, right = a.get(dimension), b.get(dimension)
+        if dimension.startswith("range:"):
+            if left and right and _ranges_conflict(left, right):
+                return True
+            continue
         if dimension == "quantity":
             left, right = left or _DEFAULT_QUANTITY, right or _DEFAULT_QUANTITY
         if left and right and not (left & right):
             return True
     return False
+
+
+def without_values(title: str | None) -> str:
+    """The title, lower-cased, with every value and range taken out: what is
+    left is what a shop says about the product beyond its size or rating."""
+    text = _ranges((title or "").lower())
+    text = _VALUE.sub(" ", text)
+    for pattern, _, _ in _PHRASES:
+        text = pattern.sub(" ", text)
+    return text
 
 
 def is_unit(word: str | None) -> bool:
@@ -156,7 +223,7 @@ def is_value(text: str | None) -> bool:
 #: Words written *before* a number to name the scale, standard or label it is
 #: read on. "AWG-16" is a wire gauge, "NEMA-17" a motor frame size, "IP65" an
 #: ingress rating, "M8" a thread, "DN50"/"PN16" a nominal diameter and pressure,
-#: "PH2"/"PZ2" a screwdriver tip, "P120" an abrasive grit, "CAT6" a cable
+#: "PH2"/"PZ2" a screwdriver tip, "P120" a grit, "HSS-10" a drill steel, "CAT6" a cable
 #: category, "SS304" a steel grade, "DIN-912" the standard a part follows,
 #: "Size-10"/"Class-150" a label and its value. Each says *how big* or *which
 #: grade*, never *which product*, so different makers' products share it.
@@ -174,13 +241,17 @@ SCALE_WORDS: frozenset[str] = frozenset(
         *("AC", "DC", "CAT", "RJ", "USB"),
         # threads and pipe sizes
         *("M", "UNC", "UNF", "NPT", "BSP", "BSPT", "BSPP", "DN", "PN", "SCH"),
-        # drive and tip sizes, abrasive grit
-        *("PH", "PZ", "SDS", "HEX", "TX", "TORX", "SW", "P", "ER"),
+        # drive and tip sizes, collet system, abrasive grit. "P" stays: of 107
+        # tools and chemicals titles with a P-number, 64 are sanding grits
+        # (P80, P120), shared by every brand's sheets. It costs codes such as
+        # Ceta Form's P22-150 and Donaldson's P551808. "SW" does not: it named a
+        # wrench size no title used, and refused SW-420 sensors.
+        *("PH", "PZ", "SDS", "HEX", "TX", "TORX", "ER", "P"),
         # a count or magnification ("x250", "X10")
         "X",
         # standards bodies, and the grades and materials they number
         *("ISO", "DIN", "EN", "BS", "ASME", "ASTM", "AISI", "ANSI", "SAE", "API", "JIS"),
-        *("SS", "PVC", "PPR", "HDPE", "PE", "RAL"),
+        *("SS", "HSS", "PVC", "PPR", "HDPE", "PE", "RAL"),
         # package outlines: a JEDEC standard for how a part is housed (TO-220,
         # DIP-16, DO-214AA), shared by thousands of different parts
         *("TO", "SOT", "SOD", "SOP", "SOIC", "SSOP", "TSSOP", "MSOP", "DIP", "PDIP"),

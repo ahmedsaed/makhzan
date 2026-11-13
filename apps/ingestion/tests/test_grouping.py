@@ -555,7 +555,8 @@ def test_value_tokens_are_read_from_titles(title, dimension, values):
     ],
 )
 def test_what_is_not_a_value(title):
-    assert value_tokens(title) == {}
+    """No single value; a range is kept apart, under "range:<dimension>"."""
+    assert {k for k in value_tokens(title) if not k.startswith("range:")} == set()
 
 
 def test_values_conflict_only_when_both_state_the_dimension():

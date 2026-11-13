@@ -10,8 +10,8 @@ from __future__ import annotations
 from makhzan_schemas.domains.base import DomainProfile, register_profile
 from makhzan_schemas.identifiers import (
     Identifier,
-    bearing_designation,
     hyphenated_model_code,
+    miniature_bearing,
 )
 from makhzan_schemas.part_number import extract_part_number
 
@@ -22,12 +22,12 @@ def _part_number(title: str) -> Identifier | None:
     return Identifier(found) if found else None
 
 
-#: In order: an MPN (LM358, ESP32-WROOM-32, DT830B); a miniature bearing, which is
-#: digit-led (608ZZ, 623-2RS) and so invisible to the MPN rules; then a
+#: In order: an MPN (LM358, ESP32-WROOM-32, DT830B); a miniature bearing that states
+#: its seal, which is digit-led (608ZZ, 623-2RS) and so invisible to the MPN rules; then a
 #: hobby-market model code written with a hyphen (DT-830, DSO-153, KY-032), which
 #: is family-checked because such a code sometimes names a range (FC-26 male and
 #: female) or a printer whose parts are named after it (CR-10).
-_IDENTIFIER_RULES = (_part_number, bearing_designation, hyphenated_model_code)
+_IDENTIFIER_RULES = (_part_number, miniature_bearing, hyphenated_model_code)
 
 # --- Taxonomy tree: (slug, name_en, name_ar, parent_slug) ------------------- #
 # Parents are browse groups; leaves are what the resolver assigns.
