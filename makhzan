@@ -72,11 +72,11 @@ cmd_status() {
   echo
 
   set -a; . ./.env.prod; set +a
-  local port="${WEB_PORT:-3000}"
-  if curl -fsS --max-time 5 "http://localhost:${port}/api/health" >/dev/null 2>&1; then
+  local port="${WEB_PORT:-3000}" bind="${WEB_BIND:-172.17.0.1}"
+  if curl -fsS --max-time 5 "http://${bind}:${port}/api/health" >/dev/null 2>&1; then
     echo "==> Health: /api/health answers"
   else
-    echo "==> Health: /api/health on localhost:${port} is NOT answering"
+    echo "==> Health: /api/health on ${bind}:${port} is NOT answering"
   fi
   echo
   echo "==> Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"
