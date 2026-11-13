@@ -117,7 +117,7 @@ export const crawlingContent = {
     {
       label: "What we keep",
       value: "Catalogue facts",
-      note: "Never used to train AI, sold or licensed",
+      note: "Never sold, licensed or used to train others' AI",
       href: at(SECTION.keep),
     },
   ] satisfies Glance[],
@@ -256,8 +256,13 @@ export const crawlingContent = {
     dont: [
       "copy photos",
       "use what we read for anything but showing it here, with that link",
-      "use shop content to train AI models, or sell or license it",
+      "sell or license shop content, or let anyone else train AI models on it",
     ],
+    /** makhzan itself may use AI models later (likely local ones) to organise
+     * listings; the promise is about where shop content goes, not about
+     * whether a model ever reads it (owner, 2026-11-13). */
+    ownAi:
+      "We may use AI models to help organise what we read, such as sorting products into categories or reading out specifications, only to show it here.",
     /** Replaces "we do not feed it to AI tools", which over-promised: a
      * visitor's assistant reading a public page is reading, not being fed
      * (robots.txt policy, 2026-11-13). robots.txt is a request, and it names
@@ -330,7 +335,7 @@ export const crawlingContent = {
       },
       {
         question: "Do you use shop content to train AI?",
-        answer: "No.",
+        answer: "Not for anyone else.",
         more: { href: at(SECTION.keep), label: "What we keep" },
       },
       {
