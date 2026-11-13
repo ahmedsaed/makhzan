@@ -611,6 +611,12 @@ function Contact() {
         >
           Remove, add or correct a shop
         </Link>
+        <Link
+          href={routes.contact()}
+          className="inline-flex h-11 items-center text-sm text-ink-2 hover:text-ink hover:underline"
+        >
+          Anything else: Contact
+        </Link>
       </div>
     </section>
   );

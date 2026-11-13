@@ -15,7 +15,8 @@ import {
  * robots.txt names.
  *
  * 0 is every browsable page: home, the departments and each department and category, the
- * shops and each shop, and the two pages for suppliers. 1..N are the products,
+ * shops and each shop, the two pages for suppliers, and the site's own pages
+ * (about, FAQ, contact, privacy, terms). 1..N are the products,
  * 50,000 to a file, read from the API's keyset listing by id, each with the
  * date its visible content last changed (not its last recheck: Google ignores
  * a lastmod that is not consistently accurate).

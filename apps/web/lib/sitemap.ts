@@ -51,7 +51,11 @@ export function sitemapEntries(
     ),
     page(routes.howWeCrawl(), "monthly", 0.3),
     page(routes.forSuppliers(), "monthly", 0.3),
+    page(routes.about(), "monthly", 0.3),
+    page(routes.faq(), "monthly", 0.3),
+    page(routes.contact(), "yearly", 0.2),
     page(routes.privacy(), "yearly", 0.1),
+    page(routes.terms(), "yearly", 0.1),
   ];
 }
 
