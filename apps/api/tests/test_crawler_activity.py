@@ -419,8 +419,9 @@ async def test_last_full_pass_is_the_latest_completed_cycle_in_days(client, db):
     await make_supplier(db, slug="shop-a", name="Shop A")
     await _source(db, "src-a", "shop-a")
     cycle = {
-        "cycle_started_at": "2026-10-01T03:00:00+00:00",
-        "cycle_completed_at": "2026-10-08T03:00:00+00:00",
+        # A year no timestamp in the body can carry, so its absence means something.
+        "cycle_started_at": "1999-10-01T03:00:00+00:00",
+        "cycle_completed_at": "1999-10-08T03:00:00+00:00",
         "cycle_partitions": 170,
         "cycle_pages": 497,
     }
@@ -437,8 +438,38 @@ async def test_last_full_pass_is_the_latest_completed_cycle_in_days(client, db):
     assert shop["last_cycle_days"] == 6.5
     # Nothing else of the cycle: not its partitions, pages or dates.
     text = json.dumps(body)
-    for word in ("cycle_pages", "cycle_partitions", "497", "170", "2026-10-0"):
+    for word in ("cycle_pages", "cycle_partitions", "cycle_started", "cycle_completed"):
         assert word not in text, word
+    # Numbers as whole tokens: as bare substrings they turn up inside
+    # microsecond timestamps now and then.
+    for number in ("497", "170", "1999"):
+        assert not re.search(rf"(?<!\d){number}(?!\d)", text), number
+
+
+async def test_the_week_is_the_seven_days_the_series_shows(client, db):
+    """A run late on the eighth day back is inside now-minus-7-days for part of
+    the day, but no day of the series shows it: it is not in the week's total,
+    nor are its gaps."""
+    await make_supplier(db, slug="shop-a", name="Shop A")
+    await _source(db, "src-a", "shop-a")
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    eighth_day = midnight - timedelta(days=6) - timedelta(minutes=30)
+    await _run(
+        db,
+        "src-a",
+        ago=datetime.now(UTC) - eighth_day,
+        stats={"pacing": _paced(3.0, 3.0)},
+    )
+    first_day = midnight - timedelta(days=6) + timedelta(minutes=30)
+    await _run(db, "src-a", ago=datetime.now(UTC) - first_day, stats={"pacing": _paced(15.0, 16.0)})
+
+    body = await _activity(client)
+    (shop,) = body["shops"]
+    assert shop["requests_7d"] == 3
+    assert sum(d["requests"] for d in shop["requests_by_day"]) == 3
+    assert shop["requests_by_day"][0] == {"date": _day(6), "requests": 3}
+    assert shop["min_gap_s"] == 15.0
+    assert body["totals"]["requests_7d"] == 3
 
 
 async def test_the_gap_histogram_merges_every_shops_gaps_into_fixed_buckets(client, db):

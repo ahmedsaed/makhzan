@@ -105,9 +105,11 @@ export function Tabs({ label, panels }: { label: string; panels: TabPanel[] }) {
 
 /**
  * Text to copy as it is. Without JavaScript the text is still there to
- * select; the button only appears once it can work.
+ * select; the button only appears once it can work. `name` says what is
+ * copied ("Copy User-Agent"); the outcome is announced through a separate
+ * status, so the button's own name stays put.
  */
-export function Snippet({ text, label }: { text: string; label?: string }) {
+export function Snippet({ text, name }: { text: string; name: string }) {
   const hydrated = useHydrated();
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -129,7 +131,6 @@ export function Snippet({ text, label }: { text: string; label?: string }) {
   return (
     <div className="relative mt-2.5 rounded-card border border-line bg-ground">
       <pre
-        aria-label={label}
         className={cn(
           "p-3 font-mono text-[13px] leading-relaxed break-all whitespace-pre-wrap text-ink",
           hydrated && "pr-24",
@@ -138,14 +139,25 @@ export function Snippet({ text, label }: { text: string; label?: string }) {
         {text}
       </pre>
       {hydrated && (
-        <button
-          type="button"
-          onClick={copy}
-          aria-live="polite"
-          className="absolute top-1.5 right-1.5 min-h-11 rounded-control border-[1.5px] border-line-strong bg-surface px-3 text-[13px] font-semibold text-ink hover:border-ink-3 md:min-h-9"
-        >
-          {state === "copied" ? "Copied" : state === "failed" ? "Select to copy" : "Copy"}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={copy}
+            aria-label={`Copy ${name}`}
+            className="absolute top-1.5 right-1.5 min-h-11 rounded-control border-[1.5px] border-line-strong bg-surface px-3 text-[13px] font-semibold text-ink hover:border-ink-3 md:min-h-9"
+          >
+            <span aria-hidden="true">
+              {state === "copied" ? "Copied" : state === "failed" ? "Select to copy" : "Copy"}
+            </span>
+          </button>
+          <span role="status" className="sr-only">
+            {state === "copied"
+              ? `Copied ${name}`
+              : state === "failed"
+                ? `Could not copy ${name}; select it to copy`
+                : ""}
+          </span>
+        </>
       )}
     </div>
   );
