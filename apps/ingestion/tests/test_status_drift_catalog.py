@@ -182,6 +182,52 @@ async def test_a_run_cut_off_mid_sweep_has_already_recorded_what_it_saw():
     assert "unused" not in seen[0]
 
 
+async def _watch_checkpoints(adapter_cls, parts, **run_kw) -> tuple[list, IngestionRun]:
+    """Run, reading the run's committed `stats.crosswalk` from another session
+    whenever the second partition starts."""
+    from sqlalchemy import select
+
+    await _seed_taxonomy()
+    seen: list = []
+
+    class Watched(adapter_cls):
+        async def fetch_page(self, partition, page):
+            if partition == parts[1]:
+                async with SessionLocal() as other:
+                    row = (
+                        await other.execute(select(IngestionRun).where(IngestionRun.source == SRC))
+                    ).scalar_one()
+                    seen.append(row.stats or {})
+            return await super().fetch_page(partition, page)
+
+    run = await run_source(SRC, Watched(parts, {"cat-x": ("electronics", "resistors")}), **run_kw)
+    return seen, run
+
+
+async def test_a_limit_runs_checkpoints_record_no_crosswalk_check():
+    seen, run = await _watch_checkpoints(CategoryAdapter, ["cat-new", "cat-later"], limit=5)
+    assert seen and "pacing" in seen[0], "expected a checkpoint before the second partition"
+    assert "crosswalk" not in seen[0]
+    assert "crosswalk" not in run.stats
+
+
+async def test_a_run_ending_with_nothing_to_record_keeps_no_stale_checkpoint():
+    """The checkpoint wrote names; the end of the run decides afresh, so a run
+    with no check to record (here, its crosswalk gone by then) carries none."""
+
+    class LosesItsCrosswalk(CategoryAdapter):
+        async def fetch_page(self, partition, page):
+            if partition == "cat-later":
+                self.categories = {}
+            return await super().fetch_page(partition, page)
+
+    seen, run = await _watch_checkpoints(LosesItsCrosswalk, ["cat-new", "cat-later"])
+    assert seen[0]["crosswalk"]["unmapped"] == {"cat-new": 1}
+    async with SessionLocal() as session:
+        stored = await session.get(IngestionRun, run.id)
+        assert "crosswalk" not in (stored.stats or {})
+
+
 def _crosswalk_file(tmp_path, monkeypatch, body: str) -> None:
     (tmp_path / "shop_x.toml").write_text(body)
     monkeypatch.setenv("MAKHZAN_CROSSWALKS", str(tmp_path))

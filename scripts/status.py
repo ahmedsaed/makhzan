@@ -31,7 +31,7 @@ from makhzan_schemas.models import (
     SourceCursor,
     Supplier,
 )
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 DIM, BOLD, RED, YELLOW, GREEN, RESET = (
     "\033[2m",
@@ -468,7 +468,7 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
     # started before `since` must still be read from its start, or its first
     # runs would be cut off while the window still claimed to cover it.
     cycle_query = (
-        select(IngestionRun.source, IngestionRun.stats)
+        select(IngestionRun.source, IngestionRun.stats["cycle"])
         .where(IngestionRun.stats.has_key("cycle"))
         .order_by(IngestionRun.source, IngestionRun.started_at.desc())
         .distinct(IngestionRun.source)
@@ -477,29 +477,36 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
         cycle_query = cycle_query.where(IngestionRun.source == source_filter)
     cycle_starts = {
         source: start
-        for source, stats in (await session.execute(cycle_query)).all()
-        if (start := _cycle_start(stats))
+        for source, cycle in (await session.execute(cycle_query)).all()
+        if (start := _cycle_start({"cycle": cycle}))
     }
-    floor = min([since, *cycle_starts.values()])
 
+    # Per source, from the earlier of `since` and its own cycle's start: one
+    # source with an old cycle must not drag every other source's read back.
+    # Only the runs that checked, and only the keys this reads.
+    ended = func.coalesce(IngestionRun.finished_at, IngestionRun.started_at)
+    windows = [
+        and_(IngestionRun.source == source, ended >= min(since, start))
+        for source, start in cycle_starts.items()
+    ]
+    windows.append(and_(IngestionRun.source.notin_(list(cycle_starts)), ended >= since))
     query = (
-        select(IngestionRun)
-        .where(func.coalesce(IngestionRun.finished_at, IngestionRun.started_at) >= floor)
+        select(IngestionRun.source, ended, IngestionRun.stats["crosswalk"])
+        .where(IngestionRun.stats.has_key("crosswalk"), or_(*windows))
         .order_by(IngestionRun.started_at.desc())
     )
     if source_filter:
         query = query.where(IngestionRun.source == source_filter)
-    runs_by_source: dict[str, list] = {}
-    for run in (await session.execute(query)).scalars().all():
-        runs_by_source.setdefault(run.source, []).append(run)
+    # (ended, crosswalk) per source, newest first.
+    runs_by_source: dict[str, list[tuple[datetime, dict]]] = {}
+    for source, run_ended, drift in (await session.execute(query)).all():
+        if isinstance(drift, dict):
+            runs_by_source.setdefault(source, []).append((run_ended, drift))
     configs = dict((await session.execute(select(Source.source_id, Source.config))).all())
 
     reported = False
     for source in sorted(runs_by_source):
-        runs = runs_by_source[source]  # newest first
-        checked_all = [r for r in runs if isinstance((r.stats or {}).get("crosswalk"), dict)]
-        if not checked_all:
-            continue
+        checked_all = runs_by_source[source]
         reported = True
 
         # The window: from the start of the newest completed cycle (a run
@@ -507,20 +514,19 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
         # stamped after its first run starts), else the last `days`.
         cycle_start = cycle_starts.get(source)
         start = cycle_start or since
-        checked = [r for r in checked_all if (r.finished_at or r.started_at) >= start]
+        checked = [drift for run_ended, drift in checked_all if run_ended >= start]
         scope = "this cycle" if cycle_start else f"in {days}d, no completed cycle"
         if not checked:
             print(f"  {source:22s} 0 runs checked ({scope})")
             continue
-        newest = checked[0].stats["crosswalk"]
+        newest = checked[0]
         covered = cycle_start is not None or "unused" in newest
 
         mapped, ignored, why_unfiltered = _current_crosswalk(configs.get(source))
         known = mapped | ignored
         unmapped: dict[str, int] = {}
         hidden: tuple[int | None, int] | None = None  # what the newest capped run left out
-        for run in checked:
-            drift = run.stats["crosswalk"]
+        for drift in checked:
             listed = drift.get("unmapped") or {}
             for name, count in listed.items():
                 if normalize_category_name(name) not in known:
@@ -532,9 +538,7 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
             if hidden is None and ((more_names or 0) > 0 or more_listings > 0):
                 hidden = (more_names, more_listings)
 
-        complete = next(
-            (r.stats["crosswalk"] for r in checked_all if "unused" in r.stats["crosswalk"]), {}
-        )
+        complete = next((drift for _, drift in checked_all if "unused" in drift), {})
         unused = list(complete.get("unused") or [])
         unused_count = complete.get("unused_count", len(unused))
         unused_capped = unused_count > len(unused)
