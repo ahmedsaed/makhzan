@@ -113,16 +113,43 @@ Edit `.env.prod`:
   with it, kept 24 hours, never the address itself. `deploy.sh` stops if it is
   unset, and the API refuses reports without it. Changing it resets every
   sender's count, nothing else.
-- `TRUSTED_PROXY_HOPS` — how many proxies in front of the web app append to
-  `X-Forwarded-For` (default 1, your reverse proxy alone; 2 with a CDN in front
-  of it). The API sees only the web container as its peer, so the visitor's
-  address, for the report rate limit, is the entry that many from the right of
-  that header, believed only when the peer is on a private network
-  (`TRUSTED_PROXY_NETWORKS`, default loopback and the private ranges). **Your
-  reverse proxy must set or append `X-Forwarded-For`** (nginx:
-  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`); Next's
-  rewrite passes it through unchanged. A proxy that forwards a visitor's own
-  header untouched lets them choose their address, and so dodge the limit.
+- `TRUSTED_PROXY_HOPS` — how many entries at the right of `X-Forwarded-For`
+  our own proxies wrote (default 1). The API sees only the web container as its
+  peer, so the visitor's address, for the report rate limit, is the entry that
+  many from the right of that header, believed only when the peer is on a
+  private network (`TRUSTED_PROXY_NETWORKS`, default loopback and the private
+  ranges). Next's rewrite passes the header through unchanged. See "Visitor
+  addresses behind the proxy" below for what the proxy must do.
+
+#### Visitor addresses behind the proxy
+
+The report rate limit is only as good as the address it counts, and in
+production that address is decided by the reverse proxy, not by the app:
+
+```
+visitor -> Cloudflare -> Nginx Proxy Manager (host) -> 172.17.0.1:3000 web -> api
+```
+
+- **The proxy host restores the visitor's address.** Its nginx config has
+  `real_ip_header CF-Connecting-IP;` with `set_real_ip_from` for each of
+  Cloudflare's published ranges, so `$remote_addr` is the visitor, not a
+  Cloudflare edge. Then `proxy_set_header X-Forwarded-For
+  $proxy_add_x_forwarded_for;` appends it, and `TRUSTED_PROXY_HOPS=1` reads
+  exactly that entry.
+- **If those directives go, nothing errors.** `$remote_addr` becomes the edge,
+  and everyone who reaches makhzan through one Cloudflare edge shares a single
+  limit of 5 reports an hour. Setting `TRUSTED_PROXY_HOPS=2` instead is *not*
+  the fix: the entry left of the edge is whatever arrived in the request's own
+  `X-Forwarded-For`, which a visitor can write. Restore the visitor at the
+  proxy, from the CDN's header, for the CDN's ranges only.
+- **Keep the ranges current.** A Cloudflare range missing from
+  `set_real_ip_from` makes its visitors look like that edge; a range listed that
+  is not Cloudflare's lets anyone there send `CF-Connecting-IP` and pick their
+  address.
+- **The web port must not be public** (`WEB_BIND`, above): a request straight
+  to it skips all of this.
+
+This document is internal; the public pages do not name the CDN.
 
 ### 3. Seed the data
 
