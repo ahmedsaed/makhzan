@@ -67,6 +67,11 @@ async def get_product(
 
     offers = sorted(offers, key=cheapest)
 
+    # The low end names an offer as of the last rebuild. If that offer is no
+    # longer among these (archived since), what it said about it is not said:
+    # the range itself stays, as on a withdrawn product.
+    names_an_offer = product.min_price_listing_id in {o.id for o in offers}
+
     return ProductRead(
         id=product.id,
         part_number=product.part_number,
@@ -79,10 +84,10 @@ async def get_product(
         offer_count=product.offer_count,
         min_price=product.min_price,
         max_price=product.max_price,
-        min_price_offer_id=product.min_price_listing_id,
-        min_price_shop=product.min_price_supplier,
-        min_price_option=product.min_price_option,
-        min_price_quantity=product.min_price_quantity,
+        min_price_offer_id=product.min_price_listing_id if names_an_offer else None,
+        min_price_shop=product.min_price_supplier if names_an_offer else None,
+        min_price_option=product.min_price_option if names_an_offer else None,
+        min_price_quantity=product.min_price_quantity if names_an_offer else None,
         price_each=product.price_each,
         on_request_count=product.on_request_count,
         currency=product.currency,

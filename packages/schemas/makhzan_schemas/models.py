@@ -342,6 +342,8 @@ class Product(TimestampMixin, Base):
     min_price_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL")
     )
+    # As wide as the longest option title the contracts keep
+    # (`contracts._MAX_TEXT`; a test holds the two equal).
     min_price_option: Mapped[str | None] = mapped_column(String(200))
     min_price_quantity: Mapped[int | None] = mapped_column()
     # Some offer in the range has a minimum order: the range reads "each".
