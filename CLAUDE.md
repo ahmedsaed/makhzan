@@ -39,6 +39,7 @@ make sources                    # seed the sources table from sources.toml
 make ingest SOURCE=<source-id> LIMIT=10
 make reindex                    # rebuild products + search index
 make status                     # crawler progress, recent runs, catalog health
+make freshness                  # requests, staleness, changes found, false archivals (read-only)
 ./makhzan status                # the same report, plus containers/health/crawl flag, from production
 ```
 

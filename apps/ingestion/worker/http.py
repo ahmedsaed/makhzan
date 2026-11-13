@@ -179,6 +179,38 @@ class RequestLog:
         #: Per host, what robots.txt said for this run (worker/robots.py): read
         #: fresh, a stale copy standing in, or unavailable. `stats.robots`.
         self.robots_state: dict[str, dict] = {}
+        #: Per host, how many 2xx responses carried a cache validator
+        #: (`note_validators`). `stats.validators`, never `stats.pacing`.
+        self.validators: dict[str, Counter[str]] = defaultdict(Counter)
+
+    def note_validators(self, host: str, response: httpx.Response) -> None:
+        """Count whether a 2xx response carried `ETag` / `Last-Modified` (T11, measure only).
+
+        Whether conditional requests could ever save a shop anything depends on
+        how many of its pages carry a validator, so each answer is counted —
+        presence only, never the values. Kept out of `stats.pacing`: that is
+        published on /how-we-crawl, and this is not what was sent but what
+        came back.
+        """
+        if not 200 <= response.status_code < 300:
+            return
+        counts = self.validators[host]
+        counts["responses"] += 1
+        etag = response.headers.get("ETag")
+        if etag:
+            counts["etag"] += 1
+            if etag.strip().startswith("W/"):
+                counts["etag_weak"] += 1
+        if response.headers.get("Last-Modified"):
+            counts["last_modified"] += 1
+
+    def validator_stats(self) -> dict[str, dict[str, int]]:
+        """`stats.validators`: per host, 2xx responses and how many carried each validator."""
+        return {
+            host: {key: counts[key] for key in ("responses", "etag", "etag_weak", "last_modified")}
+            for host, counts in sorted(self.validators.items())
+            if counts["responses"]
+        }
 
     def record(self, host: str, *, robots: bool = False) -> None:
         self.times[host].append((self._clock or _now)())
@@ -443,6 +475,8 @@ async def _request(
             raise
         # The host that answered: after a redirect, not necessarily the first.
         note_response(host_of(resp.url), resp.status_code)
+        if (log := _REQUEST_LOG.get()) is not None:
+            log.note_validators(host_of(resp.url), resp)
         if resp.status_code in _RETRYABLE:
             # The host that asked: after a redirect, not necessarily the first.
             asked = hold_host(host_of(resp.url), resp.headers.get("Retry-After"))
