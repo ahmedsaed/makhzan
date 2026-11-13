@@ -115,7 +115,11 @@ class Identity:
         return self.auth is not None
 
     def describe(self) -> dict:
-        """What goes on the run's row as `stats.identity` (never published)."""
+        """What goes on the run's row as `stats.identity`.
+
+        /how-we-crawl publishes the name and `signed` of each shop's latest run
+        (`makhzan_schemas.crawl.public_identity`); the key id never leaves the row.
+        """
         out: dict = {"name": self.name, "signed": self.signed}
         if self.keyid:
             out["keyid"] = self.keyid

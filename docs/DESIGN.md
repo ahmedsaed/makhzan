@@ -236,12 +236,28 @@ link going to `/how-we-crawl#activity`; for a paused shop only "makhzan is not r
 site at the moment." The line is left out, and the page still renders, when the activity
 cannot be fetched. Then "Own this shop? Add your details."
 
-**How we crawl.** The policy as prose, then **Crawler activity** (`#activity`): the measured
+**How we crawl.** A contents list (a sticky chip row on phones that scrolls inside
+itself, a rail from `lg`, the section in view marked), then a lead and four
+at-a-glance tiles linking down, then the sections in order: what we read (do / do not);
+how to recognise us (an annotated example request: User-Agent, From and the Web Bot
+Auth signature headers, numbered to their notes; then tabs for User-Agent, robots.txt
+token and Web Bot Auth, which without JavaScript are all three panels in turn under
+their own headings; copy buttons appear only with JavaScript); robots.txt (four steps,
+Crawl-delay as a floor, the two lines that block us); our pace (one request at a time,
+a week's pass as daily slices, how we react to push-back, the hour); what we keep (and
+the price warning); Crawler activity; for suppliers; questions; contact. **Each fact is
+stated once**: the questions are `<details>` whose answers are a few words and a link to
+the section that says it in full, never a second copy. Cloudflare is not named until
+the verified-bots registration is settled. Then **Crawler activity** (`#activity`): the measured
 proof of it, from `GET /crawler/activity`, cached for ten minutes. Four tiles of totals
 (shops read this week of all shops, requests this week, the next daily run as a relative
 time with "Early morning, Egypt time (03:00 UTC)" under it, and "robots.txt: Honoured"),
-then one row per shop: last read, requests over 7 days, the shortest and the typical
-(median) gap between requests, and a status. A table from `md`; on phones a card per shop
+then one row per shop: its name with the identity its latest run sent ("makhzanbot ·
+signed", or "browser User-Agent"), last read with "last full pass: N days" under it,
+requests over 7 days with a sparkline of requests per UTC day (a day whose count was not
+recorded breaks the line, never drawn as zero), the shortest and the typical (median) gap
+between requests, and a status. Under the table, every shop's gaps of the week together as
+a histogram in fixed buckets (under 15 s, 15, 16, 17, 18–19, 20–29, 30–59, 60 s or more). A table from `md`; on phones a card per shop
 with the same facts, never a sideways scroll. Times are relative ("3 hours ago") with the
 absolute UTC time as a tooltip. Gaps are floored to the second, so a published figure never
 flatters, and a gap not measured reads "—". A count that some run did not record reads
