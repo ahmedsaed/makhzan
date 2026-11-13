@@ -18,9 +18,9 @@ jobs:
       # which turned CI red on untouched files. Keep in step with poetry.lock.
       - run: pip install ruff==0.15.21
       - name: Ruff check
-        run: ruff check packages apps/api apps/ingestion scripts
+        run: ruff check packages apps/api apps/ingestion scripts ml
       - name: Ruff format check
-        run: ruff format --check packages apps/api apps/ingestion scripts
+        run: ruff format --check packages apps/api apps/ingestion scripts ml
 
   tests:
     name: Ingestion tests

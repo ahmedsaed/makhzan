@@ -1,0 +1,279 @@
+# Local model serving for the Phase D product-matching bake-off. See ml/README.md.
+#
+# Every service is behind a profile, so `docker compose up` alone starts nothing: start the one
+# you need by name (`docker compose -f ml/docker-compose.yml up -d rr-qwen3-0.6b`). Ports bind to
+# 127.0.0.1 only: catalogue text never leaves this machine, and nothing here has auth.
+#
+# Each model runs on the engine that measured fastest for it with unchanged answers (README,
+# "Engines"): vLLM for the Qwen3 models and Harrier, TEI for bge-reranker-v2-m3 on the GPU,
+# vLLM's CPU backend for everything on CPU, Kev's own server for Kev. The losing engine of each
+# comparison stays under the `compare` profile so the measurement can be repeated.
+#
+# GPU budget (RTX 3060, 12 GB): the `gpu-small` services fit together (about 9.5 GB at the
+# utilisation caps below; at 0.15 Qwen3-Embedding has too little KV room for 2,048 tokens). rr-qwen3-4b and kev-4b each need most of the card: run ONE, alone.
+#
+# Images are pinned by version and digest (tag@sha256).
+
+name: makhzan-ml
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+x-common: &common
+  restart: "no"
+  # Weights live in the workspace (git-ignored ml/.cache/), not in /var/lib/docker. Relative paths
+  # resolve against this file's directory; from another checkout (an agent worktree) set
+  # ML_CACHE_DIR to the main checkout's ml/.cache so weights are not downloaded twice. `:z`
+  # relabels only that directory for SELinux. The vLLM and TEI containers run as root, so files
+  # they add there are root-owned (README, "Files"); kev-4b runs as uid 1000.
+  volumes:
+    - ${ML_CACHE_DIR:-./.cache}/huggingface:/root/.cache/huggingface:z
+  environment: &env
+    HF_HOME: /root/.cache/huggingface
+    # TEI reads its cache from here (it defaults to /data).
+    HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface/hub
+    # Offline by default: no server contacts the Hub, so weights must already be in the cache.
+    # Download first with HF_HUB_OFFLINE=0 (README, "Downloading weights").
+    HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    # No telemetry: vLLM reports usage stats unless told not to; the Hub client honours these too.
+    VLLM_NO_USAGE_STATS: "1"
+    DO_NOT_TRACK: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+
+# --- vLLM ---
+# The official Qwen3-Reranker checkpoints are causal LMs; vLLM's documented conversion
+# (--hf-overrides below) turns the "yes"/"no" logits at the last token into a one-label
+# classifier, so /score returns P(yes) = sigmoid(logit_yes - logit_no), the model card's number.
+# templates/qwen3_reranker.jinja (from vLLM v0.32.0 examples/pooling/score/template) builds the
+# card's prompt, with the <Instruct> line from the request's chat_template_kwargs.instruction. Its
+# ending differs from vLLM's copy on purpose: an explicit {{ "</think>\n\n" }}. Jinja drops a
+# template file's final newline, so vLLM's file renders "</think>\n" where the card has
+# "</think>\n\n" (a different token); its scores then moved from the card's by up to 0.28 and
+# flipped 7 of 247 validation decisions at 0.5. With the explicit ending the served scores match a
+# transformers run of the card's code to within bf16 noise (parity_qwen3_reranker.py; README,
+# "Checks").
+x-vllm-gpu: &vllm-gpu
+  <<: [*common, *gpu]
+  image: vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
+  shm_size: 2gb   # rather than ipc: host: enough for vLLM, no shared host IPC
+  volumes:
+    - ${ML_CACHE_DIR:-./.cache}/huggingface:/root/.cache/huggingface:z
+    - ./templates:/templates:ro,z
+    - ${ML_CACHE_DIR:-./.cache}/vllm:/root/.cache/vllm:z   # torch.compile cache: later starts skip the compile
+  healthcheck: &vllm-health
+    test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+    interval: 5s
+    timeout: 5s
+    retries: 3
+    start_period: 900s
+
+x-vllm-cpu: &vllm-cpu
+  <<: *common
+  image: vllm/vllm-openai-cpu:v0.32.0-x86_64@sha256:827ef38187f9b52f2bb838695ef815ec5b65f4bf3e4c061b002b2b0a19cb0701
+  cpuset: ${CPU_SET:-0-11}
+  shm_size: 2gb   # rather than ipc: host: enough for vLLM, no shared host IPC
+  environment:
+    <<: *env
+    VLLM_CPU_KVCACHE_SPACE: "4"   # GiB of RAM for the KV cache
+  volumes:
+    - ${ML_CACHE_DIR:-./.cache}/huggingface:/root/.cache/huggingface:z
+    - ./templates:/templates:ro,z
+    - ${ML_CACHE_DIR:-./.cache}/vllm:/root/.cache/vllm:z
+  healthcheck: *vllm-health
+
+# --- Text Embeddings Inference ---
+x-tei-gpu: &tei-gpu
+  <<: [*common, *gpu]
+  image: ghcr.io/huggingface/text-embeddings-inference:86-1.9.4@sha256:bee0bdb887096229add91b6fdfcf95258c12eb9180e90dc86f3b4b25b86fc613   # 86 = Ampere 8.6 (RTX 30xx)
+  # TEI's image has no curl/wget/python, so the healthcheck uses bash's /dev/tcp to GET /health.
+  healthcheck: &tei-health
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/80 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+    interval: 5s
+    timeout: 5s
+    retries: 3
+    start_period: 600s
+
+x-tei-cpu: &tei-cpu
+  <<: *common
+  image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.4@sha256:2538ea1c9640d3763b15af668039d24172d063b42337b0c27796fc2be180c78d
+  cpuset: ${CPU_SET:-0-11}
+  healthcheck: *tei-health
+
+services:
+  # ======================= GPU =======================
+  emb-qwen3:
+    <<: *vllm-gpu
+    profiles: [emb-qwen3, gpu-small]
+    command: >-
+      Qwen/Qwen3-Embedding-0.6B --served-model-name qwen3-embedding-0.6b
+      --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization ${GPU_UTIL_EMB_QWEN3:-0.20}
+      --runner pooling ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8101:8000"]
+
+  emb-harrier:
+    <<: *vllm-gpu
+    profiles: [emb-harrier, gpu-small]
+    command: >-
+      microsoft/harrier-oss-v1-270m --served-model-name harrier-oss-v1-270m
+      --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization ${GPU_UTIL_EMB:-0.15}
+      --runner pooling ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8102:8000"]
+
+  rr-bge:
+    <<: *tei-gpu
+    profiles: [rr-bge, gpu-small]
+    command: --model-id BAAI/bge-reranker-v2-m3 --dtype ${RR_BGE_DTYPE:-float16} --max-client-batch-size 512 --auto-truncate
+    ports: ["127.0.0.1:8103:80"]
+
+  rr-qwen3-0.6b:
+    <<: *vllm-gpu
+    profiles: [rr-qwen3-0.6b, gpu-small]
+    command: >-
+      Qwen/Qwen3-Reranker-0.6B --served-model-name qwen3-reranker-0.6b
+      --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization ${GPU_UTIL_SMALL:-0.30}
+      ${QUANT_ARGS:-}
+      --runner pooling ${VLLM_EXTRA_ARGS:-}
+      --hf-overrides '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+      --chat-template /templates/qwen3_reranker.jinja
+    ports: ["127.0.0.1:8104:8000"]
+
+  rr-qwen3-4b:
+    <<: *vllm-gpu
+    profiles: [rr-qwen3-4b, big]
+    command: >-
+      Qwen/Qwen3-Reranker-4B --served-model-name qwen3-reranker-4b
+      --dtype bfloat16 --max-model-len 2048 --gpu-memory-utilization ${GPU_UTIL_BIG:-0.85}
+      ${QUANT_ARGS:-}
+      --runner pooling ${VLLM_EXTRA_ARGS:-}
+      --hf-overrides '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+      --chat-template /templates/qwen3_reranker.jinja
+    ports: ["127.0.0.1:8105:8000"]
+
+  kev-4b:
+    <<: [*common, *gpu]
+    profiles: [kev-4b, big]
+    build: ./kev
+    image: makhzan-ml/kev:1.0
+    # Writes into the bind-mounted caches as this uid, so they stay yours. UID is a bash variable
+    # that is not exported by default: `export UID GID="$(id -g)"` if yours is not 1000.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      <<: *env
+      # The card's 14.3 GB resident figure includes CUDA-graph buffers (~1 GB attention + ~2 GB
+      # state bank on Kev-4B) and a 4-state prefix cache. Both only buy latency, never different
+      # answers (kev/serve.py, kev/cuda_graphs.py). Measured here: with graphs on, the buffer
+      # allocation runs out of memory at start-up (10.45 GiB already allocated); with both off it
+      # serves in 10,328 MiB (about 10.1 GiB).
+      KEV_CUDA_GRAPHS: ${KEV_CUDA_GRAPHS:-0}
+      KEV_PREFIX_CACHE: ${KEV_PREFIX_CACHE:-0}
+      # Raw P(yes); the bake-off calibrates its own temperature on owner labels.
+      KEV_TEMPERATURE: ${KEV_TEMPERATURE:-1.0}
+      # The image runs as uid 1000 (user kev), so the cache lives under its home.
+      HF_HOME: /home/kev/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /home/kev/.cache/huggingface/hub
+    volumes:
+      - ${ML_CACHE_DIR:-./.cache}/huggingface:/home/kev/.cache/huggingface:z
+      # Triton kernel cache: a cold first request otherwise spends ~60 s compiling the fused
+      # Qwen3.5 kernels. Create ml/.cache/triton yourself first (README): a directory Docker
+      # creates is root-owned, uid 1000 cannot write it, and every request then fails (HTTP 500).
+      - ${ML_CACHE_DIR:-./.cache}/triton:/home/kev/.triton:z
+    # kev-1.0 picks the device itself (cuda, then mps, then cpu); its serve.py has no --device.
+    command: --run jaredpalmer/kev-4b
+    ports: ["127.0.0.1:8106:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 1200s
+
+  # ======================= CPU (no GPU reservation) =======================
+  # vLLM's CPU backend (bf16 on this Zen 4's AVX-512) measured 5.1-7.8x TEI's CPU build on all three
+  # models TEI could serve (README, "Engines").
+  emb-qwen3-cpu:
+    <<: *vllm-cpu
+    profiles: [emb-qwen3-cpu, cpu]
+    command: >-
+      Qwen/Qwen3-Embedding-0.6B --served-model-name qwen3-embedding-0.6b
+      --dtype bfloat16 --max-model-len 2048 --runner pooling ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8111:8000"]
+
+  emb-harrier-cpu:
+    <<: *vllm-cpu
+    profiles: [emb-harrier-cpu, cpu]
+    command: >-
+      microsoft/harrier-oss-v1-270m --served-model-name harrier-oss-v1-270m
+      --dtype bfloat16 --max-model-len 2048 --runner pooling ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8112:8000"]
+
+  rr-bge-cpu:
+    <<: *vllm-cpu
+    profiles: [rr-bge-cpu, cpu]
+    command: >-
+      BAAI/bge-reranker-v2-m3 --served-model-name bge-reranker-v2-m3
+      --dtype bfloat16 --max-model-len 1024 --runner pooling ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8113:8000"]
+
+  rr-qwen3-0.6b-cpu:
+    <<: *vllm-cpu
+    profiles: [rr-qwen3-0.6b-cpu, cpu]
+    command: >-
+      Qwen/Qwen3-Reranker-0.6B --served-model-name qwen3-reranker-0.6b
+      --dtype bfloat16 --max-model-len 2048
+      --runner pooling ${VLLM_EXTRA_ARGS:-}
+      --hf-overrides '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
+      --chat-template /templates/qwen3_reranker.jinja
+    ports: ["127.0.0.1:8114:8000"]
+
+  # ======================= engine comparison (`compare` profile) =======================
+  # The engine that lost for each model, kept so the comparison can be re-run.
+  emb-qwen3-tei:
+    <<: *tei-gpu
+    profiles: [emb-qwen3-tei, compare]
+    command: --model-id Qwen/Qwen3-Embedding-0.6B --dtype float16 --max-client-batch-size 512 --auto-truncate
+    ports: ["127.0.0.1:8121:80"]
+
+  emb-harrier-tei:
+    <<: *tei-gpu
+    profiles: [emb-harrier-tei, compare]
+    # TEI 1.9.4 refuses anything but fp32 for Gemma3 ("Gemma3 is only supported in fp32
+    # precision"), and that path has no flash attention, so its warm-up at the default
+    # 16,384-token batch runs out of memory on 12 GB; 4,096 tokens a batch is ample for titles.
+    command: --model-id microsoft/harrier-oss-v1-270m --dtype float32 --max-batch-tokens 4096 --max-client-batch-size 512 --auto-truncate
+    ports: ["127.0.0.1:8122:80"]
+
+  rr-bge-vllm:
+    <<: *vllm-gpu
+    profiles: [rr-bge-vllm, compare]
+    command: >-
+      BAAI/bge-reranker-v2-m3 --served-model-name bge-reranker-v2-m3
+      --dtype float16 --max-model-len 1024 --gpu-memory-utilization ${GPU_UTIL_SMALL:-0.30}
+      --runner pooling ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8123:8000"]
+
+  # TEI on CPU runs candle (MKL) unless the repo ships ONNX weights; none of these do. The
+  # 4,096-token batch cap keeps the Qwen3 warm-up (padded attention at the 16,384 default) from
+  # exhausting memory and the container exiting.
+  emb-qwen3-cpu-tei:
+    <<: *tei-cpu
+    profiles: [emb-qwen3-cpu-tei, compare]
+    command: --model-id Qwen/Qwen3-Embedding-0.6B --max-batch-tokens 4096 --max-client-batch-size 512 --auto-truncate
+    ports: ["127.0.0.1:8131:80"]
+
+  emb-harrier-cpu-tei:
+    <<: *tei-cpu
+    profiles: [emb-harrier-cpu-tei, compare]
+    command: --model-id microsoft/harrier-oss-v1-270m --dtype float32 --max-batch-tokens 4096 --max-client-batch-size 512 --auto-truncate
+    ports: ["127.0.0.1:8132:80"]
+
+  rr-bge-cpu-tei:
+    <<: *tei-cpu
+    profiles: [rr-bge-cpu-tei, compare]
+    command: --model-id BAAI/bge-reranker-v2-m3 --max-client-batch-size 512 --auto-truncate
+    ports: ["127.0.0.1:8133:80"]
