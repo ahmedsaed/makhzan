@@ -18,7 +18,9 @@
 const API_BASE =
   process.env.API_INTERNAL_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-/** Seconds. Long enough to absorb a burst, short enough that a sweep shows up. */
+/** Seconds. Long enough to absorb a burst, short enough that a sweep shows up.
+ *  A page cached as a whole (ISR) passes its own lifetime as `ttl` instead:
+ *  the shortest fetch lifetime on a page becomes the page's. */
 const TAXONOMY_TTL = 300;
 const DETAIL_TTL = 120;
 /** The crawler's activity moves once a day, but "read 3 hours ago" should not lag far. */
@@ -324,8 +326,8 @@ export function fetchStats(): Promise<Stats> {
 }
 
 /** The whole taxonomy, or one vertical's slice of it. */
-export function fetchCategories(domain?: string): Promise<Category[]> {
-  return get<Category[]>(`/categories${query({ domain })}`, { revalidate: TAXONOMY_TTL });
+export function fetchCategories(domain?: string, ttl = TAXONOMY_TTL): Promise<Category[]> {
+  return get<Category[]>(`/categories${query({ domain })}`, { revalidate: ttl });
 }
 
 export function searchProducts(params: SearchParams): Promise<SearchResponse> {
@@ -350,8 +352,8 @@ export function searchProducts(params: SearchParams): Promise<SearchResponse> {
   );
 }
 
-export function fetchProduct(id: string): Promise<Product | null> {
-  return getOrNull<Product>(`/products/${encodeURIComponent(id)}`);
+export function fetchProduct(id: string, ttl = DETAIL_TTL): Promise<Product | null> {
+  return getOrNull<Product>(`/products/${encodeURIComponent(id)}`, { revalidate: ttl });
 }
 
 /**
@@ -359,17 +361,25 @@ export function fetchProduct(id: string): Promise<Product | null> {
  * merged into another product, or one deleted before ids were permanent
  * (docs/decisions/0004-stable-product-ids.md, 0005-url-retirement.md).
  */
-export async function fetchProductRedirect(id: string): Promise<string | null> {
-  const moved = await getOrNull<{ id: string }>(`/products/${encodeURIComponent(id)}/redirect`);
+export async function fetchProductRedirect(id: string, ttl = DETAIL_TTL): Promise<string | null> {
+  const moved = await getOrNull<{ id: string }>(`/products/${encodeURIComponent(id)}/redirect`, {
+    revalidate: ttl,
+  });
   return moved?.id ?? null;
 }
 
-export function fetchSimilar(id: string, limit = 8): Promise<ProductSummary[]> {
-  return get<ProductSummary[]>(`/products/${encodeURIComponent(id)}/similar${query({ limit })}`);
+/** Nothing is similar to a product the API does not know (404); a failure throws. */
+export async function fetchSimilar(
+  id: string,
+  limit = 8,
+  ttl = DETAIL_TTL,
+): Promise<ProductSummary[]> {
+  const path = `/products/${encodeURIComponent(id)}/similar${query({ limit })}`;
+  return (await getOrNull<ProductSummary[]>(path, { revalidate: ttl })) ?? [];
 }
 
-export function fetchListing(id: string): Promise<Listing | null> {
-  return getOrNull<Listing>(`/listings/${encodeURIComponent(id)}`);
+export function fetchListing(id: string, ttl = DETAIL_TTL): Promise<Listing | null> {
+  return getOrNull<Listing>(`/listings/${encodeURIComponent(id)}`, { revalidate: ttl });
 }
 
 /** Every shop, biggest first — including ones with no active listings, which
@@ -378,10 +388,8 @@ export function fetchSuppliers(): Promise<ShopSummary[]> {
   return get<ShopSummary[]>("/suppliers", { revalidate: TAXONOMY_TTL });
 }
 
-export function fetchSupplier(slug: string): Promise<SupplierProfile | null> {
-  return getOrNull<SupplierProfile>(`/suppliers/${encodeURIComponent(slug)}`, {
-    revalidate: TAXONOMY_TTL,
-  });
+export function fetchSupplier(slug: string, ttl = TAXONOMY_TTL): Promise<SupplierProfile | null> {
+  return getOrNull<SupplierProfile>(`/suppliers/${encodeURIComponent(slug)}`, { revalidate: ttl });
 }
 
 /**

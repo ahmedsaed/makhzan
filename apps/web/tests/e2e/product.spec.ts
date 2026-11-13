@@ -1026,3 +1026,43 @@ test("the page opens a connection to the main photo's server early", async ({ pa
     /<img[^>]*caliper-1\.jpg[^>]*fetchPriority="high"|<img[^>]*fetchPriority="high"[^>]*caliper-1\.jpg/i,
   );
 });
+
+test.describe("caching", () => {
+  test("a product page is cached for 6 hours, and a CDN told to keep it a day at most", async ({
+    request,
+  }) => {
+    await request.get("/products/p-single");
+    const again = await request.get("/products/p-single");
+    expect(again.headers()["x-nextjs-cache"]).toBe("HIT");
+    expect(again.headers()["cache-control"]).toBe("s-maxage=21600, stale-while-revalidate=64800");
+  });
+
+  test("a cache-busting query string is served the same copy", async ({ request }) => {
+    await request.get("/products/p-single");
+    const busted = await request.get("/products/p-single?1ed457cadab3e3b0");
+    expect(busted.status()).toBe(200);
+    expect(busted.headers()["x-nextjs-cache"]).toBe("HIT");
+    expect(await busted.text()).toContain("Digital Caliper 150mm");
+  });
+
+  test("a merged id's redirect is cached and still one permanent hop", async ({ request }) => {
+    await request.get("/products/p-merged", { maxRedirects: 0 });
+    const again = await request.get("/products/p-merged", { maxRedirects: 0 });
+    expect(again.status()).toBe(308);
+    expect(again.headers()["x-nextjs-cache"]).toBe("HIT");
+    expect(again.headers()["location"]).toMatch(/\/products\/p-multi$/);
+  });
+
+  test("a page the catalogue failed partway through is an error, and is not cached", async ({
+    request,
+  }) => {
+    // p-flaky's similar products answer 500: a degraded copy would be served
+    // for hours, so the page fails instead and the next visit tries again.
+    for (let visit = 0; visit < 2; visit++) {
+      const response = await request.get("/products/p-flaky");
+      expect(response.status()).toBe(500);
+      expect(response.headers()["x-nextjs-cache"]).toBeUndefined();
+      expect(response.headers()["cache-control"] ?? "").not.toContain("s-maxage");
+    }
+  });
+});

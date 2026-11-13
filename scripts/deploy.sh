@@ -84,12 +84,15 @@ echo "==> Starting stack (migrations run first via 'migrate' service)"
 
 if [ -n "$web_before" ] && [ "$web_before" != "$web_after" ]; then
   # Cleared, then restarted: Next also holds recent entries in memory, and the
-  # new container may have read old ones from disk in its first seconds.
+  # new container may have read old ones from disk in its first seconds. The
+  # product pages it rendered from them go too: they are cached (ISR) in the
+  # container itself, which a restart keeps.
   echo "==> New web image: clearing its cached API responses"
-  if "${COMPOSE[@]}" exec -T web sh -c 'rm -rf /app/.next/cache/fetch-cache'; then
+  if "${COMPOSE[@]}" exec -T web sh -c \
+    'rm -rf /app/.next/cache/fetch-cache /app/.next/server/app/products'; then
     "${COMPOSE[@]}" restart web
   else
-    echo "    (could not clear it; cached responses expire within minutes)"
+    echo "    (could not clear it; cached responses expire within minutes, product pages within 6 h)"
   fi
 fi
 

@@ -182,6 +182,8 @@ const PRODUCTS = {
   ),
 };
 
+PRODUCTS["p-flaky"] = { ...PRODUCTS["p-single"], id: "p-flaky" };
+
 /**
  * Every shop has withdrawn it. Its id is permanent, so the API still serves it:
  * "delisted", no offers, the last price range seen and when it was checked.
@@ -253,6 +255,9 @@ const HOURS = {
 export function productFixture(path) {
   const similar = path.match(/^\/products\/([^/]+)\/similar$/);
   if (similar && similar[1] === "p-bare") return [200, []];
+  // The catalogue failing partway through a page: the product loads, the
+  // similar products do not. The page is cached, so this must not be.
+  if (similar && similar[1] === "p-flaky") return [500, { detail: "database unreachable" }];
   if (similar && PRODUCTS[similar[1]]) return [200, similarTo()];
   // A product merged into p-multi: the API has no page for it, only where it went.
   if (path === "/products/p-merged/redirect") return [200, { id: "p-multi" }];
