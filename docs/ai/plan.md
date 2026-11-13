@@ -19,7 +19,7 @@ Suppliers are named by role only (see the private configuration's README).
 | D | Validate: Docker model serving on the RTX 3060; bake-off of candidate finding (text similarity vs embeddings) and pair judging (rules vs Qwen3-Reranker vs Kev-4B), precision/recall per department | Setting up |
 | E | Integrate the winner: suggestions in the review queue first; automatic merges per department only past a precision gate (lower 95% bound ≥ 0.98 on the frozen test set) | After D |
 | F | Fine-tune a small judge on our pairs — only if D shows off-the-shelf models fall short | After D |
-| G | Feedback loop: a structured "Report a problem" form (button) on product pages → review queue → reviewed reports become labelled pairs (wrong-merge and missed-match) for training and testing. Unreviewed reports never feed training. | Mockup |
+| G | Feedback loop: a structured "Report a problem" form (button) on product pages → review queue → reviewed reports become labelled pairs (wrong-merge and missed-match) for training and testing. Unreviewed reports never feed training. | Form, `POST /reports` and review on the server (`./makhzan reports`) built; turning accepted reports into pairs not yet |
 
 ## Decisions so far
 - Brand is not a hard grouping rule; the AI judge decides brand-only differences.

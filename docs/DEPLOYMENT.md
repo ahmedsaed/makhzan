@@ -99,6 +99,21 @@ Edit `.env.prod`:
   runtime, never from request headers). `deploy.sh` stops if it is unset,
   because the fallback is `http://localhost:3000`
 - `WEB_ORIGINS` — CORS allow-list; unused in the default same-origin topology
+- `REPORT_IP_SALT` — a random secret (`openssl rand -base64 32`). "Report a
+  problem" (`POST /reports`) counts each sender under an HMAC of their address
+  with it, kept 24 hours, never the address itself. `deploy.sh` stops if it is
+  unset, and the API refuses reports without it. Changing it resets every
+  sender's count, nothing else.
+- `TRUSTED_PROXY_HOPS` — how many proxies in front of the web app append to
+  `X-Forwarded-For` (default 1, your reverse proxy alone; 2 with a CDN in front
+  of it). The API sees only the web container as its peer, so the visitor's
+  address, for the report rate limit, is the entry that many from the right of
+  that header, believed only when the peer is on a private network
+  (`TRUSTED_PROXY_NETWORKS`, default loopback and the private ranges). **Your
+  reverse proxy must set or append `X-Forwarded-For`** (nginx:
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`); Next's
+  rewrite passes it through unchanged. A proxy that forwards a visitor's own
+  header untouched lets them choose their address, and so dodge the limit.
 
 ### 3. Seed the data
 
@@ -130,7 +145,7 @@ terminate TLS there, and you're live.
 ## Day-2 operations
 
 `./makhzan` (repo root) wraps the common ones: `status`, `deploy`, `crawl on|off`,
-`logs`, `stop`, `start`, `backup`, `migrate`, `retire`, `probe`. Run it on the server, or from a
+`logs`, `stop`, `start`, `backup`, `migrate`, `retire`, `probe`, `reports`. Run it on the server, or from a
 laptop with `DEPLOY_HOST` set (it re-runs itself over SSH). `status` is the one
 to reach for first: containers, health, whether the crawl is paused, and the full
 crawler report from `scripts/status.py`, read from the live database.
@@ -145,6 +160,8 @@ crawler report from `scripts/status.py`, read from the live database.
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
 | What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
+| Review visitors' reports | `./makhzan reports` lists new ones, oldest first, each with the offers as the page showed them; `./makhzan reports show 12` adds the reporter's email; `./makhzan reports accept 12 13` / `reject 14` set `status` and `reviewed_at`. Nothing else happens on accept yet: correct the page by hand. |
+| Erase reporters' data past its time | Automatic: the worker's hourly `purge_reports` cron erases an email 90 days after its report was closed and an address hash 24 hours after the report was sent, as /privacy says. By hand: `./makhzan reports purge` |
 | Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
 | Back up the DB | `./makhzan backup` → `backups/makhzan-<ts>.dump`, read back before it is kept |
 | Restore the DB | `./makhzan restore <file>`: see [Backup and restore](#backup-and-restore) |

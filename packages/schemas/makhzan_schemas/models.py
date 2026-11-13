@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     Numeric,
@@ -648,4 +649,79 @@ class WorkerState(Base):
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class Report(Base):
+    """One visitor's "Report a problem" from a product page (POST /reports).
+
+    The API's first write that comes from a visitor. A person reviews each one
+    on the server (`./makhzan reports`), setting `status` and `reviewed_at`;
+    only a reviewed report may ever become a labelled pair for matching
+    (docs/ai/plan.md, phase G). The rules for what is kept and for how long are
+    `makhzan_schemas.reports` and the site's /privacy page:
+
+    - `email` is optional, only to reply, and is erased 90 days after the
+      report is closed (reviewed).
+    - `ip_hash` is a salted hash of the sender's address, kept only to rate
+      limit, and erased 24 hours after the report was sent.
+    - the rest, the report itself, is kept.
+
+    `product_id` and `other_product_id` are deliberately not foreign keys,
+    like `product_events.product_id`: product ids are permanent, but a merged
+    one's row is dropped once its redirect goes unused for a year
+    (`worker.retire_redirects`), and a report must outlive that. They hold the
+    product as it was resolved when the report was sent (a merged id becomes
+    its survivor); `reported_product_id` keeps the id the page sent, when that
+    differed.
+
+    `snapshot` is what the page showed, read on the server when the report
+    arrived: the product and every active offer of it (title, shop, price,
+    stock), and the other product's for "the same as another product". A
+    regroup or a re-crawl changes them later, and a label must be about what
+    the visitor saw.
+    """
+
+    __tablename__ = "reports"
+    __table_args__ = (
+        CheckConstraint("status IN ('new', 'accepted', 'rejected')", name="ck_report_status"),
+        CheckConstraint(
+            "reason IN ('offers_not_same', 'same_as_other', 'wrong_price_stock', "
+            "'wrong_category', 'wrong_details', 'shop_contact', 'other')",
+            name="ck_report_reason",
+        ),
+        CheckConstraint(
+            "(status = 'new') = (reviewed_at IS NULL)", name="ck_report_reviewed_when_closed"
+        ),
+        # The rate limit counts one address's reports over the last day.
+        Index("ix_report_ip_hash_created", "ip_hash", "created_at"),
+        Index("ix_report_status_created", "status", "created_at"),
+    )
+
+    #: Also the reference the visitor is shown: "R-{id}".
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    reported_product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    #: One of `makhzan_schemas.reports.REASONS`.
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Listing ids the visitor ticked or picked, as strings.
+    offer_ids: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    #: The duplicate, for `same_as_other`.
+    other_product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    #: What is wrong: one of `makhzan_schemas.reports.FIELDS`.
+    field: Mapped[str | None] = mapped_column(String(32))
+    #: What it should say, as the visitor gave it ("EGP 460", "out_of_stock", a category).
+    correct_value: Mapped[str | None] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    email: Mapped[str | None] = mapped_column(String(254))
+    snapshot: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    status: Mapped[str] = mapped_column(
+        String(16), default="new", server_default="new", nullable=False
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: HMAC-SHA256 of the sender's address under a server secret, hex.
+    ip_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

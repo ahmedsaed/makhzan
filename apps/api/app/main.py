@@ -2,7 +2,8 @@
 
 Directory/discovery backend. Serves the consumer search/browse API and the
 supplier-portal API. Reads from Postgres + Meilisearch; the ingestion worker
-(apps/ingestion) is what writes new listings.
+(apps/ingestion) is what writes new listings. The one write a visitor makes is
+a "Report a problem" (`POST /reports`, app/routers/reports.py).
 """
 
 import os
@@ -13,6 +14,7 @@ from app.routers import (
     history,
     listings,
     products,
+    reports,
     search,
     sitemap,
     suppliers,
@@ -29,7 +31,9 @@ _origins = os.getenv("WEB_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _origins.split(",") if o.strip()],
-    allow_methods=["GET"],
+    # POST for /reports only. The default topology is same-origin (the web app
+    # proxies /api), so this matters only where the API is reached directly.
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -47,4 +51,5 @@ app.include_router(suppliers.router)
 app.include_router(sitemap.router)
 app.include_router(crawler.router)
 app.include_router(history.router)
+app.include_router(reports.router)
 app.include_router(wellknown.router)
