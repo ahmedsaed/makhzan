@@ -540,8 +540,9 @@ product still splits and keeps its consistent majority), merges products the
 vetoes allow, places newcomers by best match, and merges once more. Product ids
 come in as `current`, resolved through `merged_into`. A first build, with no
 product ids, is the plain order; a rebuild from scratch gives the same groups,
-and one rebuild converges — the next changes nothing. A seed change can change a
-group's key (ids survive; only `plan_identity`'s merge undo reads stored keys).
+and one rebuild converges — the next changes nothing. A group's key depends only
+on its membership (named after the member first in natural order), so it is the
+same however the group was reached.
 
 **The marketplace adapter reads `extract_identifier` too** (pending an owner
 decision). The private adapter appends a slug code to a title only when that

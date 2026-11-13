@@ -374,9 +374,12 @@ def _stated(value: object) -> Identifier | None:
     reading = re.fullmatch(r"([A-Za-z]+)[-\s]?(.+)", text)
     if reading and is_scale_word(reading.group(1)):
         rest = reading.group(2)
+        # A value only when short ("4P", "220V", "7R"): a long number with a
+        # letter after it is a part number whose suffix merely looks like a unit
+        # (PN2222A, M51231P, ER18505M).
         if (
             re.fullmatch(r"\d{1,4}", rest)
-            or is_value(rest)
+            or (re.fullmatch(r"\d{1,3}(?:\.\d+)?\s*\D.*", rest) and is_value(rest))
             or re.fullmatch(r"\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?", rest)
         ):
             return None

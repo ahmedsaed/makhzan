@@ -173,8 +173,6 @@ class _Evidence:
 class _Cluster:
     """One sub-product being accumulated out of a shared-identifier group."""
 
-    #: Tokens of the member that seeded it — the stable part of the group key.
-    seed_tokens: set[str]
     #: Every member's evidence. A candidate is compared against all of them, not
     #: just the seed: the seed can be title-poor ("ESP32 Development Board 30
     #: pin" reduces to {pin} once noise is stripped), and comparing only against
@@ -247,7 +245,6 @@ class _Cluster:
 
 def _new_cluster(listing: Listing, ev: _Evidence) -> _Cluster:
     return _Cluster(
-        seed_tokens=ev.tokens,
         evidence=[ev],
         prices=[listing.price] if listing.price is not None else [],
         members=[listing],
@@ -291,10 +288,14 @@ def _subcluster(
        listings (`current`, each listing's product followed through any merge;
        its stored `product_id` when not given) is rebuilt as a cluster from its
        own members, largest first. Members are placed fewest conflicts first
-       (the seed is the one that contradicts the fewest others), so a wrong
-       product keeps its consistent majority, and each must still pass every
-       veto against those placed: a wrong merge from before still splits, and
-       what will not fit becomes a newcomer.
+       (the seed is the one that contradicts the fewest others; on a tie, the
+       natural key decides), so a wrong product keeps its consistent majority,
+       and each must still pass every veto against those placed: a wrong merge
+       from before still splits, and what will not fit becomes a newcomer.
+       Conflicts are counted, not weighed: when the wrong side of a product
+       has more listings than the right one, the right one is evicted. That is
+       bounded — evicted listings are placed again as newcomers and re-form
+       their own product — but it can move an id to the wrong side.
     2. Those clusters merge with one another where every veto allows it (how a
        rule change joins two existing products).
     3. **Newcomers** — no product yet, alone in theirs, or evicted in pass 1 —
@@ -306,11 +307,10 @@ def _subcluster(
 
     On a first build nobody has a product, so passes 3 and 4 only.
 
-    A group's key comes from its seed's words, so a different seed (a misfit
-    evicted, two products merged) can change the key of a group whose id
-    survives. Ids are matched by membership (`plan_identity`), so that is
-    harmless, except that undoing a merge matches the absorbed product's stored
-    key: after a key change, an undo mints a new id instead of reviving the old.
+    A group's key depends only on its membership (it is named after the member
+    first in natural order), so reaching the same groups another way gives the
+    same keys. Ids are matched by membership (`plan_identity`) in any case; only
+    undoing a merge reads an absorbed product's stored key.
     """
     profile = get_profile(domain)
     threshold = profile.cluster_threshold
@@ -401,19 +401,26 @@ def _subcluster(
     # Pass 4: the same merge over everything, so one rebuild converges.
     clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
 
+    # Keys depend on membership alone: named after the member first in natural
+    # order, whichever member happened to seed the cluster, and assigned in that
+    # order too. So the same groups get the same keys however they were reached
+    # (from scratch, by incumbency, after a merge), and a rebuild that changes
+    # no membership changes no key.
+    named = sorted(
+        ((min(cluster.members, key=_natural_order), cluster.members) for cluster in clusters),
+        key=lambda pair: _natural_order(pair[0]),
+    )
     result: dict[str, list[Listing]] = {}
-    for cluster in clusters:
-        members = cluster.members
-        sig = "-".join(sorted(cluster.seed_tokens)) or "base"
+    for first, members in named:
+        sig = "-".join(sorted(evidence[first.id].tokens)) or "base"
         key = f"{mpn_key}:{sig}"
         if key in result:
             # Variants of one shop often word their titles identically apart from
             # the value ("Thermal Switch NC 40°C" / "… 90°C"), so signatures
-            # collide. Disambiguate by the seed listing's own natural key, which
+            # collide. Disambiguate by that member's own natural key, which
             # survives a re-scrape, rather than by position, which shifts whenever
             # a sibling appears or disappears.
-            seed = members[0]
-            natural = f"{seed.source}:{seed.external_id or seed.id}"
+            natural = f"{first.source}:{first.external_id or first.id}"
             key += "~" + hashlib.sha1(natural.encode()).hexdigest()[:10]
         result[key] = members
     return result
