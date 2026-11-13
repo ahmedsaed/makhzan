@@ -137,8 +137,10 @@ visitor -> Cloudflare -> Nginx Proxy Manager (host) -> 172.17.0.1:3000 web -> ap
   `set_real_ip_from` makes its visitors look like that edge; a range listed that
   is not Cloudflare's lets anyone there send `CF-Connecting-IP` and pick their
   address.
-- **The web port must not be public** (`WEB_BIND`, above): a request straight
-  to it skips all of this.
+- **The web port must not be reachable except through the proxy.** The API
+  trusts `X-Forwarded-For` from the web container, and Next's rewrite forwards
+  whatever a request carries, so a request straight to the web port picks the
+  address the rate limit counts. Bind or firewall it so only the proxy reaches it.
 
 This document is internal. /how-we-crawl does not name the CDN; /privacy
 names Cloudflare as handling every request (the owner's decision, November
