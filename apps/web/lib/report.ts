@@ -89,7 +89,8 @@ export type ContactField = (typeof CONTACT_FIELDS)[number][0];
 
 /** The limits the API enforces, so the form can say them before it is refused. */
 export const MAX_DESCRIPTION = 1000;
-/** Kept in step with makhzan_schemas/reports.py and the privacy page. */
+/** Kept in step with makhzan_schemas/reports.py and the privacy page: an
+ *  email is erased this many days after the report was sent. */
 export const EMAIL_KEPT_DAYS = 90;
 export const IP_HASH_KEPT_HOURS = 24;
 
@@ -307,14 +308,15 @@ export type ReportPayload = {
   description: string | null;
   email: string | null;
   website: string;
-  elapsed_ms: number;
+  /** When the form opened, as the API signed it (`fetchOpenedToken`). */
+  token: string | null;
 };
 
 /** The body of `POST /reports`: only what the chosen reason takes. */
 export function buildPayload(
   state: FormState,
   context: ReportContext,
-  elapsedMs: number,
+  token: string | null,
 ): ReportPayload {
   const reason = state.reason ?? "other";
   const many = several(context);
@@ -369,7 +371,7 @@ export function buildPayload(
     description: state.description.trim() || null,
     email: state.email.trim() || null,
     website: state.website,
-    elapsed_ms: Math.max(0, Math.round(elapsedMs)),
+    token,
   };
 }
 
@@ -393,7 +395,8 @@ export function candidateMeta(
   return price ? `${who} · ${price}` : who;
 }
 
-export type Limited = { limit: "hour" | "day"; count: number; minutes: number };
+/** "hour" and "day" are one sender's limits; "site" is everyone's together. */
+export type Limited = { limit: "hour" | "day" | "site"; count: number; minutes: number };
 
 export type SubmitResult =
   { kind: "sent"; reference: string | null } | ({ kind: "limited" } & Limited) | { kind: "error" };
@@ -410,9 +413,29 @@ export function waitText(minutes: number): string {
 
 /** The headline of the "too many reports" state. */
 export function limitedTitle(limited: Limited): string {
+  if (limited.limit === "site") return "makhzan has had more reports than it can take today.";
   return limited.limit === "hour"
     ? `You’ve sent ${limited.count} reports in the last hour.`
     : `You’ve sent ${limited.count} reports in the last day.`;
+}
+
+/**
+ * When the form opened, signed by the API (`GET /reports/token`): the API
+ * drops a report sent under 3 s after it, so the time is the server's word,
+ * not the page's. No cookie; null when it cannot be had.
+ */
+export async function fetchOpenedToken(fetcher: typeof fetch = fetch): Promise<string | null> {
+  try {
+    const response = await fetcher(`${apiBase()}/reports/token`, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const body = await response.json().catch(() => null);
+    return typeof body?.token === "string" ? body.token : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Where the browser reaches the API: same origin, through the web app's rewrite. */
@@ -437,7 +460,7 @@ export async function submitReport(
       const retry = Number(response.headers.get("retry-after"));
       return {
         kind: "limited",
-        limit: detail.limit === "day" ? "day" : "hour",
+        limit: detail.limit === "day" || detail.limit === "site" ? detail.limit : "hour",
         count: Number(detail.count) || (detail.limit === "day" ? 20 : 5),
         minutes:
           Number(detail.retry_after_minutes) ||

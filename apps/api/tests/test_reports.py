@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from factories import make_category, make_listing, make_product, make_supplier
+from app.routers.reports import issue_token
 from httpx import ASGITransport, AsyncClient
 from makhzan_schemas.models import ProductRedirect, Report
 from sqlalchemy import func, select, update
@@ -57,7 +59,12 @@ async def _two_shop_product(db):
 
 
 def _body(product, **fields) -> dict:
-    return {"product_id": str(product.id), "elapsed_ms": 12_000, **fields}
+    return {"product_id": str(product.id), "token": _token(12), **fields}
+
+
+def _token(seconds_ago: float) -> str:
+    """An opened-at token as the API signs it, for a form opened that long ago."""
+    return issue_token(SALT.encode(), int((time.time() - seconds_ago) * 1000))
 
 
 async def _post(client, body, ip="198.51.100.7", **headers):
@@ -160,7 +167,7 @@ async def test_an_unknown_product_is_a_404(client, db):
             "product_id": str(uuid.uuid4()),
             "reason": "other",
             "description": "Typo in the title",
-            "elapsed_ms": 9000,
+            "token": _token(9),
         },
     )
     assert response.status_code == 404
@@ -273,8 +280,11 @@ async def test_answers_a_reason_does_not_take_are_dropped(client, db):
     "extra",
     [
         {"website": "https://spam.example"},  # the honeypot
-        {"elapsed_ms": 2_999},  # under 3 s
-        {"elapsed_ms": None},  # a client that never opened the form
+        {"token": None},  # a client that never opened the form
+        {"token": "garbage"},
+        {"token": f"{int(time.time() * 1000) - 60_000}.{'0' * 32}"},  # forged
+        {"token": issue_token(b"another-secret", int(time.time() * 1000) - 60_000)},
+        {"token": None, "elapsed_ms": 60_000},  # what the page says is not evidence
         {"description": "x" * 1001},
         {"description": "see http://a.example http://b.example www.c.example"},
     ],
@@ -466,3 +476,124 @@ def test_forwarded_entries_are_read_as_proxies_write_them(raw, expected):
         }
     )
     assert rate_limit_key(client_address(request)) == expected
+
+
+@pytest.mark.parametrize("seconds_ago", [0, 2.5, 6 * 3600 + 60])
+async def test_a_form_sent_too_soon_or_too_late_is_dropped(client, db, seconds_ago):
+    product, _, _ = await _two_shop_product(db)
+    body = {**_body(product, reason="wrong_category"), "token": _token(seconds_ago)}
+    assert (await _post(client, body)).json() == {"reference": None}
+    assert await _reports(db) == []
+
+
+async def test_the_opened_at_token_is_signed_stateless_and_uncached(client, db):
+    response = await client.get("/reports/token")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert "set-cookie" not in response.headers
+    token = response.json()["token"]
+    stamp, _ = token.split(".")
+    assert abs(int(stamp) - time.time() * 1000) < 5_000
+    assert token == issue_token(SALT.encode(), int(stamp))
+
+
+async def test_without_the_salt_there_is_no_token(client, monkeypatch):
+    monkeypatch.delenv("REPORT_IP_SALT")
+    assert (await client.get("/reports/token")).status_code == 503
+
+
+async def test_a_large_body_is_refused_before_it_is_parsed(client, db):
+    product, _, _ = await _two_shop_product(db)
+    padded = {**_body(product, reason="wrong_category"), "pad": "x" * 17_000}
+    response = await _post(client, padded)
+    assert response.status_code == 413
+    assert await _reports(db) == []
+
+
+async def test_a_chunked_body_is_cut_off_at_the_limit_too(client, db):
+    product, _, _ = await _two_shop_product(db)
+
+    async def chunks():
+        yield b'{"product_id": "' + str(product.id).encode() + b'", "pad": "'
+        for _ in range(40):
+            yield b"x" * 1024
+        yield b'"}'
+
+    response = await client.post(
+        "/reports",
+        content=chunks(),
+        headers={"content-type": "application/json", "x-forwarded-for": "198.51.100.7"},
+    )
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 413
+
+
+async def test_an_ordinary_body_passes_the_limit(client, db):
+    product, _, _ = await _two_shop_product(db)
+    body = _body(product, reason="other", description="y" * 1000)
+    assert (await _post(client, body)).status_code == 202
+
+
+async def test_control_characters_never_reach_the_table(client, db):
+    product, a, _ = await _two_shop_product(db)
+    osc52 = "\x1b]52;c;cm0gLXJmIH4=\x07"
+    await _post(
+        client,
+        _body(
+            product,
+            reason="wrong_category",
+            description=f"Line one\r\nline two{osc52}\twith a tab\x9b31m",
+            correct_value=f"Motor\x00 drivers{osc52}",
+        ),
+    )
+    [report] = await _reports(db)
+    assert report.description == "Line one\nline two]52;c;cm0gLXJmIH4=\twith a tab31m"
+    assert report.correct_value == "Motor drivers]52;c;cm0gLXJmIH4="
+    assert not any(ord(c) < 32 and c not in "\n\t" for c in report.description)
+
+
+async def test_an_email_with_control_characters_is_cleaned_before_it_is_checked(client, db):
+    product, _, _ = await _two_shop_product(db)
+    await _post(client, _body(product, reason="wrong_category", email="buyer\x1b@example.com"))
+    [report] = await _reports(db)
+    assert report.email == "buyer@example.com"
+
+
+async def test_a_snapshot_keeps_every_ticked_offer_and_at_most_50(client, db, monkeypatch):
+    import makhzan_schemas.reports as rules
+
+    monkeypatch.setattr(rules, "MAX_SNAPSHOT_LISTINGS", 4)
+    product, a, b = await _two_shop_product(db)
+    shop = await make_supplier(db, slug="cairo-makers", name="Cairo Makers")
+    extra = [
+        await make_listing(
+            db, supplier=shop, product=product, title_en=f"TB6600 #{i}", price=f"{100 + i}.00"
+        )
+        for i in range(6)
+    ]
+    ticked = [b, extra[-1]]
+    await _post(
+        client,
+        _body(product, reason="offers_not_same", offer_ids=[str(o.id) for o in ticked]),
+    )
+    [report] = await _reports(db)
+    snap = report.snapshot["product"]
+    assert snap["listings_total"] == 8
+    assert len(snap["listings"]) == 4
+    kept = {x["id"] for x in snap["listings"]}
+    assert {str(o.id) for o in ticked} <= kept
+    assert sum(x["ticked"] for x in snap["listings"]) == 2
+
+
+async def test_a_daily_ceiling_holds_for_everyone_together(client, db, monkeypatch):
+    monkeypatch.setenv("REPORTS_PER_DAY_ALL", "3")
+    products = await _distinct_products(db, 4)
+    for i, product in enumerate(products[:3]):
+        ok = await _post(client, _body(product, reason="wrong_category"), ip=f"203.0.113.{i + 1}")
+        assert ok.status_code == 202
+    over = await _post(client, _body(products[3], reason="wrong_category"), ip="203.0.113.99")
+    assert over.status_code == 429
+    detail = over.json()["detail"]
+    assert detail["limit"] == "site" and detail["count"] == 3
+    assert 1 <= detail["retry_after_minutes"] <= 24 * 60
+    assert len(await _reports(db)) == 3

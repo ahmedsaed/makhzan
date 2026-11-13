@@ -23,6 +23,7 @@ import {
   CONTACT_FIELDS,
   DETAIL_FIELDS,
   emailFallback,
+  fetchOpenedToken,
   type FieldErrors,
   type FormState,
   type Limited,
@@ -84,7 +85,8 @@ export function ReportProblem({ context }: { context: ReportContext }) {
   const [limited, setLimited] = useState<Limited | null>(null);
   const [reference, setReference] = useState<string | null>(null);
   const [sentAt, setSentAt] = useState<Date | null>(null);
-  const openedAt = useRef(0);
+  /** When the form opened, as the API signed it; asked for on opening. */
+  const openedToken = useRef<Promise<string | null> | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const popup = useRef<HTMLDivElement>(null);
@@ -132,7 +134,8 @@ export function ReportProblem({ context }: { context: ReportContext }) {
   const onOpenChange = (next: boolean, details: Dialog.Root.ChangeEventDetails) => {
     if (!next && details.reason === "escape-key" && listOpen.current) return;
     if (next) {
-      openedAt.current = performance.now();
+      // A token per opening: the API counts its 3 s from here.
+      openedToken.current = fetchOpenedToken();
       if (status === "sent") reset();
     } else {
       attempt.current += 1;
@@ -168,9 +171,16 @@ export function ReportProblem({ context }: { context: ReportContext }) {
     }
     const mine = ++attempt.current;
     setStatus("sending");
-    const result = await submitReport(
-      buildPayload(form, context, performance.now() - openedAt.current),
-    );
+    // Asked for when the dialog opened; once more if that failed. Without
+    // one the API would drop the report unseen, so say it was not sent.
+    let token = await (openedToken.current ?? Promise.resolve(null));
+    if (!token) {
+      openedToken.current = fetchOpenedToken();
+      token = await openedToken.current;
+    }
+    const result = token
+      ? await submitReport(buildPayload(form, context, token))
+      : ({ kind: "error" } as const);
     if (mine !== attempt.current) return;
     if (result.kind === "sent") {
       setReference(result.reference);
@@ -863,8 +873,8 @@ function StepTwo({
 
       <p data-report-privacy className="mt-4 text-[12.5px] leading-[1.45] text-ink-2">
         We use your report to correct this page and to improve how makhzan matches products. An
-        email is used only to reply, and deleted 90 days after we close the report. To stop spam we
-        keep a scrambled form of your IP address for 24 hours.{" "}
+        email is used only to reply, and deleted 90 days after you send it. To stop spam we keep a
+        scrambled form of your IP address for 24 hours.{" "}
         <Link href={routes.privacy()} target="_blank" className="text-link underline">
           Privacy policy<span className="sr-only"> (opens in a new tab)</span>
         </Link>

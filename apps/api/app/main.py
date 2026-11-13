@@ -23,7 +23,12 @@ from app.routers import (
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.body_limit import BodyLimit
+
 app = FastAPI(title="makhzan API", version="0.1.0")
+
+# The one public write's body is capped before anything parses it.
+app.add_middleware(BodyLimit)
 
 # The Next.js frontend calls this API from the browser (a different origin),
 # so CORS must allow it. Configurable via WEB_ORIGINS (comma-separated).

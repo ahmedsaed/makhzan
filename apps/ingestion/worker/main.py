@@ -9,7 +9,7 @@ vanished products get archived. Every source job, however it ends, asks for a
 product rebuild and reindex (`rebuild_and_reindex`), deduplicated so sources
 finishing close together share one; the first rebuild of each day then retires
 redirects unused for a year. Idempotent upserts mean re-runs update in
-place. An hourly cron (`purge_reports`) erases what the privacy page says is
+place. A cron every 10 minutes (`purge_reports`) erases what the privacy page says is
 not kept from visitors' reports. Run the worker:  arq worker.main.WorkerSettings
 """
 
@@ -303,18 +303,25 @@ async def refresh_all(ctx: dict) -> list[dict]:
 
 
 async def purge_reports(ctx: dict) -> dict:
-    """Cron task, hourly: erase reporters' data past its time (makhzan_schemas.reports).
+    """Cron task, every 10 minutes: erase reporters' data past its time
+    (makhzan_schemas.reports).
 
-    An email 90 days after its report was closed, an address's hash 24 hours
-    after the report was sent: what /privacy promises. Hourly, so nothing is
-    kept more than an hour past its limit, and not behind CRAWL_ENABLED: a
-    paused crawl must not pause a privacy promise.
+    An email 90 days after its report was sent, an address's hash 24 hours
+    after it: what
+    /privacy promises. Every 10 minutes, so an address's hash never outlives
+    its 24 hours by more than that; two indexed updates that usually touch
+    nothing. Not behind CRAWL_ENABLED: a paused crawl must not pause a privacy
+    promise.
     """
     async with SessionLocal() as session:
         counts = await purge_personal_data(session)
     if counts["emails"] or counts["ip_hashes"]:
         log.info("reports: erased %(emails)d emails and %(ip_hashes)d address hashes", counts)
     return counts
+
+
+#: When `purge_reports` runs: every 10 minutes, off the hour.
+PURGE_MINUTES = {7, 17, 27, 37, 47, 57}
 
 
 class WorkerSettings:
@@ -328,8 +335,13 @@ class WorkerSettings:
     ]
     cron_jobs = [
         cron(refresh_all, hour=REFRESH_HOUR, minute=0, timeout=timedelta(minutes=5)),
-        # Every hour, off the hour so it never queues behind the daily refresh.
-        cron(purge_reports, minute=17, timeout=timedelta(minutes=5), run_at_startup=True),
+        # Every 10 minutes, off the hour so it never queues behind the daily refresh.
+        cron(
+            purge_reports,
+            minute=PURGE_MINUTES,
+            timeout=timedelta(minutes=5),
+            run_at_startup=True,
+        ),
     ]
     # Also for run_source / run_partition jobs enqueued by hand.
     job_timeout = JOB_TIMEOUT
