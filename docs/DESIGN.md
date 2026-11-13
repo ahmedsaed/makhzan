@@ -274,11 +274,13 @@ the page container on desktop; each section is left out when its fetch fails.
   - Dates read in Cairo time. The chart's label for screen readers carries Now and the
     lowest.
   - **Recording span**: no card and no facts line until 30 days are recorded (nothing is
-    drawn empty). Recording is read from the offers that count, the fresh ones when any
-    is: an out-of-date offer's lone early point (history began with one baseline row
-    per listing, dated at its last check) never stretches the chart back to a time when
-    no counted shop had a point. A "not checked since" gap only ever follows that shop's
-    last check; "Lowest since 24 Aug" and "since 24 Aug" until 90 days; the stock strip
+    drawn empty). An offer counts toward when recording began only if it ever has a
+    value in the window (a point before its last check): an out-of-date offer's lone
+    baseline (history began with one row per listing, dated at its last check) never
+    stretches the chart back to a time when no shop had a point, while a stale shop's
+    real earlier history still counts, so a new shop joining never hides it. With no
+    such offer there is no card. A "not checked since" gap only ever follows that
+    shop's last check, and a truncated history starts at its first point, unshaded; "Lowest since 24 Aug" and "since 24 Aug" until 90 days; the stock strip
     and its count only once 12 weeks are recorded.
   - Nothing priced (every shop gives its price on request): no chart and no "lowest", only
     "Stock history · last 12 weeks" with the strip, once 12 weeks are recorded, and a

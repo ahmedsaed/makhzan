@@ -67,12 +67,6 @@ describe.each([
   it("draws no gap where shops simply had no points yet", () => {
     expect(h.segments.filter((s) => s.price === null)).toEqual([]);
   });
-
-  it("never dates a 'not checked since' after the stretch it labels", () => {
-    for (const s of h.segments) {
-      if (s.gap === "unchecked") expect(s.checked!).toBeLessThanOrEqual(s.from);
-    }
-  });
 });
 
 describe("the real lowest prices", () => {

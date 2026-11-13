@@ -220,9 +220,10 @@ function lowestValue(all: Track[], t: number, previous: string | null): Value {
   if (points.some(stocked)) return gap("on-request");
   if (points.some((p) => p?.available)) return gap("out-of-stock");
   if (points.some((p) => p !== null)) return gap("unlisted");
-  // Nobody has a value: the shops that had one are past their last check.
-  // The date is the latest of *those* checks, never a shop that has not
-  // started yet (whose `until` is today).
+  // No shop has a value here. The chart starts at the first counted point, so
+  // some shop had one before: it is past its last check now. The gap is dated
+  // with the latest of *those* checks, never with a shop that has not started
+  // yet (whose `until` is today).
   const ended = all.filter((track) => track.points[0].at <= t && t >= track.until);
   return gap("unchecked", ended.length ? Math.max(...ended.map((track) => track.until)) : null);
 }
@@ -252,19 +253,24 @@ export function buildHistory(
   const all = tracks(history, offers, now);
   if (all.length === 0) return null;
   const end = now.getTime();
-  // When recording began, read from the offers that count (C2b): the fresh
-  // ones when any is fresh. A stale offer's lone point (its seeded baseline,
-  // dated at its last check months ago) must not stretch the chart back to a
-  // time when no counted shop had a point: that stretch would be all gap. A
-  // truncated track began before its first point: recording covers the window.
-  const fresh = all.filter((track) => !track.stale);
-  const counted = fresh.length > 0 ? fresh : all;
-  const recorded = Math.min(
-    ...counted.map((track) => (track.truncated ? -Infinity : track.points[0].at)),
-  );
-  if (end - recorded < RECORDING_MIN_DAYS * DAY) return null;
   const windowStart = end - HISTORY_DAYS * DAY;
-  const start = Math.max(recorded, windowStart);
+  // An offer counts toward when recording began only if it ever has a value
+  // in the window: a point before its last check, and that check inside the
+  // window. A stale offer's lone baseline (seeded at its last check, so never
+  // before it) has none, and must not stretch the chart back to a time when no
+  // shop had a point; a stale shop's real history before its last check
+  // counts, so a new shop joining never hides history already shown.
+  const counted = all.filter(
+    (track) => track.points[0].at < track.until && track.until > windowStart,
+  );
+  if (counted.length === 0) return null;
+  const firstPoint = Math.min(...counted.map((track) => track.points[0].at));
+  // A truncated track began before its first point: recording covers the
+  // window, though the chart still starts at the first point it has (the
+  // stretch before it is no data, not a gap).
+  const recorded = counted.some((track) => track.truncated) ? -Infinity : firstPoint;
+  if (end - recorded < RECORDING_MIN_DAYS * DAY) return null;
+  const start = Math.max(firstPoint, windowStart);
   const full = recorded <= windowStart;
   const single = offers.length === 1;
   const weeks = end - recorded >= STRIP_WEEKS * 7 * DAY ? weeksOf(all, end) : null;
