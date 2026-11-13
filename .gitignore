@@ -41,3 +41,7 @@ seed/makhzan-prod-latest.dump
 
 # Agent worktrees (Claude Code); never part of the repo.
 .claude/worktrees/
+
+# ml/: model weights, caches and bench output stay in the workspace, never in git.
+ml/.cache/
+ml/out/

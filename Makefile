@@ -9,7 +9,7 @@
 # config ruff discovers for files outside any project (scripts/), which once made
 # `make lint` pass while CI failed on the same commit.
 RUFF = $(shell cd apps/ingestion && poetry env info --path)/bin/ruff
-LINT_PATHS = packages apps/api apps/ingestion scripts
+LINT_PATHS = packages apps/api apps/ingestion scripts ml
 
 DB_URL ?= postgresql+asyncpg://makhzan:makhzan@localhost:5432/makhzan
 MEILI_URL ?= http://localhost:7700
