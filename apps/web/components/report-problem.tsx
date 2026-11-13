@@ -23,10 +23,11 @@ import {
   CONTACT_FIELDS,
   DETAIL_FIELDS,
   emailFallback,
-  fetchOpenedToken,
+  openToken,
   type FieldErrors,
   type FormState,
   type Limited,
+  type OpenedToken,
   limitedTitle,
   MAX_DESCRIPTION,
   PRICE_FIELDS,
@@ -40,6 +41,7 @@ import {
   shopsOf,
   STOCK_VALUES,
   submitReport,
+  tokenToSend,
   validate,
   waitText,
 } from "@/lib/report";
@@ -86,7 +88,7 @@ export function ReportProblem({ context }: { context: ReportContext }) {
   const [reference, setReference] = useState<string | null>(null);
   const [sentAt, setSentAt] = useState<Date | null>(null);
   /** When the form opened, as the API signed it; asked for on opening. */
-  const openedToken = useRef<Promise<string | null> | null>(null);
+  const openedToken = useRef<Promise<OpenedToken | null> | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const popup = useRef<HTMLDivElement>(null);
@@ -135,7 +137,7 @@ export function ReportProblem({ context }: { context: ReportContext }) {
     if (!next && details.reason === "escape-key" && listOpen.current) return;
     if (next) {
       // A token per opening: the API counts its 3 s from here.
-      openedToken.current = fetchOpenedToken();
+      openedToken.current = openToken();
       if (status === "sent") reset();
     } else {
       attempt.current += 1;
@@ -171,15 +173,13 @@ export function ReportProblem({ context }: { context: ReportContext }) {
     }
     const mine = ++attempt.current;
     setStatus("sending");
-    // Asked for when the dialog opened; once more if that failed. Without
-    // one the API would drop the report unseen, so say it was not sent.
-    let token = await (openedToken.current ?? Promise.resolve(null));
-    if (!token) {
-      openedToken.current = fetchOpenedToken();
-      token = await openedToken.current;
-    }
+    // Asked for when the dialog opened; renewed if that failed or the dialog
+    // has been open for hours (lib/report.ts, tokenToSend). Without one the
+    // API would drop the report unseen, so say it was not sent.
+    const token = await tokenToSend(await (openedToken.current ?? Promise.resolve(null)));
+    openedToken.current = Promise.resolve(token);
     const result = token
-      ? await submitReport(buildPayload(form, context, token))
+      ? await submitReport(buildPayload(form, context, token.token))
       : ({ kind: "error" } as const);
     if (mine !== attempt.current) return;
     if (result.kind === "sent") {
