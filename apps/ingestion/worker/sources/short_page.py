@@ -58,6 +58,9 @@ class ShortPageEnd:
         self.saved = 0
         #: Partitions that ended on a full page: a short-page stop saves nothing there.
         self.full_last_page = 0
+        #: Partitions whose would-stop was judged this run: their end, when it
+        #: comes a page later (an unrecognised repeat), is not a full last page.
+        self._judged: set[str] = set()
 
     def restore(self, report: object) -> None:
         """Pick up the would-stops a previous run left unresolved."""
@@ -93,6 +96,7 @@ class ShortPageEnd:
             stop_page, stop_ids = pending
             if page == stop_page + 1:
                 self.compared += 1
+                self._judged.add(partition)
                 # Odoo's repeat of the would-stop page. The adapter cannot call
                 # it a repeat when the two pages fell in different runs, so it
                 # is judged here and not taken for a would-stop of its own.
@@ -107,7 +111,7 @@ class ShortPageEnd:
             # Any other page (a restarted partition) leaves nothing to compare.
         if short and not end and ids and not repeat:
             self._pending[partition] = (page, ids)
-        elif end and pending is None and page > 1:
+        elif end and pending is None and page > 1 and partition not in self._judged:
             self.full_last_page += 1
         return False
 

@@ -329,10 +329,8 @@ async def short_page_end(session, source_filter: str | None, days: int = 45) -> 
         select(IngestionRun)
         .where(
             IngestionRun.started_at >= since,
-            or_(
-                IngestionRun.stats["source_report"].has_key("short_page"),
-                IngestionRun.stats.has_key("cycle"),
-            ),
+            # Every full run, those without a tally too: the window's first
+            # run must carry one for the window to be a cycle of shadow.
             ~IngestionRun.stats.has_key("limit"),
         )
         .order_by(IngestionRun.started_at.desc())
@@ -354,7 +352,11 @@ async def short_page_end(session, source_filter: str | None, days: int = 45) -> 
         # From the start of the newest completed cycle: one whole cycle, plus
         # whatever of the next has run since.
         start = next((s for r in runs if (s := _cycle_start(r.stats))), None)
-        window = [r for r in runs if start is None or r.started_at >= start]
+        # A run belongs to the window if it was still going when the cycle
+        # began: the one that stamped its first cursor started just before.
+        window = [
+            r for r in runs if start is None or r.finished_at is None or r.finished_at >= start
+        ]
         reports = [
             report
             for r in window
@@ -376,7 +378,14 @@ async def short_page_end(session, source_filter: str | None, days: int = 45) -> 
             f"  {source:22s} short-page stop: {mode}, {compared} partitions compared,"
             f" {colour}{wrong} disagreements{RESET}, would save {saved} requests ({span})"
         )
-        if not wrong and compared and start is not None:
+        # A whole cycle in shadow: the window's first run already carried a
+        # tally, so no run of the cycle predates the shadow.
+        covered = bool(window) and bool(
+            ((window[-1].stats or {}).get("source_report") or {}).get("short_page")
+        )
+        if not covered and start is not None:
+            line += f"  {DIM}not all of the cycle in shadow{RESET}"
+        if not wrong and compared and start is not None and covered:
             line += f'  {GREEN}ready: end_on_short_page = "live"{RESET}'
         print(line)
         named = [d for r in reports for d in r.get("disagreed") or []]

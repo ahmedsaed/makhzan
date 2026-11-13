@@ -34,9 +34,9 @@ from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_categor
 from makhzan_schemas.enums import SourceType
 from selectolax.parser import HTMLParser
 
-from worker.http import get_text, make_client
+from worker.http import HostBackingOff, get_text, make_client
 from worker.normalize import parse_price
-from worker.robots import DisallowedByRobots
+from worker.robots import DisallowedByRobots, RobotsUnavailable
 from worker.richtext import (
     documents_from_html,
     html_to_text,
@@ -48,6 +48,7 @@ from worker.richtext import (
 from worker.sources.base import (
     TOKEN_MODIFIED,
     Confirmation,
+    ConfirmStopped,
     DetailsSettings,
     Page,
     SourceAdapter,
@@ -203,17 +204,25 @@ class OdooAdapter(SourceAdapter):
         held: the sweep missed it, but the shop still publishes it. Its
         product page is read, at most `CONFIRM_PAGES` a run, and a page that is
         the product keeps the listing (`last_seen_at` only: no price is read).
-        A page that is gone (404/410, or not this product) archives it.
+        A page that is gone (404/410, or not this product) archives it. A page
+        that fails otherwise leaves only that candidate unasked; a host that
+        refuses, or a run that may send no more, leaves the rest unasked.
 
-        Sitemap presence itself never counts as seen: a sitemap can lag the
-        shop, and "seen" would then outlive the product.
+        A sitemap that is not there or cannot be read as one (404, gzip only,
+        an index of more than `MAX_SITEMAP_FILES` files, no product pages, or
+        disallowed by robots.txt) vetoes nothing: None, and the cycle archives
+        as before. Sitemap presence itself never counts as seen: a sitemap can
+        lag the shop, and "seen" would then outlive the product.
         """
         if not self.sitemap_veto:
             return None
         try:
             listed = await self._sitemap_ids(fetcher)
-        except DisallowedByRobots:
-            return None  # the shop does not want it read: archive as before
+        except ConfirmStopped as exc:
+            # Nothing was asked: every candidate waits for the next run.
+            return Confirmation(notes={"via": "sitemap", "stopped": str(exc)[:200]})
+        if listed is None:
+            return None
         out = Confirmation(notes={"via": "sitemap", "sitemap_products": len(listed)})
         held = []
         for row in listings:
@@ -222,6 +231,7 @@ class OdooAdapter(SourceAdapter):
             else:
                 out.absent.add(row.external_id)
         out.notes["held_by_sitemap"] = len(held)
+        failed = 0
         for row in held[:CONFIRM_PAGES]:
             try:
                 url = _product_url(row.source_url, self.base_url)
@@ -233,42 +243,64 @@ class OdooAdapter(SourceAdapter):
             except DisallowedByRobots:
                 out.absent.add(row.external_id)  # not ours to read: as before
                 continue
+            except (ConfirmStopped, HostBackingOff, RobotsUnavailable, httpx.TransportError) as exc:
+                # The host or the run, not this page: the rest wait.
+                out.notes["stopped"] = f"{type(exc).__name__}: {exc}"[:200]
+                break
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code in (404, 410):
                     out.absent.add(row.external_id)
-                    continue
-                raise
+                else:
+                    failed += 1  # this candidate stays unasked
+                continue
             if _is_product_page(response, row.external_id):
                 out.seen.add(row.external_id)
             else:
                 out.absent.add(row.external_id)
+        if failed:
+            out.notes["pages_failed"] = failed
         return out
 
-    async def _sitemap_ids(self, fetcher) -> set[str]:
-        """Product ids in the shop's sitemap (following an index a few files deep)."""
-        response = await fetcher.get(CONFIRM_LABEL, f"{self.base_url}/sitemap.xml")
+    async def _sitemap_ids(self, fetcher) -> set[str] | None:
+        """Product ids in the shop's sitemap, or None when it is no usable census.
+
+        Raises only for what may pass by the next run (a 5xx, a refusing host).
+        """
+        try:
+            response = await fetcher.get(CONFIRM_LABEL, f"{self.base_url}/sitemap.xml")
+        except DisallowedByRobots:
+            return None  # the shop does not want it read
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 410):
+                return None
+            raise
         text = response.text
-        locs = _LOC.findall(text)
+        if "<urlset" not in text and "<sitemapindex" not in text:
+            return None  # gzip, or not a sitemap at all
+        locs = [html_unescape(loc) for loc in _LOC.findall(text)]
         if "<sitemapindex" in text:
-            if len(locs) > MAX_SITEMAP_FILES:
-                raise ValueError(f"sitemap index of {len(locs)} files; not read")
-            children = locs
+            shop = urlsplit(self.base_url).netloc
+            children = [loc for loc in locs if urlsplit(loc).netloc == shop]
+            if not children or len(children) > MAX_SITEMAP_FILES:
+                return None
+            if any(urlsplit(loc).path.endswith(".gz") for loc in children):
+                return None  # compressed files are not read
             locs = []
             for child in children:
-                if urlsplit(html_unescape(child)).netloc != urlsplit(self.base_url).netloc:
-                    continue
-                locs += _LOC.findall((await fetcher.get(CONFIRM_LABEL, html_unescape(child))).text)
+                try:
+                    part = await fetcher.get(CONFIRM_LABEL, child)
+                except DisallowedByRobots:
+                    return None
+                locs += [html_unescape(loc) for loc in _LOC.findall(part.text)]
         ids = set()
         for loc in locs:
-            path = urlsplit(html_unescape(loc.strip())).path.rstrip("/")
+            path = urlsplit(loc.strip()).path.rstrip("/")
             if not path.startswith("/shop/") or path.startswith(("/shop/category/", "/shop/page/")):
                 continue
             if match := _ID_RE.search(path):
                 ids.add(match.group(1))
-        if not ids:
-            # A sitemap with no products is not evidence that none exist.
-            raise ValueError("the sitemap lists no product pages")
-        return ids
+        # A sitemap with no products is not evidence that none exist.
+        return ids or None
 
     def source_categories(self, raw: RawItem) -> list[str]:
         category = (raw.raw or {}).get("category")

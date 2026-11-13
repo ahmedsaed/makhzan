@@ -47,6 +47,15 @@ SINGLE_PARTITION = ""
 CONTACT_PART = "contact"
 
 
+class ConfirmStopped(Exception):
+    """Raised by the confirmation's fetcher before a request it may not send.
+
+    The run's page ceiling is spent, its time is up, or its host refused it.
+    `confirm_listed` catches it and returns what it has: the candidates not
+    yet asked about stay unasked, and wait for the next run.
+    """
+
+
 @dataclass
 class Confirmation:
     """What a source said when asked about listings a cycle did not see (T4).

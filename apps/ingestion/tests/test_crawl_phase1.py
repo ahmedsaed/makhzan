@@ -31,7 +31,6 @@ from sqlalchemy import select, update
 from worker import http as http_mod
 from worker.details import (
     DETAIL_KEYS,
-    MAX_INTERVAL_DAYS,
     MIN_INTERVAL_DAYS,
     carry_details,
     due_listings,
@@ -212,10 +211,10 @@ async def test_odoo_shadow_catches_a_page_without_a_pager_that_was_not_the_last(
 # --------------------------------------------------------------------------- #
 
 
-def _product(pid: int, status: str = "instock") -> dict:
+def _product(pid: int, status: str = "instock", name: str | None = None) -> dict:
     return {
         "id": pid,
-        "name": f"Widget {pid}",
+        "name": name or f"Widget {pid}",
         "permalink": f"{WOO}/p/{pid}",
         "prices": {"price": str(1000 + pid), "currency_minor_unit": 2, "currency_code": "EGP"},
         "categories": [],
@@ -230,6 +229,8 @@ class FakeWoo:
 
     def __init__(self) -> None:
         self.catalogue: dict[int, str] = {}
+        #: Titles other than "Widget <id>".
+        self.names: dict[int, str] = {}
         self.requests: list[dict] = []
         self.include_status = 200
 
@@ -240,11 +241,17 @@ class FakeWoo:
             if self.include_status != 200:
                 return httpx.Response(self.include_status, json={"code": "error"})
             wanted = {int(i) for i in params["include"].split(",")}
-            rows = [_product(i, s) for i, s in sorted(self.catalogue.items()) if i in wanted]
+            rows = [
+                _product(i, s, self.names.get(i))
+                for i, s in sorted(self.catalogue.items())
+                if i in wanted
+            ]
             return httpx.Response(200, json=rows)
         size, page = int(params["per_page"]), int(params["page"])
         rows = [
-            _product(i, s) for i, s in sorted(self.catalogue.items()) if s == params["stock_status"]
+            _product(i, s, self.names.get(i))
+            for i, s in sorted(self.catalogue.items())
+            if s == params["stock_status"]
         ]
         return httpx.Response(200, json=rows[(page - 1) * size : page * size])
 
@@ -381,6 +388,101 @@ async def test_a_confirmation_failing_for_a_whole_cycle_archives_as_before(woo):
     assert late.stats.get("cycle") and late.stats["archived"] == 1
 
 
+async def _cursor_stamps() -> list:
+    async with SessionLocal() as session:
+        rows = (await session.execute(select(SourceCursor).order_by(SourceCursor.id))).scalars()
+        return [(c.partition_key, c.exhausted, c.updated_at) for c in rows]
+
+
+async def test_two_failed_runs_give_up_and_archive_as_before(woo):
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    for _ in range(5):
+        first = await run_source("woo", _woo_adapter())
+        if first.stats.get("archive_confirm"):
+            break
+    assert first.stats["archive_confirm"]["attempt"] == 1 and not first.stats.get("cycle")
+
+    second = await run_source("woo", _woo_adapter())
+    report = second.stats["archive_confirm"]
+    assert report["attempt"] == 2 and report["gave_up"] == 1
+    assert second.stats.get("cycle") and second.stats["archived"] == 1
+
+
+async def test_the_wait_for_an_answer_is_not_part_of_the_cycle_length(woo):
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    for _ in range(5):
+        run = await run_source("woo", _woo_adapter())
+        if run.stats.get("archive_confirm"):
+            break
+    # Pretend the cycle began three hours ago, its sweep ended two hours ago,
+    # and it has been held since.
+    now = datetime.now(UTC)
+    async with SessionLocal() as session:
+        await session.execute(
+            update(SourceCursor).values(
+                cycle_started_at=now - timedelta(hours=3), updated_at=now - timedelta(hours=2)
+            )
+        )
+        await session.execute(
+            update(Listing)
+            .where(Listing.external_id == "2")
+            .values(last_seen_at=now - timedelta(hours=4))
+        )
+        await session.commit()
+    woo.include_status = 200
+    done = await run_source("woo", _woo_adapter())
+    assert done.stats["archived"] == 1
+    assert 3500 < done.stats["cycle"]["cycle_seconds"] < 3700, "the hour of the sweep only"
+
+
+async def test_a_returned_product_that_is_not_upserted_is_not_kept(woo):
+    """The shop answers for it, but as a placeholder ("Item"), so it is skipped:
+    it was never upserted, and archives like an absence."""
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    woo.names[2] = "Item"
+    runs = await _run_until_cycle()
+    closing = runs[-1]
+    assert woo.included()[-1] == "2", "the shop was asked"
+    assert closing.stats["archive_confirm"]["returned_not_kept"] == 1
+    assert closing.stats["archive_confirm"]["kept"] == 0
+    assert (await _status_of("2")).status == ListingStatus.ARCHIVED
+
+
+async def test_confirm_requests_count_against_the_run_ceiling(woo):
+    """Two ids a request here, one request a run: three candidates take two runs."""
+    woo.catalogue = {i: "instock" for i in range(1, 5)}
+    await _run_until_cycle()
+    woo.catalogue = {1: "instock"}
+    runs = await _run_until_cycle()
+    asked = [r for r in runs if r.stats.get("archive_confirm")]
+    assert len(asked) == 2
+    assert all(r.stats["requests"]["confirm"] == 1 for r in asked)
+    assert asked[0].stats["archive_confirm"]["held"] == 1
+    assert asked[0].stats["archive_confirm"]["absent"] == 2
+    assert asked[-1].stats.get("cycle")
+    for pid in ("2", "3", "4"):
+        assert (await _status_of(pid)).status == ListingStatus.ARCHIVED
+
+
+async def test_a_store_api_page_that_is_not_a_list_is_an_error(monkeypatch):
+    """Never read as an empty page, which would end the partition."""
+
+    async def fake_get_response(client, url, params):
+        return httpx.Response(200, json={"code": "rest_invalid_param"})
+
+    monkeypatch.setattr(woo_mod, "get_response", fake_get_response)
+    adapter = WooCommerceAdapter("w", WOO, SupplierInfo(slug="w", name="W"))
+    with pytest.raises(ValueError, match="not a list"):
+        await adapter.fetch_page("instock", 1)
+
+
 async def test_a_limited_run_asks_nothing(woo):
     woo.catalogue = {1: "instock"}
     await run_source("woo", _woo_adapter(), limit=5)
@@ -397,6 +499,7 @@ class FakeOdoo:
         self.shop: list[int] = []
         self.sitemap: list[int] = []
         self.pages: dict[int, int] = {}  # product id -> status of its page
+        self.sitemap_status = 200
         self.requests: list[str] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -405,6 +508,8 @@ class FakeOdoo:
         if path == "/shop":
             return httpx.Response(200, text=_odoo_page(self.shop, 1, None))
         if path == "/sitemap.xml":
+            if self.sitemap_status != 200:
+                return httpx.Response(self.sitemap_status, text="")
             locs = "".join(f"<url><loc>{ODOO}/shop/widget-{i}</loc></url>" for i in self.sitemap)
             locs += f"<url><loc>{ODOO}/shop/category/sensors-3</loc></url>"
             return httpx.Response(200, text=f"<urlset>{locs}</urlset>")
@@ -481,14 +586,59 @@ async def test_sitemap_presence_alone_is_never_a_sighting(odoo, monkeypatch):
     assert (await _odoo_listing(2)).last_seen_at > first.finished_at
 
 
-async def test_an_odoo_sitemap_that_fails_holds_the_archive(odoo):
+@pytest.mark.parametrize("sitemap,status", [([], 200), ([2], 404)])
+async def test_an_unusable_sitemap_vetoes_nothing(odoo, sitemap, status):
+    """No product pages, or no sitemap at all: archive as before, no veto."""
     odoo.shop = [1, 2]
     await run_source("odoo", _odoo_adapter())
-    odoo.shop = [1]
-    odoo.sitemap = []  # lists no products: not evidence that none exist
+    odoo.shop, odoo.sitemap, odoo.sitemap_status = [1], sitemap, status
+    run = await run_source("odoo", _odoo_adapter())
+    assert "archive_confirm" not in run.stats
+    assert run.stats.get("cycle") and run.stats["archived"] == 1
+    assert (await _odoo_listing(2)).status == ListingStatus.ARCHIVED
+
+
+async def test_an_odoo_sitemap_that_errors_holds_the_archive(odoo):
+    odoo.shop = [1, 2]
+    await run_source("odoo", _odoo_adapter())
+    odoo.shop, odoo.sitemap_status = [1], 500
     run = await run_source("odoo", _odoo_adapter())
     assert "failed" in run.stats["archive_confirm"]
     assert (await _odoo_listing(2)).status == ListingStatus.ACTIVE
+
+
+async def test_one_product_page_failing_leaves_only_that_candidate_unasked(odoo):
+    odoo.shop = [1, 2, 3, 4]
+    first = await run_source("odoo", _odoo_adapter())
+    odoo.shop, odoo.sitemap, odoo.pages = [1], [1, 2, 3, 4], {2: 200, 3: 500}
+    held = await run_source("odoo", _odoo_adapter())
+    report = held.stats["archive_confirm"]
+    assert report["kept"] == 1 and report["absent"] == 1 and report["held"] == 1
+    assert report["pages_failed"] == 1 and "failed" not in report
+    assert (await _odoo_listing(2)).last_seen_at > first.finished_at
+    assert (await _odoo_listing(4)).status == ListingStatus.ARCHIVED, "its page is gone"
+    assert (await _odoo_listing(3)).status == ListingStatus.ACTIVE, "waits for the next run"
+
+    odoo.pages[3] = 200
+    done = await run_source("odoo", _odoo_adapter())
+    assert done.stats.get("cycle") and (await _odoo_listing(3)).status == ListingStatus.ACTIVE
+
+
+async def test_candidates_held_over_the_page_cap_get_three_runs(odoo, monkeypatch):
+    odoo.shop = [1, 2]
+    await run_source("odoo", _odoo_adapter())
+    odoo.shop, odoo.sitemap, odoo.pages = [1], [1, 2], {2: 200}
+    monkeypatch.setattr(odoo_mod, "CONFIRM_PAGES", 0)
+    runs = [await run_source("odoo", _odoo_adapter())]
+    # The hold dates itself from the cursors: a held run leaves them be.
+    stamps = await _cursor_stamps()
+    assert stamps and all(exhausted for _, exhausted, _ in stamps)
+    runs.append(await run_source("odoo", _odoo_adapter()))
+    assert await _cursor_stamps() == stamps
+    runs.append(await run_source("odoo", _odoo_adapter()))
+    assert [r.stats["archive_confirm"].get("held") for r in runs] == [1, 1, None]
+    assert runs[-1].stats["archive_confirm"]["gave_up"] == 1
+    assert runs[-1].stats.get("cycle") and runs[-1].stats["archived"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -549,12 +699,17 @@ async def test_the_backfill_reads_important_listings_first_then_newest():
 def test_the_interval_grows_on_an_unchanged_page_and_shrinks_on_a_changed_one():
     read = {"details_fetched_at": "2026-01-01T00:00:00+00:00", "details": {"description": "a"}}
     assert next_interval({}, {"description": "a"}, 90) is None, "a first read sets nothing"
-    assert next_interval(read, {"description": "a"}, 90) == 126.0
+    # The source's own max_age_days is the ceiling: an unchanged page never
+    # waits longer than the owner set.
+    assert next_interval(read, {"description": "a"}, 90) == 90
+    assert next_interval({**read, "details_interval_days": 50}, read["details"], 90) == 70.0
+    assert next_interval({**read, "details_interval_days": 80}, read["details"], 90) == 90
     assert next_interval(read, {"description": "b"}, 90) == 72.0
-    assert next_interval({**read, "details_interval_days": 150}, read["details"], 90) == (
-        MAX_INTERVAL_DAYS
-    )
     assert next_interval({**read, "details_interval_days": 32}, {"x": 1}, 90) == MIN_INTERVAL_DAYS
+    # A change never lengthens it, even below the floor (a source set lower).
+    assert next_interval({**read, "details_interval_days": 20}, {"x": 1}, 90) == 20
+    assert next_interval({**read, "details_interval_days": 20}, {"x": 1}, 20) == 20
+    assert next_interval(read, {"x": 1}, 14) == 14  # floor min(30, 14) = 14
 
 
 async def test_a_card_hash_source_uses_each_listings_own_interval():
@@ -563,6 +718,7 @@ async def test_a_card_hash_source_uses_each_listings_own_interval():
     await _details_shop(
         [
             {"id": "short", "attributes": {**common, "details_interval_days": 40}},
+            # Stored above the setting (it was lowered since): the setting wins.
             {"id": "long", "attributes": {**common, "details_interval_days": 120}},
             {"id": "unset", "attributes": common},
         ]
@@ -570,9 +726,13 @@ async def test_a_card_hash_source_uses_each_listings_own_interval():
     settings = DetailsSettings(enabled=True, per_run=10, max_age_days=45)
     async with SessionLocal() as session:
         adaptive = await due_listings(session, "d", settings, adaptive=True)
-        fixed = await due_listings(session, "d", settings)
-    assert sorted(row.external_id for row, _ in adaptive) == ["short", "unset"]
-    assert sorted(row.external_id for row, _ in fixed) == ["long", "short", "unset"]
+        fixed = await due_listings(session, "d", DetailsSettings(max_age_days=60))
+        adaptive_60 = await due_listings(
+            session, "d", DetailsSettings(max_age_days=60), adaptive=True
+        )
+    assert sorted(row.external_id for row, _ in adaptive) == ["long", "short", "unset"]
+    assert fixed == []
+    assert [row.external_id for row, _ in adaptive_60] == ["short"]
 
 
 def test_the_interval_survives_the_next_list_page_sweep():
@@ -622,3 +782,20 @@ async def test_status_says_whether_the_short_page_stop_is_ready(capsys):
     assert "short-page stop: shadow, 6 partitions compared" in out
     assert "0 disagreements" in out
     assert 'ready: end_on_short_page = "live"' in out
+
+    # A run of the cycle from before the shadow: not a whole cycle in shadow.
+    async with SessionLocal() as session:
+        session.add(
+            IngestionRun(
+                source="woo",
+                source_type=SourceType.SCRAPED,
+                started_at=now - timedelta(days=8, hours=1),
+                finished_at=now - timedelta(days=7),
+                stats={"requests": {"pages": 3}},
+            )
+        )
+        await session.commit()
+        await _status().short_page_end(session, None)
+    out = capsys.readouterr().out
+    assert "not all of the cycle in shadow" in out
+    assert "ready" not in out

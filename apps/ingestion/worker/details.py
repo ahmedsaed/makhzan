@@ -19,10 +19,13 @@ page is read again only when there is a reason to think it changed.
      only sees what the card shows, so a description edited on its own is
      caught here and nowhere else. For such a source the age adapts per
      listing (`details_interval_days`), as Nutch's AdaptiveFetchSchedule does:
-     a re-read that finds the page unchanged waits 1.4 times longer next
-     time, one that finds it changed 0.8 times as long, within
-     [`MIN_INTERVAL_DAYS`, `MAX_INTERVAL_DAYS`]. A shop's own last-write
-     token (TOKEN_MODIFIED) already sees every edit, so its age stays fixed.
+     a re-read that finds the page changed comes back 0.8 times as soon,
+     one that finds it unchanged waits 1.4 times longer, between
+     `MIN_INTERVAL_DAYS` (or `max_age_days`, if lower) and `max_age_days`.
+     The source's own setting stays the ceiling, so adapting only ever brings
+     a volatile page forward, never leaves one longer than the owner set; and
+     a change never lengthens the interval. A shop's own last-write token
+     (TOKEN_MODIFIED) already sees every edit, so its age stays fixed.
 A listing whose last read failed waits out a backoff (`details_retry_at`) first.
 
 **Where the details live.** What a page gave is kept whole under
@@ -80,9 +83,9 @@ DETAIL_KEYS = (
 
 #: The adaptive revisit interval of a card-hash source (T10), in days: grown
 #: by `INTERVAL_GROW` on a re-read that found nothing new, shrunk by
-#: `INTERVAL_SHRINK` on one that did, and kept within these bounds.
+#: `INTERVAL_SHRINK` on one that did, never below this (or the source's
+#: `max_age_days`, if lower) and never above `max_age_days`.
 MIN_INTERVAL_DAYS = 30
-MAX_INTERVAL_DAYS = 180
 INTERVAL_GROW = 1.4
 INTERVAL_SHRINK = 0.8
 
@@ -220,9 +223,10 @@ def _conditions(
     retry = a["details_retry_at"].astext
     max_age = cast(literal(timedelta(days=settings.max_age_days)), Interval)
     if adaptive:
-        # Per listing, once a re-read has set one; the setting until then.
+        # Per listing, once a re-read has set one; the setting until then, and
+        # never past it (LEAST ignores the NULL of a listing without one).
         days = cast(a["details_interval_days"].astext, Float)
-        max_age = func.coalesce(cast(literal(timedelta(days=1)), Interval) * days, max_age)
+        max_age = func.least(cast(literal(timedelta(days=1)), Interval) * days, max_age)
     eligible = and_(
         Listing.source == source_id,
         Listing.status == ListingStatus.ACTIVE,
@@ -346,15 +350,22 @@ def next_interval(attributes: dict, details: dict, base_days: int) -> float | No
     """The adaptive revisit interval after a page read, or None on a first read.
 
     A re-read that found the page as it was grows the listing's interval, one
-    that found it changed shrinks it, within the bounds (see the module doc).
+    that found it changed shrinks it, within [min(`MIN_INTERVAL_DAYS`,
+    `base_days`), `base_days`]: the source's `max_age_days` is the ceiling.
+    A change never lengthens it, whatever the bounds.
     """
     if not attributes.get("details_fetched_at"):
         return None  # nothing to compare: the setting's age applies until a re-read
+    low, high = min(MIN_INTERVAL_DAYS, base_days), base_days
     previous = attributes.get("details_interval_days")
     if isinstance(previous, bool) or not isinstance(previous, int | float) or previous <= 0:
         previous = base_days
-    factor = INTERVAL_SHRINK if attributes.get("details") != details else INTERVAL_GROW
-    return round(min(MAX_INTERVAL_DAYS, max(MIN_INTERVAL_DAYS, previous * factor)), 1)
+    previous = min(previous, high)
+    if attributes.get("details") != details:
+        interval = min(previous, max(low, previous * INTERVAL_SHRINK))
+    else:
+        interval = min(high, previous * INTERVAL_GROW)
+    return round(interval, 1)
 
 
 def _fetched(
