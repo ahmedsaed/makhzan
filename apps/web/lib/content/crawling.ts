@@ -117,7 +117,7 @@ export const crawlingContent = {
     {
       label: "What we keep",
       value: "Catalogue facts",
-      note: "Never used to train AI or fed to AI tools",
+      note: "Never used to train AI, sold or licensed",
       href: at(SECTION.keep),
     },
   ] satisfies Glance[],
@@ -256,9 +256,14 @@ export const crawlingContent = {
     dont: [
       "copy photos",
       "use what we read for anything but showing it here, with that link",
-      "use shop content to train AI models",
-      "feed it to AI tools",
+      "use shop content to train AI models, or sell or license it",
+      "let AI training crawlers take it from our pages: our robots.txt refuses them",
     ],
+    /** The line the old "we do not feed it to AI tools" over-promised: a
+     * visitor's assistant reading a public page that it links back to is
+     * reading, not being fed (robots.txt policy, 2026-11-13). */
+    readers:
+      "Search engines and AI assistants that link back to the shop may read our pages, as they can read the shop's own.",
     pricesTitle: "Prices here may be out of date.",
     pricesBody:
       "Every listing shows when we last checked it. We do not control supplier pricing and cannot guarantee a price is still current — always confirm on the supplier's own site before buying.",
