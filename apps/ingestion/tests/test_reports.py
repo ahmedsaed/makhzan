@@ -1,20 +1,22 @@
 """Visitors' reports: what the worker erases, when, and the review command.
 
-The privacy page promises an email is erased 90 days after its report is
-closed and an address's hash 24 hours after the report was sent. The worker's
-hourly cron keeps that promise (`worker.main.purge_reports`). Reviewing happens
+The privacy page promises an email is erased 90 days after its report was
+sent and an address's hash 24 hours after it. The worker's cron, every 10
+minutes, keeps that promise (`worker.main.purge_reports`). Reviewing happens
 on the server, through `python -m worker.reports` (`./makhzan reports`).
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import Report
-from makhzan_schemas.reports import purge_personal_data
+from makhzan_schemas.reports import purge_personal_data, strip_controls
 from sqlalchemy import select
 
 from worker import main
@@ -75,22 +77,22 @@ async def _get(report_id: int) -> Report:
 
 
 @pytest.mark.parametrize(
-    "status, closed_days_ago, kept",
+    "status, sent_days_ago, kept",
     [
         ("accepted", 91, False),
         ("rejected", 90, False),
+        # Never reviewed: gone all the same.
+        ("new", 90, False),
+        ("new", 89, True),
         ("accepted", 89, True),
-        # Never closed: kept, however old, so the reply can still be sent.
-        ("new", None, True),
     ],
 )
-async def test_an_email_goes_90_days_after_its_report_is_closed(status, closed_days_ago, kept):
-    reviewed = None if closed_days_ago is None else NOW - timedelta(days=closed_days_ago)
+async def test_an_email_goes_90_days_after_the_report_was_sent(status, sent_days_ago, kept):
     report_id = await _report(
         email="buyer@example.com",
         status=status,
-        reviewed_at=reviewed,
-        created_at=NOW - timedelta(days=200),
+        reviewed_at=None if status == "new" else NOW,
+        created_at=NOW - timedelta(days=sent_days_ago),
     )
     async with SessionLocal() as session:
         await purge_personal_data(session, now=NOW)
@@ -122,11 +124,17 @@ async def test_the_cron_job_purges(monkeypatch):
     assert (await _get(report_id)).ip_hash is None
 
 
-def test_the_purge_runs_every_hour_whatever_the_crawl_flag():
+def test_the_purge_runs_every_10_minutes_whatever_the_crawl_flag():
     [job] = [j for j in main.WorkerSettings.cron_jobs if j.coroutine is main.purge_reports]
     # No hour given: every hour. Not gated on CRAWL_ENABLED (refresh_all is).
     assert job.hour is None
-    assert job.minute == 17
+    minutes = sorted(job.minute)
+    assert len(minutes) == 6
+    # No gap longer than 10 minutes, the hour's wrap included, so an address
+    # hash never outlives its 24 hours by more than that.
+    gaps = [b - a for a, b in zip(minutes, minutes[1:])] + [minutes[0] + 60 - minutes[-1]]
+    assert max(gaps) == 10
+    assert 0 not in minutes
     assert job.run_at_startup
 
 
@@ -183,3 +191,38 @@ async def test_purge_by_hand(capsys):
 def test_a_bad_id_is_refused():
     with pytest.raises(SystemExit):
         cli._parser().parse_args(["accept", "R-abc"])
+
+
+def test_the_rule_is_the_one_the_privacy_copy_quotes():
+    from makhzan_schemas.reports import EMAIL_KEPT
+
+    web = (Path(__file__).resolve().parents[2] / "web" / "lib" / "report.ts").read_text()
+    assert f"export const EMAIL_KEPT_DAYS = {EMAIL_KEPT.days};" in web
+
+
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        ("a\r\nb\rc", "a\nb\nc"),
+        ("tab\tkept", "tab\tkept"),
+        ("\x1b]52;c;aGk=\x07osc", "]52;c;aGk=osc"),
+        ("c1\x9b31m", "c131m"),
+        ("nul\x00del\x7f", "nuldel"),
+        ("عربي ok", "عربي ok"),
+        (None, None),
+    ],
+)
+def test_control_characters_are_stripped_at_intake(raw, clean):
+    assert strip_controls(raw) == clean
+
+
+async def test_a_report_prints_nothing_a_terminal_would_obey(capsys):
+    """Rows from before intake stripped control characters, and shop titles."""
+    snapshot = json.loads(json.dumps(SNAPSHOT))
+    snapshot["product"]["listings"][0]["title"] = "Driver\x1b[2J\x1b]52;c;cm0=\x07"
+    report_id = await _report(description="Look\x1b]52;c;cm0gLXJm\x07 here", snapshot=snapshot)
+    assert await cli.run(["show", str(report_id)]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "Look\\x1b]52;c;cm0gLXJm\\x07 here" in out
+    assert "Driver\\x1b[2J" in out

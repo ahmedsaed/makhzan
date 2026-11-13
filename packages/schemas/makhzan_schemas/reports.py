@@ -13,6 +13,7 @@ the visitor saw), and nothing more.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
@@ -54,11 +55,45 @@ MIN_FILL_SECONDS = 3.0
 #: Per address (its salted hash): at most this many stored reports an hour, and a day.
 PER_HOUR = 5
 PER_DAY = 20
+#: Every sender together: at most this many stored reports a day, unless the
+#: API's REPORTS_PER_DAY_ALL says otherwise. A ceiling on what a flood from many
+#: addresses can put in the table and the review queue.
+PER_DAY_ALL = 500
+#: A request body larger than this is refused (413) before it is parsed. The
+#: largest honest report (1,000 characters, 100 offer ids) is under 6 KB.
+MAX_BODY_BYTES = 16 * 1024
+#: A snapshot keeps every offer the visitor ticked, and at most this many
+#: offers in all per product, so one report's row stays small whatever the
+#: product. The total is recorded beside them.
+MAX_SNAPSHOT_LISTINGS = 50
+#: How long a form's opened-at token stays good. Long enough for a slow
+#: visitor, short enough that one token is not a bot's for ever.
+TOKEN_MAX_AGE = timedelta(hours=6)
 
-#: An email is erased this long after its report is closed (reviewed).
-EMAIL_KEPT_AFTER_CLOSED = timedelta(days=90)
+#: An email is erased this long after its report was sent, whether or not
+#: anyone ever reviews it: one rule, the owner's (November 2026). The privacy
+#: page and the form's note quote it from apps/web/lib/report.ts
+#: (EMAIL_KEPT_DAYS), which a test holds equal to this.
+EMAIL_KEPT = timedelta(days=90)
 #: An address's hash is erased this long after the report was sent.
 IP_HASH_KEPT = timedelta(hours=24)
+
+
+#: C0 and C1 control characters, but for tab and line feed. A carriage return
+#: goes too, after CRLF and CR are read as line feeds.
+_CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def strip_controls(text: str | None) -> str | None:
+    """Text as a visitor sent it, less control characters.
+
+    Kept out at intake so nothing stored can drive a terminal: an escape
+    sequence in a description (OSC 52 writes the clipboard) would otherwise
+    reach whoever runs `./makhzan reports`.
+    """
+    if text is None:
+        return None
+    return _CONTROLS.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
 
 
 def reference(report_id: int) -> str:
@@ -71,19 +106,16 @@ async def purge_personal_data(
 ) -> dict[str, int]:
     """Erase what the privacy page says is not kept, and commit.
 
-    The email 90 days after the report was closed; the address's hash 24 hours
-    after it was sent. The report itself stays. Idempotent: run hourly by the
-    worker's cron (`worker.main.purge_reports`), so nothing outlives its limit
-    by more than an hour.
+    The email 90 days after the report was sent, reviewed or not; the
+    address's hash 24 hours after it was sent.
+    The report itself stays. Idempotent: run every 10 minutes by the worker's
+    cron (`worker.main.purge_reports`), so nothing outlives its limit by more
+    than that.
     """
     now = now or datetime.now(UTC)
     emails = await session.execute(
         update(Report)
-        .where(
-            Report.email.is_not(None),
-            Report.reviewed_at.is_not(None),
-            Report.reviewed_at <= now - EMAIL_KEPT_AFTER_CLOSED,
-        )
+        .where(Report.email.is_not(None), Report.created_at <= now - EMAIL_KEPT)
         .values(email=None)
         .execution_options(synchronize_session=False)
     )
@@ -117,7 +149,7 @@ async def review(
     """Close a report as `accepted` or `rejected`, and commit. None if there is no such report.
 
     Reviewing again changes the verdict and its time: a mistake can be put
-    right. The email's 90 days count from the latest review.
+    right. It has no bearing on how long the email is kept.
     """
     if status not in ("accepted", "rejected"):
         raise ValueError(f"a report is accepted or rejected, not {status!r}")

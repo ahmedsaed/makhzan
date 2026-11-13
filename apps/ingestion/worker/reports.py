@@ -14,7 +14,8 @@ purpose: the owner decided review happens on the server.
 Accepting or rejecting sets `status` and `reviewed_at`; nothing else happens
 yet. Correcting the page, and turning accepted reports into labelled pairs for
 matching (docs/ai/plan.md, phase G), are later steps done by hand or by a tool
-not written yet. The 90 days an email is kept count from `reviewed_at`.
+not written yet. An email is erased 90 days after the report was sent,
+reviewed or not.
 
 The listing shows each report's snapshot (what the page showed when it was
 sent), because the product may have changed since. It prints the reporter's
@@ -56,6 +57,19 @@ def _listing_line(listing: dict) -> str:
     return f"    {mark} {listing.get('title') or '(untitled)'} | {shop} | {_price(listing)} | {listing.get('stock')}"
 
 
+def printable(text: str) -> str:
+    """Text safe to print to a terminal: anything unprintable but a line break,
+    escaped (`\x1b`), so nothing in a report can move the cursor, recolour the
+    screen or write the clipboard (OSC 52). Intake strips control characters
+    already (`makhzan_schemas.reports.strip_controls`); this covers rows from
+    before that, and the snapshot's shop titles, which came from shops.
+    """
+    return "".join(
+        ch if ch == "\n" or ch.isprintable() else ch.encode("unicode_escape").decode("ascii")
+        for ch in text
+    )
+
+
 def format_report(report: Report, *, full: bool = False) -> str:
     """One report as text: what was said, and the offers as the page showed them."""
     snap = report.snapshot or {}
@@ -90,7 +104,7 @@ def format_report(report: Report, *, full: bool = False) -> str:
         lines.append(wrapped)
     if report.email:
         lines.append(f"  Reply to: {report.email}" if full else "  Reply wanted (email kept)")
-    return "\n".join(lines)
+    return printable("\n".join(lines))
 
 
 async def _list(limit: int) -> int:

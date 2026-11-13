@@ -296,6 +296,7 @@ const server = createServer((req, res) => {
   // "Report a problem" (tests/e2e/report.spec.ts): takes any report, as the
   // API does a good one. The states the API can answer with otherwise (429,
   // 500) are set per test with page.route, so they cannot leak between tests.
+  if (path === "/reports/token") return send(200, { token: "stub-token" });
   if (path === "/reports" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));

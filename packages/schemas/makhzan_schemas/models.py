@@ -662,7 +662,7 @@ class Report(Base):
     `makhzan_schemas.reports` and the site's /privacy page:
 
     - `email` is optional, only to reply, and is erased 90 days after the
-      report is closed (reviewed).
+      report was sent, reviewed or not.
     - `ip_hash` is a salted hash of the sender's address, kept only to rate
       limit, and erased 24 hours after the report was sent.
     - the rest, the report itself, is kept.

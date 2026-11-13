@@ -10,6 +10,7 @@ import {
   buildPayload,
   candidateMeta,
   emailFallback,
+  fetchOpenedToken,
   type FormState,
   limitedTitle,
   priceValue,
@@ -136,7 +137,7 @@ describe("buildPayload", () => {
     const payload = buildPayload(
       step2({ reason: "offers_not_same", offers: ["o-giza"], description: "  smaller  " }),
       TWO,
-      8123.4,
+      "tok",
     );
     expect(payload).toEqual({
       product_id: PRODUCT,
@@ -148,7 +149,7 @@ describe("buildPayload", () => {
       description: "smaller",
       email: null,
       website: "",
-      elapsed_ms: 8123,
+      token: "tok",
     });
   });
 
@@ -156,7 +157,7 @@ describe("buildPayload", () => {
     const price = buildPayload(
       step2({ reason: "wrong_price_stock", priceOffer: "o-delta", field: "price", value: "1200" }),
       TWO,
-      5000,
+      "tok",
     );
     expect([price.offer_ids, price.field, price.correct_value]).toEqual([
       ["o-delta"],
@@ -166,7 +167,7 @@ describe("buildPayload", () => {
     const stock = buildPayload(
       step2({ reason: "wrong_price_stock", field: "stock", stockValue: "gone" }),
       ONE,
-      5000,
+      "tok",
     );
     expect([stock.offer_ids, stock.correct_value]).toEqual([["o-delta"], "gone"]);
   });
@@ -175,12 +176,16 @@ describe("buildPayload", () => {
     const contact = buildPayload(
       step2({ reason: "shop_contact", contactShop: "giza-robotics", contactField: "hours" }),
       TWO,
-      5000,
+      "tok",
     );
     expect([contact.offer_ids, contact.field]).toEqual([["o-giza", "o-giza-2"], "hours"]);
-    const details = buildPayload(step2({ reason: "wrong_details", detailField: "photo" }), TWO, 1);
+    const details = buildPayload(
+      step2({ reason: "wrong_details", detailField: "photo" }),
+      TWO,
+      "tok",
+    );
     expect(details.offer_ids).toEqual([]);
-    const sole = buildPayload(step2({ reason: "wrong_details", detailField: "photo" }), ONE, 1);
+    const sole = buildPayload(step2({ reason: "wrong_details", detailField: "photo" }), ONE, "tok");
     expect(sole.offer_ids).toEqual(["o-delta"]);
   });
 
@@ -194,7 +199,7 @@ describe("buildPayload", () => {
         other: { id: "x", title: "x", meta: "" },
       }),
       TWO,
-      1,
+      "tok",
     );
     expect(payload.offer_ids).toEqual([]);
     expect(payload.other_product_id).toBeNull();
@@ -202,7 +207,7 @@ describe("buildPayload", () => {
   });
 
   it("carries the honeypot as it was", () => {
-    expect(buildPayload(step2({ reason: "other", website: "x" }), TWO, 1).website).toBe("x");
+    expect(buildPayload(step2({ reason: "other", website: "x" }), TWO, "tok").website).toBe("x");
   });
 });
 
@@ -249,7 +254,7 @@ describe("too many reports", () => {
 });
 
 describe("submitReport", () => {
-  const payload = buildPayload(step2({ reason: "wrong_category" }), TWO, 5000);
+  const payload = buildPayload(step2({ reason: "wrong_category" }), TWO, "tok");
   const reply = (status: number, body: unknown, headers: Record<string, string> = {}) =>
     vi.fn().mockResolvedValue(
       new Response(JSON.stringify(body), {
@@ -329,5 +334,51 @@ describe("reportContextOf", () => {
       ["old", "EGP 300", false, true],
     ]);
     expect(context.offers[0].shop).toEqual({ slug: "delta-components", name: "delta components" });
+  });
+});
+
+describe("the opened-at token", () => {
+  it("is asked of the API, uncached, and read from its answer", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ token: "1700000000000.abc" }), { status: 200 }),
+      );
+    expect(await fetchOpenedToken(fetcher)).toBe("1700000000000.abc");
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe("/api/reports/token");
+    expect(init.cache).toBe("no-store");
+  });
+
+  it("is null when the API cannot give one", async () => {
+    expect(
+      await fetchOpenedToken(vi.fn().mockResolvedValue(new Response("{}", { status: 503 }))),
+    ).toBeNull();
+    expect(await fetchOpenedToken(vi.fn().mockRejectedValue(new TypeError("offline")))).toBeNull();
+  });
+
+  it("goes in the payload as it came", () => {
+    expect(buildPayload(step2({ reason: "wrong_category" }), TWO, "t.1").token).toBe("t.1");
+  });
+});
+
+describe("the ceiling for everyone", () => {
+  it("is read and said without blaming the visitor", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ detail: { limit: "site", count: 500, retry_after_minutes: 300 } }),
+          { status: 429 },
+        ),
+      );
+    const result = await submitReport(
+      buildPayload(step2({ reason: "wrong_category" }), TWO, "tok"),
+      fetcher,
+    );
+    expect(result).toEqual({ kind: "limited", limit: "site", count: 500, minutes: 300 });
+    expect(limitedTitle({ limit: "site", count: 500, minutes: 300 })).toBe(
+      "makhzan has had more reports than it can take today.",
+    );
   });
 });

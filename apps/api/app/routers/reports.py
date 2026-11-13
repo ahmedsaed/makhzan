@@ -8,17 +8,24 @@ here acts on one.
 Spam, without a CAPTCHA (the owner's choice; a CAPTCHA would send visitor data
 to a third party):
 
+- Refused before parsing: a body over 16 KB (413, app/body_limit.py).
 - Dropped silently, answered as if stored, so a bot learns nothing: the
-  hidden honeypot field filled in; sent under 3 s after the form opened;
-  free text over 1,000 characters; more than 2 links in it.
+  hidden honeypot field filled in; sent under 3 s after the form opened, by
+  a server-signed opened-at token (`GET /reports/token`, no cookie, nothing
+  stored), or with no valid token at all; free text over 1,000 characters;
+  more than 2 links in it.
 - Counted once: the same reason about the same product from the same address
   within a day answers with the first report's reference.
-- Limited: 5 stored reports an hour and 20 a day per address, after which
-  429, with how long to wait.
+- Limited: 5 stored reports an hour and 20 a day per address, and 500 a day
+  from everyone together (REPORTS_PER_DAY_ALL), after which 429, with how
+  long to wait.
+
+Text is stored without control characters (`rules.strip_controls`), and a
+snapshot keeps at most 50 offers a product, every ticked one among them.
 
 The address is counted under a salted hash (`REPORT_IP_SALT`, a server secret)
 and never stored as such; the hash is erased after 24 hours, and an email 90
-days after its report is closed, by the worker (`makhzan_schemas.reports`).
+days after the report was sent, by the worker (`makhzan_schemas.reports`).
 What the visitor is told is in apps/web/app/(site)/privacy.
 """
 
@@ -29,6 +36,7 @@ import hmac
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -80,8 +88,12 @@ class ReportIn(BaseModel):
     email: str | None = Field(default=None, max_length=254)
     #: The honeypot: a field no person sees or can tab to.
     website: str | None = Field(default=None, max_length=2_000)
-    #: Milliseconds from the form opening to its sending, as the page measured it.
-    elapsed_ms: int | None = None
+    #: When the form opened, as this API signed it (`GET /reports/token`).
+    token: str | None = Field(default=None, max_length=200)
+
+
+class ReportToken(BaseModel):
+    token: str
 
 
 class ReportAck(BaseModel):
@@ -100,12 +112,41 @@ def _ip_hash(key: str | None, salt: bytes) -> str | None:
     return hmac.new(salt, key.encode(), hashlib.sha256).hexdigest()
 
 
-def _is_spam(body: ReportIn) -> str | None:
+def _token_key(salt: bytes) -> bytes:
+    # A key of its own, derived from the secret, so a token is never a hash
+    # of anything else signed with it.
+    return hashlib.sha256(b"makhzan report opened-at token\0" + salt).digest()
+
+
+def issue_token(salt: bytes, now_ms: int | None = None) -> str:
+    """`<ms since the epoch>.<signature>`: when a form opened, signed by us."""
+    stamp = str(int(time.time() * 1000) if now_ms is None else now_ms)
+    signature = hmac.new(_token_key(salt), stamp.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{stamp}.{signature}"
+
+
+def _token_age(token: str | None, salt: bytes, now_ms: int) -> float | None:
+    """Seconds since the form opened, or None for a token we did not sign."""
+    if not token or token.count(".") != 1:
+        return None
+    stamp, signature = token.split(".")
+    if not stamp.isdigit():
+        return None
+    expected = hmac.new(_token_key(salt), stamp.encode(), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return (now_ms - int(stamp)) / 1000
+
+
+def _is_spam(body: ReportIn, salt: bytes, now_ms: int) -> str | None:
     """Why a report is dropped without a word, or None to keep going."""
     if body.website and body.website.strip():
         return "honeypot"
-    if body.elapsed_ms is None or body.elapsed_ms < rules.MIN_FILL_SECONDS * 1000:
-        return "too fast"
+    age = _token_age(body.token, salt, now_ms)
+    if age is None:
+        return "no token"
+    if age < rules.MIN_FILL_SECONDS or age > rules.TOKEN_MAX_AGE.total_seconds():
+        return "too fast" if age < rules.MIN_FILL_SECONDS else "token expired"
     description = body.description or ""
     if len(description) > rules.MAX_DESCRIPTION:
         return "too long"
@@ -165,8 +206,17 @@ def _listing_snapshot(listing: Listing, ticked: set[uuid.UUID]) -> dict:
     }
 
 
+def _kept(offers: list[Listing], ticked: set[uuid.UUID]) -> list[Listing]:
+    """Every ticked offer, then the rest in order, up to the snapshot's cap."""
+    room = max(0, rules.MAX_SNAPSHOT_LISTINGS - len(ticked))
+    rest = [o for o in offers if o.id not in ticked][:room]
+    keep = {o.id for o in rest} | ticked
+    return [o for o in offers if o.id in keep]
+
+
 def _product_snapshot(product: Product, offers: list[Listing], ticked: set[uuid.UUID]) -> dict:
     category = product.category
+    kept = _kept(offers, ticked)
     return {
         "id": str(product.id),
         "title": product.title_en or product.title_ar,
@@ -176,7 +226,9 @@ def _product_snapshot(product: Product, offers: list[Listing], ticked: set[uuid.
         "min_price": _money(product.min_price),
         "max_price": _money(product.max_price),
         "currency": product.currency,
-        "listings": [_listing_snapshot(o, ticked) for o in offers],
+        "listings": [_listing_snapshot(o, ticked) for o in kept],
+        # How many there were, so a capped list says it is one.
+        "listings_total": len(offers),
     }
 
 
@@ -220,13 +272,44 @@ def _check(body: ReportIn, offers: list[Listing]) -> tuple[list[uuid.UUID], str 
     elif allowed and field not in allowed:
         raise _refuse(f"say which detail: one of {', '.join(allowed)}")
 
-    value = (body.correct_value or "").strip() or None
+    value = (rules.strip_controls(body.correct_value) or "").strip() or None
     if reason not in ("wrong_price_stock", "wrong_category"):
         value = None
     if reason == "wrong_price_stock" and field == "stock" and value is not None:
         if value not in rules.STOCK_VALUES:
             raise _refuse(f"stock is one of {', '.join(rules.STOCK_VALUES)}")
     return ids, field, value
+
+
+@router.get("/reports/token", response_model=ReportToken)
+async def report_token(response: Response) -> ReportToken:
+    """When a form opened, signed: the form sends it back with the report.
+
+    Stateless (nothing is stored, no cookie is set): the report is checked
+    against it, so a bot cannot claim it took its time.
+    """
+    salt = _salt()
+    if salt is None:
+        raise HTTPException(status_code=503, detail="reports are not available right now")
+    response.headers["Cache-Control"] = "no-store"
+    return ReportToken(token=issue_token(salt))
+
+
+def _per_day_all() -> int:
+    try:
+        return max(1, int(os.environ.get("REPORTS_PER_DAY_ALL", rules.PER_DAY_ALL)))
+    except ValueError:
+        return rules.PER_DAY_ALL
+
+
+def _too_many(over: tuple[str, int, timedelta]) -> HTTPException:
+    limit, count, wait = over
+    minutes = max(1, -(-int(wait.total_seconds()) // 60))
+    return HTTPException(
+        status_code=429,
+        detail={"limit": limit, "count": count, "retry_after_minutes": minutes},
+        headers={"Retry-After": str(minutes * 60)},
+    )
 
 
 @router.post("/reports", response_model=ReportAck, status_code=202)
@@ -237,23 +320,23 @@ async def create_report(
     session: AsyncSession = Depends(get_session),
 ) -> ReportAck:
     """Take one report. 202 with its reference; 429 over the limit."""
-    spam = _is_spam(body)
+    salt = _salt()
+    if salt is None:
+        # Without the secret there is no rate limit and no token; refusing is
+        # safer than storing reports nobody can hold back. deploy.sh refuses
+        # to deploy without it, so this is a development machine.
+        logger.error("REPORT_IP_SALT is not set; reports are refused")
+        raise HTTPException(status_code=503, detail="reports are not available right now")
+
+    spam = _is_spam(body, salt, int(time.time() * 1000))
     if spam:
         logger.info("report dropped: %s", spam)
         return ReportAck(reference=None)
 
-    salt = _salt()
-    if salt is None:
-        # Without the secret there is no rate limit; refusing is safer than
-        # storing reports nobody can hold back. deploy.sh refuses to deploy
-        # without it, so this is a development machine.
-        logger.error("REPORT_IP_SALT is not set; reports are refused")
-        raise HTTPException(status_code=503, detail="reports are not available right now")
-
-    description = (body.description or "").strip() or None
+    description = (rules.strip_controls(body.description) or "").strip() or None
     if body.reason == "other" and len(description or "") < 5:
         raise _refuse("say what is wrong, in a few words")
-    email = (body.email or "").strip() or None
+    email = (rules.strip_controls(body.email) or "").strip() or None
     if email is not None and not _EMAIL.match(email):
         raise _refuse("that email does not look complete")
 
@@ -300,13 +383,13 @@ async def create_report(
         over = await _over_limit(session, ip_hash, now)
         if over is not None:
             await session.rollback()
-            limit, count, wait = over
-            minutes = max(1, -(-int(wait.total_seconds()) // 60))
-            raise HTTPException(
-                status_code=429,
-                detail={"limit": limit, "count": count, "retry_after_minutes": minutes},
-                headers={"Retry-After": str(minutes * 60)},
-            )
+            raise _too_many(over)
+    # Everyone together, last: a flood from many addresses stops here.
+    over = await _window_full(session, None, now, "site", timedelta(days=1), _per_day_all())
+    if over is not None:
+        await session.rollback()
+        logger.warning("reports: the daily ceiling of %d is reached", over[1])
+        raise _too_many(over)
 
     ticked = set(offer_ids)
     report = Report(
@@ -340,23 +423,38 @@ async def _over_limit(
         ("hour", timedelta(hours=1), rules.PER_HOUR),
         ("day", timedelta(days=1), rules.PER_DAY),
     ):
-        count, oldest = (
-            await session.execute(
-                select(func.count(), func.min(Report.created_at)).where(
-                    Report.ip_hash == ip_hash, Report.created_at > now - window
-                )
-            )
-        ).one()
-        if count >= most:
-            if count > most:
-                # Only the newest `most` matter: one more is allowed once the
-                # (count - most + 1)th oldest leaves the window.
-                oldest = await session.scalar(
-                    select(Report.created_at)
-                    .where(Report.ip_hash == ip_hash, Report.created_at > now - window)
-                    .order_by(Report.created_at)
-                    .offset(count - most)
-                    .limit(1)
-                )
-            return limit, most, oldest + window - now
+        over = await _window_full(session, ip_hash, now, limit, window, most)
+        if over is not None:
+            return over
     return None
+
+
+async def _window_full(
+    session: AsyncSession,
+    ip_hash: str | None,
+    now: datetime,
+    limit: str,
+    window: timedelta,
+    most: int,
+) -> tuple[str, int, timedelta] | None:
+    """Whether `most` reports are already stored in the window, from one
+    address or (`ip_hash` None) from everyone; with the wait if so."""
+    where = [Report.created_at > now - window]
+    if ip_hash is not None:
+        where.append(Report.ip_hash == ip_hash)
+    count, oldest = (
+        await session.execute(select(func.count(), func.min(Report.created_at)).where(*where))
+    ).one()
+    if count < most:
+        return None
+    if count > most:
+        # Only the newest `most` matter: one more is allowed once the
+        # (count - most + 1)th oldest leaves the window.
+        oldest = await session.scalar(
+            select(Report.created_at)
+            .where(*where)
+            .order_by(Report.created_at)
+            .offset(count - most)
+            .limit(1)
+        )
+    return limit, most, oldest + window - now

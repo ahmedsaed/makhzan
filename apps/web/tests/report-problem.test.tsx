@@ -5,7 +5,7 @@
  * tests/e2e/report.spec.ts.
  */
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { ReportProblem } from "@/components/report-problem";
 import type { ReportContext } from "@/lib/report";
@@ -35,12 +35,19 @@ const CONTEXT: ReportContext = {
   ],
 };
 
-let fetchMock: ReturnType<typeof vi.fn>;
+/** What the form sends: always a method and a JSON body. */
+type Init = { method?: string; body: string };
+let fetchMock: Mock<(url: string, init: Init) => Promise<Response>>;
+let tokenMock: Mock<(url: string) => Promise<Response>>;
 let clock = 0;
 
 beforeEach(() => {
   fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock);
+  tokenMock = vi.fn(async () => reply(200, { token: "tok-1" }));
+  // The opened-at token is answered here; everything else is the test's.
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+    String(url).endsWith("/reports/token") ? tokenMock(url) : fetchMock(url, init as Init),
+  );
   clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
@@ -229,7 +236,7 @@ describe("step 2", () => {
   it("links the privacy policy and says what is kept", async () => {
     const { dialog } = await toStepTwo(/Wrong category/);
     const note = dialog.querySelector("[data-report-privacy]")!;
-    expect(note.textContent).toMatch(/deleted 90 days after we close the report/);
+    expect(note.textContent).toMatch(/deleted 90 days after you send it/);
     expect(note.textContent).toMatch(/IP address for 24 hours/);
     expect(within(dialog).getByRole("link", { name: /Privacy policy/ })).toHaveAttribute(
       "href",
@@ -260,7 +267,7 @@ describe("sending", () => {
       offer_ids: ["o-bazaar"],
       email: "buyer@example.com",
       website: "",
-      elapsed_ms: 9000,
+      token: "tok-1",
     });
 
     await act(async () => finish(reply(202, { reference: "R-24817" })));
@@ -395,5 +402,26 @@ describe("the same as another product", () => {
     expect(
       await within(dialog).findByText("Pick the other product, or paste its makhzan link."),
     ).toBeVisible();
+  });
+});
+
+describe("the opened-at token", () => {
+  it("is asked for when the dialog opens, and once more if that failed", async () => {
+    tokenMock.mockResolvedValueOnce(reply(503, {}));
+    fetchMock.mockResolvedValue(reply(202, { reference: "R-9" }));
+    const { dialog } = await toStepTwo(/Wrong category/);
+    expect(tokenMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send report" }));
+    await within(dialog).findByRole("status");
+    expect(tokenMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).token).toBe("tok-1");
+  });
+
+  it("says not sent, and sends nothing, when no token can be had", async () => {
+    tokenMock.mockResolvedValue(reply(503, {}));
+    const { dialog } = await toStepTwo(/Wrong category/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send report" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your report wasn’t sent.");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
