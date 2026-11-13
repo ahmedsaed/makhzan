@@ -15,12 +15,18 @@ simply stops appearing here: there is no "removed" state to report.
 Everything comes from `ingestion_runs`: when each run started and finished,
 `stats.requests` and `stats.pacing` (makhzan_schemas.crawl). Runs from before
 pacing was recorded have no gaps, and the gaps are then null — never guessed.
+Also published, and no more of them than this: the requests sent on each of the
+last 7 days (UTC, by the day a run started; null for a day one of whose runs did
+not record its count, never 0), the name of the identity the latest run sent and
+whether it signed (`stats.identity`, never its key id), how many days the last
+completed full pass took (`stats.cycle.cycle_seconds`, nothing else of the
+cycle), and every shop's gaps together as a histogram in fixed buckets.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.deps import get_session
 from fastapi import APIRouter, Depends
@@ -37,6 +43,8 @@ WINDOW = timedelta(days=7)
 
 _PACING = IngestionRun.stats["pacing"]
 _REQUESTS = IngestionRun.stats["requests"]
+_IDENTITY = IngestionRun.stats["identity"]
+_CYCLE_SECONDS = IngestionRun.stats["cycle"]["cycle_seconds"]
 
 
 def _run_requests(pacing: dict | None, requests: dict | None) -> int | None:
@@ -79,11 +87,47 @@ def _last_read_query():
     )
 
 
+def _latest_query(value, has):
+    """Per source: `value` from its newest run (by start) where `has` holds."""
+    return (
+        select(IngestionRun.source, IngestionRun.started_at, value)
+        .where(has)
+        .order_by(IngestionRun.source, IngestionRun.started_at.desc())
+        .distinct(IngestionRun.source)
+    )
+
+
+def _newest(rows: dict[str, tuple[datetime, object]], ids: list[str]) -> object | None:
+    """Of a shop's sources, the value from the newest run."""
+    found = [rows[i] for i in ids if i in rows]
+    return max(found, key=lambda row: row[0])[1] if found else None
+
+
+def _by_day(days: list[date], counts: list[tuple[date, int | None]]) -> list[dict]:
+    """Requests per day, oldest first. A day without runs sent nothing (0); a day
+    one of whose runs did not say how many it sent is unknown (None), never a
+    floor passing for the count."""
+    out = []
+    for day in days:
+        those = [n for when, n in counts if when == day]
+        known = None if any(n is None for n in those) else sum(those)
+        out.append({"date": day.isoformat(), "requests": known})
+    return out
+
+
+def _days(seconds: object) -> float | None:
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds < 0:
+        return None
+    return round(seconds / 86400, 1)
+
+
 @router.get("/crawler/activity")
 async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict:
     """Per shop we crawl: status, last read, requests and gaps over the last 7 days."""
     now = datetime.now(timezone.utc)
     since = now - WINDOW
+    today = now.date()
+    days = [today - timedelta(days=back) for back in range(WINDOW.days - 1, -1, -1)]
 
     sources = (await session.execute(select(Source))).scalars().all()
     slugs = {s.supplier.get("slug") for s in sources if isinstance(s.supplier, dict)}
@@ -95,14 +139,28 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
     }
 
     last_read = dict((await session.execute(_last_read_query())).all())
+    identities = {
+        source: (started, identity)
+        for source, started, identity in await session.execute(
+            _latest_query(_IDENTITY, IngestionRun.stats.has_key("identity"))
+        )
+    }
+    cycles = {
+        source: (started, seconds)
+        for source, started, seconds in await session.execute(
+            _latest_query(_CYCLE_SECONDS, IngestionRun.stats["cycle"].has_key("cycle_seconds"))
+        )
+    }
     recent = (
         await session.execute(
-            select(IngestionRun.source, _PACING, _REQUESTS).where(IngestionRun.started_at >= since)
+            select(IngestionRun.source, IngestionRun.started_at, _PACING, _REQUESTS).where(
+                IngestionRun.started_at >= since
+            )
         )
     ).all()
-    runs: dict[str, list[tuple[dict | None, dict | None]]] = defaultdict(list)
-    for source, pacing, requests in recent:
-        runs[source].append((pacing, requests))
+    runs: dict[str, list[tuple[datetime, dict | None, dict | None]]] = defaultdict(list)
+    for source, started, pacing, requests in recent:
+        runs[source].append((started, pacing, requests))
 
     # A shop may be read through more than one source; it is one row.
     by_shop: dict[str, list[Source]] = defaultdict(list)
@@ -120,8 +178,9 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
         supplier = suppliers[slug]
         ids = [s.source_id for s in its_sources]
         its_runs = [run for source_id in ids for run in runs.get(source_id, [])]
-        counts = [_run_requests(pacing, requests) for pacing, requests in its_runs]
-        pacings = [pacing for pacing, _ in its_runs if isinstance(pacing, dict)]
+        counts = [_run_requests(pacing, requests) for _, pacing, requests in its_runs]
+        pacings = [pacing for _, pacing, _ in its_runs if isinstance(pacing, dict)]
+        started_on = [started.astimezone(timezone.utc).date() for started, _, _ in its_runs]
         every_pacing.extend(pacings)
         min_gap, median_gap = crawl.merge_gaps(pacings)
         reads = [last_read[i] for i in ids if last_read.get(i) is not None]
@@ -141,6 +200,9 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
                 "requests_7d_partial": any(n is None for n in counts),
                 "min_gap_s": min_gap,
                 "median_gap_s": median_gap,
+                "requests_by_day": _by_day(days, list(zip(started_on, counts))),
+                "identity": crawl.public_identity(_newest(identities, ids)),
+                "last_cycle_days": _days(_newest(cycles, ids)),
             }
         )
     shops.sort(key=lambda s: (s["name"].casefold(), s["slug"]))
@@ -161,6 +223,8 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
             "requests_7d_partial": any(s["requests_7d_partial"] for s in shops),
             "min_gap_s": min_gap,
             "median_gap_s": median_gap,
+            # Every gap of the week, all shops together, in fixed buckets.
+            "gap_histogram": crawl.bucket_gaps(crawl.merge_histogram(every_pacing)),
             # Not measured: every request checks robots.txt first (worker/robots.py),
             # and one it disallows is never sent.
             "robots_txt_honoured": True,

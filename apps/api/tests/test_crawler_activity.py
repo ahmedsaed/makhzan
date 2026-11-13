@@ -108,6 +108,9 @@ async def test_an_active_shop_reports_its_week(client, db):
             "min_gap_s": 15.2,
             # Gaps 15.2, 16, 17.5, 20 by whole second: 15, 16, 17, 20; lower median 16.
             "median_gap_s": 16,
+            "requests_by_day": body["shops"][0]["requests_by_day"],
+            "identity": None,
+            "last_cycle_days": None,
         }
     ]
     assert _parse(body["shops"][0]["last_read_at"]) == latest.finished_at
@@ -119,6 +122,7 @@ async def test_an_active_shop_reports_its_week(client, db):
         "requests_7d_partial": False,
         "min_gap_s": 15.2,
         "median_gap_s": 16,
+        "gap_histogram": body["totals"]["gap_histogram"],
         "robots_txt_honoured": True,
     }
     assert body["window_days"] == 7
@@ -168,6 +172,12 @@ async def test_a_source_with_no_runs_has_nothing_to_report_yet(client, db):
         "requests_7d_partial": False,
         "min_gap_s": None,
         "median_gap_s": None,
+        "requests_by_day": [
+            {"date": (datetime.now(UTC).date() - timedelta(days=back)).isoformat(), "requests": 0}
+            for back in range(6, -1, -1)
+        ],
+        "identity": None,
+        "last_cycle_days": None,
     }
 
 
@@ -311,3 +321,203 @@ async def test_the_worker_saying_on_wins_too(client, db, monkeypatch):
     await crawl.record_crawl_enabled(db, False)
     await crawl.record_crawl_enabled(db, True)  # `./makhzan crawl on`: stated again
     assert (await _activity(client))["schedule"]["next_run_at"] is not None
+
+
+# --- requests by day, identity, last full pass, the gap histogram ----------------
+
+
+def _day(back: int) -> str:
+    return (datetime.now(UTC).date() - timedelta(days=back)).isoformat()
+
+
+async def _run_on(db, source_id: str, back: int, **kwargs) -> IngestionRun:
+    """A run that started `back` days ago (UTC), early in that day."""
+    today = datetime.now(UTC).replace(hour=0, minute=30, second=0, microsecond=0)
+    started = today - timedelta(days=back)
+    return await _run(db, source_id, ago=datetime.now(UTC) - started, **kwargs)
+
+
+async def test_requests_by_day_cover_the_last_seven_days_oldest_first(client, db):
+    await make_supplier(db, slug="shop-a", name="Shop A")
+    await _source(db, "src-a", "shop-a")
+    await _run_on(db, "src-a", 6, stats={"pacing": _paced(15, 15)})  # 3 requests
+    await _run_on(db, "src-a", 2, stats={"requests": {"pages": 40, "details": 2}})
+    await _run_on(db, "src-a", 2, stats={"pacing": {"requests": 8}})
+    # A day with a run that never said how many it sent is unknown, not zero
+    # and not a floor, even beside a run that did.
+    await _run_on(db, "src-a", 1, stats={"pacing": {"requests": 5}})
+    await _run_on(db, "src-a", 1, stats={}, finished=False)
+    # Before the window: not a day of it.
+    await _run_on(db, "src-a", 8, stats={"pacing": {"requests": 99}})
+
+    (shop,) = (await _activity(client))["shops"]
+    assert shop["requests_by_day"] == [
+        {"date": _day(6), "requests": 3},
+        {"date": _day(5), "requests": 0},
+        {"date": _day(4), "requests": 0},
+        {"date": _day(3), "requests": 0},
+        {"date": _day(2), "requests": 50},
+        {"date": _day(1), "requests": None},
+        {"date": _day(0), "requests": 0},
+    ]
+
+
+async def test_a_shop_read_through_two_sources_adds_its_days_up(client, db):
+    await make_supplier(db, slug="shop-d", name="Shop D")
+    await _source(db, "src-d1", "shop-d")
+    await _source(db, "src-d2", "shop-d")
+    await _run_on(db, "src-d1", 0, stats={"pacing": {"requests": 4}})
+    await _run_on(db, "src-d2", 0, stats={"pacing": {"requests": 6}})
+    (shop,) = (await _activity(client))["shops"]
+    assert shop["requests_by_day"][-1] == {"date": _day(0), "requests": 10}
+
+
+async def test_identity_is_the_latest_runs_name_and_signature_only(client, db):
+    await make_supplier(db, slug="moved", name="Moved")
+    await _source(db, "src-moved", "moved")
+    await _run(
+        db,
+        "src-moved",
+        ago=timedelta(days=3),
+        stats={"identity": {"name": "browser", "signed": False}},
+    )
+    await _run(
+        db,
+        "src-moved",
+        ago=timedelta(hours=4),
+        stats={"identity": {"name": "makhzanbot", "signed": True, "keyid": "SECRET-THUMBPRINT"}},
+    )
+    # A later run that recorded no identity (from before it was recorded) says nothing.
+    await _run(db, "src-moved", ago=timedelta(hours=1), stats={"pacing": {"requests": 1}})
+    await make_supplier(db, slug="not-moved", name="Not Moved")
+    await _source(db, "src-not-moved", "not-moved")
+    await _run(
+        db,
+        "src-not-moved",
+        ago=timedelta(hours=2),
+        stats={"identity": {"name": "browser", "signed": False}},
+    )
+    await make_supplier(db, slug="unsigned", name="Unsigned")
+    await _source(db, "src-unsigned", "unsigned")
+    await _run(
+        db,
+        "src-unsigned",
+        ago=timedelta(hours=2),
+        stats={"identity": {"name": "makhzanbot", "signed": False}},
+    )
+
+    body = await _activity(client)
+    by_slug = {shop["slug"]: shop for shop in body["shops"]}
+    assert by_slug["moved"]["identity"] == {"name": "makhzanbot", "signed": True}
+    assert by_slug["not-moved"]["identity"] == {"name": "browser", "signed": False}
+    assert by_slug["unsigned"]["identity"] == {"name": "makhzanbot", "signed": False}
+    assert "SECRET-THUMBPRINT" not in json.dumps(body)
+    assert "keyid" not in json.dumps(body)
+
+
+async def test_last_full_pass_is_the_latest_completed_cycle_in_days(client, db):
+    await make_supplier(db, slug="shop-a", name="Shop A")
+    await _source(db, "src-a", "shop-a")
+    cycle = {
+        "cycle_started_at": "2026-10-01T03:00:00+00:00",
+        "cycle_completed_at": "2026-10-08T03:00:00+00:00",
+        "cycle_partitions": 170,
+        "cycle_pages": 497,
+    }
+    await _run(
+        db, "src-a", ago=timedelta(days=20), stats={"cycle": {**cycle, "cycle_seconds": 9 * 86400}}
+    )
+    await _run(
+        db, "src-a", ago=timedelta(days=2), stats={"cycle": {**cycle, "cycle_seconds": 561600}}
+    )
+    await _run(db, "src-a", ago=timedelta(hours=2), stats={"pacing": {"requests": 3}})
+
+    body = await _activity(client)
+    (shop,) = body["shops"]
+    assert shop["last_cycle_days"] == 6.5
+    # Nothing else of the cycle: not its partitions, pages or dates.
+    text = json.dumps(body)
+    for word in ("cycle_pages", "cycle_partitions", "497", "170", "2026-10-0"):
+        assert word not in text, word
+
+
+async def test_the_gap_histogram_merges_every_shops_gaps_into_fixed_buckets(client, db):
+    for slug, gaps in (("shop-a", (15.2, 15.9, 16.4, 21.0)), ("shop-b", (15.0, 75.0, 12.5))):
+        await make_supplier(db, slug=slug, name=slug)
+        await _source(db, f"src-{slug}", slug)
+        await _run(db, f"src-{slug}", ago=timedelta(days=1), stats={"pacing": _paced(*gaps)})
+    # Outside the window: left out.
+    await _run(db, "src-shop-a", ago=timedelta(days=10), stats={"pacing": _paced(40, 40)})
+
+    histogram = (await _activity(client))["totals"]["gap_histogram"]
+    assert histogram == [
+        {"min_s": 0, "max_s": 14, "count": 1},
+        {"min_s": 15, "max_s": 15, "count": 3},
+        {"min_s": 16, "max_s": 16, "count": 1},
+        {"min_s": 17, "max_s": 17, "count": 0},
+        {"min_s": 18, "max_s": 19, "count": 0},
+        {"min_s": 20, "max_s": 29, "count": 1},
+        {"min_s": 30, "max_s": 59, "count": 0},
+        {"min_s": 60, "max_s": None, "count": 1},
+    ]
+
+
+async def test_no_histogram_when_no_gap_was_measured(client, db):
+    await make_supplier(db, slug="old-shop", name="Old Shop")
+    await _source(db, "src-old", "old-shop")
+    await _run(db, "src-old", ago=timedelta(days=2), stats={"requests": {"pages": 40}})
+    assert (await _activity(client))["totals"]["gap_histogram"] is None
+
+
+async def test_the_new_figures_leak_nothing_private(client, db):
+    """A run carrying everything the worker records: only the public figures leave."""
+    await make_supplier(db, slug="busy", name="Busy Shop")
+    await _source(db, "src-busy", "busy", enabled=False)
+    await _run(
+        db,
+        "src-busy",
+        ago=timedelta(hours=6),
+        stats={
+            "errors": ["p3: Server error '503 Service Unavailable' for url 'https://busy.test/p3'"],
+            "stopped": "robots.txt unavailable",
+            "robots": {"https://busy.test": {"state": "stale copy"}},
+            "identity": {"name": "makhzanbot", "signed": True, "keyid": "kid-123"},
+            "budget": {"pages": 40, "target_cycle_days": 7},
+            "cycle": {"cycle_seconds": 86400, "cycle_partitions": 9, "cycle_pages": 77},
+            "requests": {"pages": 12},
+            "pacing": _paced(15, 15, 15),
+        },
+    )
+    body = await _activity(client)
+    (shop,) = body["shops"]
+    assert shop["status"] == "paused"
+    assert set(shop) == {
+        "slug",
+        "name",
+        "status",
+        "last_read_at",
+        "requests_7d",
+        "requests_7d_partial",
+        "min_gap_s",
+        "median_gap_s",
+        "requests_by_day",
+        "identity",
+        "last_cycle_days",
+    }
+    text = json.dumps(body).lower()
+    for word in (
+        "error",
+        "unavailable",
+        "stopped",
+        "robots.txt unavailable",
+        "stale copy",
+        "kid-123",
+        "keyid",
+        "budget",
+        "target_cycle",
+        "cycle_pages",
+        "src-busy",
+        "busy.test",
+    ):
+        assert word not in text, word
+    assert not re.search(r"(?<!\d)503(?!\d)", text), text
