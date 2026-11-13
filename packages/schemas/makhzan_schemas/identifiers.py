@@ -356,6 +356,33 @@ _MODEL_ROWS = {
     "model / part number", "model/part number",
 }  # fmt: skip
 _STATED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-./_]{1,28}(?: [A-Za-z0-9\-]{1,6})?$")
+#: FEPA "P" abrasive grits. A slug states a grit range glued together ("P60100"
+#: for P60/P100), which is too long to read as a short grit but is no part number.
+_FEPA_GRITS = frozenset(
+    (12, 16, 20, 24, 30, 36, 40, 50, 60, 80, 100, 120, 150, 180, 220, 240, 280, 320,
+     360, 400, 500, 600, 800, 1000, 1200, 1500, 2000, 2500, 3000)
+)  # fmt: skip
+
+
+def _is_grit_range(text: str) -> bool:
+    """ "P60100", "P-80-120": two ascending FEPA grits after a P. Donaldson's
+    "P551808" splits into no such pair, so it stays a part number."""
+    match = re.fullmatch(r"[Pp][-\s]?(\d+)(?:[-/](\d+))?", text)
+    if not match:
+        return False
+    if match.group(2):
+        pairs = [(match.group(1), match.group(2))]
+    else:
+        digits = match.group(1)
+        pairs = [(digits[:i], digits[i:]) for i in range(2, len(digits) - 1)]
+    return any(
+        not low.startswith("0")
+        and not high.startswith("0")
+        and int(low) in _FEPA_GRITS
+        and int(high) in _FEPA_GRITS
+        and int(low) < int(high)
+        for low, high in pairs
+    )
 
 
 def _stated(value: object) -> Identifier | None:
@@ -383,7 +410,7 @@ def _stated(value: object) -> Identifier | None:
             or re.fullmatch(r"\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?", rest)
         ):
             return None
-    if is_value(text):
+    if is_value(text) or _is_grit_range(text):
         return None
     return Identifier(text.upper(), family_checked=True)
 
