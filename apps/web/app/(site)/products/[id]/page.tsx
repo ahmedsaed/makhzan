@@ -17,6 +17,7 @@ import {
   fetchCategories,
   fetchListing,
   fetchProduct,
+  fetchProductHistory,
   fetchProductRedirect,
   fetchSimilar,
   fetchSupplier,
@@ -55,6 +56,7 @@ import {
   unitPrice,
   unitPriceText,
 } from "@/lib/offers";
+import { buildHistory, HISTORY_DAYS } from "@/lib/history";
 import { productIdFrom, routes } from "@/lib/routes";
 import { absoluteUrl } from "@/lib/site";
 import { departmentLabel } from "@/lib/departments";
@@ -64,6 +66,7 @@ import { Carousel } from "./carousel";
 import { Details } from "./details";
 import { Facts } from "./facts";
 import { Gallery } from "./gallery";
+import { PriceHistoryCard } from "./history";
 import { Offers } from "./offers";
 import { PartNumberLines } from "./part-numbers";
 import { OptionsSection, PriceBreaksTable, TermPills } from "./terms";
@@ -182,12 +185,21 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
   // Everything but the product itself is garnish: a failure there must not
   // take the page down with it.
-  const [similar, categories, listings, shopProfiles] = await Promise.all([
+  const [similar, categories, listings, shopProfiles, recorded] = await Promise.all([
     fetchSimilar(id, 8).catch(() => []),
     product.category ? fetchCategories().catch(() => []) : Promise.resolve([]),
     Promise.all(described.map((offer) => fetchListing(offer.id).catch(() => null))),
     Promise.all(shopSlugs.map((slug) => fetchSupplier(slug).catch(() => null))),
+    fetchProductHistory(product.id || id, HISTORY_DAYS),
   ]);
+  const history = buildHistory(recorded, product.offers, now);
+  const historyCard = history && (
+    <PriceHistoryCard
+      history={history}
+      currency={product.currency}
+      shop={several ? null : (product.offers[0].supplier?.name ?? null)}
+    />
+  );
   const shop = soleShop ? (shopProfiles[shopSlugs.indexOf(soleShop)] ?? null) : null;
   const hoursOf = new Map(
     shopProfiles.flatMap((profile) =>
@@ -312,7 +324,13 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               )}
             </div>
           </div>
-          <Facts offers={product.offers} currency={product.currency} now={now} similar={similar} />
+          <Facts
+            offers={product.offers}
+            currency={product.currency}
+            now={now}
+            similar={similar}
+            history={history}
+          />
         </div>
 
         <div
@@ -346,10 +364,14 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               page={absoluteUrl(path)}
             />
           )}
+          {/* Without the shops' text the wide column holds the offers, and
+              the history follows them. */}
+          {!split && historyCard}
         </div>
 
         {split && (
           <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-2">
+            {historyCard}
             <Details sources={sources} />
           </div>
         )}

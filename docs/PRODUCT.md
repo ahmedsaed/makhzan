@@ -95,8 +95,10 @@ change, switched on shop by shop (see "Decided" above).
 Phase 2 shows it, decided 2026-11-09:
 
 (In progress on 2026-11-13. Done: shop contact details, crawler activity, price history
-recorded and served by the API. Not done: everything on the product page below, price
-history on the site, and both grouping changes. `docs/ROADMAP.md` keeps the table.)
+recorded and served by the API; on branches awaiting review, the product page below
+(`feat/phase2-product-page`) and price history on it (`feat/phase2-price-history`). Not
+done: search rows using the API's price-of-one summary fields, and both grouping changes.
+`docs/ROADMAP.md` keeps the table.)
 
 - **Product page:** minimum order ("EGP 0.25 each · min. 10 (EGP 2.50)"), the
   manufacturer part number, an options table (each option with its own price, stock
