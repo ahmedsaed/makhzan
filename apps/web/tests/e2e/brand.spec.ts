@@ -80,12 +80,25 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   const robots = await request.get("/robots.txt");
   expect(robots.status()).toBe(200);
   const text = await robots.text();
-  expect(text).toContain("Disallow: /search");
+  expect(robots.headers()["content-type"]).toContain("text/plain");
+  expect(text).toContain(
+    "User-agent: *\nContent-Signal: search=yes, ai-input=yes, ai-train=no\nAllow: /\n",
+  );
+  expect(text).toContain("Disallow: /search\n");
+  expect(text).toContain("Disallow: /departments*?stale=\n");
+  expect(text).toContain("Disallow: /shops*&sort=\n");
+  expect(text).not.toContain("offset=");
   expect(text).toContain(`Sitemap: ${SITE}/sitemap.xml`);
-  // SEO backlink crawlers are refused everything; AI and search crawlers are not named.
-  expect(text).toMatch(/User-Agent: SemrushBot\nDisallow: \/\n/);
-  expect(text).toMatch(/User-Agent: SERankingBacklinksBot\nDisallow: \/\n/);
-  expect(text).not.toMatch(/ClaudeBot|Amazonbot|GPTBot|Googlebot/);
+  // Training and backlink crawlers share one group that refuses everything.
+  expect(text).toMatch(/User-agent: GPTBot\n(User-agent: \S+\n)*Disallow: \/\n/);
+  for (const agent of ["ClaudeBot", "CCBot", "SemrushBot", "SERankingBacklinksBot", "AhrefsBot"]) {
+    expect(text).toContain(`User-agent: ${agent}\n`);
+  }
+  // Paced, with the facet rules repeated (a named group ignores `*`).
+  expect(text).toMatch(/User-agent: Claude-SearchBot\nUser-agent: Bingbot\n[^]*?Crawl-delay: 5\n/);
+  expect(text.match(/Disallow: \/departments\*\?stale=/g)).toHaveLength(2);
+  // Search engines and answer agents are not named: the * group is theirs.
+  expect(text).not.toMatch(/User-agent: (Googlebot|OAI-SearchBot|ChatGPT-User|Claude-User|PerplexityBot)\n/);
 });
 
 test("the head links the icons and the manifest", async ({ page }) => {
