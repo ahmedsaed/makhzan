@@ -367,11 +367,20 @@ def _stated(value: object) -> Identifier | None:
     text = value.strip().strip(".-/_")
     if not _STATED.match(text) or not re.search(r"[A-Za-z]", text) or not re.search(r"\d", text):
         return None
-    # A scale word and a short reading ("AWG-16", "M8", "P120") is a
-    # measurement; the same letter leading a long number a shop states as the
-    # part number (Donaldson "P551808") is not.
-    reading = re.fullmatch(r"([A-Za-z]+)[-\s]?(\d{1,4})", text)
-    if (reading and is_scale_word(reading.group(1))) or is_value(text):
+    # A scale word and a reading is a measurement: a short number ("AWG-16",
+    # "M8", "P120"), a value ("DIP-4P") or a size ("M8X1.25"). The same letter
+    # leading a long number a shop states as the part number (Donaldson
+    # "P551808") is not.
+    reading = re.fullmatch(r"([A-Za-z]+)[-\s]?(.+)", text)
+    if reading and is_scale_word(reading.group(1)):
+        rest = reading.group(2)
+        if (
+            re.fullmatch(r"\d{1,4}", rest)
+            or is_value(rest)
+            or re.fullmatch(r"\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?", rest)
+        ):
+            return None
+    if is_value(text):
         return None
     return Identifier(text.upper(), family_checked=True)
 

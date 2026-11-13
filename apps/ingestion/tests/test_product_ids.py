@@ -101,7 +101,7 @@ async def _set_status(listing_id: uuid.UUID, status: ListingStatus) -> None:
 def _rules(monkeypatch, table: dict[str, str]) -> None:
     """Group by a fixed title → key table instead of the real heuristics."""
 
-    def group(listings):
+    def group(listings, current=None):
         groups: dict[str, list[Listing]] = {}
         for listing in listings:
             groups.setdefault(table[listing.title_en], []).append(listing)
@@ -167,7 +167,7 @@ async def test_an_id_survives_a_rule_change_that_only_renames_keys(monkeypatch):
     monkeypatch.setattr(
         grouping,
         "_group_listings",
-        lambda listings: {f"v2|{k}": v for k, v in real(listings).items()},
+        lambda listings, current=None: {f"v2|{k}": v for k, v in real(listings, current).items()},
     )
     stats = await _rebuild()
 
@@ -421,6 +421,40 @@ async def test_rebuilding_twice_changes_nothing(monkeypatch):
     assert {x: await _product_of(x) for x in ids} == after_first
     assert await _events() == events
     assert (stats["created"], stats["merged"], stats["split"], stats["emptied"]) == (0, 0, 0, 0)
+
+
+async def test_two_existing_products_the_real_rules_join_merge_once(monkeypatch):
+    """Incumbency, end to end: two products that the real grouping says are one
+    merge in a single rebuild (the absorbed id redirects, with an event), and
+    the next rebuild changes nothing."""
+    shops = [await _supplier(s) for s in ("shop-a", "shop-b", "shop-c", "shop-d")]
+    titles = [
+        "IRF530N N-Channel MOSFET 100V",
+        "IRF530N MOSFET N-Channel 100V",
+        "IRF530N N-Channel MOSFET",
+        "IRF530N MOSFET N-Channel",
+    ]
+    ids = [await _listing(shop, t, "IRF530N") for shop, t in zip(shops, titles)]
+    _rules(monkeypatch, {titles[0]: "x", titles[1]: "x", titles[2]: "y", titles[3]: "y"})
+    await _rebuild()
+    assert len({await _product_of(x) for x in ids}) == 2
+    monkeypatch.undo()
+
+    stats = await _rebuild()
+    assert stats["merged"] == 1 and stats["split"] == 0 and stats["created"] == 0
+    survivor = {await _product_of(x) for x in ids}
+    assert len(survivor) == 1
+    async with SessionLocal() as session:
+        absorbed = (
+            await session.execute(select(Product).where(Product.merged_into.is_not(None)))
+        ).scalar_one()
+    assert absorbed.merged_into in survivor
+    assert (ProductEventKind.MERGE, absorbed.id, absorbed.merged_into) in await _events()
+
+    events = await _events()
+    again = await _rebuild()
+    assert (again["created"], again["merged"], again["split"], again["emptied"]) == (0, 0, 0, 0)
+    assert await _events() == events
 
 
 def _fake_listing(name: str, seen_days: int) -> Listing:

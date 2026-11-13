@@ -530,6 +530,19 @@ starts with the title's reading). A rule change therefore needs no re-crawl, and
 on an unchanged catalogue the regroup changes nothing. An adapter's own
 `RawItem.part_number` is kept as `attributes.adapter_part_number` and wins.
 
+**Sub-clustering reads the products listings already belong to (incumbency).**
+Greedy clustering in plain (source, external id) order let one contradicting
+newcomer that sorted first seed a cluster and capture the silent members of a
+settled product (the marketplace's "1N5817 1A 30V" broke a four-shop 1N5817 in
+three). `_subcluster` therefore rebuilds each existing product from its own
+members first (fewest conflicts first, every veto still applied, so a wrong
+product still splits and keeps its consistent majority), merges products the
+vetoes allow, places newcomers by best match, and merges once more. Product ids
+come in as `current`, resolved through `merged_into`. A first build, with no
+product ids, is the plain order; a rebuild from scratch gives the same groups,
+and one rebuild converges — the next changes nothing. A seed change can change a
+group's key (ids survive; only `plan_identity`'s merge undo reads stored keys).
+
 **The marketplace adapter reads `extract_identifier` too** (pending an owner
 decision). The private adapter appends a slug code to a title only when that
 does not change what the title's domain extracts. Before tools had rules every
