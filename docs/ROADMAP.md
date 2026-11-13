@@ -112,9 +112,8 @@ Phase 1 (collecting more of what shops already publish) has shipped. Phase 2
 
 The polish list in `docs/PRODUCT.md`. The blocked two were emailed on 2026-11-06;
 first emails went to the reachable shops on 2026-11-10: shop 3, the Odoo shop,
-shop 2, the Shopify shop and the Wix shop by email, shop 5 by WhatsApp (the
-private outreach notes also say "later" for it; to confirm). Shop 1: unclear
-whether sent, to confirm. The per-shop spot-check (the fifth item) was **not done** before those
+shop 1, shop 2, the Shopify shop and the Wix shop by email. Shop 5 has not
+been contacted yet. The per-shop spot-check (the fifth item) was **not done** before those
 emails went out.
 
 - A working contact address — done (`crawler@makhzan.merope.dev`).
