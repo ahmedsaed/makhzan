@@ -45,7 +45,7 @@ from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_categor
 
 from worker import compatibility
 from worker.contact import contact_from_html
-from worker.http import CycleFetcher, get_json, get_response, make_client, total_pages
+from worker.http import CycleFetcher, get_response, make_client, total_pages
 from worker.richtext import (
     documents_from_html,
     html_to_text,
@@ -54,8 +54,12 @@ from worker.richtext import (
     videos_from_html,
     without_sections,
 )
-from worker.sources.base import CONTACT_PART, Page, SourceAdapter, SupplierInfo
+from worker.sources.base import CONTACT_PART, Confirmation, Page, SourceAdapter, SupplierInfo
+from worker.sources.short_page import SHADOW, ShortPageEnd
 from worker.util import strip_html
+
+#: The `stats.requests` label of the requests that confirm archive candidates.
+CONFIRM_LABEL = "confirm"
 
 PER_PAGE = 100
 #: The API exposes at most this many (contracts._ShopDetails).
@@ -150,6 +154,16 @@ def _option_label(variation: str | None) -> str | None:
     return " / ".join(v for v in values if v) or label
 
 
+def _availability(p: dict) -> str:
+    """A product's stock, from the product itself, for a row not read by stock status.
+
+    `is_in_stock` is true for a backorder too, so that is checked first.
+    """
+    if p.get("is_on_backorder"):
+        return STOCK_STATUSES["onbackorder"]
+    return STOCK_STATUSES["instock" if p.get("is_in_stock") else "outofstock"]
+
+
 def _spec_key(name: str) -> str:
     return re.sub(r"[^a-z#]", "", name.lower())
 
@@ -177,8 +191,14 @@ class WooCommerceAdapter(SourceAdapter):
         strip_description_sections: tuple[str, ...] | list[str] = (),
         compatibility_from_titles: bool = False,
         stock_from_purchase_limit: bool = False,
+        end_on_short_page: str = SHADOW,
     ) -> None:
         self.source_id = source_id
+        #: End a Store API partition on a page of fewer than `PER_PAGE`
+        #: products (or one `X-WP-TotalPages` calls the last), instead of
+        #: asking for the empty page after it. Shadow until proven: see
+        #: worker/sources/short_page.py.
+        self.short_page = ShortPageEnd(end_on_short_page)
         self.base_url = base_url.rstrip("/")
         self.supplier = supplier
         self.enabled = enabled
@@ -286,15 +306,22 @@ class WooCommerceAdapter(SourceAdapter):
         url = f"{self.base_url}/wp-json/wc/store/v1/products"
         availability = STOCK_STATUSES[partition]
         async with make_client() as client:
-            products = await get_json(
+            response = await get_response(
                 client,
                 url,
                 {"per_page": PER_PAGE, "page": page, "stock_status": partition},
             )
-        return Page(
-            [self._to_raw(p, availability) for p in products],
-            has_more=bool(products),
+        products = response.json()
+        products = products if isinstance(products, list) else []
+        items = [self._to_raw(p, availability) for p in products]
+        # An empty page is today's end. A short one, or the header saying this
+        # is the last, says the same a request earlier (T1).
+        pages = total_pages(response)
+        short = len(products) < PER_PAGE or (pages is not None and page >= pages)
+        stop = self.short_page.page(
+            partition, page, [i.external_id for i in items], short=short, end=not products
         )
+        return Page(items, has_more=bool(products) and not stop)
 
     async def _fetch_unlisted(self, page: int) -> Page:
         """One page of the WordPress product route: the ids it marks out of stock.
@@ -324,6 +351,50 @@ class WooCommerceAdapter(SourceAdapter):
         pages = total_pages(response)
         more = page < pages if pages is not None else len(rows) == PER_PAGE
         return Page([], has_more=more and page < MAX_PAGES, out_of_stock_ids=ids)
+
+    # ------------------------------------------------------------------ #
+    # Confirm before archiving (T4)
+    # ------------------------------------------------------------------ #
+
+    async def confirm_listed(self, listings, fetcher: CycleFetcher) -> Confirmation:
+        """Ask the Store API for the cycle's archive candidates by id, 100 a request.
+
+        `include=<ids>&per_page=100` returns whichever of those products the
+        shop still publishes, with price and stock, so a product a multi-day
+        offset sweep skipped (it moved between stock partitions, or onto a page
+        already read) is re-read and kept instead of archived. One the shop no
+        longer returns is archived as before. The products come back as cards
+        like any page's, but carrying no category signal (`knows_category`):
+        like the whole-shop pass, they never clear a category.
+        """
+        url = f"{self.base_url}/wp-json/wc/store/v1/products"
+        ids = [str(row.external_id) for row in listings if row.external_id]
+        out = Confirmation(notes={"via": "store api include"})
+        # A Store API id is a number; anything else cannot be asked for, and is
+        # archived as it always was.
+        out.absent.update(i for i in ids if not i.isdigit())
+        ids = [i for i in ids if i.isdigit()]
+        for start in range(0, len(ids), PER_PAGE):
+            batch = ids[start : start + PER_PAGE]
+            response = await fetcher.get(
+                CONFIRM_LABEL, url, {"include": ",".join(batch), "per_page": PER_PAGE}
+            )
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise ValueError(f"include returned {type(rows).__name__}, not a list")
+            returned: set[str] = set()
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("id")) in batch:
+                    returned.add(str(row["id"]))
+                    raw = self._to_raw(row, _availability(row))
+                    raw.raw["confirmed"] = True
+                    out.items.append(raw)
+            out.absent.update(set(batch) - returned)
+        return out
+
+    def knows_category(self, raw: RawItem) -> bool:
+        """False for a product re-read by id at cycle end: it never clears a category."""
+        return not (raw.raw or {}).get("confirmed")
 
     # ------------------------------------------------------------------ #
     # Once-a-cycle reference data

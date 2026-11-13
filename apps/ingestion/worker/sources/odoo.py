@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from html import unescape as html_unescape
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
@@ -35,6 +36,7 @@ from selectolax.parser import HTMLParser
 
 from worker.http import get_text, make_client
 from worker.normalize import parse_price
+from worker.robots import DisallowedByRobots
 from worker.richtext import (
     documents_from_html,
     html_to_text,
@@ -45,13 +47,22 @@ from worker.richtext import (
 )
 from worker.sources.base import (
     TOKEN_MODIFIED,
+    Confirmation,
     DetailsSettings,
     Page,
     SourceAdapter,
     SupplierInfo,
 )
+from worker.sources.short_page import SHADOW, ShortPageEnd
 
 DETAILS_LABEL = "details"
+#: The `stats.requests` label of the requests that confirm archive candidates.
+CONFIRM_LABEL = "confirm"
+#: Product pages read a run to confirm candidates the sitemap held (T12).
+CONFIRM_PAGES = 20
+#: A sitemap index naming more files than this is not followed.
+MAX_SITEMAP_FILES = 5
+_LOC = re.compile(r"<loc>\s*([^<]+?)\s*</loc>", re.I)
 #: More photos than this on one product is a gallery, not a product's pictures.
 _MAX_GALLERY = 12
 _MAX_DOCUMENTS = 10
@@ -92,8 +103,17 @@ class OdooAdapter(SourceAdapter):
         partition_keys: tuple[str, ...] | Sequence[str] | None = None,
         sweep_whole_shop: bool = False,
         details: dict | None = None,
+        end_on_short_page: str = SHADOW,
+        sitemap_veto: bool = True,
     ) -> None:
         self.source_id = source_id
+        #: End a partition on the page whose pager says it is the last, instead
+        #: of fetching the repeat Odoo serves after it. Shadow until proven:
+        #: see worker/sources/short_page.py.
+        self.short_page = ShortPageEnd(end_on_short_page)
+        #: Before archiving, hold any candidate the shop's sitemap still lists
+        #: and read its product page (T12). The sitemap never counts as "seen".
+        self.sitemap_veto = sitemap_veto
         self.base_url = base_url.rstrip("/")
         self.supplier = supplier
         self.enabled = enabled
@@ -151,7 +171,8 @@ class OdooAdapter(SourceAdapter):
         url = f"{self.base_url}/shop/category/{partition}" if partition else f"{self.base_url}/shop"
         async with make_client() as client:
             html = await get_text(client, url, {"page": page})
-        cards = HTMLParser(html).css(".oe_product")
+        tree = HTMLParser(html)
+        cards = tree.css(".oe_product")
 
         items = [item for item in (self._to_raw(c, partition) for c in cards) if item is not None]
         ids = {item.external_id for item in items}
@@ -163,7 +184,91 @@ class OdooAdapter(SourceAdapter):
         repeated = bool(ids) and ids == self._prev_page_ids.get(partition)
         self._prev_page_ids[partition] = ids
 
-        return Page(items, has_more=bool(items) and not repeated)
+        # The pager says so one request earlier (T1): the repeat costs a
+        # request per partition, about a third of this shop's cycle.
+        stop = self.short_page.page(
+            partition,
+            page,
+            ids,
+            short=_pager_says_last(tree, page),
+            end=not items or repeated,
+        )
+        return Page(items, has_more=bool(items) and not repeated and not stop)
+
+    async def confirm_listed(self, listings, fetcher) -> Confirmation | None:
+        """The sitemap as a veto on archiving, then the product page as the proof (T12).
+
+        One request for `/sitemap.xml`, which lists every published product. A
+        candidate it does not list is archived as before. One it does list is
+        held: the sweep missed it, but the shop still publishes it. Its
+        product page is read, at most `CONFIRM_PAGES` a run, and a page that is
+        the product keeps the listing (`last_seen_at` only: no price is read).
+        A page that is gone (404/410, or not this product) archives it.
+
+        Sitemap presence itself never counts as seen: a sitemap can lag the
+        shop, and "seen" would then outlive the product.
+        """
+        if not self.sitemap_veto:
+            return None
+        try:
+            listed = await self._sitemap_ids(fetcher)
+        except DisallowedByRobots:
+            return None  # the shop does not want it read: archive as before
+        out = Confirmation(notes={"via": "sitemap", "sitemap_products": len(listed)})
+        held = []
+        for row in listings:
+            if row.external_id in listed:
+                held.append(row)
+            else:
+                out.absent.add(row.external_id)
+        out.notes["held_by_sitemap"] = len(held)
+        for row in held[:CONFIRM_PAGES]:
+            try:
+                url = _product_url(row.source_url, self.base_url)
+            except ValueError:
+                out.absent.add(row.external_id)  # no page to ask: as before
+                continue
+            try:
+                response = await fetcher.get(CONFIRM_LABEL, url)
+            except DisallowedByRobots:
+                out.absent.add(row.external_id)  # not ours to read: as before
+                continue
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in (404, 410):
+                    out.absent.add(row.external_id)
+                    continue
+                raise
+            if _is_product_page(response, row.external_id):
+                out.seen.add(row.external_id)
+            else:
+                out.absent.add(row.external_id)
+        return out
+
+    async def _sitemap_ids(self, fetcher) -> set[str]:
+        """Product ids in the shop's sitemap (following an index a few files deep)."""
+        response = await fetcher.get(CONFIRM_LABEL, f"{self.base_url}/sitemap.xml")
+        text = response.text
+        locs = _LOC.findall(text)
+        if "<sitemapindex" in text:
+            if len(locs) > MAX_SITEMAP_FILES:
+                raise ValueError(f"sitemap index of {len(locs)} files; not read")
+            children = locs
+            locs = []
+            for child in children:
+                if urlsplit(html_unescape(child)).netloc != urlsplit(self.base_url).netloc:
+                    continue
+                locs += _LOC.findall((await fetcher.get(CONFIRM_LABEL, html_unescape(child))).text)
+        ids = set()
+        for loc in locs:
+            path = urlsplit(html_unescape(loc.strip())).path.rstrip("/")
+            if not path.startswith("/shop/") or path.startswith(("/shop/category/", "/shop/page/")):
+                continue
+            if match := _ID_RE.search(path):
+                ids.add(match.group(1))
+        if not ids:
+            # A sitemap with no products is not evidence that none exist.
+            raise ValueError("the sitemap lists no product pages")
+        return ids
 
     def source_categories(self, raw: RawItem) -> list[str]:
         category = (raw.raw or {}).get("category")
@@ -279,6 +384,28 @@ class OdooAdapter(SourceAdapter):
         if "arriving soon" in text:
             return "arriving soon"
         return "in stock"
+
+
+def _pager_says_last(tree: HTMLParser, page: int) -> bool:
+    """Whether the listing page's pager says this is the last page.
+
+    Odoo's pager ends on a "next" item, disabled on the last page; it leaves the
+    pager out altogether when there is only one page. With no pager on a later
+    page there is no telling, so that is not read as the last.
+    """
+    pager = tree.css_first("ul.pagination")
+    if pager is None:
+        return page == 1
+    items = pager.css("li")
+    return bool(items) and "disabled" in (items[-1].attributes.get("class") or "").split()
+
+
+def _is_product_page(response: httpx.Response, external_id: str | None) -> bool:
+    """Whether a confirmation read landed on this product's own page."""
+    match = _ID_RE.search(response.url.path.rstrip("/"))
+    if match is None or match.group(1) != external_id:
+        return False  # redirected elsewhere: the shop's way of saying it is gone
+    return HTMLParser(response.text).css_first("#product_detail") is not None
 
 
 def _internal_reference(img) -> str | None:

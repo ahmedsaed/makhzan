@@ -586,7 +586,11 @@ async def test_a_hidden_out_of_stock_product_is_kept_not_archived(shop):
     assert second.stats["archived"] == 1
     # The fixture's own out-of-stock product (7104) was never stored: not created.
     assert second.stats["out_of_stock_unlisted"] == {"kept": 1, "unknown": 1}
-    assert shop.requests[-1][1]["_fields"] == "id,class_list"
+    wp_requests = [params for path, params in shop.requests if path == "/wp-json/wp/v2/product"]
+    assert wp_requests[-1]["_fields"] == "id,class_list"
+    # 7102 was asked for by id before it was archived, and not returned.
+    assert shop.requests[-1][1]["include"] == "7102"
+    assert second.stats["requests"]["confirm"] == 1
 
 
 async def test_without_the_setting_a_hidden_product_is_archived(shop):

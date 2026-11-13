@@ -39,6 +39,7 @@ from worker.normalize import parse_price
 from worker.richtext import documents_from_html, html_to_text, specs_from_html, videos_from_html
 from worker.robots import DisallowedByRobots, polite_pause
 from worker.sources.base import Page, SourceAdapter, SupplierInfo
+from worker.sources.short_page import SHADOW, ShortPageEnd
 
 log = logging.getLogger(__name__)
 
@@ -78,8 +79,13 @@ class ShopifyAdapter(SourceAdapter):
         prefer: Sequence[str] = (),
         collections: bool = False,
         skip_collections: Sequence[str] = (),
+        end_on_short_page: str = SHADOW,
     ) -> None:
         self.source_id = source_id
+        #: End the feed on a page of fewer than `PER_PAGE` products instead of
+        #: asking for the empty one after it. Shadow until proven: see
+        #: worker/sources/short_page.py.
+        self.short_page = ShortPageEnd(end_on_short_page)
         self.base_url = base_url.rstrip("/")
         self.supplier = supplier
         self.currency = currency
@@ -171,8 +177,17 @@ class ShopifyAdapter(SourceAdapter):
                 await asyncio.sleep(await polite_pause(self.base_url, self.polite_delay))
             data = await get_json(client, url, {"limit": PER_PAGE, "page": page})
         products = data.get("products", [])
+        items = [self._to_raw(p) for p in products]
         # products.json simply runs dry — an empty array is the end of the feed.
-        return Page([self._to_raw(p) for p in products], has_more=bool(products))
+        # A short page says the same a request earlier (T1).
+        stop = self.short_page.page(
+            partition,
+            page,
+            [i.external_id for i in items],
+            short=len(products) < PER_PAGE,
+            end=not products,
+        )
+        return Page(items, has_more=bool(products) and not stop)
 
     async def _paged(self, client, path: str, key: str):
         """Every row of a paged Shopify JSON list, paced like the pipeline paces pages.
