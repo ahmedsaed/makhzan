@@ -161,10 +161,12 @@ alive without re-pricing it, and the site shows `last_verified_at` as "checked".
 end the candidates go to `adapter.confirm_listed`: WooCommerce re-reads them by
 id (`include`, 100 a request), and the Odoo shop checks its sitemap, then reads the
 product page of each one the sitemap still lists (20 a run). Returned is kept,
-asked-and-absent is archived. A failed or unfinished check archives nothing
-more and holds the cycle open (cursors exhausted) for the next run, capped at
-one cycle. Sitemap presence is never a sighting. Requests count as
-`stats.requests.confirm`.
+asked-and-absent, or returned but not upserted, is archived. A failed or
+unfinished check archives nothing more and holds the cycle open (cursors
+exhausted, untouched) for the next run: at most 2 failed runs, 3 runs held for
+room, or one cycle, then the rest archives as before. Hold time is not
+`cycle_seconds`. Sitemap presence is never a sighting. Requests count as
+`stats.requests.confirm`, against the run's page ceiling.
 
 **A short page can end a partition** (`worker/sources/short_page.py`, T1):
 `end_on_short_page` on the Odoo, WooCommerce and Shopify adapters, default
@@ -186,7 +188,7 @@ due, in this order, when its change token moved since its page was read, when
 it was never read (most important first: multi-supplier, in stock; then
 newest), or when it was read over `max_age_days` ago (oldest first). For a
 card-hash source that age adapts per listing (`details_interval_days`, ×1.4
-unchanged, ×0.8 changed, 30–180 days). A failed page backs off 1, 2, 4… days; a host backing off, a
+unchanged, ×0.8 changed, between min(30, max_age_days) and max_age_days). A failed page backs off 1, 2, 4… days; a host backing off, a
 429 or a network failure stops the stage and blames no listing. A `limit=` run
 reads none.
 

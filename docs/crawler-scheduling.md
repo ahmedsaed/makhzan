@@ -93,17 +93,27 @@ the source, most recently seen first, up to 500 a run. Beyond 500 the cycle
 archives as before: that is a shop that changed, not drift.
 
 - WooCommerce: `include=<ids>&per_page=100` on the Store API, 100 ids a request.
-  - A returned product is upserted like any card: seen and verified. It never
-    clears a category.
+  - A returned product is upserted like any card: seen and verified, with
+    `via = "confirm"` on its history row. It never clears a category and
+    does not count as category churn.
+  - A returned product that is not upserted (skipped as not a product, routed
+    to review, failed) is not kept: it archives like an absence.
   - One not returned is archived.
-- Requests are counted as `stats.requests.confirm`, and every one goes through
-  `take_turn`.
-- If asking fails (an error, a refusing host, the run's time spent), nothing
-  more is archived. The cycle stays open with every cursor exhausted, and the
-  next run asks again.
-- The wait is capped at one cycle from when the sweep finished: the source's
-  `target_cycle_days`, else as long as the cycle took, and at least a day.
-  After that the cycle archives as before.
+- Requests are counted as `stats.requests.confirm`. Every one goes through
+  `take_turn`, and counts against the run's ceiling as one more partition
+  would: at most `max_pages_per_run`, within what an adaptive page budget has
+  left. The run's time and its host's refusal are checked before each one.
+- Candidates not asked about (the asking failed, the budget or time ran out)
+  are not archived. The cycle stays open with every cursor exhausted, and the
+  next run asks again. The hold is bounded:
+  - after 2 runs whose asking failed, the unasked archive as before;
+  - after 3 runs held for want of room to ask (the Odoo shop's 20 pages a
+    run), the remainder archives as before;
+  - after one cycle of time from when the sweep finished (the source's
+    `target_cycle_days`, else as long as the cycle took, at least a day),
+    whatever is left archives as before.
+- Hold time is not part of `stats.cycle.cycle_seconds`: a held cycle's length
+  ends when its sweep did.
 - Never on a `limit=` run.
 - Sources without a cheap way to ask (Shopify, Wix, the marketplace) archive as
   before.
@@ -116,10 +126,15 @@ request per confirmation:
   - the product's own page keeps the listing, setting `last_seen_at` only,
     since no price is read;
   - a 404/410, or a redirect elsewhere, archives it;
+  - any other page error leaves only that candidate unasked; a refusing host
+    leaves the rest unasked;
   - held candidates with no room left this run wait for the next.
 
 Sitemap presence never sets `last_seen_at`, because a sitemap can lag the shop.
-`sitemap_veto = false` turns it off.
+A sitemap that is no usable census vetoes nothing, and the cycle archives as
+before: a 404, gzip-only files, an index of more than 5 files, no product
+pages, or one disallowed by robots.txt. A 5xx or a refusing host on the sitemap
+is a failed attempt. `sitemap_veto = false` turns the veto off.
 
 **T10, details ordering.**
 
@@ -128,9 +143,14 @@ Sitemap presence never sets `last_seen_at`, because a sitemap can lag the shop.
   newest first.
 - For card-hash sources (the Wix shop, the marketplace), the age-based refresh
   adapts per listing, as Nutch's AdaptiveFetchSchedule does:
-  - ×1.4 after a re-read that found the page unchanged;
-  - ×0.8 after one that found it changed;
-  - kept within 30 to 180 days, in `attributes.details_interval_days`.
+  - ×0.8 after a re-read that found the page changed (a change never
+    lengthens the interval);
+  - ×1.4 after one that found it unchanged;
+  - kept between 30 days (or `max_age_days`, if lower) and the source's own
+    `max_age_days`, in `attributes.details_interval_days`. The configured age
+    stays the ceiling, so adapting only brings a volatile page forward. It
+    never leaves a page longer than the owner set. This departs from the
+    plan's [30, 180] range, which would have stretched past a 90-day setting.
 - That key is carried over by the list-page upsert, like the other details keys.
 - The Odoo shop's token is its own last-write stamp, so its age stays fixed.
 
@@ -142,17 +162,17 @@ confirmation under CONFIRM BEFORE ARCHIVING.
 - **T1 is not live anywhere.** It needs one shadow cycle per source with zero
   disagreements, then a config change.
 - **A held confirmation pauses the sweep.** While a cycle is held, no new cycle
-  starts, so the source sweeps nothing until the confirmation succeeds or the
-  one-cycle cap passes. That is normally one day. Persistent failure costs up
-  to a cycle of freshness on that source. Holding is still preferred to archiving
-  stock the shop still sells.
+  starts, so the source sweeps nothing until the confirmation succeeds or a cap
+  passes. That is normally one day, at most two runs on failure or three on a
+  page backlog. Holding is still preferred to archiving stock the shop still
+  sells.
 - **Hidden out-of-stock products.** A WooCommerce shop that hides out-of-stock
   products may leave them out of an `include` answer too. Those archive as
   before; `hides_out_of_stock` shops keep them through their unlisted pass.
 - **Unverified on the live shops:** `include` with 100 ids, and the Odoo
   shop's pager markup and sitemap layout. Shadow runs and the confirmation's
-  own report settle them. A sitemap that lists no products is treated as a
-  failure, never as "nothing exists".
+  own report settle them. A sitemap that lists no products vetoes nothing; it
+  is never read as "nothing exists".
 
 ## T2 option (c), for later
 
