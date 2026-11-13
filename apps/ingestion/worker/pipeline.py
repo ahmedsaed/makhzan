@@ -931,6 +931,12 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     nothing — reporting it would cry wolf on every recovery from a failure. The
     same is true of a paced source, where the run that closes the cycle has only
     visited its own slice of the partitions; see the caller.
+
+    A clean check is recorded too (`unmapped` empty; `unused` empty when the
+    run was complete, absent when it could not say), and None
+    means "not checked" — no crosswalk, or nothing observed. Storing nothing on
+    a clean run left status showing the last run that *did* drift, so drift
+    fixed by a mapping or an `ignore` entry lingered for weeks.
     """
     if not adapter.categories or not observed:
         return None
@@ -943,21 +949,23 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     unmapped = {
         name: n for name, n in observed.items() if normalize_category_name(name) not in known
     }
-    drift: dict = {"observed": len(observed)}
-    if unmapped:
-        # Biggest first — a rename of a busy category matters more than a new
-        # one-product corner.
-        drift["unmapped"] = dict(Counter(unmapped).most_common(15))
-        drift["unmapped_listings"] = sum(unmapped.values())
+    # Biggest first — a rename of a busy category matters more than a new
+    # one-product corner.
+    drift: dict = {
+        "observed": len(observed),
+        "unmapped": dict(Counter(unmapped).most_common(15)),
+        "unmapped_listings": sum(unmapped.values()),
+    }
     if complete:
         seen = fold_names(observed)
         unused = sorted(
             name for name in adapter.categories if normalize_category_name(name) not in seen
         )
-        if unused:
-            drift["unused"] = unused[:25]
-            drift["unused_count"] = len(unused)
-    return drift if len(drift) > 1 else None
+        # Present (even empty) only when this run could speak for retirements,
+        # so status can tell "none retired" from "not in a position to know".
+        drift["unused"] = unused[:25]
+        drift["unused_count"] = len(unused)
+    return drift
 
 
 async def _partitions_for_this_run(
@@ -1205,7 +1213,7 @@ async def _logged_run(
             observed,
             complete=bool(cycle) and not resumed and swept_every_partition,
         )
-        if drift:
+        if drift is not None:
             stats["crosswalk"] = drift
         run.stats = stats
 
