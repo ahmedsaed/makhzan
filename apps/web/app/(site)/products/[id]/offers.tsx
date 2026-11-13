@@ -6,11 +6,13 @@ import { PriceRange } from "@/components/price";
 import { ShopLink } from "@/components/shop-link";
 import { StockBadge } from "@/components/stock-badge";
 import { titleOf, type Offer } from "@/lib/api";
-import { plural } from "@/lib/format";
+import { plural, PRICE_ON_REQUEST } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
-import { isInStock } from "@/lib/product";
+import { isInStock, needsEach, rowSpan } from "@/lib/offers";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+
+import { RowTerms } from "./terms";
 
 /**
  * Every offer of a product in one list (rule P3), with the out-of-stock ones
@@ -57,7 +59,13 @@ export function Offers({
           productTitle={productTitle}
           now={now}
         />
-        <Fold offers={stale} kind="out of date" data="stale" productTitle={productTitle} now={now} />
+        <Fold
+          offers={stale}
+          kind="out of date"
+          data="stale"
+          productTitle={productTitle}
+          now={now}
+        />
       </div>
     </section>
   );
@@ -119,7 +127,10 @@ function OfferList({
 /**
  * One offer, led by the shop's own title: a shop legitimately lists several
  * variants of one product, and without the title those rows are identical
- * lines with different prices (rule P3).
+ * lines with different prices (rule P3). Its price is the price of one, with
+ * "each" when the shop sells a minimum; "Price on request" when it gives none.
+ * Under it, the terms its shop states (RowTerms): a stock count, the minimum,
+ * quantity prices, "Ships from abroad", a part number, what it fits, options.
  *
  * Self-contained on purpose — nothing here reads a neighbouring row — so that
  * variant groups can later wrap runs of rows without rewriting them.
@@ -127,10 +138,13 @@ function OfferList({
 function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: string; now: Date }) {
   const supplier = offer.supplier;
   const title = titleOf(offer) || productTitle;
+  // Every price the row's options show, in stock or not: the table inside
+  // the row says which are in stock.
+  const span = rowSpan(offer);
   return (
     <li
       data-offer={offer.id}
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'] last:border-b-0"
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'_'extra_extra_extra'] last:border-b-0"
     >
       <div className="[grid-area:title]">
         <span
@@ -164,8 +178,26 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
         </span>
         <Freshness lastVerified={parseVerified(offer.last_verified_at)} now={now} />
       </div>
-      <div className="ps-3 text-end [grid-area:price]">
-        <PriceRange min={offer.price} currency={offer.currency} className="text-base" />
+      <div className="ps-3 text-end whitespace-nowrap [grid-area:price]">
+        {span === null ? (
+          <span data-price data-on-request className="figure text-sm text-ink">
+            {PRICE_ON_REQUEST}
+          </span>
+        ) : (
+          <>
+            <PriceRange
+              min={span.min}
+              max={span.max}
+              currency={offer.currency}
+              className="text-base"
+            />
+            {needsEach(offer) && (
+              <span data-each className="ms-1 text-xs font-medium text-ink-2">
+                each
+              </span>
+            )}
+          </>
+        )}
       </div>
       <div className="ps-3 text-end [grid-area:view]">
         {offer.source_url && supplier && (
@@ -180,6 +212,7 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
           </ShopLink>
         )}
       </div>
+      <RowTerms offer={offer} now={now} />
     </li>
   );
 }
