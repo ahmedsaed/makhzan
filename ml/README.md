@@ -322,3 +322,15 @@ Verdicts for the other models:
   - `--cpu-set 0-3` pins the CPU services to fewer cores.
 - `quant.py`: compares two score files with the adoption rule.
 - `parity_qwen3_reranker.py`: compares the served reranker with the model card's own code.
+- `bakeoff/`: the Phase D bake-off (candidate finding and pair judging, with the prompt study).
+  Run in this order:
+  1. `catalogue.py`: dump the local database copy.
+  2. `rules.py`: today's grouping rules, via makhzan_schemas, in the ingestion venv.
+  3. `contexts.py`: the context ladder.
+  4. `fit.py`: per-model token budgets, inside the vLLM image.
+  5. `embed.py` and `retrieval.py`: these need numpy.
+  6. `judge.py`, once per running service.
+  7. `evaluate.py validation`, then `evaluate.py test` once.
+
+  Each script's docstring gives its exact command. Catalogue text goes to a private directory
+  you name. `ml/out/bakeoff/` gets pair ids, scores and counts.
