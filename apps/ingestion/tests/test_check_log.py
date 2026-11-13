@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -150,6 +151,97 @@ async def test_coming_back_from_archive_at_the_same_values_is_not_a_change():
     listing = await _listing()
     assert listing.status == ListingStatus.ACTIVE
     assert (listing.checks, listing.changes) == (2, 0)
+
+
+@pytest.mark.asyncio
+async def test_the_first_counted_read_is_never_a_change():
+    """A listing stored before the log existed compares against a weeks-old row."""
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+    async with SessionLocal() as s:  # as the migration leaves an older listing
+        listing = (await s.execute(select(Listing))).scalar_one()
+        listing.checks, listing.changes = 0, 0
+        listing.first_checked_at = listing.last_checked_at = None
+        await s.commit()
+
+    await run_source(SRC, Shop({"a1": ("150 EGP", "In stock")}))
+    listing = await _listing()
+    assert (listing.checks, listing.changes) == (1, 0)
+    async with SessionLocal() as s:
+        rows = (
+            (await s.execute(select(PriceObservation).order_by(PriceObservation.observed_at)))
+            .scalars()
+            .all()
+        )
+    assert [r.price for r in rows] == [Decimal("120.00"), Decimal("150.00")]  # still recorded
+    assert rows[1].prev_checked_at is None
+
+
+class TwoLeafShop(Shop):
+    """The same product under two partitions of one run, as the Odoo shop's leaves are."""
+
+    def __init__(self, a: tuple, b: tuple):
+        super().__init__({})
+        self.by_partition = {"a": {"a1": a}, "b": {"a1": b}}
+
+    def partitions(self) -> list[str]:
+        return ["a", "b"]
+
+    async def fetch_page(self, partition: str, page: int) -> Page:
+        self.items = self.by_partition[partition]
+        return await super().fetch_page(partition, page)
+
+
+@pytest.mark.asyncio
+async def test_one_counted_read_per_listing_per_run():
+    run = await run_source(SRC, TwoLeafShop(("120 EGP", "In stock"), ("120 EGP", "In stock")))
+    first = await _listing()
+    assert (first.checks, first.changes) == (1, 0)
+    assert first.last_checked_at >= run.started_at
+
+    await run_source(SRC, TwoLeafShop(("120 EGP", "In stock"), ("120 EGP", "In stock")))
+    again = await _listing()
+    assert (again.checks, again.changes) == (2, 0)
+
+    # A change seen on the run's second read is still found and recorded,
+    # without a second check, and the run's first read stays its check time.
+    await run_source(SRC, TwoLeafShop(("120 EGP", "In stock"), ("130 EGP", "In stock")))
+    changed = await _listing()
+    assert (changed.checks, changed.changes) == (3, 1)
+    async with SessionLocal() as s:
+        latest = (
+            await s.execute(
+                select(PriceObservation).order_by(PriceObservation.observed_at.desc()).limit(1)
+            )
+        ).scalar_one()
+    assert latest.price == Decimal("130.00")
+    assert latest.prev_checked_at == changed.last_checked_at
+    assert latest.observed_at > changed.last_checked_at
+
+
+@pytest.mark.asyncio
+async def test_a_change_row_carries_the_previous_read():
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+    read = (await _listing()).last_checked_at
+    await run_source(SRC, Shop({"a1": ("135 EGP", "In stock")}))
+
+    async with SessionLocal() as s:
+        rows = (
+            (await s.execute(select(PriceObservation).order_by(PriceObservation.observed_at)))
+            .scalars()
+            .all()
+        )
+    assert [r.prev_checked_at for r in rows] == [None, read]
+    assert (await _listing()).last_checked_at > read
+
+
+@pytest.mark.asyncio
+async def test_a_stock_only_read_moves_last_checked_not_last_verified():
+    await run_source(SRC, Shop({"a1": ("120 EGP", "In stock")}))
+    before = await _listing()
+    await run_source(SRC, Shop({}, out_of_stock_ids=["a1"]))
+    after = await _listing()
+    assert after.last_verified_at == before.last_verified_at
+    assert after.last_checked_at > before.last_checked_at
 
 
 # --------------------------------------------------------------------------- #
@@ -302,7 +394,7 @@ def _freshness():
 
 def test_cho_estimator_matches_its_formula():
     fresh = _freshness()
-    assert fresh.cho_rate(10, 0, 7) == pytest.approx(-__import__("math").log(10.5 / 10.5) / 7)
+    assert fresh.cho_rate(10, 0, 7) == pytest.approx(0.0)
     # 2 changes in 10 weekly checks: a bit above the naive 2/70 a day.
     rate = fresh.cho_rate(10, 2, 7)
     assert rate > 2 / 70
@@ -338,14 +430,17 @@ async def test_freshness_report_on_fixture_data(capsys):
         defaults.update(kw)
         return Listing(**defaults)
 
-    cheap = listing("cheap", "20", checks=3, changes=0, first_checked_at=now - 15 * day)
-    dear = listing("dear", "1500", checks=3, changes=1, first_checked_at=now - 15 * day)
+    log = dict(first_checked_at=now - 15 * day, last_checked_at=now - day)
+    cheap = listing("cheap", "20", checks=3, changes=0, **log)
+    dear = listing("dear", "1500", checks=3, changes=1, **log)
     restock = listing(
         "restock", "100", stock_signal=StockSignal.OUT_OF_STOCK, last_verified_at=now - 30 * day
     )
-    gone = listing("gone", "60", status=ListingStatus.ACTIVE)
+    gone = listing("gone", "60")
+    recent = listing("recent", "70", last_verified_at=now - 4 * day)
+    lost = listing("lost", "80", status=ListingStatus.ARCHIVED, last_verified_at=now - 19 * day)
 
-    def obs(row, when, price, stock=StockSignal.IN_STOCK, available=True):
+    def obs(row, when, price, stock=StockSignal.IN_STOCK, available=True, prev=None):
         return PriceObservation(
             listing_id=row.id,
             observed_at=when,
@@ -354,6 +449,7 @@ async def test_freshness_report_on_fixture_data(capsys):
             stock_signal=stock,
             in_stock=available and stock == StockSignal.IN_STOCK,
             available=available,
+            prev_checked_at=prev,
         )
 
     def run(source, ago, stats, took=timedelta(hours=1)):
@@ -369,17 +465,22 @@ async def test_freshness_report_on_fixture_data(capsys):
     async with SessionLocal() as s:
         s.add_all([supplier, other])
         await s.flush()
-        s.add_all([cheap, dear, restock, gone])
+        s.add_all([cheap, dear, restock, gone, recent, lost])
         await s.flush()
         s.add_all(
             [
                 obs(cheap, now - 20 * day, "20"),
                 obs(dear, now - 20 * day, "1400"),
-                obs(dear, now - 2 * day, "1500"),  # a change in the window
+                # A change in the window, found 3 days after the previous read.
+                obs(dear, now - 2 * day, "1500", prev=now - 5 * day),
                 obs(restock, now - 40 * day, "100", StockSignal.OUT_OF_STOCK),
-                obs(gone, now - 20 * day, "60"),
-                obs(gone, now - 10 * day, "60", available=False),  # archived ...
-                obs(gone, now - 1 * day, "60"),  # ... and back: a false archival
+                obs(gone, now - 30 * day, "60"),
+                obs(gone, now - 20 * day, "60", available=False),  # archived ...
+                obs(gone, now - 15 * day, "60"),  # ... and back in 5 days: a false archival
+                obs(lost, now - 30 * day, "80"),
+                obs(lost, now - 18 * day, "80", available=False),  # archived for good
+                obs(recent, now - 30 * day, "70"),
+                obs(recent, now - 3 * day, "70", available=False),  # too recent to judge
             ]
         )
         cycle = {
@@ -423,14 +524,30 @@ async def test_freshness_report_on_fixture_data(capsys):
     assert m1["cycle_days"] == [7.0]
     assert m1["requests_max_day"] == 40
 
-    assert data["staleness"]["fresh-shop"]["active"] == 4
+    assert data["staleness"]["fresh-shop"]["active"] == 5
     assert data["changes"]["fresh-shop"] == {"sweep": 1}
-    log = data["check_log"]["fresh-shop"]
-    assert (log["listings"], log["checks"], log["changes"]) == (2, 6, 1)
-    assert log["delay_n"] == 1
-    assert log["delay_p50"] == pytest.approx(7.0, abs=0.01)  # 14 days over 2 intervals
+    stats = data["check_log"]["fresh-shop"]
+    assert (stats["listings"], stats["checks"], stats["changes"], stats["intervals"]) == (
+        2,
+        6,
+        1,
+        4,
+    )
+    # n = 4 intervals over 28 days (I = 7), X = 1.
+    rate = -math.log((4 - 1 + 0.5) / (4 + 0.5)) / 7
+    assert stats["days_between_changes"] == pytest.approx(1 / rate)
 
-    assert data["false_archivals"]["fresh-shop"] == {"archived": 1, "back": 1, "back_within": 1}
+    delay = data["detection_delay"]["fresh-shop"]
+    assert delay["n"] == 1
+    assert delay["p50"] == pytest.approx(3.0, abs=0.01)
+
+    # Two cycles of 7 days: gone (back after 5) and lost are judged, recent is not.
+    assert data["false_archivals"]["fresh-shop"] == {
+        "judged": 2,
+        "back_within": 1,
+        "too_recent": 1,
+        "judge_days": 14.0,
+    }
 
     segments = {row["segment"]: row for row in data["segments"]}
     # restock was last read 30 days ago: not re-read in the window, so absent.
@@ -444,7 +561,7 @@ async def test_freshness_report_on_fixture_data(capsys):
     }
     assert segments["price < 50"]["either"] == 0
     assert "not in stock at baseline" not in segments
-    assert segments["single supplier"]["n"] == 3
+    assert segments["single supplier"]["n"] == 4
 
     assert data["validators"]["fresh-shop"]["last_modified"] == 19
     assert data["categories"]["fresh-shop"]["moved"] == 2
@@ -497,4 +614,4 @@ async def test_freshness_report_on_an_empty_database(capsys):
     async with SessionLocal() as s:
         data = await fresh.collect(s, days=14)
     fresh.render(data)
-    assert "nothing archived in the window" in capsys.readouterr().out
+    assert "nothing archived to judge" in capsys.readouterr().out
