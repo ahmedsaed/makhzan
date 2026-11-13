@@ -259,7 +259,7 @@ async def rebuild_and_reindex(ctx: dict) -> str:
     """
     async with _REBUILD_LOCK:
         async with SessionLocal() as session:
-            await rebuild_products(session)
+            await rebuild_products(session, reidentify=True)
             await reindex_all(session, get_client())
             try:
                 retired = await retire_redirects_daily(session, datetime.now(timezone.utc).date())

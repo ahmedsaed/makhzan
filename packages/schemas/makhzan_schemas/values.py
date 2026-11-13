@@ -40,9 +40,13 @@ _unit("volt", "1000", "kv")
 _unit("volt", "0.001", "mv")
 _unit("watt", "1", "w", "watt", "watts")
 _unit("watt", "1000", "kw")
+_unit("watt", "745.7", "hp")
+_unit("pressure", "1", "bar")
+_unit("pressure", "0.0689476", "psi")
 _unit("amp", "1", "a", "amp", "amps")
 _unit("amp", "0.001", "ma")
 _unit("charge", "1", "mah")
+_unit("charge", "1000", "ah")
 _unit("pin", "1", "pin", "pins", "p")
 _unit("channel", "1", "ch", "channel", "channels")
 _unit("angle", "1", "°", "deg", "degree", "degrees")
@@ -53,6 +57,8 @@ _unit("length", "1000", "m", "meter", "meters", "metre", "metres")
 _unit("length", "25.4", "inch", "inches", '"')
 _unit("mass", "1", "g", "gram", "grams")
 _unit("mass", "1000", "kg")
+_unit("volume", "1", "ml")
+_unit("volume", "1000", "l", "ltr", "liter", "liters", "litre", "litres")
 _unit("frequency", "1", "hz")
 _unit("frequency", "1000", "khz")
 _unit("frequency", "1000000", "mhz")
@@ -69,7 +75,7 @@ _unit("quantity", "1", "pcs", "pc", "piece", "pieces", "pack")
 
 #: Bare single-letter units are only read when glued to the number ("90C",
 #: "2P", "10K", "3m"): with a space they are far more often a word or a label.
-_GLUED_ONLY = {"c", "p", "k", "m", "r", "a", "g", '"'}
+_GLUED_ONLY = {"c", "p", "k", "m", "r", "a", "g", "l", '"'}
 
 _NUM = r"\d+(?:\.\d+)?"
 _UNIT_ALT = "|".join(
@@ -131,3 +137,60 @@ def values_conflict(a: dict[str, frozenset[Decimal]], b: dict[str, frozenset[Dec
         if left and right and not (left & right):
             return True
     return False
+
+
+def is_unit(word: str | None) -> bool:
+    """Whether a word is a unit this module reads ("ml", "kg", "pcs")."""
+    return bool(word) and word.lower() in _UNITS
+
+
+def is_value(text: str | None) -> bool:
+    """Whether `text` is, in its entirety, one number and its unit ("12V", "2000W").
+
+    The tail of something shaped like a model code ("HG-2000W", "DC-12V") is a
+    reading, not a model number, when it is a value on its own.
+    """
+    return bool(text and _VALUE.fullmatch(text.strip().lower()))
+
+
+#: Words written *before* a number to name the scale, standard or label it is
+#: read on. "AWG-16" is a wire gauge, "NEMA-17" a motor frame size, "IP65" an
+#: ingress rating, "M8" a thread, "DN50"/"PN16" a nominal diameter and pressure,
+#: "PH2"/"PZ2" a screwdriver tip, "P120" an abrasive grit, "CAT6" a cable
+#: category, "SS304" a steel grade, "DIN-912" the standard a part follows,
+#: "Size-10"/"Class-150" a label and its value. Each says *how big* or *which
+#: grade*, never *which product*, so different makers' products share it.
+#:
+#: This is measurement vocabulary — a closed set of scales and standards bodies
+#: that grows with the metrology a trade uses — not a list of product families.
+#: CLAUDE.md forbids the latter: a code that turns out to cover several products
+#: (CR-10, A2212) is caught by evidence from the catalogue, never by being named
+#: (`makhzan_schemas.identifiers`).
+SCALE_WORDS: frozenset[str] = frozenset(
+    {
+        # gauges, frames and ratings
+        *("AWG", "SWG", "NEMA", "IP", "IK", "HRC", "GRIT", "MESH"),
+        # electrical
+        *("AC", "DC", "CAT", "RJ", "USB"),
+        # threads and pipe sizes
+        *("M", "UNC", "UNF", "NPT", "BSP", "BSPT", "BSPP", "DN", "PN", "SCH"),
+        # drive and tip sizes, abrasive grit
+        *("PH", "PZ", "SDS", "HEX", "TX", "TORX", "SW", "P", "ER"),
+        # a count or magnification ("x250", "X10")
+        "X",
+        # standards bodies, and the grades and materials they number
+        *("ISO", "DIN", "EN", "BS", "ASME", "ASTM", "AISI", "ANSI", "SAE", "API", "JIS"),
+        *("SS", "PVC", "PPR", "HDPE", "PE", "RAL"),
+        # package outlines: a JEDEC standard for how a part is housed (TO-220,
+        # DIP-16, DO-214AA), shared by thousands of different parts
+        *("TO", "SOT", "SOD", "SOP", "SOIC", "SSOP", "TSSOP", "MSOP", "DIP", "PDIP"),
+        *("QFP", "LQFP", "TQFP", "QFN", "DFN", "BGA", "DO", "LGA", "PLCC", "SIP"),
+        # labels that precede a value
+        *("NO", "SIZE", "TYPE", "STYLE", "CLASS", "GRADE", "LEVEL", "GROUP"),
+    }
+)
+
+
+def is_scale_word(letters: str | None) -> bool:
+    """Whether letters written before a number name a scale or label (see `SCALE_WORDS`)."""
+    return bool(letters) and letters.upper() in SCALE_WORDS

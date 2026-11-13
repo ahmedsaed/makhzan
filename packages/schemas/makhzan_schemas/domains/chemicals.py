@@ -4,11 +4,17 @@ Bought by the same person maintaining the machine, but a different purchase from
 a bearing or a valve: shelf life matters, quantity matters, and selection is by
 application (threadlocking, rust removal, sealing a joint) rather than by a
 dimension or a catalogue reference.
+
+Identifiers: the letter-led product code a maker prints on the can or tube
+(GP-999, CP-0001, MD-50) — the same family-checked rule tools use — with the
+shop's stated model as a fallback. Brand-plus-number names (Loctite 574) are not
+read: only one shop stocks those brands today.
 """
 
 from __future__ import annotations
 
 from makhzan_schemas.domains.base import DomainProfile, register_profile
+from makhzan_schemas.identifiers import model_code
 
 TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("adhesives", "Adhesives", "المواد اللاصقة", None),
@@ -38,6 +44,8 @@ CHEMICALS = register_profile(
         name_ar="الكيماويات والزيوت",
         taxonomy=TAXONOMY,
         category_rules=[],
+        identifier_rules=(model_code,),
+        shop_stated_identifiers=True,
         search_attributes=("title_en", "title_ar", "brand"),
         identifier_label_en="Product code",
         identifier_label_ar="كود المنتج",

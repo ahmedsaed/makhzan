@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+
+from makhzan_schemas.identifiers import Identifier, IdentifierRule, stated_identifiers
 
 #: (slug, name_en, name_ar, parent_slug) — parents are browse groups, leaves are
 #: what the resolver assigns.
@@ -27,10 +29,6 @@ CategoryRule = tuple[str, list[str]]
 
 #: Fallback domain for anything that predates the domain column.
 DEFAULT_DOMAIN = "electronics"
-
-
-def _no_identifier(_title: str | None) -> str | None:
-    return None
 
 
 @dataclass(frozen=True)
@@ -48,9 +46,14 @@ class DomainProfile:
     #: Supplier category strings too vague to resolve on (skipped before matching).
     generic_categories: frozenset[str] = frozenset()
 
-    #: Title -> product identifier. Electronics extracts an MPN; verticals with no
-    #: stable identifier return None and simply group less.
-    extract_identifier: Callable[[str | None], str | None] = _no_identifier
+    #: Title rules that read a product identifier (`makhzan_schemas.identifiers`),
+    #: tried in order; the first that answers wins. A department with none —
+    #: because its codes are family-level or absent (electrical, piping, timber
+    #: today) — simply groups less; adding one is adding its rules here.
+    identifier_rules: tuple[IdentifierRule, ...] = ()
+    #: Whether a shop's stated manufacturer part number or "Model" spec may stand
+    #: in for an identifier when no title rule answers.
+    shop_stated_identifiers: bool = False
     #: Title tokens that do not distinguish products, dropped from signatures.
     noise_tokens: frozenset[str] = frozenset()
     #: Jaccard similarity above which two listings sharing an identifier are
@@ -77,6 +80,35 @@ class DomainProfile:
     #: What this vertical calls its identifier in the UI ("Part number", ...).
     identifier_label_en: str = "Identifier"
     identifier_label_ar: str = "المعرّف"
+
+    def title_identifier(self, title: str | None) -> Identifier | None:
+        """The identifier the title names, by the first rule that answers."""
+        if not title:
+            return None
+        for rule in self.identifier_rules:
+            found = rule(title)
+            if found:
+                return found
+        return None
+
+    def extract_identifier(self, title: str | None) -> str | None:
+        """The identifier the title names, as shown, or None."""
+        found = self.title_identifier(title)
+        return found.value if found else None
+
+    def identifier_candidates(
+        self, title: str | None, attributes: Mapping | None = None
+    ) -> list[Identifier]:
+        """Every identifier a listing offers, best first: the title's, then (where
+        the department allows it) what the shop states. Grouping takes the first
+        one its family guard does not refuse."""
+        found = self.title_identifier(title)
+        candidates = [found] if found else []
+        if self.shop_stated_identifiers:
+            candidates += [
+                c for c in stated_identifiers(attributes) if all(c.key != k.key for k in candidates)
+            ]
+        return candidates
 
     def leaf_slugs(self) -> set[str]:
         return {slug for slug, *_ in self.category_rules}

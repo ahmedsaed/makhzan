@@ -117,6 +117,13 @@ def not_a_product(title: str | None, categories: list[str] | None = None) -> str
     return None
 
 
+def _first_identifier(domain: str | None, title: str | None, attributes: object) -> str | None:
+    found = get_profile(domain).identifier_candidates(
+        title, attributes if isinstance(attributes, dict) else None
+    )
+    return found[0].value if found else None
+
+
 def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing:
     reasons: list[str] = []
 
@@ -159,8 +166,10 @@ def normalize_item(raw: RawItem, domain: str | None = None) -> NormalizedListing
         title_ar=title_ar,
         description_en=None if desc_is_ar else description,
         description_ar=description if desc_is_ar else None,
-        # Prefer an adapter-provided MPN; otherwise extract from the title.
-        part_number=raw.part_number or get_profile(domain).extract_identifier(title),
+        # Prefer an adapter-provided MPN; otherwise the title's identifier, then
+        # what the shop states. The family guard needs the whole catalogue, so
+        # it is applied at regroup (`grouping.assign_identifiers`), not here.
+        part_number=raw.part_number or _first_identifier(domain, title, raw.raw),
         brand=raw.brand,
         price=price,
         currency=(raw.currency or DEFAULT_CURRENCY).upper()[:3],

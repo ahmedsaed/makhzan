@@ -1,8 +1,15 @@
 """Product grouping — derive canonical products from listings.
 
 Every active listing maps to exactly one product:
-  - a confident part number  -> shared product  "mpn:<PN>:<signature>"
+  - a confident identifier   -> shared product  "mpn:<ID>:<signature>"
+                                (electronics), "mpn:<domain>:<ID>:<signature>"
+                                (any other department)
   - otherwise                 -> singleton       "single:<source>:<external_id>"
+
+Identifiers are compared within one department only, folded so that "DT-830"
+and "DT830" are one code (`identifiers.fold_identifier`). Which rules read them
+is each department's `DomainProfile`; `assign_identifiers` applies them, plus
+the family guard, across the whole catalogue before a regroup.
 
 A shared part number is evidence, not proof, so every group that shares one is
 sub-clustered (`_subcluster`): listings merge only when their titles agree, and
@@ -35,7 +42,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from makhzan_schemas.domains import get_profile
+from functools import lru_cache
+
+from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
+from makhzan_schemas.identifiers import fold_identifier, identifier_pattern
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
 from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
 from makhzan_schemas.pricing import summarize_prices
@@ -47,15 +57,46 @@ from sqlalchemy.orm import selectinload
 _TOKEN = re.compile(r"[a-z0-9]+")
 
 
-def base_key(part_number: str | None, source: str, external_id: str | None, listing_id) -> str:
+def identity_key(part_number: str, domain: str | None = None) -> str:
+    """The shared-identifier key: folded, and scoped to its department.
+
+    Matching stays within a department (an owner decision): a tools listing and
+    an electronics listing that happen to share a code are never candidates.
+    Electronics keeps the bare form it always had, so its keys do not move.
+    """
+    folded = fold_identifier(part_number)
+    domain = domain or DEFAULT_DOMAIN
+    return f"mpn:{folded}" if domain == DEFAULT_DOMAIN else f"mpn:{domain}:{folded}"
+
+
+def base_key(
+    part_number: str | None,
+    source: str,
+    external_id: str | None,
+    listing_id,
+    domain: str | None = None,
+) -> str:
     if part_number:
-        return f"mpn:{part_number.upper()}"
+        return identity_key(part_number, domain)
     return f"single:{source}:{external_id or listing_id}"
 
 
-def _sig_tokens(title: str | None, mpn: str, domain: str | None = None) -> set[str]:
+@lru_cache(maxsize=65536)
+def _identifier_re(mpn: str) -> re.Pattern[str]:
+    return identifier_pattern(mpn)
+
+
+def _without_identifier(title: str | None, mpn: str | None) -> str:
+    """The title, lower-cased, with the identifier taken out however it is
+    spelled ("DT-830", "dt830"): what is left is what the listing says about
+    itself beyond its code."""
+    text = (title or "").lower()
+    return _identifier_re(mpn).sub(" ", text) if mpn else text
+
+
+def _sig_tokens(title: str | None, mpn: str | None, domain: str | None = None) -> set[str]:
     noise = get_profile(domain).noise_tokens
-    text = (title or "").lower().replace(mpn.lower(), " ")
+    text = _without_identifier(title, mpn)
     return {t for t in _TOKEN.findall(text) if t not in noise and len(t) >= 2 and not t.isdigit()}
 
 
@@ -93,7 +134,7 @@ def _span_ok(prices: list[Decimal], candidate: Decimal | None, max_ratio: float)
 _FORM_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
 
 
-def _form(title: str | None, mpn: str, domain: str | None = None) -> str | None:
+def _form(title: str | None, mpn: str | None, domain: str | None = None) -> str | None:
     """The physical form a title states ("chip", "module"...), or None if silent.
 
     Read before noise stripping, because the noise list is exactly where the
@@ -104,7 +145,7 @@ def _form(title: str | None, mpn: str, domain: str | None = None) -> str | None:
     if compiled is None:
         compiled = [(form, re.compile(pattern)) for form, pattern in profile.form_markers]
         _FORM_CACHE[profile.slug] = compiled
-    text = (title or "").lower().replace(mpn.lower(), " ")
+    text = _without_identifier(title, mpn)
     return next((form for form, pattern in compiled if pattern.search(text)), None)
 
 
@@ -201,7 +242,6 @@ def _subcluster(
     Price still gets a veto. Identical titles priced 15x apart are a pack and a
     single unit, and merging them publishes a price range that is false.
     """
-    mpn = mpn_key[len("mpn:") :]
     profile = get_profile(domain)
     threshold = profile.cluster_threshold
     max_ratio = profile.merge_price_ratio
@@ -213,9 +253,12 @@ def _subcluster(
     clusters: list[_Cluster] = []
     for listing in ordered:
         title = listing.title_en or listing.title_ar
+        # Each listing's own spelling of the identifier is taken out of its own
+        # title: the key is folded, so "HC-SR04" and "HCSR04" share a group.
+        mpn = listing.part_number
         ev = _Evidence(
             tokens=_sig_tokens(title, mpn, domain),
-            values=value_tokens((title or "").lower().replace(mpn.lower(), " ")),
+            values=value_tokens(_without_identifier(title, mpn)),
             form=_form(title, mpn, domain),
         )
         # The best-matching cluster, not the first that will have it: with a
@@ -287,14 +330,15 @@ def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
     """Two-phase grouping: base key, then sub-cluster ambiguous family groups."""
     base: dict[str, list[Listing]] = defaultdict(list)
     for listing in listings:
-        base[base_key(listing.part_number, listing.source, listing.external_id, listing.id)].append(
-            listing
+        key = base_key(
+            listing.part_number, listing.source, listing.external_id, listing.id, listing.domain
         )
+        base[key].append(listing)
 
     groups: dict[str, list[Listing]] = {}
     for key, items in base.items():
-        # A group's listings share an identifier, so they share a domain in
-        # practice; take it from the first and let the profile decide.
+        # A shared-identifier key is scoped to one domain, so a group's listings
+        # share it; take it from the first and let the profile decide.
         domain = items[0].domain if items else None
         # Every shared-identifier group is corroborated, not just a hardcoded
         # list of "ambiguous" families. That list was unmaintainable by
@@ -305,6 +349,59 @@ def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
         else:
             groups[key] = items
     return groups
+
+
+def assign_identifiers(listings: list[Listing]) -> int:
+    """Set every listing's `part_number` from its department's rules; returns how
+    many changed.
+
+    Each listing offers its candidates, best first
+    (`DomainProfile.identifier_candidates`): what its title names, then what its
+    shop states. It takes the first one the **family guard** does not refuse.
+
+    The guard is evidence, not a list. A model code is a family, not a product,
+    when one shop's own catalogue lists several different products under it:
+    FC-40 male, female and angled; RL-601S Plus, Mini and Universal; the parts a
+    3D-printer shop names after the CR-10 they fit. A shop lists two SKUs because
+    they differ, so two of its listings carrying one code under different titles
+    prove the code covers more than one product, and no shop may then group on
+    it. The same title listed twice is a duplicate, not a family. Only model
+    codes are checked (`Identifier.family_checked`): a bearing designation or an
+    O-ring size names one product by a published standard.
+
+    It needs the whole catalogue, so it runs at regroup time over every active
+    listing; the `part_number` set at ingest is the title's reading without it.
+    """
+    candidates: dict[uuid.UUID, tuple[str, list]] = {}
+    titles: dict[tuple[str, str, uuid.UUID], set[str]] = defaultdict(set)
+    for listing in listings:
+        domain = listing.domain or DEFAULT_DOMAIN
+        title = listing.title_en or listing.title_ar
+        found = get_profile(domain).identifier_candidates(title, listing.attributes)
+        candidates[listing.id] = (domain, found)
+        folded_title = " ".join(_TOKEN.findall((title or "").lower()))
+        # Every listing naming the code is evidence, whichever rule read it;
+        # only a family-checked identifier is ever refused on that evidence.
+        for identifier in found:
+            titles[(domain, identifier.key, listing.supplier_id)].add(folded_title)
+    families = {(domain, key) for (domain, key, _), seen in titles.items() if len(seen) > 1}
+
+    changed = 0
+    for listing in listings:
+        domain, found = candidates[listing.id]
+        chosen = next(
+            (
+                identifier
+                for identifier in found
+                if not (identifier.family_checked and (domain, identifier.key) in families)
+            ),
+            None,
+        )
+        value = chosen.value if chosen else None
+        if listing.part_number != value:
+            listing.part_number = value
+            changed += 1
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +600,9 @@ async def lock_products(session: AsyncSession) -> None:
     await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": PRODUCTS_LOCK_KEY})
 
 
-async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> dict:
+async def rebuild_products(
+    session: AsyncSession, *, dry_run: bool = False, reidentify: bool = False
+) -> dict:
     """Regroup active listings into products, keeping every product's id.
 
     Groups are computed exactly as before (`_group_listings`, every veto
@@ -511,6 +610,10 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
     Nothing is deleted: a product whose offers joined another is marked
     `merged_into` it, and one whose offers are all gone is marked `delisted_at`.
     Each merge, split, emptying and revival is recorded in `product_events`.
+
+    `reidentify` first re-reads every active listing's identifier with the
+    current rules and the family guard (`assign_identifiers`): what makes a rule
+    change, or a second shop selling a code, take effect without a re-crawl.
 
     `dry_run` applies everything inside the transaction and then rolls it back:
     the counts returned are what a real run would do, and nothing is kept.
@@ -530,6 +633,7 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         .scalars()
         .all()
     )
+    reidentified = assign_identifiers(listings) if reidentify else 0
     groups = _group_listings(listings)
 
     products = {p.id: p for p in (await session.execute(select(Product))).scalars().all()}
@@ -693,6 +797,7 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         "revived": len(plan.revived),
         "unmerged": len(plan.unmerged),
         "changed": changed,
+        "reidentified": reidentified,
     }
     if dry_run:
         await session.rollback()
@@ -708,6 +813,7 @@ def describe(stats: dict) -> str:
         f"ids kept {stats['kept']}, new {stats['created']}, merged {stats['merged']}, "
         f"split {stats['split']}, emptied {stats['emptied']}, revived {stats['revived']}, "
         f"un-merged {stats['unmerged']}"
+        + (f"; identifiers re-read on {n} listings" if (n := stats.get("reidentified")) else "")
     )
 
 
