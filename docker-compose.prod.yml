@@ -155,13 +155,8 @@ services:
     environment:
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
       SITE_URL: ${SITE_URL:-}
-    # Published on the Docker bridge address only (WEB_BIND), never on every
-    # interface: the reverse proxy reaches it there, and the internet cannot
-    # reach it at all. Reachable directly, the web app would forward a
-    # visitor's own X-Forwarded-For to the API, which would then rate-limit
-    # reports by whatever address the visitor chose (apps/api/app/client_ip.py).
     ports:
-      - "${WEB_BIND:-172.17.0.1}:${WEB_PORT:-3000}:3000"
+      - "${WEB_PORT:-3000}:3000"
     # Next's data cache (the `revalidate` results in lib/api.ts) lives under
     # .next/cache. Without a volume it is part of the container, so every deploy
     # starts cold and the first visitor pays for the whole taxonomy again —
