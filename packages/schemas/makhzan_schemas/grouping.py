@@ -353,11 +353,35 @@ def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
     return groups
 
 
-def _different_products(titles: set[frozenset[str]]) -> bool:
-    """Whether a shop's titles under one code name two products: two of them
-    each carry a word the other lacks."""
-    ordered = sorted(titles, key=sorted)
-    return any(not (a <= b or b <= a) for i, a in enumerate(ordered) for b in ordered[i + 1 :])
+#: What a shop's title under a code says once the code is taken out: its other
+#: words, and its values (as sorted pairs, so it can sit in a set).
+_TitleEvidence = tuple[frozenset[str], tuple]
+
+
+def _different_products(titles: set[_TitleEvidence]) -> bool:
+    """Whether a shop's titles under one code name more than one product.
+
+    - Different words, apart from the code and the values: always. Even one
+      title that only *adds* words is another product as often as not — the
+      printer and "the printer hotend", a drill and "+ 2 core bits", J47TK and
+      J47TK-S — so a title is the same product only when it says exactly the
+      same thing. The single exemption is a title that is nothing but the code
+      (and values): it says nothing another could contradict.
+    - The same words and values that differ without conflicting: the value veto
+      cannot keep those apart across shops (SCT-013 "100A/1V" against
+      "100A/50mA" states volts on one side and nothing on the other), so the
+      code cannot be trusted either. Values that do conflict ("200ml" against
+      "330ml") are one product in two sizes, which the value veto separates.
+    """
+    entries = sorted(titles, key=lambda e: (sorted(e[0]), repr(e[1])))
+    words = {w for w, _ in entries if w}
+    if len(words) > 1:
+        return True
+    for i, (wa, va) in enumerate(entries):
+        for wb, vb in entries[i + 1 :]:
+            if wa == wb and va != vb and not values_conflict(dict(va), dict(vb)):
+                return True
+    return False
 
 
 def assign_identifiers(listings: list[Listing]) -> int:
@@ -377,10 +401,9 @@ def assign_identifiers(listings: list[Listing]) -> int:
     it. Titles are compared with their values and the code taken out
     (`values.without_values`): "WD-40 Spray 200ml" and "WD-40 Spray 330ml" are
     one product in two sizes, which the value veto keeps apart, not a family.
-    Nor is one title that only adds words to another ("TU-501 Wire Cutter" and
-    "TNI-U Wire Cutter TU501 Side Snips"): that is one product described more
-    or less fully, or listed twice. Only titles that each say something the
-    other does not (FC-40 *male* / *female*) make a family. Only model codes are checked
+    Any other difference in wording does make a family, including a title that
+    only adds words ("CR-10 3D Printer" and "CR-10 3D Printer Hotend"); see
+    `_different_products`. Only model codes are checked
     (`Identifier.family_checked`): a bearing designation or an O-ring size names
     one product by a published standard.
 
@@ -391,7 +414,7 @@ def assign_identifiers(listings: list[Listing]) -> int:
     the stored value), so on an unchanged catalogue it changes nothing.
     """
     candidates: dict[uuid.UUID, tuple[str, list]] = {}
-    titles: dict[tuple[str, str, uuid.UUID], set[frozenset[str]]] = defaultdict(set)
+    titles: dict[tuple[str, str, uuid.UUID], set[_TitleEvidence]] = defaultdict(set)
     for listing in listings:
         domain = listing.domain or DEFAULT_DOMAIN
         title = listing.title_en or listing.title_ar
@@ -405,10 +428,10 @@ def assign_identifiers(listings: list[Listing]) -> int:
         # Every listing naming the code is evidence, whichever rule read it;
         # only a family-checked identifier is ever refused on that evidence.
         for identifier in found:
-            words = frozenset(
-                _TOKEN.findall(without_values(_without_identifier(title, identifier.value)))
-            )
-            titles[(domain, identifier.key, listing.supplier_id)].add(words)
+            rest = _without_identifier(title, identifier.value)
+            words = frozenset(_TOKEN.findall(without_values(rest)))
+            values = tuple(sorted(value_tokens(rest).items()))
+            titles[(domain, identifier.key, listing.supplier_id)].add((words, values))
     families = {
         (domain, key) for (domain, key, _), seen in titles.items() if _different_products(seen)
     }
