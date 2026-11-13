@@ -82,8 +82,10 @@ test("the icons, the manifest, the sitemap and robots.txt respond", async ({ req
   const text = await robots.text();
   expect(robots.headers()["content-type"]).toContain("text/plain");
   expect(text).toContain(
-    "User-agent: *\nContent-Signal: search=yes, ai-input=yes, ai-train=no\nAllow: /\n",
+    "User-agent: *\nContent-Signal: search=yes, ai-input=yes, ai-train=no\nDisallow: /search\n",
   );
+  // Allowing is the default; an `Allow: /` would win first-match parsers outright.
+  expect(text).not.toMatch(/^Allow:/m);
   expect(text).toContain("Disallow: /search\n");
   expect(text).toContain("Disallow: /departments*?stale=\n");
   expect(text).toContain("Disallow: /shops*&sort=\n");

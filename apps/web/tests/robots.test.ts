@@ -62,6 +62,26 @@ function allowed(agent: string, path: string): boolean {
   return best?.allow ?? true;
 }
 
+/**
+ * First-match semantics, as CPython's urllib.robotparser applies them: the
+ * group's rules in file order, the first whose path matches decides.
+ * `wildcards` false reads `*` literally (robotparser does, as of 3.12);
+ * true expands it, as some other first-match parsers do.
+ */
+function allowedFirstMatch(agent: string, path: string, wildcards: boolean): boolean {
+  for (const [field, pattern] of groupFor(agent).lines) {
+    if (field !== "allow" && field !== "disallow") continue;
+    if (!pattern) continue;
+    const matches = wildcards
+      ? new RegExp(
+          "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*"),
+        ).test(path)
+      : path.startsWith(pattern);
+    if (matches) return field === "allow";
+  }
+  return true;
+}
+
 /** Pages crawlers should reach: the sitemap's own and plain paging. */
 const CANONICAL = [
   "/",
@@ -91,8 +111,24 @@ const FILTERED = [
 
 describe("robots.txt", () => {
   it("signals search and AI input yes, training no, to everyone", () => {
-    expect(TEXT).toContain(`User-agent: *\nContent-Signal: ${CONTENT_SIGNAL}\n`);
+    expect(TEXT).toContain(`User-agent: *\nContent-Signal: ${CONTENT_SIGNAL}\nDisallow: /search\n`);
     expect(CONTENT_SIGNAL).toBe("search=yes, ai-input=yes, ai-train=no");
+  });
+
+  it("refuses under first-match parsers too: no Allow line can win first", () => {
+    expect(TEXT).not.toMatch(/^Allow:/m);
+    for (const agent of ["Googlebot", ...PACED_CRAWLERS]) {
+      for (const wildcards of [false, true]) {
+        expect(allowedFirstMatch(agent, "/search?q=servo", wildcards)).toBe(false);
+        expect(allowedFirstMatch(agent, "/api/search", wildcards)).toBe(false);
+        for (const path of CANONICAL) {
+          expect(allowedFirstMatch(agent, path, wildcards), path).toBe(true);
+        }
+      }
+      // A literal-`*` parser cannot read the facet rules at all; one that
+      // expands `*` refuses them in first-match order as well.
+      for (const path of FILTERED) expect(allowedFirstMatch(agent, path, true), path).toBe(false);
+    }
   });
 
   it("names the sitemap index", () => {

@@ -119,7 +119,10 @@ export function disallowLines(): string[] {
 }
 
 export function robotsTxt(sitemapUrl: string): string {
-  const general = ["Allow: /", ...disallowLines()];
+  // No `Allow: /`: allowing is the default, and a first-match parser (CPython's
+  // urllib.robotparser, which small fetchers use) would match it before any
+  // Disallow and read the whole file as "allow everything".
+  const general = disallowLines();
   const groups = [
     [
       "# Everyone: search engines and AI search/answer agents are welcome;",
