@@ -102,9 +102,9 @@ Phase 1 (collecting more of what shops already publish) has shipped. Phase 2
 | Shop contact details on the shop page | done |
 | Crawler activity on `/how-we-crawl` and shop pages | done |
 | Price history recorded and served by the API | done |
-| Price history on the product page ("lowest in 90 days", chart) | not done |
-| Options table, minimum order, quantity breaks, stated MPN | not done |
-| "Ships from abroad" / "Fits: …" badges, videos, "Price on request" | not done |
+| Price history on the product page ("lowest in 90 days", chart) | in review (`feat/phase2-price-history`) |
+| Options table, minimum order, quantity breaks, stated MPN | in review (`feat/phase2-product-page`) |
+| "Ships from abroad" / "Fits: …" badges, videos, "Price on request" | in review (`feat/phase2-product-page`) |
 | Grouping on the manufacturer part numbers shops state | not done |
 | Grouping by material for products sold per colour | not done (needs the options table) |
 

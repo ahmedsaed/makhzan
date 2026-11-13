@@ -1,12 +1,15 @@
-import { Layers, Store } from "lucide-react";
+import { Layers, Store, TrendingUp } from "lucide-react";
 
 import { Freshness } from "@/components/freshness";
 import { PriceRange } from "@/components/price";
 import type { Offer, ProductSummary } from "@/lib/api";
+import type { History } from "@/lib/history";
 import { formatCount, plural } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { shopsFact, summarizeOffers } from "@/lib/product";
 import { cn } from "@/lib/utils";
+
+import { historyFactParts } from "./history";
 
 /**
  * A link inside a line of text. On a phone its row is 44px tall and its
@@ -31,12 +34,16 @@ export function Facts({
   currency,
   now,
   similar,
+  history = null,
 }: {
   offers: Offer[];
   currency: string;
   now: Date;
   similar: ProductSummary[];
+  /** What the price history card shows; null when there is no card. */
+  history?: History | null;
 }) {
+  const recorded = history ? historyFactParts(history, currency) : null;
   const similarPrices = similar.flatMap((item) =>
     item.min_price === null ? [] : [item.min_price],
   );
@@ -49,6 +56,15 @@ export function Facts({
       <Fact name="shops" icon={Store}>
         <ShopsLine offers={offers} currency={currency} now={now} />
       </Fact>
+      {recorded && (
+        <Fact name="history" icon={TrendingUp} linked>
+          {[recorded.lowest, recorded.weeks].filter(Boolean).join(" · ")}
+          {(recorded.lowest || recorded.weeks) && " · "}
+          <a href="#history" className={LINK}>
+            {recorded.link}
+          </a>
+        </Fact>
+      )}
       {similar.length > 0 && (
         <Fact name="similar" icon={Layers} linked>
           <a href="#similar" className={LINK}>
