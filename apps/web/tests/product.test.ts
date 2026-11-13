@@ -115,7 +115,7 @@ describe("in-stock summary", () => {
       offer("c", 280, "in_stock", { shop: "y" }),
       offer("d", 100, "out_of_stock", { shop: "z" }),
     ]);
-    expect(summary).toEqual({
+    expect(summary).toMatchObject({
       state: "in_stock",
       offerCount: 3,
       shopCount: 2,

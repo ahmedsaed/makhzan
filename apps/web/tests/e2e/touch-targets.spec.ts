@@ -119,6 +119,56 @@ test("the product page's controls", async ({ page }) => {
   });
 });
 
+test("the product page's shop-term controls (Phase 2)", async ({ page }) => {
+  await page.goto("/products/p2-badges");
+  await expectTappable(page, {
+    "Fits N models": page.locator("details[data-fits] summary"),
+  });
+  await page.goto("/products/p2-options");
+  await expectTappable(page, {
+    "show more options": page.locator("[data-options-more] summary"),
+    video: page.locator("a[data-video]"),
+  });
+  await page.goto("/products/p2-cheapopt");
+  await expectTappable(page, {
+    "a row's options": page.locator("[data-offer] details[data-options] summary"),
+  });
+  await page.goto("/products/p2-fits");
+  await expectTappable(page, {
+    "a row's Fits": page.locator("[data-offer] details[data-fits] summary"),
+  });
+});
+
+test("nothing scrolls sideways at 320px on the Phase 2 product pages", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  for (const id of [
+    "p2-options",
+    "p2-options-long",
+    "p2-minorder",
+    "p2-breaks",
+    "p2-por",
+    "p2-badges",
+    "p2-multi",
+    "p2-mixedmin",
+    "p2-somepor",
+    "p2-allpor",
+    "p2-cheapopt",
+    "p2-volume",
+    "p2-mfrs",
+    "p2-fits",
+    "p2-longnotes",
+  ]) {
+    await page.goto(`/products/${id}`);
+    await page.evaluate(() =>
+      document.querySelectorAll("details").forEach((d) => d.setAttribute("open", "")),
+    );
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow, id).toBeLessThanOrEqual(0);
+  }
+});
+
 test("a shop page's contact links", async ({ page }) => {
   await page.goto("/shops/shop-a");
   const contact = page.locator("[data-shop-contact]");

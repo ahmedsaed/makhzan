@@ -102,7 +102,9 @@ function Fact({
 /**
  * One shop: "Sold by 1 shop · checked 3 days ago" (the age in its F2 colour).
  * Several: "Sold by 3 shops · in stock at 2 · EGP 260 – 295", the range being
- * the one the summary below shows, so the two never disagree.
+ * the one the summary below shows, so the two never disagree: prices of one
+ * ("each" when any has a minimum), offers on request left out, and "prices on
+ * request" when nothing is priced.
  */
 function ShopsLine({ offers, currency, now }: { offers: Offer[]; currency: string; now: Date }) {
   const { shops, listings, inStockAt } = shopsFact(offers);
@@ -115,7 +117,7 @@ function ShopsLine({ offers, currency, now }: { offers: Offer[]; currency: strin
       </>
     );
   }
-  const summary = summarizeOffers(offers);
+  const summary = summarizeOffers(offers, now);
   const parts = [sold];
   if (listings > shops) parts.push(plural(listings, "listing"));
   // "Unknown" is not "no": stock nobody confirmed is said to be unconfirmed.
@@ -131,7 +133,7 @@ function ShopsLine({ offers, currency, now }: { offers: Offer[]; currency: strin
   return (
     <>
       {parts.join(" · ")}
-      {summary.min !== null && (
+      {summary.min !== null ? (
         <>
           {" · "}
           <PriceRange
@@ -140,7 +142,10 @@ function ShopsLine({ offers, currency, now }: { offers: Offer[]; currency: strin
             currency={currency}
             className="text-ink-2"
           />
+          {summary.each && " each"}
         </>
+      ) : (
+        summary.onRequest.length > 0 && " · prices on request"
       )}
     </>
   );

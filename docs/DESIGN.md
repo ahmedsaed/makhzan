@@ -27,7 +27,7 @@ Measured on 60.9k active listings (November 2026).
 | Images on 99% of listings, 21% with several; descriptions on 41%, median ~900 chars | Photos can lead, inside a white frame. Descriptions come after makhzan's own facts and the way to the shop, clamped to 25 lines behind Read more. |
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
-| Prices EGP 5 (p10) to 39,000 (p99); unit of sale never recorded | "From EGP X" for ranges; never imply a per-unit price. |
+| Prices EGP 5 (p10) to 39,000 (p99); unit of sale recorded only where a shop states a minimum order (Phase 2) | "From EGP X" for ranges; a price reads "each" only beside a stated minimum (C3), never otherwise. |
 | 16 departments, very uneven (three hold 88% of products) | Departments are listed by size and each says what's inside; never equal tiles of names. |
 | Shops' contact details: listed by hand from where each shop's details are published (its site, its Facebook, its Google Maps listing; `sources.toml`) or read by the crawler from its JSON-LD; few shops have them yet, and none has a logo | The shop page shows what is known with where and when it was read, and names what is still missing; a product page offers WhatsApp or a call only for a shop that publishes one. |
 | Offers per product exceed shops per product | One shop can list several variants of one product. |
@@ -137,6 +137,42 @@ the page container on desktop; each section is left out when its fetch fails.
   Tell us" (an email to makhzan naming the product and the shop); then what the shop
   wrote. A fixed bottom bar on phones: price, "checked …"
   and **View at {shop}**.
+- **Shop terms (Phase 2, the approved mockup of November 2026).** What a shop states
+  about its listing is shown on any product that has it, never as an empty slot:
+  - *Options.* Under the one-shop box, "8 options · at {shop} · read 9 Nov": a table of
+    option, price and stock, six rows then "Show N more options" (a `<details>`), and a
+    note ("6 of 8 in stock … confirm on the shop's site"). An option the shop gives no
+    price of its own reads "see shop". The headline is the price of one widened by the
+    listing's price and its in-stock priced options ("EGP 1,700 – 1,750"). Options read
+    over 45 days ago set and widen no price: their read date shows in `age-muted` ("as
+    read 14 Sept"), their stock is never bold, and the note says they are too old to
+    set a price. On an offer row the price is the span of all its options, with the
+    table folded as "2 options · 1 in stock". On a phone the price and stock columns
+    narrow so the option's name has the room; the rows behind "Show N more" keep a
+    head for screen readers.
+  - *Minimum order.* The price stays the price of one, as the shop gives it, followed by
+    "each", and under it "min. 10 (EGP 1.50), then in tens" (or "in multiples of 5").
+  - *Quantity prices.* "Price by quantity, as {shop} lists it": a table, "1–9 EGP 47
+    each, 10–49 EGP 44 each, 50 or more EGP 42 each". No "save x%" (C3).
+  - *Fits* and *Ships from abroad*: neutral pills (`line-strong` outline, `surface`, never
+    the `badge` colours, which mean "N shops"). "Fits K2 Plus" names up to two models;
+    more fold ("Fits 19 models ▾", a `<details>` list). "Ships from abroad" carries a
+    tooltip: delivery may take longer, ask the shop.
+  - *Price on request* (the shop gives no price and says it is on request) stands in
+    the price slot in the price face ("Price on request", never EGP 0 and never
+    "free"); an offer with no price and no such word from its shop reads "No price
+    listed" instead, stock reads "Available at {shop}", and a note points
+    to the contact buttons under it ("… gives this price on request: call or message
+    them below"; "ask them on their site" for a shop with no contact).
+  - *Stock counts* only where the shop itself shows one: "36 in stock at {shop}" in the
+    box, "74 in stock" on that shop's row, never summed or shown at product level.
+  - *Manufacturer part numbers.* makhzan's own part number stays under the title; a
+    shop stating the same adds "· also stated by Delta Components". One stated number
+    that differs: "Mfr. part number FRC0603F6803TS · from Cairo Makers's listing". Two or
+    more different ones: "Shops state 2 manufacturer part numbers: NE555P, NE555 · each
+    offer shows its own", and each row shows its shop's ("Mfr. part NE555P").
+  - *Videos* the shop links: in that shop's panel of "What the shops say", after the
+    datasheets, as links ("eSUN ASA+ print test on YouTube ↗"), never embedded.
 - Similar products are always last, on every product page: a swipeable row with arrows
   on a phone, a grid from `sm`.
 - **What the shops say** (a heading on its own line): description, specifications
@@ -157,7 +193,11 @@ the page container on desktop; each section is left out when its fetch fails.
   description shows in full with no button.
 - Several shops: a summary ("5 offers in stock at 3 shops", the price range), then
   **Offers**: one list for all variants, lowest price first, each row led by the shop's
-  own title, then shop and freshness, then price and **View**. Under the list,
+  own title, then shop and freshness, then price and **View**, then the terms that
+  shop states, on its row only: a stock count, "min. 10 (EGP 1.50)", its quantity
+  prices ("EGP 415 from 10, EGP 405 from 50"), "Ships from abroad", its stated part
+  number, its "Fits" (never merged into one list for the product: a merged list would
+  claim one shop's fit for another shop's part) and its options. Under the list,
   **Contact the shops**: each shop that publishes a way to reach it, once, as a small
   block (its name; "Call 19123 · WhatsApp · Email"; its opening hours), never on the rows (a shop with three offers would
   say it three times, and a row leaving it out because a neighbour said it would break
@@ -167,6 +207,38 @@ the page container on desktop; each section is left out when its fetch fails.
   points to the cheapest of them. When every offer is out of date nothing folds for
   age: the page lists them all, and the summary carries the "Price may be out of
   date" note.
+- **Comparing several offers** (`apps/web/lib/offers.ts`, one module for the summary,
+  the facts line, the rows' order, the primary button and the bottom bar):
+  - Offers are compared by the **price of one**, as every shop publishes it: an offer's
+    cheapest option the shop says is **in stock**, when it has any, else its listing
+    price. Options without a price or a stated stock never count, nor options read over
+    45 days ago; the stock tiers stay (low stock is in stock; unknown and made to order
+    are "not known to be gone"); an offer never known to be checked is not fresh. At an
+    equal price of one the offer sold singly leads, then the more recently checked. The
+    API's `min_price` (`makhzan_schemas/pricing.py`) uses the same rule, so a search card
+    and the page agree. The range, "lowest price first", the cheapest button and
+    the bar all use it. Wherever an option's price leads (one that is not the listing
+    price itself), the option is named ("Lowest is
+    the “Without headers” option at Cairo Makers."; under the button and in the bar,
+    "“Without headers” option").
+  - An offer's minimum is the larger of its stated minimum and its multiple. Wherever a
+    price of one comes from an offer with a minimum, "each" and the minimum
+    with its total stand beside it: on the row, under the summary ("Lowest needs a
+    minimum order: 10 (EGP 1.50) at Cairo Makers"), on the button ("EGP 0.15 each at
+    Cairo Makers", with "min. 10 (EGP 1.50)" under it) and in the bar. The range and the
+    facts line read "each" as soon as any offer in the range has a minimum.
+  - An offer **on request** never enters the range, the facts line, the button or the
+    bar; it sorts after every priced offer, with "Price on request" in its price slot,
+    and the summary adds "· 1 more on request". With nothing priced the headline is
+    "Price on request", the summary "2 offers in stock at 2 shops, prices on request",
+    the facts line ends "prices on request", and the button and bar open the most
+    recently checked in-stock offer ("View at Giza Robotics").
+  - Quantity prices stay on their row. When one beats every price of one, the summary
+    adds a single line ("Buying 100 or more? Giza Robotics lists EGP 35 each from
+    100."); it never changes the range, the order or the button.
+  - An out-of-date offer (C2b) folds and counts nowhere, even when it is the lowest.
+  - "Ships from abroad" stays on its row; the button and the bar repeat it when theirs
+    is that offer.
 
 **Department and category.** Header (name, count, "Search in {department}"); groups as object
 tiles; the selected group's categories as smaller object tiles; then results with the
@@ -364,7 +436,7 @@ Each is meant to be checked by a test.
 - **C1** Every result, list or grid, shows: title, price (or range), shop name or "N shops", freshness. List and grid carry the same facts.
 - **C2** Out of stock is hidden by default; when anything is hidden the page says how many and offers to show them.
 - **C2b** Stale (last checked more than 45 days ago: F2's warn tier, `STALE_AFTER_DAYS` in `apps/web/lib/freshness.ts` and `makhzan_schemas/freshness.py`) is hidden by default too, in results (`?stale=all` shows it) and folded on a product page. When anything is hidden the page says how many and offers to show them. A product is fresh when any of its offers is. A direct link always works: a product whose offers are all stale still renders, with the warning, and a stale shop's own page shows its products.
-- **C3** No per-unit price is ever implied; ranges read "EGP 260 – 400". Prices are the current price only: no struck-through "before" prices, no discount badges (some shops' before prices are standing markups).
+- **C3** No per-unit price is implied beyond what a shop states. Prices are compared by the price of one, as every shop publishes it. Wherever a price of one comes from an offer with a minimum order, the minimum with its total stands beside it ("EGP 0.15 each · min. 10 (EGP 1.50)": box, row, summary, button, bottom bar), and a range reads "each" as soon as any offer in it has a minimum; quantity prices say "each" in their own table. Ranges read "EGP 260 – 400". Prices are the current price only: no struck-through "before" prices, no discount badges, no "save x%" on quantity prices (some shops' before prices are standing markups). A product or offer without a price reads "Price on request", never EGP 0 or "free".
 - **C4** Specs and datasheets appear only when the shop provides them, with their source; never an empty or placeholder table. No brand filter, no Arabic interface text.
 
 **Freshness**
@@ -376,7 +448,7 @@ Each is meant to be checked by a test.
 - **P1** Every result opens the product page; nothing in a result links straight to a shop.
 - **P2** The comparison list appears only with 2+ offers.
 - **P3** All of a product's offers share one list, each row led by its own title (variants differ). Rows must not depend on their neighbours, so variant groups can wrap them later.
-- **P4** The only link out of makhzan is to a shop's own page, and it carries `ref=makhzan`. The one exception is a way to reach a shop, as its details are published (its site, its Facebook, its Google Maps listing): `tel:`, `mailto:`, `https://wa.me/<its number>` and a Google or Apple Maps link, plus the "Something wrong? Tell us" email to makhzan. These carry no `ref` (it would break them) and are marked `data-contact`.
+- **P4** The only link out of makhzan is to a shop's own page, and it carries `ref=makhzan`. The one exception is a way to reach a shop, as its details are published (its site, its Facebook, its Google Maps listing): `tel:`, `mailto:`, `https://wa.me/<its number>` and a Google or Apple Maps link, plus the "Something wrong? Tell us" email to makhzan. These carry no `ref` (it would break them) and are marked `data-contact`. Files and videos a shop links from its listing are links out too, shown only in that shop's panel: datasheets go through the shop link (with `ref`, as before), videos open their host (YouTube, Vimeo …) with no `ref`, which would mean nothing there, and are marked `data-video`.
 
 **Style and accessibility**
 - **S1** Colours come only from the tokens above; no literal colours in components.
