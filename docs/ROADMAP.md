@@ -157,7 +157,7 @@ configuration"). The tests are supplier-agnostic, crosswalks are TOML data behin
 a loader, and suppliers are rows in a table, so none of it needs code here.
 
 ### 5. Deferred
-- ~~**Drop `suppliers.phone`.**~~ Done: migration `772533d06b60` drops it, the
+- ~~**Drop `suppliers.phone`.**~~ Done 2026-11-13: migration `772533d06b60` drops it, the
   contract step for `2b656e4b5adc`, which replaced it with `phones` and kept the
   column while a release that selected it was still serving (docs/DEPLOYMENT.md).
 - Supplier self-serve portal and "claim your shop" (PLAN Phase 3).
