@@ -313,6 +313,126 @@ async def cycle_budget(session, source_filter: str | None, days: int = 14) -> No
         print(line)
 
 
+async def short_page_end(session, source_filter: str | None, days: int = 45) -> None:
+    """T1, per source: is ending a partition on a short page safe to switch on?
+
+    In shadow (the default) a run only notes where a short-page stop would
+    have ended each partition, and the next page says whether it was right
+    (`stats.source_report.short_page`). Tallied here over every full run since
+    the start of the source's last completed cycle, so "0 disagreements" over
+    a window covering a whole cycle is the plan's bar for setting
+    `end_on_short_page = "live"`. A disagreement is a short page that was not
+    the last: live, it would have lost the rest of the partition.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    query = (
+        select(IngestionRun)
+        .where(
+            IngestionRun.started_at >= since,
+            # Every full run, those without a tally too: the window's first
+            # run must carry one for the window to be a cycle of shadow.
+            ~IngestionRun.stats.has_key("limit"),
+        )
+        .order_by(IngestionRun.started_at.desc())
+    )
+    if source_filter:
+        query = query.where(IngestionRun.source == source_filter)
+    by_source: dict[str, list[IngestionRun]] = {}
+    for run in (await session.execute(query)).scalars():
+        by_source.setdefault(run.source, []).append(run)
+    tallies = {
+        source: runs
+        for source, runs in by_source.items()
+        if any(((r.stats or {}).get("source_report") or {}).get("short_page") for r in runs)
+    }
+    if not tallies:
+        return
+    _header("SHORT-PAGE END (T1)")
+    for source, runs in sorted(tallies.items()):
+        # From the start of the newest completed cycle: one whole cycle, plus
+        # whatever of the next has run since.
+        start = next((s for r in runs if (s := _cycle_start(r.stats))), None)
+        # A run belongs to the window if it was still going when the cycle
+        # began: the one that stamped its first cursor started just before.
+        window = [
+            r for r in runs if start is None or r.finished_at is None or r.finished_at >= start
+        ]
+        reports = [
+            report
+            for r in window
+            if (report := ((r.stats or {}).get("source_report") or {}).get("short_page"))
+        ]
+        mode = reports[0].get("mode", "?") if reports else "?"
+        span = f"since {start:%Y-%m-%d}, a full cycle" if start else f"last {days}d, no full cycle"
+        if mode == "live":
+            saved = sum(int(r.get("saved") or 0) for r in reports)
+            print(
+                f"  {source:22s} short-page stop: {GREEN}live{RESET}, {saved} requests saved ({span})"
+            )
+            continue
+        compared = sum(int(r.get("compared") or 0) for r in reports if r.get("mode") == "shadow")
+        wrong = sum(int(r.get("disagreements") or 0) for r in reports if r.get("mode") == "shadow")
+        saved = sum(int(r.get("saved") or 0) for r in reports if r.get("mode") == "shadow")
+        colour = RED if wrong else (GREEN if compared else DIM)
+        line = (
+            f"  {source:22s} short-page stop: {mode}, {compared} partitions compared,"
+            f" {colour}{wrong} disagreements{RESET}, would save {saved} requests ({span})"
+        )
+        # A whole cycle in shadow: the window's first run already carried a
+        # tally, so no run of the cycle predates the shadow.
+        covered = bool(window) and bool(
+            ((window[-1].stats or {}).get("source_report") or {}).get("short_page")
+        )
+        if not covered and start is not None:
+            line += f"  {DIM}not all of the cycle in shadow{RESET}"
+        if not wrong and compared and start is not None and covered:
+            line += f'  {GREEN}ready: end_on_short_page = "live"{RESET}'
+        print(line)
+        named = [d for r in reports for d in r.get("disagreed") or []]
+        if named:
+            print(f"  {RED}{'':22s} not the last page: {', '.join(named[:5])}{RESET}")
+
+
+async def archive_confirmation(session, source_filter: str | None, days: int = 45) -> None:
+    """T4/T12: what each source's last cycle-end confirmation found, before archiving.
+
+    Candidates are the listings a completed cycle did not see. "kept" were
+    still listed when asked (a sweep skip, not a removal), "absent" were
+    archived, and "held" are waiting for the next run: the cycle stays open,
+    capped at one cycle, after which they archive as before.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    query = (
+        select(IngestionRun.source, IngestionRun.started_at, IngestionRun.stats["archive_confirm"])
+        .where(IngestionRun.started_at >= since, IngestionRun.stats.has_key("archive_confirm"))
+        .order_by(IngestionRun.started_at.desc())
+    )
+    if source_filter:
+        query = query.where(IngestionRun.source == source_filter)
+    latest: dict[str, tuple[datetime, dict]] = {}
+    for source, started, report in (await session.execute(query)).all():
+        latest.setdefault(source, (started, report or {}))
+    if not latest:
+        return
+    _header("CONFIRM BEFORE ARCHIVING (T4/T12)")
+    for source, (started, r) in sorted(latest.items()):
+        line = (
+            f"  {source:22s} {_age(started)}: {r.get('candidates', 0)} candidates,"
+            f" kept {r.get('kept', 0)}, archived {r.get('absent', 0)}"
+        )
+        if r.get("via"):
+            line += f" via {r['via']}"
+        if r.get("held_by_sitemap") is not None:
+            line += f" ({r['held_by_sitemap']} held by the sitemap)"
+        if r.get("held"):
+            line += f"  {YELLOW}{r['held']} held for the next run{RESET}"
+        if r.get("failed"):
+            line += f"  {RED}failed: {str(r['failed'])[:60]}{RESET}"
+        if r.get("overdue"):
+            line += f"  {YELLOW}waited a cycle: archived as before{RESET}"
+        print(line)
+
+
 async def crawler_identity(session, source_filter: str | None) -> None:
     """Who each source is crawled as: configured, and what its last run actually sent.
 
@@ -645,10 +765,16 @@ async def product_details(session, source_filter: str | None) -> None:
             )
         if settings is None:
             continue
-        counts = await queue_counts(session, source_id, settings)
+        # A card hash cannot see a description edit, so its refresh age adapts
+        # per listing (T10); a shop's own last-write token keeps the setting.
+        adaptive = adapter.token_kind == "card_hash"
+        counts = await queue_counts(session, source_id, settings, adaptive=adaptive)
+        refresh = (
+            f"adaptive from {settings.max_age_days}d" if adaptive else f"{settings.max_age_days}d"
+        )
         print(
             f"  {'':22s} token: {adapter.token_kind or 'none'}, refresh after"
-            f" {settings.max_age_days}d   have page {counts['fetched']}"
+            f" {refresh}   have page {counts['fetched']}"
             f"   due: changed {counts['changed']}, never fetched {counts['never_fetched']},"
             f" stale by age {counts['stale']}   backing off {counts['backing_off']}"
         )
@@ -835,6 +961,8 @@ async def main() -> None:
         await sweep_progress(session, args.source)
         await cycle_history(session, args.source)
         await cycle_budget(session, args.source)
+        await short_page_end(session, args.source)
+        await archive_confirmation(session, args.source)
         await crawler_identity(session, args.source)
         await robots_health(session, args.source)
         await recent_runs(session, args.source, args.runs)

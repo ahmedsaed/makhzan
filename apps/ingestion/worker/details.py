@@ -11,11 +11,21 @@ page is read again only when there is a reason to think it changed.
   1. *changed*: the change token the list page gave (`attributes.change_token`)
      differs from the one stored when the page was last read
      (`attributes.details_token`);
-  2. *never fetched*: newest first, so a new product is described soonest;
+  2. *never fetched*: the most important first (`importance`: in a product
+     several suppliers offer, in stock), then newest, so the backfill reaches
+     the listings a buyer compares and can buy before the rest (T10);
   3. *stale by age*: read more than `max_age_days` ago, oldest first. The
      safety net for an edit no token shows — a card hash (TOKEN_CARD_HASH)
      only sees what the card shows, so a description edited on its own is
-     caught here and nowhere else.
+     caught here and nowhere else. For such a source the age adapts per
+     listing (`details_interval_days`), as Nutch's AdaptiveFetchSchedule does:
+     a re-read that finds the page changed comes back 0.8 times as soon,
+     one that finds it unchanged waits 1.4 times longer, between
+     `MIN_INTERVAL_DAYS` (or `max_age_days`, if lower) and `max_age_days`.
+     The source's own setting stays the ceiling, so adapting only ever brings
+     a volatile page forward, never leaves one longer than the owner set; and
+     a change never lengthens the interval. A shop's own last-write token
+     (TOKEN_MODIFIED) already sees every edit, so its age stays fixed.
 A listing whose last read failed waits out a backoff (`details_retry_at`) first.
 
 **Where the details live.** What a page gave is kept whole under
@@ -43,16 +53,16 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from makhzan_schemas.enums import ListingStatus
-from makhzan_schemas.models import Listing
-from sqlalchemy import DateTime, and_, cast, func, or_, select
+from makhzan_schemas.enums import ListingStatus, StockSignal
+from makhzan_schemas.models import Listing, Product
+from sqlalchemy import DateTime, Float, Interval, and_, case, cast, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from worker.http import CycleFetcher, HostBackingOff
 from worker.normalize import clean_description, clean_text
 from worker.robots import RobotsUnavailable
 from worker.richtext import merge_specs
-from worker.sources.base import DetailsSettings, SourceAdapter
+from worker.sources.base import TOKEN_CARD_HASH, DetailsSettings, SourceAdapter
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +78,21 @@ DETAIL_KEYS = (
     "details_failed_at",
     "details_failures",
     "details_retry_at",
+    "details_interval_days",
 )
+
+#: The adaptive revisit interval of a card-hash source (T10), in days: grown
+#: by `INTERVAL_GROW` on a re-read that found nothing new, shrunk by
+#: `INTERVAL_SHRINK` on one that did, never below this (or the source's
+#: `max_age_days`, if lower) and never above `max_age_days`.
+MIN_INTERVAL_DAYS = 30
+INTERVAL_GROW = 1.4
+INTERVAL_SHRINK = 0.8
+
+#: Importance weights for the never-fetched backfill (T8's starting weights):
+#: w = 1 + 1·[in a product several suppliers offer] + 0.5·[in stock].
+WEIGHT_MULTI_SUPPLIER = 1.0
+WEIGHT_IN_STOCK = 0.5
 
 #: After the n-th failure in a row, wait 2**(n-1) days before trying the page
 #: again, up to this many. A broken page costs one request a month, not one a day.
@@ -179,10 +203,30 @@ def _apply_to_listing(listing: Listing, attributes: dict) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _conditions(source_id: str, settings: DetailsSettings, now: datetime) -> dict:
+def importance():
+    """A listing's weight for the never-fetched backfill (see the module doc)."""
+    suppliers = select(Product.supplier_count).where(Product.id == Listing.product_id)
+    return (
+        1.0
+        + case(
+            (func.coalesce(suppliers.scalar_subquery(), 0) > 1, WEIGHT_MULTI_SUPPLIER), else_=0.0
+        )
+        + case((Listing.stock_signal == StockSignal.IN_STOCK, WEIGHT_IN_STOCK), else_=0.0)
+    )
+
+
+def _conditions(
+    source_id: str, settings: DetailsSettings, now: datetime, *, adaptive: bool = False
+) -> dict:
     a = Listing.attributes
     fetched = a["details_fetched_at"].astext
     retry = a["details_retry_at"].astext
+    max_age = cast(literal(timedelta(days=settings.max_age_days)), Interval)
+    if adaptive:
+        # Per listing, once a re-read has set one; the setting until then, and
+        # never past it (LEAST ignores the NULL of a listing without one).
+        days = cast(a["details_interval_days"].astext, Float)
+        max_age = func.least(cast(literal(timedelta(days=1)), Interval) * days, max_age)
     eligible = and_(
         Listing.source == source_id,
         Listing.status == ListingStatus.ACTIVE,
@@ -196,7 +240,7 @@ def _conditions(source_id: str, settings: DetailsSettings, now: datetime) -> dic
     stale = and_(
         fetched.is_not(None),
         ~changed,
-        cast(fetched, DateTime(timezone=True)) < now - timedelta(days=settings.max_age_days),
+        cast(fetched, DateTime(timezone=True)) < literal(now) - max_age,
     )
     return {
         "eligible": eligible,
@@ -213,13 +257,17 @@ async def due_listings(
     settings: DetailsSettings,
     *,
     now: datetime | None = None,
+    adaptive: bool = False,
 ) -> list[tuple[Listing, str]]:
-    """Up to `per_run` listings due for a details fetch, with why, in budget order."""
+    """Up to `per_run` listings due for a details fetch, with why, in budget order.
+
+    `adaptive` gives each listing its own age limit (a card-hash source, T10).
+    """
     now = now or datetime.now(timezone.utc)
-    c = _conditions(source_id, settings, now)
+    c = _conditions(source_id, settings, now, adaptive=adaptive)
     orders = {
         "changed": (c["fetched_order"], Listing.id),
-        "never_fetched": (Listing.first_seen_at.desc(), Listing.id),
+        "never_fetched": (importance().desc(), Listing.first_seen_at.desc(), Listing.id),
         "stale": (c["fetched_order"], Listing.id),
     }
     picked: list[tuple[Listing, str]] = []
@@ -249,10 +297,11 @@ async def queue_counts(
     settings: DetailsSettings,
     *,
     now: datetime | None = None,
+    adaptive: bool = False,
 ) -> dict[str, int]:
     """How many listings are due, by reason, and how many have details: for `make status`."""
     now = now or datetime.now(timezone.utc)
-    c = _conditions(source_id, settings, now)
+    c = _conditions(source_id, settings, now, adaptive=adaptive)
     retry = Listing.attributes["details_retry_at"].astext
     row = (
         await session.execute(
@@ -297,13 +346,41 @@ def _failed(attributes: dict, now: datetime) -> dict:
     }
 
 
-def _fetched(attributes: dict, details: dict, now: datetime) -> dict:
+def next_interval(attributes: dict, details: dict, base_days: int) -> float | None:
+    """The adaptive revisit interval after a page read, or None on a first read.
+
+    A re-read that found the page as it was grows the listing's interval, one
+    that found it changed shrinks it, within [min(`MIN_INTERVAL_DAYS`,
+    `base_days`), `base_days`]: the source's `max_age_days` is the ceiling.
+    A change never lengthens it, whatever the bounds.
+    """
+    if not attributes.get("details_fetched_at"):
+        return None  # nothing to compare: the setting's age applies until a re-read
+    low, high = min(MIN_INTERVAL_DAYS, base_days), base_days
+    previous = attributes.get("details_interval_days")
+    if isinstance(previous, bool) or not isinstance(previous, int | float) or previous <= 0:
+        previous = base_days
+    previous = min(previous, high)
+    if attributes.get("details") != details:
+        interval = min(previous, max(low, previous * INTERVAL_SHRINK))
+    else:
+        interval = min(high, previous * INTERVAL_GROW)
+    return round(interval, 1)
+
+
+def _fetched(
+    attributes: dict, details: dict, now: datetime, *, interval: float | None = None
+) -> dict:
     out = {k: v for k, v in attributes.items() if k not in DETAIL_KEYS}
     out["details"] = details
     # The token as it was when the page was read: the next card that moves it
     # makes the listing due again.
     out["details_token"] = attributes.get("change_token")
     out["details_fetched_at"] = now.isoformat()
+    if interval is not None:
+        out["details_interval_days"] = interval
+    elif attributes.get("details_interval_days") is not None:
+        out["details_interval_days"] = attributes["details_interval_days"]
     return out
 
 
@@ -333,7 +410,8 @@ async def run_details(
     settings = adapter.details
     if settings is None or not settings.enabled:
         return Counter(), {}
-    due = await due_listings(session, adapter.source_id, settings)
+    adaptive = adapter.token_kind == TOKEN_CARD_HASH
+    due = await due_listings(session, adapter.source_id, settings, adaptive=adaptive)
     summary: dict = {"due": dict(Counter(reason for _, reason in due))} if due else {}
     if not due:
         return Counter(), summary
@@ -357,7 +435,10 @@ async def run_details(
             listing.attributes = _failed(attributes, now)
         else:
             fetched += 1
-            _apply_to_listing(listing, _fetched(attributes, details, now))
+            interval = (
+                next_interval(attributes, details, settings.max_age_days) if adaptive else None
+            )
+            _apply_to_listing(listing, _fetched(attributes, details, now, interval=interval))
         if checkpoint is not None:
             # The run's request count so far, on its row with this commit.
             checkpoint(Counter({LABEL: fetcher.requests.total()}))

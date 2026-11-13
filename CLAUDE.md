@@ -155,6 +155,25 @@ route), not `last_verified_at` (its price and details were read). They differ
 for a shop that lists out-of-stock products by id alone: that keeps the listing
 alive without re-pricing it, and the site shows `last_verified_at` as "checked".
 
+**Archive candidates are asked about first** (`pipeline.Confirmer`, T4/T12 in
+`docs/crawler-scheduling.md`). A multi-day offset sweep skips listings (48 of
+173 that shop 1 archived in one cycle came back under the same id), so at cycle
+end the candidates go to `adapter.confirm_listed`: WooCommerce re-reads them by
+id (`include`, 100 a request), and the Odoo shop checks its sitemap, then reads the
+product page of each one the sitemap still lists (20 a run). Returned is kept,
+asked-and-absent, or returned but not upserted, is archived. A failed or
+unfinished check archives nothing more and holds the cycle open (cursors
+exhausted, untouched) for the next run: at most 2 failed runs, 3 runs held for
+room, or one cycle, then the rest archives as before. Hold time is not
+`cycle_seconds`. Sitemap presence is never a sighting. Requests count as
+`stats.requests.confirm`, against the run's page ceiling.
+
+**A short page can end a partition** (`worker/sources/short_page.py`, T1):
+`end_on_short_page` on the Odoo, WooCommerce and Shopify adapters, default
+`"shadow"`, which changes nothing and records in `stats.source_report.short_page`
+whether the stop would have been right. `make status` tallies it; go `"live"`
+only after a full shadow cycle with zero disagreements.
+
 `limit=` makes a run ephemeral: cursors untouched, nothing archived. Use it for
 testing so you don't disturb a real sweep's resume point.
 
@@ -166,8 +185,10 @@ most `details.per_run` pages a run, through the same paced client, counted as
 `stats.requests.details`. Off unless `details = { enabled = true }` in the
 source's config; only adapters with `fetch_details` accept the key. A listing is
 due, in this order, when its change token moved since its page was read, when
-it was never read (newest first), or when it was read over `max_age_days` ago
-(oldest first). A failed page backs off 1, 2, 4… days; a host backing off, a
+it was never read (most important first: multi-supplier, in stock; then
+newest), or when it was read over `max_age_days` ago (oldest first). For a
+card-hash source that age adapts per listing (`details_interval_days`, ×1.4
+unchanged, ×0.8 changed, between min(30, max_age_days) and max_age_days). A failed page backs off 1, 2, 4… days; a host backing off, a
 429 or a network failure stops the stage and blames no listing. A `limit=` run
 reads none.
 

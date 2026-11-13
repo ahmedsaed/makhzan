@@ -7,6 +7,7 @@ page so a naive loop runs forever.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from worker.sources import odoo as odoo_mod
 from worker.sources import woocommerce as woo_mod
@@ -55,10 +56,10 @@ def test_woocommerce_partitions_cover_every_stock_status():
 
 @pytest.mark.parametrize("returned,expected_more", [([], False), ([_product()], True)])
 async def test_woocommerce_has_more_follows_page_contents(monkeypatch, returned, expected_more):
-    async def fake_get_json(client, url, params):
-        return returned
+    async def fake_get_response(client, url, params):
+        return httpx.Response(200, json=returned)
 
-    monkeypatch.setattr(woo_mod, "get_json", fake_get_json)
+    monkeypatch.setattr(woo_mod, "get_response", fake_get_response)
     page = await _woo().fetch_page("instock", 1)
     assert page.has_more is expected_more
     assert len(page.items) == len(returned)
