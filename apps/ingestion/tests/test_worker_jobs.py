@@ -191,7 +191,7 @@ async def test_two_runs_of_one_source_never_overlap_and_other_sources_carry_on(w
 async def test_rebuilds_never_interleave(monkeypatch):
     events: list[str] = []
 
-    async def rebuild(session):
+    async def rebuild(session, **_):
         events.append("rebuild start")
         await asyncio.sleep(0)
         events.append("rebuild end")

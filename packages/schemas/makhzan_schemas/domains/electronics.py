@@ -8,7 +8,26 @@ verticals can supply their own without forking the pipeline.
 from __future__ import annotations
 
 from makhzan_schemas.domains.base import DomainProfile, register_profile
+from makhzan_schemas.identifiers import (
+    Identifier,
+    hyphenated_model_code,
+    miniature_bearing,
+)
 from makhzan_schemas.part_number import extract_part_number
+
+
+def _part_number(title: str) -> Identifier | None:
+    """The component-family and generic MPN extractor, as it always was."""
+    found = extract_part_number(title)
+    return Identifier(found) if found else None
+
+
+#: In order: an MPN (LM358, ESP32-WROOM-32, DT830B); a miniature bearing that states
+#: its seal, which is digit-led (608ZZ, 623-2RS) and so invisible to the MPN rules; then a
+#: hobby-market model code written with a hyphen (DT-830, DSO-153, KY-032), which
+#: is family-checked because such a code sometimes names a range (FC-26 male and
+#: female) or a printer whose parts are named after it (CR-10).
+_IDENTIFIER_RULES = (_part_number, miniature_bearing, hyphenated_model_code)
 
 # --- Taxonomy tree: (slug, name_en, name_ar, parent_slug) ------------------- #
 # Parents are browse groups; leaves are what the resolver assigns.
@@ -363,7 +382,8 @@ ELECTRONICS = register_profile(
         taxonomy=TAXONOMY,
         category_rules=CATEGORY_RULES,
         generic_categories=frozenset(_GENERIC),
-        extract_identifier=extract_part_number,
+        identifier_rules=_IDENTIFIER_RULES,
+        shop_stated_identifiers=True,
         noise_tokens=frozenset(_NOISE),
         cluster_threshold=0.34,
         form_markers=_FORM_MARKERS,

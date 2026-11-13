@@ -1,8 +1,15 @@
 """Product grouping — derive canonical products from listings.
 
 Every active listing maps to exactly one product:
-  - a confident part number  -> shared product  "mpn:<PN>:<signature>"
+  - a confident identifier   -> shared product  "mpn:<ID>:<signature>"
+                                (electronics), "mpn:<domain>:<ID>:<signature>"
+                                (any other department)
   - otherwise                 -> singleton       "single:<source>:<external_id>"
+
+Identifiers are compared within one department only, folded so that "DT-830"
+and "DT830" are one code (`identifiers.fold_identifier`). Which rules read them
+is each department's `DomainProfile`; `assign_identifiers` applies them, plus
+the family guard, across the whole catalogue before a regroup.
 
 A shared part number is evidence, not proof, so every group that shares one is
 sub-clustered (`_subcluster`): listings merge only when their titles agree, and
@@ -35,11 +42,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from makhzan_schemas.domains import get_profile
+from functools import lru_cache
+
+from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
+from makhzan_schemas.identifiers import Identifier, fold_identifier, identifier_pattern
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
 from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
 from makhzan_schemas.pricing import summarize_prices
-from makhzan_schemas.values import value_tokens, values_conflict
+from makhzan_schemas.values import value_tokens, values_conflict, without_values
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -47,15 +57,48 @@ from sqlalchemy.orm import selectinload
 _TOKEN = re.compile(r"[a-z0-9]+")
 
 
-def base_key(part_number: str | None, source: str, external_id: str | None, listing_id) -> str:
+def identity_key(part_number: str, domain: str | None = None) -> str:
+    """The shared-identifier key: folded, and scoped to its department.
+
+    Matching stays within a department (an owner decision): a tools listing and
+    an electronics listing that happen to share a code are never candidates.
+    Electronics keys stay bare (no domain segment), as they always were; those
+    whose identifier has separators do change with the fold ("mpn:HC-SR04" is
+    now "mpn:HCSR04"), which product ids survive like any regroup.
+    """
+    folded = fold_identifier(part_number)
+    domain = domain or DEFAULT_DOMAIN
+    return f"mpn:{folded}" if domain == DEFAULT_DOMAIN else f"mpn:{domain}:{folded}"
+
+
+def base_key(
+    part_number: str | None,
+    source: str,
+    external_id: str | None,
+    listing_id,
+    domain: str | None = None,
+) -> str:
     if part_number:
-        return f"mpn:{part_number.upper()}"
+        return identity_key(part_number, domain)
     return f"single:{source}:{external_id or listing_id}"
 
 
-def _sig_tokens(title: str | None, mpn: str, domain: str | None = None) -> set[str]:
+@lru_cache(maxsize=65536)
+def _identifier_re(mpn: str) -> re.Pattern[str]:
+    return identifier_pattern(mpn)
+
+
+def _without_identifier(title: str | None, mpn: str | None) -> str:
+    """The title, lower-cased, with the identifier taken out however it is
+    spelled ("DT-830", "dt830"): what is left is what the listing says about
+    itself beyond its code."""
+    text = (title or "").lower()
+    return _identifier_re(mpn).sub(" ", text) if mpn else text
+
+
+def _sig_tokens(title: str | None, mpn: str | None, domain: str | None = None) -> set[str]:
     noise = get_profile(domain).noise_tokens
-    text = (title or "").lower().replace(mpn.lower(), " ")
+    text = _without_identifier(title, mpn)
     return {t for t in _TOKEN.findall(text) if t not in noise and len(t) >= 2 and not t.isdigit()}
 
 
@@ -93,7 +136,7 @@ def _span_ok(prices: list[Decimal], candidate: Decimal | None, max_ratio: float)
 _FORM_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
 
 
-def _form(title: str | None, mpn: str, domain: str | None = None) -> str | None:
+def _form(title: str | None, mpn: str | None, domain: str | None = None) -> str | None:
     """The physical form a title states ("chip", "module"...), or None if silent.
 
     Read before noise stripping, because the noise list is exactly where the
@@ -104,7 +147,7 @@ def _form(title: str | None, mpn: str, domain: str | None = None) -> str | None:
     if compiled is None:
         compiled = [(form, re.compile(pattern)) for form, pattern in profile.form_markers]
         _FORM_CACHE[profile.slug] = compiled
-    text = (title or "").lower().replace(mpn.lower(), " ")
+    text = _without_identifier(title, mpn)
     return next((form for form, pattern in compiled if pattern.search(text)), None)
 
 
@@ -130,8 +173,6 @@ class _Evidence:
 class _Cluster:
     """One sub-product being accumulated out of a shared-identifier group."""
 
-    #: Tokens of the member that seeded it — the stable part of the group key.
-    seed_tokens: set[str]
     #: Every member's evidence. A candidate is compared against all of them, not
     #: just the seed: the seed can be title-poor ("ESP32 Development Board 30
     #: pin" reduces to {pin} once noise is stripped), and comparing only against
@@ -179,9 +220,43 @@ class _Cluster:
         if listing.price is not None:
             self.prices.append(listing.price)
 
+    def accepts(
+        self, other: _Cluster, threshold: float, ratio: float, strict: frozenset[str]
+    ) -> float | None:
+        """How well a whole cluster matches this one, or None if they may not
+        merge: every veto between every pair of members, as for one listing."""
+        if self.suppliers & other.suppliers:
+            return None
+        for ev in other.evidence:
+            if any(values_conflict(ev.values, known.values) for known in self.evidence):
+                return None
+            if any(_forms_conflict(ev.form, known.form, strict) for known in self.evidence):
+                return None
+        known = [p for p in [*self.prices, *other.prices] if p is not None and p > 0]
+        if len(known) >= 2 and max(known) / min(known) > Decimal(str(ratio)):
+            return None
+        best = max(_jaccard(a.tokens, b.tokens) for a in self.evidence for b in other.evidence)
+        return best if best >= threshold else None
+
+    def absorb(self, other: _Cluster) -> None:
+        for listing, ev in zip(other.members, other.evidence, strict=True):
+            self.add(listing, ev)
+
+
+def _new_cluster(listing: Listing, ev: _Evidence) -> _Cluster:
+    return _Cluster(
+        evidence=[ev],
+        prices=[listing.price] if listing.price is not None else [],
+        members=[listing],
+        suppliers={listing.supplier_id},
+    )
+
 
 def _subcluster(
-    mpn_key: str, items: list[Listing], domain: str | None = None
+    mpn_key: str,
+    items: list[Listing],
+    domain: str | None = None,
+    current: dict[uuid.UUID, uuid.UUID | None] | None = None,
 ) -> dict[str, list[Listing]]:
     """Split a shared-identifier group into sub-products by corroborating evidence.
 
@@ -200,8 +275,43 @@ def _subcluster(
 
     Price still gets a veto. Identical titles priced 15x apart are a pack and a
     single unit, and merging them publishes a price range that is false.
+
+    **Incumbency.** Clustering is greedy, so the order listings are placed in
+    decides which of two incompatible listings seeds a cluster and captures the
+    members silent on their difference. Placed in plain (source, external id)
+    order, one newcomer whose title contradicts a settled product — the
+    marketplace's "1N5817 1A 30V" against a four-shop 1N5817 (a 20 V part) —
+    sorted ahead of it and broke it in three. So listings are placed in passes,
+    each in a fixed order:
+
+    1. **Incumbents**: every product that already holds two or more of these
+       listings (`current`, each listing's product followed through any merge;
+       its stored `product_id` when not given) is rebuilt as a cluster from its
+       own members, largest first. Members are placed fewest conflicts first
+       (the seed is the one that contradicts the fewest others; on a tie, the
+       natural key decides), so a wrong product keeps its consistent majority,
+       and each must still pass every veto against those placed: a wrong merge
+       from before still splits, and what will not fit becomes a newcomer.
+       Conflicts are counted, not weighed: when the wrong side of a product
+       has more listings than the right one, the right one is evicted. That is
+       bounded — evicted listings are placed again as newcomers and re-form
+       their own product — but it can move an id to the wrong side.
+    2. Those clusters merge with one another where every veto allows it (how a
+       rule change joins two existing products).
+    3. **Newcomers** — no product yet, alone in theirs, or evicted in pass 1 —
+       join the cluster they best match without contradicting it, or start one.
+    4. The merge of pass 2 once more, over everything, largest first: so the
+       result does not depend on which listings had products, a rebuild from
+       scratch gives the same groups, and one rebuild converges — the next
+       changes nothing.
+
+    On a first build nobody has a product, so passes 3 and 4 only.
+
+    A group's key depends only on its membership (it is named after the member
+    first in natural order), so reaching the same groups another way gives the
+    same keys. Ids are matched by membership (`plan_identity`) in any case; only
+    undoing a merge reads an absorbed product's stored key.
     """
-    mpn = mpn_key[len("mpn:") :]
     profile = get_profile(domain)
     threshold = profile.cluster_threshold
     max_ratio = profile.merge_price_ratio
@@ -209,52 +319,141 @@ def _subcluster(
     # External ids are only unique within a source, so two shops' "1234" would
     # otherwise fall back to whatever order the query happened to return.
     ordered = sorted(items, key=_natural_order)
+    strict = profile.accessory_forms
 
-    clusters: list[_Cluster] = []
+    evidence: dict[uuid.UUID, _Evidence] = {}
     for listing in ordered:
         title = listing.title_en or listing.title_ar
-        ev = _Evidence(
+        # Each listing's own spelling of the identifier is taken out of its own
+        # title: the key is folded, so "HC-SR04" and "HCSR04" share a group.
+        mpn = listing.part_number
+        evidence[listing.id] = _Evidence(
             tokens=_sig_tokens(title, mpn, domain),
-            values=value_tokens((title or "").lower().replace(mpn.lower(), " ")),
+            values=value_tokens(_without_identifier(title, mpn)),
             form=_form(title, mpn, domain),
         )
+
+    # Pass 1: incumbents, each existing product rebuilt from its own members.
+    by_product: dict[uuid.UUID, list[Listing]] = defaultdict(list)
+    for listing in ordered:
+        product_id = current.get(listing.id) if current is not None else listing.product_id
+        if product_id is not None:
+            by_product[product_id].append(listing)
+    incumbents = sorted(
+        (members for members in by_product.values() if len(members) > 1),
+        key=lambda members: (-len(members), _natural_order(members[0])),
+    )
+    clusters: list[_Cluster] = []
+    newcomers: list[Listing] = []
+    placed: set[uuid.UUID] = set()
+    for members in incumbents:
+        # The members that contradict the fewest others go first, the seed
+        # among them, so a misfit is what fails, not the majority it sorts
+        # ahead of; the natural key breaks ties.
+        members = sorted(
+            members,
+            key=lambda m: (
+                sum(_vetoed(m, other, evidence, strict) for other in members if other is not m),
+                _natural_order(m),
+            ),
+        )
+        cluster = _new_cluster(members[0], evidence[members[0].id])
+        pending = members[1:]
+        # Repeat until nothing more fits: a member may only match the product
+        # through one placed after it.
+        while pending:
+            rest = []
+            # One at a time: each is checked against every member already in,
+            # including those added earlier in this sweep.
+            for listing in pending:
+                ev = evidence[listing.id]
+                if cluster.similarity(listing, ev, threshold, max_ratio, strict) is None:
+                    rest.append(listing)
+                else:
+                    cluster.add(listing, ev)
+            if len(rest) == len(pending):
+                break
+            pending = rest
+        newcomers += pending  # evicted: placed again in pass 3
+        placed.update(listing.id for listing in members)
+        clusters.append(cluster)
+
+    # Pass 2: existing products that the current rules say are one.
+    clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+
+    # Pass 3: newcomers, in the plain order.
+    newcomers += [listing for listing in ordered if listing.id not in placed]
+    for listing in sorted(newcomers, key=_natural_order):
+        ev = evidence[listing.id]
         # The best-matching cluster, not the first that will have it: with a
         # shop's variants now kept apart, a listing can be admissible to several
         # sibling clusters and should join the one it most resembles.
-        best: tuple[float, _Cluster] | None = None
+        best = None
         for cluster in clusters:
-            score = cluster.similarity(listing, ev, threshold, max_ratio, profile.accessory_forms)
+            score = cluster.similarity(listing, ev, threshold, max_ratio, strict)
             if score is not None and (best is None or score > best[0]):
                 best = (score, cluster)
         if best is not None:
             best[1].add(listing, ev)
         else:
-            clusters.append(
-                _Cluster(
-                    seed_tokens=ev.tokens,
-                    evidence=[ev],
-                    prices=[listing.price] if listing.price is not None else [],
-                    members=[listing],
-                    suppliers={listing.supplier_id},
-                )
-            )
+            clusters.append(_new_cluster(listing, ev))
 
+    # Pass 4: the same merge over everything, so one rebuild converges.
+    clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+
+    # Keys depend on membership alone: named after the member first in natural
+    # order, whichever member happened to seed the cluster, and assigned in that
+    # order too. So the same groups get the same keys however they were reached
+    # (from scratch, by incumbency, after a merge), and a rebuild that changes
+    # no membership changes no key.
+    named = sorted(
+        ((min(cluster.members, key=_natural_order), cluster.members) for cluster in clusters),
+        key=lambda pair: _natural_order(pair[0]),
+    )
     result: dict[str, list[Listing]] = {}
-    for cluster in clusters:
-        members = cluster.members
-        sig = "-".join(sorted(cluster.seed_tokens)) or "base"
+    for first, members in named:
+        sig = "-".join(sorted(evidence[first.id].tokens)) or "base"
         key = f"{mpn_key}:{sig}"
         if key in result:
             # Variants of one shop often word their titles identically apart from
             # the value ("Thermal Switch NC 40°C" / "… 90°C"), so signatures
-            # collide. Disambiguate by the seed listing's own natural key, which
+            # collide. Disambiguate by that member's own natural key, which
             # survives a re-scrape, rather than by position, which shifts whenever
             # a sibling appears or disappears.
-            seed = members[0]
-            natural = f"{seed.source}:{seed.external_id or seed.id}"
+            natural = f"{first.source}:{first.external_id or first.id}"
             key += "~" + hashlib.sha1(natural.encode()).hexdigest()[:10]
         result[key] = members
     return result
+
+
+def _vetoed(a: Listing, b: Listing, evidence: dict, strict: frozenset[str]) -> bool:
+    """Whether a veto keeps two listings apart (same shop, values, form)."""
+    ea, eb = evidence[a.id], evidence[b.id]
+    return (
+        a.supplier_id == b.supplier_id
+        or values_conflict(ea.values, eb.values)
+        or _forms_conflict(ea.form, eb.form, strict)
+    )
+
+
+def _merge_clusters(
+    clusters: list[_Cluster], threshold: float, ratio: float, strict: frozenset[str]
+) -> list[_Cluster]:
+    """Merge clusters every veto allows to merge, largest first, then by their
+    seed's natural key; each joins the earlier cluster it best matches."""
+    merged: list[_Cluster] = []
+    ordered = sorted(clusters, key=lambda c: (-len(c.members), _natural_order(c.members[0])))
+    for cluster in ordered:
+        best: tuple[float, _Cluster] | None = None
+        for target in merged:
+            score = target.accepts(cluster, threshold, ratio, strict)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, target)
+        if best is not None:
+            best[1].absorb(cluster)
+        else:
+            merged.append(cluster)
+    return merged
 
 
 def _natural_order(listing: Listing) -> tuple[str, str]:
@@ -283,28 +482,132 @@ def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:
     return next((i for i in items if i.images), None)
 
 
-def _group_listings(listings: list[Listing]) -> dict[str, list[Listing]]:
+def _group_listings(
+    listings: list[Listing], current: dict[uuid.UUID, uuid.UUID | None] | None = None
+) -> dict[str, list[Listing]]:
     """Two-phase grouping: base key, then sub-cluster ambiguous family groups."""
     base: dict[str, list[Listing]] = defaultdict(list)
     for listing in listings:
-        base[base_key(listing.part_number, listing.source, listing.external_id, listing.id)].append(
-            listing
+        key = base_key(
+            listing.part_number, listing.source, listing.external_id, listing.id, listing.domain
         )
+        base[key].append(listing)
 
     groups: dict[str, list[Listing]] = {}
     for key, items in base.items():
-        # A group's listings share an identifier, so they share a domain in
-        # practice; take it from the first and let the profile decide.
+        # A shared-identifier key is scoped to one domain, so a group's listings
+        # share it; take it from the first and let the profile decide.
         domain = items[0].domain if items else None
         # Every shared-identifier group is corroborated, not just a hardcoded
         # list of "ambiguous" families. That list was unmaintainable by
         # construction — SG90 and CR10 were never on it, and there is no reason
         # to expect the next one to be either.
         if key.startswith("mpn:") and len(items) > 1:
-            groups.update(_subcluster(key, items, domain))
+            groups.update(_subcluster(key, items, domain, current))
         else:
             groups[key] = items
     return groups
+
+
+#: What a shop's title under a code says once the code is taken out: its other
+#: words, and its values (as sorted pairs, so it can sit in a set).
+_TitleEvidence = tuple[frozenset[str], tuple]
+
+
+def _different_products(titles: set[_TitleEvidence]) -> bool:
+    """Whether a shop's titles under one code name more than one product.
+
+    - Different words, apart from the code and the values: always. Even one
+      title that only *adds* words is another product as often as not — the
+      printer and "the printer hotend", a drill and "+ 2 core bits", J47TK and
+      J47TK-S — so a title is the same product only when it says exactly the
+      same thing. The single exemption is a title that is nothing but the code
+      (and values): it says nothing another could contradict.
+    - The same words and values that differ without conflicting: the value veto
+      cannot keep those apart across shops (SCT-013 "100A/1V" against
+      "100A/50mA" states volts on one side and nothing on the other), so the
+      code cannot be trusted either. Values that do conflict ("200ml" against
+      "330ml") are one product in two sizes, which the value veto separates.
+    """
+    entries = sorted(titles, key=lambda e: (sorted(e[0]), repr(e[1])))
+    words = {w for w, _ in entries if w}
+    if len(words) > 1:
+        return True
+    for i, (wa, va) in enumerate(entries):
+        for wb, vb in entries[i + 1 :]:
+            if wa == wb and va != vb and not values_conflict(dict(va), dict(vb)):
+                return True
+    return False
+
+
+def assign_identifiers(listings: list[Listing]) -> int:
+    """Set every listing's `part_number` from its department's rules; returns how
+    many changed.
+
+    Each listing offers its candidates, best first
+    (`DomainProfile.identifier_candidates`): what its title names, then what its
+    shop states. It takes the first one the **family guard** does not refuse.
+
+    The guard is evidence, not a list. A model code is a family, not a product,
+    when one shop's own catalogue lists several different products under it:
+    FC-40 male, female and angled; RL-601S Plus, Mini and Universal; the parts a
+    3D-printer shop names after the CR-10 they fit. A shop lists two SKUs because
+    they differ, so two of its listings carrying one code under different titles
+    prove the code covers more than one product, and no shop may then group on
+    it. Titles are compared with their values and the code taken out
+    (`values.without_values`): "WD-40 Spray 200ml" and "WD-40 Spray 330ml" are
+    one product in two sizes, which the value veto keeps apart, not a family.
+    Any other difference in wording does make a family, including a title that
+    only adds words ("CR-10 3D Printer" and "CR-10 3D Printer Hotend"); see
+    `_different_products`. Only model codes are checked
+    (`Identifier.family_checked`): a bearing designation or an O-ring size names
+    one product by a published standard.
+
+    A part number the adapter itself supplied (`attributes.adapter_part_number`)
+    is used as it is, ahead of every rule.
+
+    This is the only writer of `part_number` on a stored listing (a sweep keeps
+    the stored value), so on an unchanged catalogue it changes nothing.
+    """
+    candidates: dict[uuid.UUID, tuple[str, list]] = {}
+    titles: dict[tuple[str, str, uuid.UUID], set[_TitleEvidence]] = defaultdict(set)
+    for listing in listings:
+        domain = listing.domain or DEFAULT_DOMAIN
+        title = listing.title_en or listing.title_ar
+        attributes = listing.attributes if isinstance(listing.attributes, dict) else {}
+        given = attributes.get("adapter_part_number")
+        if isinstance(given, str) and given.strip():
+            candidates[listing.id] = (domain, [Identifier(given.strip())])
+            continue
+        found = get_profile(domain).identifier_candidates(title, attributes)
+        candidates[listing.id] = (domain, found)
+        # Every listing naming the code is evidence, whichever rule read it;
+        # only a family-checked identifier is ever refused on that evidence.
+        for identifier in found:
+            rest = _without_identifier(title, identifier.value)
+            words = frozenset(_TOKEN.findall(without_values(rest)))
+            values = tuple(sorted(value_tokens(rest).items()))
+            titles[(domain, identifier.key, listing.supplier_id)].add((words, values))
+    families = {
+        (domain, key) for (domain, key, _), seen in titles.items() if _different_products(seen)
+    }
+
+    changed = 0
+    for listing in listings:
+        domain, found = candidates[listing.id]
+        chosen = next(
+            (
+                identifier
+                for identifier in found
+                if not (identifier.family_checked and (domain, identifier.key) in families)
+            ),
+            None,
+        )
+        value = chosen.value if chosen else None
+        if listing.part_number != value:
+            listing.part_number = value
+            changed += 1
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +806,9 @@ async def lock_products(session: AsyncSession) -> None:
     await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": PRODUCTS_LOCK_KEY})
 
 
-async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> dict:
+async def rebuild_products(
+    session: AsyncSession, *, dry_run: bool = False, reidentify: bool = False
+) -> dict:
     """Regroup active listings into products, keeping every product's id.
 
     Groups are computed exactly as before (`_group_listings`, every veto
@@ -511,6 +816,10 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
     Nothing is deleted: a product whose offers joined another is marked
     `merged_into` it, and one whose offers are all gone is marked `delisted_at`.
     Each merge, split, emptying and revival is recorded in `product_events`.
+
+    `reidentify` first re-reads every active listing's identifier with the
+    current rules and the family guard (`assign_identifiers`): what makes a rule
+    change, or a second shop selling a code, take effect without a re-crawl.
 
     `dry_run` applies everything inside the transaction and then rolls it back:
     the counts returned are what a real run would do, and nothing is kept.
@@ -530,13 +839,14 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         .scalars()
         .all()
     )
-    groups = _group_listings(listings)
-
+    reidentified = assign_identifiers(listings) if reidentify else 0
     products = {p.id: p for p in (await session.execute(select(Product))).scalars().all()}
     merged_into = {p.id: p.merged_into for p in products.values() if p.merged_into is not None}
     matchable = {p.id: p.created_at for p in products.values() if p.merged_into is None}
     delisted = {p.id for p in products.values() if p.merged_into is None and p.delisted_at}
     current = {listing.id: _resolve(listing.product_id, merged_into) for listing in listings}
+    # Grouping reads the products listings belong to now (incumbency).
+    groups = _group_listings(listings, current)
     dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] = defaultdict(list)
     for p in products.values():
         if p.merged_into is not None:
@@ -693,6 +1003,7 @@ async def rebuild_products(session: AsyncSession, *, dry_run: bool = False) -> d
         "revived": len(plan.revived),
         "unmerged": len(plan.unmerged),
         "changed": changed,
+        "reidentified": reidentified,
     }
     if dry_run:
         await session.rollback()
@@ -708,6 +1019,7 @@ def describe(stats: dict) -> str:
         f"ids kept {stats['kept']}, new {stats['created']}, merged {stats['merged']}, "
         f"split {stats['split']}, emptied {stats['emptied']}, revived {stats['revived']}, "
         f"un-merged {stats['unmerged']}"
+        + (f"; identifiers re-read on {n} listings" if (n := stats.get("reidentified")) else "")
     )
 
 

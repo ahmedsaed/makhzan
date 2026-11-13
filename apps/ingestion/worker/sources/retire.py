@@ -146,7 +146,7 @@ async def main(source_id: str, confirmed: bool) -> None:
         except SourceRunning as refused:
             raise SystemExit(str(refused)) from None
         print("deleted. rebuilding products and the search index...")
-        print("  products:", await rebuild_products(session))
+        print("  products:", await rebuild_products(session, reidentify=True))
         print("  indexed:", await reindex_all(session, get_client()))
 
 

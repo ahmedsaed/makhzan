@@ -507,6 +507,50 @@ so they also match titles that merely *reference* a part — "bracket for SG90",
 "robot arm kit with 4x SG90". Listings sharing an identifier are only merged when
 their **titles** agree they are the same thing (see `grouping._subcluster`).
 
+**Identifier rules are per department, and a model code can be a family.**
+Each `DomainProfile` lists its `identifier_rules` (`makhzan_schemas/identifiers.py`):
+electronics reads MPNs, miniature bearings that state their seal (608ZZ) and
+hyphenated hobby codes (DT-830); tools and chemicals letter-led catalogue codes
+(ASR-6014); seals-bearings designations (6205-2RS with its suffix, O-ring and
+oil-seal sizes). A shop's `mfr_part_number` or "Model" spec is a fallback only.
+Keys are folded (`DT-830` = `DT830`, `J58 210` = `J58-210`) and scoped to the
+department as `mpn:<domain>:<ID>`; electronics keys stay bare (`mpn:<ID>`).
+A model code is dropped as an identity when one shop lists it under titles that
+differ in any word, values aside (FC-40 male / female, a printer and "the
+printer hotend", a drill and "+ 2 bits"; not WD-40 200 ml / 330 ml, which the
+value veto separates), or whose values differ without conflicting —
+`grouping.assign_identifiers`; the catalogue is the evidence, never a list. Measurements (AWG-16, NEMA-17, M8, IP65, HSS-10) are
+refused as `values.SCALE_WORDS`.
+
+**The regroup is the only writer of a stored listing's `part_number`.** It
+needs the whole catalogue (the family guard) and the product page's specs, so
+`rebuild_products(reidentify=True)` — the worker's rebuild and `worker.regroup`
+— re-reads every identifier, and a sweep keeps the stored value (a new listing
+starts with the title's reading). A rule change therefore needs no re-crawl, and
+on an unchanged catalogue the regroup changes nothing. An adapter's own
+`RawItem.part_number` is kept as `attributes.adapter_part_number` and wins.
+
+**Sub-clustering reads the products listings already belong to (incumbency).**
+Greedy clustering in plain (source, external id) order let one contradicting
+newcomer that sorted first seed a cluster and capture the silent members of a
+settled product (the marketplace's "1N5817 1A 30V" broke a four-shop 1N5817 in
+three). `_subcluster` therefore rebuilds each existing product from its own
+members first (fewest conflicts first, every veto still applied, so a wrong
+product still splits and keeps its consistent majority), merges products the
+vetoes allow, places newcomers by best match, and merges once more. Product ids
+come in as `current`, resolved through `merged_into`. A first build, with no
+product ids, is the plain order; a rebuild from scratch gives the same groups,
+and one rebuild converges — the next changes nothing. A group's key depends only
+on its membership (named after the member first in natural order), so it is the
+same however the group was reached.
+
+**The marketplace adapter reads `extract_identifier` too** (pending an owner
+decision). The private adapter appends a slug code to a title only when that
+does not change what the title's domain extracts. Before tools had rules every
+tools title qualified, so titles crawled then may end in a shop code that the
+tools rule now reads, until the next crawl rewrites them; from now on a code the
+rule would read is no longer appended, so those listings show the bare title.
+
 **Price is not evidence of identity.** It used to be sufficient on its own, and
 that was wrong: an extracted identifier is often a *family* prefix — `ESP32`,
 `ESP8266`, `CR2025` — and within a family everything costs about the same, so
@@ -604,6 +648,7 @@ behind each layout decision, the page tree and URLs, the style tokens, and rules
 `make test`, which is the Python suites. Run them when touching the frontend —
 they catch prop and state changes the build does not.
 
-Known gaps worth naming: identifier extraction exists only for electronics. The
-other 15 domains have their own taxonomies but extract no identifier, so their
-listings group less (`docs/DOMAIN_GENERALIZATION.md`).
+Known gaps worth naming: identifiers are read for electronics, tools, chemicals
+and seals-bearings only. The other 12 domains have their own taxonomies but no
+identifier rules (their codes are family-level or sizes, and each is one shop
+today), so their listings group less (`docs/DOMAIN_GENERALIZATION.md`).
