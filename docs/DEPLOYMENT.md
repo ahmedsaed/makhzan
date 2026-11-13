@@ -303,8 +303,15 @@ with a deploy or restore.)
    (`pg_dump -Fc`). It reads the whole file back with `pg_restore` and fails
    loudly if it cannot, or if it has no `alembic_version` data, so a 0-byte or
    truncated backup is never kept under its final name. It keeps the 14 newest
-   backups, and separately every `*-pre-restore.dump` safety copy from the
-   last 7 days (never fewer than 3). A pruning failure is only a warning.
+   backups, deletes any older than 30 days except the newest (so the server is
+   never left with none), and separately keeps every `*-pre-restore.dump`
+   safety copy from the last 7 days (never fewer than 3). A pruning failure is
+   only a warning. The 30 days are a promise on /privacy: a dump holds report
+   emails and address hashes past their erasure, so a copy may keep them at most
+   30 days more (`BACKUP_MAX_DAYS` in `scripts/lib/prune.sh`, `BACKUP_DAYS` in
+   `apps/web/lib/content/privacy.ts`). Since pruning runs only when a backup is
+   taken, take one at least monthly, or delete old dumps by hand; and a copy
+   taken off the box (step 2) must be deleted within 30 days too.
 2. **Copy it off the box**, from your laptop:
    `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
 3. **Test-restore it into a scratch database** now and then, without touching the

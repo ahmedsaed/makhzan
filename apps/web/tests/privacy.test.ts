@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ACCESS_LOG_DAYS, privacyLead, privacySections } from "@/lib/content/privacy";
+import { ACCESS_LOG_DAYS, BACKUP_DAYS, privacyLead, privacySections } from "@/lib/content/privacy";
 import { EMAIL_KEPT_DAYS, IP_HASH_KEPT_HOURS } from "@/lib/report";
 
 const COPY = JSON.stringify([privacyLead, privacySections]);
@@ -29,6 +29,20 @@ describe("the privacy page", () => {
     const rules = readFileSync(join(ROOT, "packages/schemas/makhzan_schemas/reports.py"), "utf8");
     expect(rules).toContain(`EMAIL_KEPT = timedelta(days=${EMAIL_KEPT_DAYS})`);
     expect(rules).toContain(`IP_HASH_KEPT = timedelta(hours=${IP_HASH_KEPT_HOURS})`);
+  });
+
+  it("says backups may hold it 30 days more, as the backup script prunes", () => {
+    expect(COPY).toContain(
+      `Copies of the database kept as backups can hold this information for up to ${BACKUP_DAYS} more days before they are deleted.`,
+    );
+    const prune = readFileSync(join(ROOT, "scripts/lib/prune.sh"), "utf8");
+    expect(prune).toContain(`BACKUP_MAX_DAYS=${BACKUP_DAYS}`);
+  });
+
+  it("describes itself as the body does: no cookies of ours", () => {
+    const page = readFileSync(join(__dirname, "..", "app/(site)/privacy/page.tsx"), "utf8");
+    expect(page).toContain("no cookies of ours");
+    expect(page).not.toMatch(/No account, no cookies;/);
   });
 
   it("names Cloudflare as handling every request, reports included", () => {
