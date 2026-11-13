@@ -1,30 +1,38 @@
 # Roadmap & current state
 
-**Last updated:** 2026-10-24
+**Last updated:** 2026-11-13
 
 `PLAN.md` holds the original product plan and phase definitions. This file tracks
-what is actually true today and what happens next.
+what is actually true today and what happens next. `PRODUCT.md` holds the product
+decisions behind it; `DESIGN.md` is the frontend's specification.
 
 ## Where the project is
 
-**Updated 2026-08-24.** Phase 2 has shipped and the catalogue is now
-multi-vertical: 60,559 listings → 57,207 products across **8 suppliers and 16
-domains**, with 1,029 products offered by more than one supplier (max 8).
+**Updated 2026-11-13**, from production's `./makhzan status`. The November
+redesign has shipped and the site is public at makhzan.merope.dev: 60,974 active
+listings → 59,613 products, from **9 suppliers across 16 domains**. Two of the
+nine, the marketplace and shop 4 (35,585 listings between them, over half the
+catalogue), block the production server's address and are paused; their data is
+from 2026-08-24 (see "Live issue" below). The other seven are read daily.
 
 ### Suppliers
 
 Named by role here; the key is in the private configuration (see `CLAUDE.md`).
+Listings are active listings on 2026-11-13.
 
-| Supplier | Adapter | Listings | Categories |
+| Supplier | Adapter | Listings | State |
 |---|---|---|---|
-| The marketplace | bespoke (private) | 31,245 | crosswalk (608) |
-| Shop 1 | `WooCommerceAdapter` | 13,259 | crosswalk (313) |
-| Shop 3 | `WooCommerceAdapter` | 5,574 | crosswalk (130) |
-| Shop 4 | `WooCommerceAdapter` | 4,340 | crosswalk (184) |
-| The Odoo shop | `OdooAdapter` | 2,877 | crosswalk (162) |
-| Shop 2 | `WooCommerceAdapter` | 1,624 | crosswalk (102) |
-| The Shopify shop | `ShopifyAdapter` | 1,243 | crosswalk (87) |
-| Shop 5 | `WooCommerceAdapter` | 395 | crosswalk (15) |
+| The marketplace | bespoke (private) | 31,245 | paused: blocks the server |
+| Shop 1 | `WooCommerceAdapter` | 13,434 | crawled daily |
+| Shop 3 | `WooCommerceAdapter` | 5,604 | crawled daily |
+| Shop 4 | `WooCommerceAdapter` | 4,340 | paused: blocks the server |
+| The Odoo shop | `OdooAdapter` | 2,877 | crawled daily; product pages on |
+| Shop 2 | `WooCommerceAdapter` | 1,761 | crawled daily |
+| The Shopify shop | `ShopifyAdapter` | 1,267 | crawled daily |
+| Shop 5 | `WooCommerceAdapter` | 393 | crawled daily |
+| The Wix shop | `WixStoresAdapter` (since 2026-11-09) | 53 | crawled daily, as makhzanbot; product pages on |
+
+Every supplier maps its own categories through a crosswalk.
 
 ### Domains
 
@@ -32,129 +40,147 @@ tools · seals-bearings · electronics · electrical · piping · chemicals · t
 machinery · welding · safety · garden · materials · cleaning · rigging ·
 security · automotive
 
+The site calls them **departments** (`/departments/{department}`).
+
+### Shipped since the last update (2026-10-24)
+
+- **The November redesign** (`docs/DESIGN.md`): English only (the Arabic
+  interface and the `/en`, `/ar` routes are gone; old URLs redirect), direction D,
+  departments, shop pages, product pages that lead with makhzan's own facts,
+  readable product URLs, a sitemap and structured data, link previews, and the
+  stale-results filter (rule C2b).
+- **Stable product ids** (2026-11-09, `docs/decisions/0004-stable-product-ids.md`).
+  A regroup merges, splits, empties and revives products without deleting or
+  re-keying any; merged ids redirect, a withdrawn product's page says "no longer
+  listed". Redirects retire per `docs/decisions/0005-url-retirement.md`, first
+  review May 2027.
+- **Crawler identity: makhzanbot with Web Bot Auth** (2026-11-10,
+  `docs/crawler-identity.md`). Identity is per source; makhzanbot names itself,
+  sends no browser hints and signs every request (RFC 9421, Ed25519), with the key
+  directory published by the API. The Wix shop was switched first and its runs are
+  signed. Two more, the Shopify shop and shop 5, are being switched on 2026-11-13;
+  the other three crawled shops are still on the browser identity.
+  **Not done:** the application to Cloudflare's verified bots directory was
+  submitted on 2026-11-10 and came back on 2026-11-12 asking for a registered
+  business, which the operator does not have yet. It is pending. (Shopify needs
+  only the signature, no registration.) `python -m worker.probe` (`./makhzan
+  probe`) compares the identities from the server with the crawler's own client.
+- **Shop contact details** (2026-11-10): phone, WhatsApp, email, address, map
+  link, opening hours and branches on each shop page, each field saying where it
+  was read. Listed by hand in the private `sources.toml`, merged with what the
+  crawler reads (`makhzan_schemas.contact.resolve_contact`).
+- **The shop photo badge** (2026-11-10): every product photo names the shop it
+  comes from.
+- **Crawler activity on `/how-we-crawl#activity`** and each shop page
+  (2026-11-09): when the shop was last read, requests in the last 7 days, the
+  measured gap between them, "Active" or "Paused". Served by
+  `GET /crawler/activity`.
+- **Price history is recorded** (2026-11-09): one row per change of a listing's
+  price or stock, plus archive and return, served by the API per listing and per
+  product. 7,122 observations in the week to 2026-11-13. **Not shown on the site
+  yet.**
+- **The details stage** (2026-11-09, `worker/details.py`): descriptions, specs,
+  documents and photos that only a product page has, read a few pages a run and
+  again only on change. On for the Odoo shop and the Wix shop, 20 pages a run;
+  the Odoo shop's backfill of 2,822 pages takes about 144 days at that pace.
+- **Ingestion hardening:** each source is its own job with its own timeout (the
+  old 300 s arq timeout had been cancelling the Odoo shop's runs); a finished
+  partition is not re-swept in a cycle; `target_cycle_days` can plan a cycle's
+  length (not enabled on any source yet); robots.txt outages are handled per RFC
+  9309; a struggling host is slowed after three errors in a row; a run ends itself
+  before the job timeout; an unmapped category no longer clears a mapped one.
+
+### Shop data
+
+Phase 1 (collecting more of what shops already publish) has shipped. Phase 2
+(showing it), decided 2026-11-09 in `docs/PRODUCT.md`, is **in progress**:
+
+| Phase 2 item | State |
+|---|---|
+| Shop contact details on the shop page | done |
+| Crawler activity on `/how-we-crawl` and shop pages | done |
+| Price history recorded and served by the API | done |
+| Price history on the product page ("lowest in 90 days", chart) | not done |
+| Options table, minimum order, quantity breaks, stated MPN | not done |
+| "Ships from abroad" / "Fits: …" badges, videos, "Price on request" | not done |
+| Grouping on the manufacturer part numbers shops state | not done |
+| Grouping by material for products sold per colour | not done (needs the options table) |
+
+### Before contacting the shops
+
+The polish list in `docs/PRODUCT.md`:
+
+- A working contact address — done (`crawler@makhzan.merope.dev`).
+- Fresh data for the reachable shops — done (the crawl runs daily again since
+  2026-11-06).
+- A "For suppliers" page — done (`/for-suppliers`).
+- `ref=makhzan` on shop links, and clicks per shop counted (Umami events) — done.
+- Each shop's own makhzan page spot-checked — **not done.**
+- No half-finished Arabic — done (English only).
+
 ### Infrastructure
 
-- CI green (lint, 68 ingestion tests, 86 API tests, web lint/typecheck/build).
-  It had been red from 2026-07-15 to 2026-08-24 on an unpinned ruff and a
-  misconfigured pnpm action.
+- Tests, as run on 2026-11-13: 879 ingestion and 228 API (`make test`), 695
+  Vitest and 226 Playwright cases in `apps/web` (not part of `make test`).
+  CI runs lint, both Python suites, and web lint, typecheck, build and tests.
+- Each test session gets a database of its own, so suites can run in parallel.
 - Sweeps are resumable and checkpointed per page; archiving is cycle-gated.
-- A cycle now spans ~a week: the cron stays daily and each run takes a slice.
-- `make status` reports sweep progress, cycle history, crosswalk drift, catalogue
-  health and index drift.
-- `apps/api` has a test suite as of 2026-09-05 (86 tests, real Postgres, the app
-  driven in-process; only Meilisearch is faked). `apps/web` still has none, held
-  until the rewrite lands.
+- A cycle spans about a week: the cron stays daily and each run takes a slice.
+  Cycles in October and early November ran long (up to 24 days) because of an
+  11-day gap with no runs around the public release; the first full cycles
+  after 2026-11-09 will show the real length.
+- `make status` (`./makhzan status` from production) reports sweep progress,
+  cycle history, crawler identity, robots.txt, crosswalk drift, product details,
+  catalogue health, price observations and index drift.
+
+## How it got here
+
+Kept short; `git log` has the detail.
+
+- **Crosswalks** (2026-09): every supplier maps its own categories. The Odoo shop
+  is browsed by category (170 leaf categories) plus a whole-shop pass, because 8
+  of its 2,875 products sit in no category and category partitioning alone would
+  have archived them. That is why the pipeline has `knows_category`.
+- **The September `apps/web` rewrite** (2026-09-07) made every page
+  server-rendered and the site usable without JavaScript, and brought the first
+  web tests. The November redesign replaced its look and dropped its bilingual
+  routes.
 
 ## Next
 
-Everything below is genuinely outstanding; the finished work is described above.
+### 1. In this order
 
-### 0. The November redesign — in progress (2026-11-06)
-The frontend is being redesigned from the data up: English only, direction D,
-burnt orange on Archivo and Inter. `docs/DESIGN.md` is the specification (it
-replaces the September design below); `docs/PRODUCT.md` holds what comes after it
-(projects, blog, accounts, supplier pages) and the polish list to finish before the
-suppliers are contacted. Product ids are permanent as of 2026-11-09
-(`docs/decisions/0004-stable-product-ids.md`); old URLs and redirects retire per
-`docs/decisions/0005-url-retirement.md`, first review May 2027.
+1. **Shop data Phase 2 mockups**: the product page with the options table,
+   minimum order, quantity breaks, badges and price history, designed before it
+   is built.
+2. **The `/how-we-crawl` redesign.** The page names the token, the block
+   snippet and the activity record; it does not yet explain the signature or the
+   key directory to a shop.
+3. **A crawler scheduling plan.** Drafted; the owner is reviewing it.
+4. **A caching and rendering review** of the web app and API.
+5. **A bot traffic policy** for makhzan's own site.
 
-### 1. The `apps/web` rewrite — done (2026-09-07), superseded by 0
-Built to the September version of `docs/DESIGN.md`. Nine server-rendered surfaces under `/en` and `/ar`
-with `hreflang` pairs; language is a route rather than React state, so an Arabic
-page is finally linkable and indexable. Search, sort, facets and paging are links
-and a GET form, so the site works with JavaScript disabled.
-
-Tests came with it, and CI now runs four suites: 38 Vitest cases over the logic
-that fails silently (language negotiation, dictionary parity, `domain:slug`
-handling, the two timestamp shapes, the image fallback) and 21 Playwright cases
-over what only a browser can see — server-rendered direction, no-JS search, the
-tombstone, the hand-off's `nofollow`. Playwright runs against a stub API, so it
-needs no Postgres, Meilisearch or Python and cannot fail because the catalogue
-changed.
-
-The history, for anyone wondering why it was worth doing:
-
-The rewrite is a re-architecture, not a re-platform: the stack (Next 16, React
-19, Tailwind 4, Base UI) is current and the API layer, i18n strings and RTL CSS
-are reusable. What is wrong is structural. Every page is a client component
-fetching in `useEffect`, so nothing is server-rendered — for a discovery product
-whose whole value is being found for "LM358 القاهرة", that means no SEO at all.
-And language lives in React state, so `<html lang>` is always `en` on the server,
-an Arabic URL does not exist, and the choice resets on reload. For a bilingual
-Egyptian directory that is the biggest functional gap in the product.
-
-The no-tests exemption was justified by the pending rewrite; it has expired.
-
-**Everything it was blocked on is now settled** (2026-09-06):
-
-- Design language, layout for all ten surfaces, and the responsive system —
-  `docs/DESIGN.md`.
-- Image hosting: `next/image` with `remotePatterns`. Archived listings: a
-  tombstone page, not a 404. Pack size: show the supplier's unit, never compute
-  a normalised one.
-- The three API endpoints the layouts assumed are built and tested —
-  `/search?facets=true`, `/search?min_suppliers=N`, `/products/{id}/similar`.
-  **`min_suppliers` needs `make reindex` before it returns anything**, because
-  `supplier_count` became a filterable attribute and that is an index setting.
-
-So the rewrite is unblocked and its first slice is the part nothing depends on:
-`/en` and `/ar` routing with `hreflang`, the server-rendered shell, chrome, the
-design tokens, and the test harness in CI.
-
-`apps/api` was covered on 2026-09-05 — 86 tests over the routers and the
-Meilisearch query builder, aimed at the failures that are silent rather than
-loud: a filter on the wrong attribute, a category identified by bare slug, a
-sort key the index does not have, priceless offers sorting as if free. Verified
-by mutation: seven deliberate breakages each failed the test that names them.
-
-### 2. Crosswalks — done
-All eight suppliers now map their own categories rather than inferring them.
-Shops 1 and 2 and the Shopify shop landed on 2026-09-05 (uncategorized 1,392 ->
-359); the Odoo shop followed on 2026-09-06.
-
-The Odoo shop was the awkward one. `OdooAdapter` swept `/shop`, whose product cards carry
-no category, so it now partitions by category instead: 170 leaf categories, 162
-of them mapped, `authoritative_categories` on. The categories come out of the
-`/shop` sidebar, which renders them as `data-link-href` attributes rather than
-`<a href>` — a link scrape finds none.
-
-The coverage crawl that gated it is worth keeping in mind for the next source:
-all 194 categories against a full `/shop` sweep gave 2,867 vs 2,875, i.e. **8
-products filed under no category at all** — magnetrons, lead-acid batteries,
-PETG filament, all live and priced. Category partitioning alone would have
-archived them. That shop therefore also sweeps `/shop`, and the pipeline gained
-`knows_category` so that pass cannot erase what the category pass set.
+### 2. The last polish item
+The spot-check of each shop's makhzan page (prices, links, photos, categories),
+before the shops that have not been written to are contacted.
 
 ### 3. Domain generalization
-**Phase 1 is done** (2026-08-24). `DomainProfile` exists, electronics was moved
-into it verbatim, and `domain` is a real column on Supplier / Category / Listing /
-Product with slugs unique per domain. Verified as a no-op for electronics: 796
-resolver probes matched the old implementation exactly, and re-ingesting a source
-produced identical category assignments.
+Phases 1–3 are done (`DomainProfile`, data-driven suppliers from a `sources`
+table, 15 further verticals), and browse is now scoped to a department.
+Remaining: an admin path for adding a source other than editing the private
+`sources.toml`, and index-wide search settings — `search_attributes` comes from
+the default profile because Meilisearch settings are per index, so a vertical
+needing very different ranking will force a compromise order or a second index.
+Identifier extraction exists only for electronics; the other domains extract
+none and group less.
 
-Phase 3 is done too — 15 further verticals were authored and populated. Remaining:
-
-- ~~**Phase 2, data-driven suppliers.**~~ Done 2026-10-24: adapters are built
-  from a `sources` table seeded from `sources.toml`, which lives in the private
-  configuration. Still open: an admin path for adding a source other than
-  editing the file.
-- **Phase 4, domain-aware UI.** The API identifies categories by `domain:slug`
-  and search is deliberately cross-domain, but browse is not scoped to a
-  vertical. With 16 domains that matters.
-- **Index-wide search settings.** `search_attributes` comes from the default
-  profile because Meilisearch settings are per index. Documents carry `domain`,
-  and identifier-shaped queries are handled by narrowing `attributesToSearchOn`,
-  but a vertical needing very different ranking will force a compromise order or
-  a second index.
-
-### 4. Open-sourcing
+### 4. Open-sourcing — done
 The platform is public under Apache-2.0; the supplier configuration is not. The
-crawling code is commodity (public WooCommerce, Shopify and Odoo endpoints),
-while the 2,568 lines of hand-authored crosswalks are the competitive asset, so
+crawling code is commodity (public WooCommerce, Shopify, Odoo and Wix
+endpoints), while the hand-authored crosswalks are the competitive asset, so
 `sources.toml`, the crosswalks, their tests and the one bespoke adapter live in a
 private repository that production mounts (`docs/DEPLOYMENT.md`, "Private
-configuration"). The tests are supplier-agnostic, crosswalks are TOML data behind
-a loader, and suppliers are rows in a table, so none of it needs code here.
+configuration").
 
 ### 5. Deferred
 - **Drop `suppliers.phone`.** Migration `2b656e4b5adc` (shop contact details)
@@ -177,9 +203,15 @@ a loader, and suppliers are rows in a table, so none of it needs code here.
 Found 2026-09-07: two suppliers, the largest among them, answer `403` to every
 request from the production host's address while serving a residential one
 normally, at any browser version. It is the address, not the User-Agent;
-`scripts/probe-suppliers.sh` run from both machines is how to tell. Archiving is
-cycle-gated, so nothing is lost; the cost is freshness. The details and options
-are tracked in the private configuration (`docs/live-issues.md`).
+`./makhzan probe` run from the server and a laptop is how to tell. Both are
+paused (`enabled = false`) rather than retried daily, and are never crawled from
+another address to get past the block. Archiving is cycle-gated, so nothing is
+lost; the cost is freshness, and their data is now from 2026-08-24.
+
+Both shops were emailed on 2026-11-06 and again on 2026-11-10, asking them to
+allow the crawler. **Neither has replied.** The next step, around 2026-11-16, is
+to follow up through their other channels (phone, WhatsApp, social). The details
+and options are tracked in the private configuration (`docs/live-issues.md`).
 
 ## Operational notes
 
