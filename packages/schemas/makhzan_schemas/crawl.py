@@ -136,6 +136,18 @@ def pacing_stats(
     return {**summary, "by_host": by_host}
 
 
+def merge_histogram(pacings: Iterable[Mapping]) -> Counter[int]:
+    """Every run's `gaps` histogram added up: whole seconds -> how many gaps."""
+    histogram: Counter[int] = Counter()
+    for pacing in pacings:
+        for second, n in (pacing.get("gaps") or {}).items():
+            try:
+                histogram[int(second)] += int(n)
+            except (TypeError, ValueError):
+                continue
+    return histogram
+
+
 def merge_gaps(pacings: Iterable[Mapping]) -> tuple[float | None, int | None]:
     """The shortest gap and the median gap (whole seconds, floored) across runs.
 
@@ -143,17 +155,13 @@ def merge_gaps(pacings: Iterable[Mapping]) -> tuple[float | None, int | None]:
     recorded have nothing to say and are left out rather than guessed. None
     when nothing was measured.
     """
+    pacings = list(pacings)
     shortest: float | None = None
-    histogram: Counter[int] = Counter()
     for pacing in pacings:
         low = pacing.get("min_gap_s")
         if isinstance(low, (int, float)):
             shortest = low if shortest is None else min(shortest, low)
-        for second, n in (pacing.get("gaps") or {}).items():
-            try:
-                histogram[int(second)] += int(n)
-            except (TypeError, ValueError):
-                continue
+    histogram = merge_histogram(pacings)
     total = histogram.total()
     if not total:
         return shortest, None
@@ -165,3 +173,45 @@ def merge_gaps(pacings: Iterable[Mapping]) -> tuple[float | None, int | None]:
         if seen >= middle:
             return shortest, second
     return shortest, None  # unreachable
+
+
+#: Where the published gap histogram's buckets start, in whole seconds. The
+#: first holds anything under our 15 s default, so a gap shorter than we
+#: promise shows up rather than being folded into the 15 s bucket; the last
+#: is open-ended. Fixed, so the page's rows do not move from week to week.
+GAP_BUCKETS: tuple[int, ...] = (0, 15, 16, 17, 18, 20, 30, 60)
+
+
+def bucket_gaps(histogram: Mapping[int, int]) -> list[dict] | None:
+    """`histogram` (whole seconds -> count) as the published buckets.
+
+    `[{"min_s": 15, "max_s": 15, "count": 380}, ..., {"min_s": 60, "max_s": None, ...}]`,
+    every bucket present, empty ones at 0. None when nothing was measured.
+    """
+    if not sum(histogram.values()):
+        return None
+    buckets = []
+    for i, low in enumerate(GAP_BUCKETS):
+        high = GAP_BUCKETS[i + 1] - 1 if i + 1 < len(GAP_BUCKETS) else None
+        count = sum(
+            n
+            for second, n in histogram.items()
+            if second >= low and (high is None or second <= high)
+        )
+        buckets.append({"min_s": low, "max_s": high, "count": count})
+    return buckets
+
+
+def public_identity(identity: object) -> dict | None:
+    """What may be published of a run's `stats.identity`: its name and whether it signed.
+
+    The signing key's id stays on the row (`make status` shows it); the page
+    says only "makhzanbot, signed" or "browser". None for a run from before
+    the identity was recorded, or anything unrecognised.
+    """
+    if not isinstance(identity, Mapping):
+        return None
+    name = identity.get("name")
+    if name not in ("makhzanbot", "browser"):
+        return None
+    return {"name": name, "signed": name == "makhzanbot" and identity.get("signed") is True}
