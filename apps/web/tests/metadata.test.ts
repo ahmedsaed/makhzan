@@ -227,21 +227,31 @@ describe("pageMetadata", () => {
 });
 
 describe("homeJsonLd", () => {
-  it("offers a search box on the site's own origin", () => {
+  it("names the site and who runs it, on the site's own origin", () => {
     const [organization, website] = homeJsonLd("https://makhzan.example/");
     expect(organization).toMatchObject({
+      "@context": "https://schema.org",
       "@type": "Organization",
+      "@id": "https://makhzan.example/#organization",
       name: "makhzan",
+      url: "https://makhzan.example/",
       logo: "https://makhzan.example/icon-512.png",
     });
-    expect(website.potentialAction).toEqual({
-      "@type": "SearchAction",
-      target: {
-        "@type": "EntryPoint",
-        urlTemplate: "https://makhzan.example/search?q={search_term_string}",
-      },
-      "query-input": "required name=search_term_string",
+    expect(website).toMatchObject({
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "@id": "https://makhzan.example/#website",
+      name: "makhzan",
+      url: "https://makhzan.example/",
+      publisher: { "@id": "https://makhzan.example/#organization" },
     });
+  });
+
+  // Google retired the sitelinks search box (November 2024); the site has no
+  // other name, so an alternateName would be invented.
+  it("has no search action and no alternate name", () => {
+    const text = JSON.stringify(homeJsonLd("https://makhzan.example/"));
+    expect(text).not.toMatch(/SearchAction|potentialAction|alternateName/);
   });
 });
 

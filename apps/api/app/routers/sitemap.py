@@ -2,8 +2,9 @@
 
 Search cannot enumerate products: it pages 100 hits at a time and stops at
 50,000. This walks the products table by id instead (keyset paging), selecting
-only what a sitemap entry needs: the id and title for the URL, and when the
-product's visible content last changed for `lastmod`.
+only what a sitemap entry needs: the id and title for the URL, when the
+product's visible content last changed for `lastmod`, and its main photo for
+the image extension (`<image:image>`).
 
 At `/sitemap/products` rather than `/products/sitemap`, where it would sit
 beside `/products/{product_id}` and work only for as long as it stayed declared
@@ -39,6 +40,10 @@ class SitemapProduct(BaseModel):
     title_ar: str | None = None
     part_number: str | None = None
     changed_at: datetime
+    #: The photo the product page leads with (`Product.image`, the first in its
+    #: gallery), for the sitemap's image extension. Google accepts images on
+    #: other hosts there, as these are: they are the shops' own photos.
+    image: str | None = None
 
 
 class SitemapPage(BaseModel):
@@ -75,6 +80,7 @@ async def sitemap_products(
             Product.title_ar,
             Product.part_number,
             Product.content_changed_at,
+            Product.image,
         )
         .where(_has_active_offer)
         .order_by(Product.id)
@@ -98,6 +104,7 @@ async def sitemap_products(
                 title_ar=r.title_ar,
                 part_number=r.part_number,
                 changed_at=r.content_changed_at,
+                image=r.image,
             )
             for r in rows
         ],
