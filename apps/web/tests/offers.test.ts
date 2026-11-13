@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { Offer, Product } from "@/lib/api";
 import {
   boxSpan,
+  isOnRequest,
+  isStaleOffer,
   breaksText,
   compareOffers,
   comparisonText,
@@ -38,6 +40,7 @@ const only = (id: string): Offer => CASES[id].offers[0];
 const offerOf = (id: string, offerId: string): Offer =>
   CASES[id].offers.find((o) => o.id === offerId)!;
 const ids = (offers: Offer[]) => offers.map((o) => o.id);
+const daysAgoIso = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
 
 describe("one shop · options", () => {
   const offer = only("p2-options");
@@ -54,12 +57,20 @@ describe("one shop · options", () => {
     expect(unitPrice(offer)).toEqual({ price: 1700, option: null });
   });
 
-  it("uses every option's price when none is in stock", () => {
+  it("is the listing price alone when no option is in stock", () => {
     const gone = {
       ...offer,
       variants: offer.variants!.map((v) => ({ ...v, in_stock: false })),
     };
-    expect(boxSpan(gone)).toEqual({ min: 1700, max: 1750 });
+    expect(boxSpan(gone)).toEqual({ min: 1700, max: 1700 });
+  });
+
+  it("is never widened by options read over 45 days ago", () => {
+    const old = {
+      ...offer,
+      variants_checked_at: new Date(now.getTime() - 50 * 86_400_000).toISOString(),
+    };
+    expect(boxSpan(old, now)).toEqual({ min: 1700, max: 1700 });
   });
 
   it("an out-of-stock option never sets the lowest", () => {
@@ -174,6 +185,65 @@ describe("the price of one (the rule the API's min_price shares)", () => {
   });
 });
 
+describe("parity with the API's pricing.py", () => {
+  const base = only("p2-breaks");
+  const opt = (title: string, price: number | null, inStock: boolean | null) => ({
+    title,
+    price,
+    in_stock: inStock,
+    stock_quantity: null,
+  });
+
+  it("at an equal price of one, the offer sold singly leads, then the freshest", () => {
+    const tens = {
+      ...base,
+      id: "tens",
+      price: 5,
+      min_quantity: 10,
+      last_verified_at: daysAgoIso(1),
+    };
+    const single = { ...base, id: "single", price: 5, last_verified_at: daysAgoIso(9) };
+    const fresher = { ...base, id: "fresher", price: 5, last_verified_at: daysAgoIso(2) };
+    expect(orderOffers([tens, single, fresher], now).map((o) => o.id)).toEqual([
+      "fresher",
+      "single",
+      "tens",
+    ]);
+    expect(compareOffers([tens, single], now).best?.offer.id).toBe("single");
+  });
+
+  it("a null listing price with in-stock priced options is priced by the cheapest", () => {
+    const offer = {
+      ...base,
+      price: null,
+      price_on_request: false,
+      variants: [opt("Red", 12, true), opt("Blue", 9, true), opt("Green", 5, false)],
+      variants_checked_at: null,
+    };
+    expect(unitPrice(offer, now)).toEqual({ price: 9, option: "Blue" });
+    expect(rowSpan(offer)).toEqual({ min: 5, max: 12 });
+    expect(boxSpan(offer, now)).toEqual({ min: 9, max: 12 });
+  });
+
+  it("a null price is on request only when the shop says so", () => {
+    const asked = { ...base, id: "asked", price: null, price_on_request: true };
+    const silent = { ...base, id: "silent", price: null, price_on_request: false };
+    expect(isOnRequest(asked)).toBe(true);
+    expect(isOnRequest(silent)).toBe(false);
+    expect(unitPrice(silent, now)).toBeNull();
+    const c = compareOffers([asked, silent], now);
+    expect(c.onRequest.map((o) => o.id)).toEqual(["asked"]);
+    expect(c.priced).toEqual([]);
+  });
+
+  it("an offer with no check date is not fresh", () => {
+    const undated = { ...base, id: "undated", price: 3, last_verified_at: "" };
+    const dated = { ...base, id: "dated", price: 8 };
+    expect(isStaleOffer(undated, now)).toBe(true);
+    expect(compareOffers([undated, dated], now).min).toBe(8);
+  });
+});
+
 describe("one shop · minimum order", () => {
   const offer = only("p2-minorder");
 
@@ -232,6 +302,8 @@ describe("one shop · quantity prices", () => {
       ],
     });
     expect(rows.map(quantityLabel)).toEqual(["10", "11 or more"]);
+    // A tier at or under the minimum prices the smallest order.
+    expect(rows.map((r) => r.price)).toEqual([46, 44]);
   });
 
   it("has no table without breaks or without a price", () => {

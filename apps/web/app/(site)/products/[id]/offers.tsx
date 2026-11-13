@@ -6,9 +6,9 @@ import { PriceRange } from "@/components/price";
 import { ShopLink } from "@/components/shop-link";
 import { StockBadge } from "@/components/stock-badge";
 import { titleOf, type Offer } from "@/lib/api";
-import { plural, PRICE_ON_REQUEST } from "@/lib/format";
+import { NO_PRICE, plural, PRICE_ON_REQUEST } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
-import { isInStock, needsEach, rowSpan } from "@/lib/offers";
+import { isInStock, isOnRequest, needsEach, rowSpan, unitPrice } from "@/lib/offers";
 import { routes } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -43,7 +43,11 @@ export function Offers({
         <h2 id="offers-heading" className="text-[17px] lg:text-lg">
           Offers
         </h2>
-        <span className="text-[13px] text-ink-2">lowest price first</span>
+        {/* Said only when there is an order to speak of: offers on request
+            have no price to sort by. */}
+        {[...listed, ...outOfStock, ...stale].some((offer) => unitPrice(offer, now)) && (
+          <span className="text-[13px] text-ink-2">lowest price first</span>
+        )}
       </div>
       {/* Not more than this: what differs between two shops' titles is for the
           reader to see, and a sentence claiming it would be a guess. */}
@@ -180,9 +184,15 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
       </div>
       <div className="ps-3 text-end whitespace-nowrap [grid-area:price]">
         {span === null ? (
-          <span data-price data-on-request className="figure text-sm text-ink">
-            {PRICE_ON_REQUEST}
-          </span>
+          isOnRequest(offer) ? (
+            <span data-price data-on-request className="figure text-sm text-ink">
+              {PRICE_ON_REQUEST}
+            </span>
+          ) : (
+            <span data-price data-no-price className="text-sm font-medium text-ink-2">
+              {NO_PRICE}
+            </span>
+          )
         ) : (
           <>
             <PriceRange

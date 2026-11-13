@@ -39,9 +39,14 @@ export function checkedAt(offer: Offer): number {
   return parseVerified(offer.last_verified_at)?.getTime() ?? 0;
 }
 
-/** Last checked more than STALE_AFTER_DAYS ago (rule C2b). */
+/**
+ * Not fresh (rule C2b): last checked more than STALE_AFTER_DAYS ago, or never
+ * known to be checked. An offer with no check date is no evidence of anything
+ * current, and the API's price summary treats it the same way.
+ */
 export function isStaleOffer(offer: Offer, now: Date = new Date()): boolean {
-  return isStaleCheck(parseVerified(offer.last_verified_at), now);
+  const checked = parseVerified(offer.last_verified_at);
+  return checked === null || isStaleCheck(checked, now);
 }
 
 /**
@@ -58,9 +63,14 @@ export function preferFresh(offers: Offer[], now: Date = new Date()): Offer[] {
 // One offer's prices
 // --------------------------------------------------------------------------- //
 
-/** No price to compare: the shop gives it on request (or gives none). Never free. */
+/**
+ * The shop sells it and gives the price on request: no listing price, and the
+ * shop says so (`price_on_request`). A price, when there is one, wins. An
+ * offer with no price and no such flag is not "on request": it has no price
+ * at all (and may still be priced by its options, `unitPrice`).
+ */
 export function isOnRequest(offer: Offer): boolean {
-  return offer.price === null;
+  return offer.price === null && offer.price_on_request === true;
 }
 
 /** An option the shop says is in stock. Unknown is not "yes": it never sets the lowest. */
@@ -72,12 +82,18 @@ function optionInStock(variant: Variant): boolean {
 export type UnitPrice = { price: number; option: string | null };
 
 /**
- * Options read longer ago than this do not set the price of one: they are
- * refreshed once a cycle, and an option list as old as a stale price (C2b)
- * says no more than one.
+ * Options read over 45 days ago (C2b) set no price: they are refreshed once a
+ * cycle, and an option list that old says no more than a stale price. With no
+ * read date they were read with the listing, and are as fresh as it is.
  */
-function optionsCurrent(offer: Offer, now: Date): boolean {
+export function optionsCurrent(offer: Offer, now: Date = new Date()): boolean {
   return !isStaleCheck(parseVerified(offer.variants_checked_at ?? null), now);
+}
+
+/** The options that can set a price: current, in stock, priced. */
+function pricedOptions(offer: Offer, now: Date): Variant[] {
+  if (!optionsCurrent(offer, now)) return [];
+  return (offer.variants ?? []).filter((v) => optionInStock(v) && v.price !== null);
 }
 
 /**
@@ -89,11 +105,10 @@ function optionsCurrent(offer: Offer, now: Date): boolean {
  * same rule, so a search card and the page agree.
  */
 export function unitPrice(offer: Offer, now: Date = new Date()): UnitPrice | null {
-  if (offer.price === null) return null;
-  const options = optionsCurrent(offer, now)
-    ? (offer.variants ?? []).filter((v) => optionInStock(v) && v.price !== null)
-    : [];
-  if (options.length === 0) return { price: offer.price, option: null };
+  if (isOnRequest(offer)) return null;
+  const options = pricedOptions(offer, now);
+  if (options.length === 0)
+    return offer.price === null ? null : { price: offer.price, option: null };
   const cheapest = options.reduce((a, b) => ((b.price as number) < (a.price as number) ? b : a));
   const price = cheapest.price as number;
   return { price, option: price === offer.price ? null : cheapest.title };
@@ -105,28 +120,32 @@ function spanOf(prices: number[]): Span | null {
   return prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null;
 }
 
-/**
- * Every price a row shows: the listing's and each option's, in stock or not,
- * since the table inside the row gives each option's stock. Null on request.
- */
-export function rowSpan(offer: Offer): Span | null {
-  if (offer.price === null) return null;
-  const options = (offer.variants ?? []).flatMap((v) => (v.price === null ? [] : [v.price]));
-  return spanOf([offer.price, ...options]);
+function listed(offer: Offer): number[] {
+  return offer.price === null ? [] : [offer.price];
 }
 
 /**
- * The headline of a one-shop page: the listing's price and its in-stock
- * options' (C3: "EGP 1,700 – 1,750" when one colour costs more). When no
- * option is in stock, every option's, so the range still says what they cost.
+ * Every price a row shows: the listing's and each option's, in stock or not,
+ * since the table inside the row gives each option's stock. Null on request,
+ * or with no price anywhere.
  */
-export function boxSpan(offer: Offer): Span | null {
-  if (offer.price === null) return null;
-  const variants = offer.variants ?? [];
-  const inStock = variants.filter(optionInStock);
-  const counted = inStock.length > 0 ? inStock : variants;
-  const options = counted.flatMap((v) => (v.price === null ? [] : [v.price]));
-  return spanOf([offer.price, ...options]);
+export function rowSpan(offer: Offer): Span | null {
+  if (isOnRequest(offer)) return null;
+  const options = (offer.variants ?? []).flatMap((v) => (v.price === null ? [] : [v.price]));
+  return spanOf([...listed(offer), ...options]);
+}
+
+/**
+ * The headline of a one-shop page: the price of one and the listing's price,
+ * widened by its current in-stock priced options (C3: "EGP 1,700 – 1,750" when
+ * one colour costs more). Options read over 45 days ago, out of stock or
+ * without a price never widen it, as they never set the price of one.
+ */
+export function boxSpan(offer: Offer, now: Date = new Date()): Span | null {
+  const unit = unitPrice(offer, now);
+  if (!unit) return null;
+  const options = pricedOptions(offer, now).map((v) => v.price as number);
+  return spanOf([unit.price, ...listed(offer), ...options]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -175,8 +194,8 @@ const STEP_WORDS: Record<number, string> = {
  * "min. 10 (EGP 1.50), then in tens" for the one-shop box: the minimum, its
  * total, and how the quantity steps after it, when the shop says.
  */
-export function minimumLine(offer: Offer): string | null {
-  const text = minimumText(offer);
+export function minimumLine(offer: Offer, price: number | null = offer.price): string | null {
+  const text = minimumText(offer, price);
   if (!text) return null;
   const step = offer.multiple_of ?? null;
   const fewest = minimumOrder(offer);
@@ -205,12 +224,13 @@ export type BreakRow = { from: number; to: number | null; price: number };
 export function priceBreakRows(offer: Offer): BreakRow[] {
   if (offer.price === null) return [];
   const start = minimumOrder(offer) ?? 1;
-  const breaks = (offer.price_breaks ?? [])
-    .filter((b) => b.min_quantity > start)
-    .sort((a, b) => a.min_quantity - b.min_quantity);
+  const sorted = [...(offer.price_breaks ?? [])].sort((a, b) => a.min_quantity - b.min_quantity);
+  const breaks = sorted.filter((b) => b.min_quantity > start);
   if (breaks.length === 0) return [];
+  // A tier at or under the minimum is the price of the smallest order.
+  const opening = sorted.filter((b) => b.min_quantity <= start).at(-1);
   const steps: { from: number; price: number }[] = [
-    { from: start, price: offer.price },
+    { from: start, price: opening?.price ?? offer.price },
     ...breaks.map((b) => ({ from: b.min_quantity, price: b.price })),
   ];
   return steps.map((step, i) => ({
@@ -241,9 +261,11 @@ export function breaksText(offer: Offer): string | null {
 
 /**
  * Lowest price of one first (`unitPrice`, so a cheaper in-stock option
- * counts). An offer on request goes after every priced one, since "Price on
- * request" must never sort as free, and equal prices put the more recently
- * checked offer first: it is the likelier to still be true.
+ * counts). An offer without one (on request, or no price at all) goes after
+ * every priced one, since "Price on request" must never sort as free. Equal
+ * prices put the offer sold singly first, then the more recently checked (the
+ * likelier to still be true), then a fixed order: the API's `pricing.py`
+ * breaks ties the same way, so the page and a search card name one offer.
  */
 export function orderOffers(offers: Offer[], now: Date = new Date()): Offer[] {
   return [...offers].sort((a, b) => {
@@ -253,8 +275,11 @@ export function orderOffers(offers: Offer[], now: Date = new Date()): Offer[] {
       if (pa !== pb) return pa === null ? 1 : -1;
     } else if (pa !== pb) {
       return pa - pb;
+    } else if (needsEach(a) !== needsEach(b)) {
+      // Equal prices of one: the offer a buyer can take singly first.
+      return needsEach(a) ? 1 : -1;
     }
-    return checkedAt(b) - checkedAt(a);
+    return checkedAt(b) - checkedAt(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   });
 }
 

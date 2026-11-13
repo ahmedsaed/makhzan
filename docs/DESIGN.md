@@ -142,10 +142,14 @@ the page container on desktop; each section is left out when its fetch fails.
   - *Options.* Under the one-shop box, "8 options · at {shop} · read 9 Nov": a table of
     option, price and stock, six rows then "Show N more options" (a `<details>`), and a
     note ("6 of 8 in stock … confirm on the shop's site"). An option the shop gives no
-    price of its own reads "see shop". The headline is the range of the listing's price
-    and its in-stock options ("EGP 1,700 – 1,750"; every option's when none is in stock).
-    On an offer row the price is the span of all its options, with the table folded as
-    "2 options · 1 in stock".
+    price of its own reads "see shop". The headline is the price of one widened by the
+    listing's price and its in-stock priced options ("EGP 1,700 – 1,750"). Options read
+    over 45 days ago set and widen no price: their read date shows in `age-muted` ("as
+    read 14 Sept"), their stock is never bold, and the note says they are too old to
+    set a price. On an offer row the price is the span of all its options, with the
+    table folded as "2 options · 1 in stock". On a phone the price and stock columns
+    narrow so the option's name has the room; the rows behind "Show N more" keep a
+    head for screen readers.
   - *Minimum order.* The price stays the price of one, as the shop gives it, followed by
     "each", and under it "min. 10 (EGP 1.50), then in tens" (or "in multiples of 5").
   - *Quantity prices.* "Price by quantity, as {shop} lists it": a table, "1–9 EGP 47
@@ -154,8 +158,10 @@ the page container on desktop; each section is left out when its fetch fails.
     the `badge` colours, which mean "N shops"). "Fits K2 Plus" names up to two models;
     more fold ("Fits 19 models ▾", a `<details>` list). "Ships from abroad" carries a
     tooltip: delivery may take longer, ask the shop.
-  - *Price on request* stands in the price slot in the price face ("Price on request",
-    never EGP 0 and never "free"), stock reads "Available at {shop}", and a note points
+  - *Price on request* (the shop gives no price and says it is on request) stands in
+    the price slot in the price face ("Price on request", never EGP 0 and never
+    "free"); an offer with no price and no such word from its shop reads "No price
+    listed" instead, stock reads "Available at {shop}", and a note points
     to the contact buttons under it ("… gives this price on request: call or message
     them below"; "ask them on their site" for a shop with no contact).
   - *Stock counts* only where the shop itself shows one: "36 in stock at {shop}" in the
@@ -207,8 +213,10 @@ the page container on desktop; each section is left out when its fetch fails.
     cheapest option the shop says is **in stock**, when it has any, else its listing
     price. Options without a price or a stated stock never count, nor options read over
     45 days ago; the stock tiers stay (low stock is in stock; unknown and made to order
-    are "not known to be gone"). The API's `min_price` uses the same rule, so a search
-    card and the page agree. The range, "lowest price first", the cheapest button and
+    are "not known to be gone"); an offer never known to be checked is not fresh. At an
+    equal price of one the offer sold singly leads, then the more recently checked. The
+    API's `min_price` (`makhzan_schemas/pricing.py`) uses the same rule, so a search card
+    and the page agree. The range, "lowest price first", the cheapest button and
     the bar all use it. Wherever an option's price leads (one that is not the listing
     price itself), the option is named ("Lowest is
     the “Without headers” option at Cairo Makers."; under the button and in the bar,
@@ -428,7 +436,7 @@ Each is meant to be checked by a test.
 - **C1** Every result, list or grid, shows: title, price (or range), shop name or "N shops", freshness. List and grid carry the same facts.
 - **C2** Out of stock is hidden by default; when anything is hidden the page says how many and offers to show them.
 - **C2b** Stale (last checked more than 45 days ago: F2's warn tier, `STALE_AFTER_DAYS` in `apps/web/lib/freshness.ts` and `makhzan_schemas/freshness.py`) is hidden by default too, in results (`?stale=all` shows it) and folded on a product page. When anything is hidden the page says how many and offers to show them. A product is fresh when any of its offers is. A direct link always works: a product whose offers are all stale still renders, with the warning, and a stale shop's own page shows its products.
-- **C3** No per-unit price is implied: a price reads "each" only beside a minimum order the shop states, and then always with the minimum and its total ("EGP 0.15 each · min. 10 (EGP 1.50)"), wherever that price appears (box, row, summary, button, bottom bar); quantity prices say "each" in their own table. Ranges read "EGP 260 – 400". Prices are the current price only: no struck-through "before" prices, no discount badges, no "save x%" on quantity prices (some shops' before prices are standing markups). A product or offer without a price reads "Price on request", never EGP 0 or "free".
+- **C3** No per-unit price is implied beyond what a shop states. Prices are compared by the price of one, as every shop publishes it. Wherever a price of one comes from an offer with a minimum order, the minimum with its total stands beside it ("EGP 0.15 each · min. 10 (EGP 1.50)": box, row, summary, button, bottom bar), and a range reads "each" as soon as any offer in it has a minimum; quantity prices say "each" in their own table. Ranges read "EGP 260 – 400". Prices are the current price only: no struck-through "before" prices, no discount badges, no "save x%" on quantity prices (some shops' before prices are standing markups). A product or offer without a price reads "Price on request", never EGP 0 or "free".
 - **C4** Specs and datasheets appear only when the shop provides them, with their source; never an empty or placeholder table. No brand filter, no Arabic interface text.
 
 **Freshness**
