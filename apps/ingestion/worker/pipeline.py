@@ -815,6 +815,131 @@ async def _pace(adapter: SourceAdapter) -> float:
     return await polite_pause(adapter.base_url, adapter.polite_delay)
 
 
+#: Archive candidates offered to the source for confirmation in one run, the
+#: most recently seen first. A cycle missing more than this is not the drift of
+#: a multi-day sweep but a shop that changed: the rest archive as they always did.
+CONFIRM_MAX_CANDIDATES = 500
+
+#: The shortest a held archive waits before archiving as before, whatever the
+#: cycle length: a source swept in one sitting still gets a day's retries.
+CONFIRM_MIN_WAIT = timedelta(days=1)
+
+
+class Confirmer:
+    """Asks the source about a cycle's archive candidates before they are archived (T4).
+
+    A multi-day sweep by page offset can skip a listing: one that leaves an
+    already-read page shifts the rest back a slot, and one that moves to a stock
+    partition already swept is never reached. The cycle then archives it,
+    though the shop still sells it. So the candidates — active, not seen since
+    the cycle began — are first offered to `SourceAdapter.confirm_listed`:
+
+      - returned with a price: upserted (seen and verified), and kept;
+      - still listed without a price: `last_seen_at` only, and kept;
+      - asked and absent: archived, as before;
+      - not asked (over a cap, held for a page there was no room to read) or
+        the asking failed: nothing more is archived, and the cycle stays open
+        with every cursor exhausted, so the next run asks again.
+
+    The wait is capped at one cycle (`target_cycle_days`, else as long as the
+    cycle took, at least `CONFIRM_MIN_WAIT`) from when the sweep finished; after
+    it the cycle archives as it always has. Confirmation only ever *prevents* an
+    archive: a listing's absence from it is never the reason for one beyond
+    what the cycle already established.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        run: IngestionRun,
+        adapter: SourceAdapter,
+        supplier_id: uuid.UUID,
+        cat_index: dict,
+        *,
+        errors: list[str],
+        already_sent: Callable[[], bool],
+        may_send: Callable[[], str | None],
+    ) -> None:
+        self.session, self.run, self.adapter = session, run, adapter
+        self.supplier_id, self.cat_index, self.errors = supplier_id, cat_index, errors
+        self._already_sent = already_sent
+        #: Why no request may go out now (the host refused the run, its time
+        #: budget is spent), or None.
+        self._may_send = may_send
+        self.requests: Counter = Counter()
+        self.report: dict = {}
+
+    async def __call__(
+        self, candidates: list[Listing], *, overdue: bool
+    ) -> tuple[list[uuid.UUID], bool]:
+        """(ids to archive, whether to hold the cycle open for the next run)."""
+        everything = [row.id for row in candidates]
+        offered = candidates[:CONFIRM_MAX_CANDIDATES]
+        beyond = [row.id for row in candidates[CONFIRM_MAX_CANDIDATES:]]
+        report = self.report
+        report.update(candidates=len(candidates), offered=len(offered))
+        if overdue:
+            report["overdue"] = True
+
+        refused = self._may_send()
+        if refused:
+            report["failed"] = refused[:200]
+            return (everything, False) if overdue else ([], True)
+
+        fetcher = CycleFetcher(lambda: _pace(self.adapter), retries=1)
+        if self._already_sent():
+            await asyncio.sleep(await _pace(self.adapter))
+        try:
+            answer = await self.adapter.confirm_listed(offered, fetcher)
+        except Exception as exc:  # noqa: BLE001 — a failed check must not archive
+            self.requests.update(fetcher.requests)
+            message = f"{type(exc).__name__}: {exc}"[:200]
+            self.errors.append(f"confirm before archiving: {message}")
+            report["failed"] = message
+            return (everything, False) if overdue else ([], True)
+        self.requests.update(fetcher.requests)
+        if answer is None:
+            # No cheap way to ask this source: archive as it always has.
+            self.report = {}
+            return everything, False
+        report.update(answer.notes)
+
+        returned: set[str] = set()
+        for raw in answer.items:
+            returned.add(str(raw.external_id))
+            try:
+                await _ingest_item(
+                    self.session, self.run, self.adapter, self.supplier_id, self.cat_index, raw
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad item must not stop the rest
+                self.run.items_failed += 1
+                self.errors.append(f"confirm {raw.external_id}: {exc}")
+        kept = returned | answer.seen
+        by_external = {str(row.external_id): row for row in offered}
+        now = datetime.now(timezone.utc)
+        for external_id in kept:
+            # The source just listed it. An upsert already said so; a listing
+            # routed to review, or seen without a price, is said so here.
+            if (row := by_external.get(external_id)) is not None:
+                row.last_seen_at = now
+        absent = [
+            row.id
+            for external_id, row in by_external.items()
+            if external_id in answer.absent and external_id not in kept
+        ]
+        unasked = [
+            row.id
+            for external_id, row in by_external.items()
+            if external_id not in kept and external_id not in answer.absent
+        ]
+        report.update(kept=len(kept & set(by_external)), absent=len(absent))
+        if unasked and not overdue:
+            report["held"] = len(unasked)
+            # The confirmed absences go now; the cycle waits on the rest.
+            return absent, True
+        return absent + unasked + beyond, False
+
+
 async def _finish_cycle_if_swept(
     session: AsyncSession,
     adapter: SourceAdapter,
@@ -822,12 +947,16 @@ async def _finish_cycle_if_swept(
     *,
     run: IngestionRun | None = None,
     pages_this_run: int = 0,
+    confirm: Confirmer | None = None,
 ) -> tuple[int, dict]:
     """Archive vanished listings, but only once every partition has been swept.
 
     Archiving keys off the start of the whole *cycle*, not of this run: a sweep
     may span several runs, and retiring everything a single partial run failed
     to reach would delete most of the catalog.
+
+    With `confirm`, the candidates are first put to the source (`Confirmer`);
+    it may hold the cycle open, cursors exhausted, for the next run to finish.
     """
     cursors = (
         (
@@ -846,16 +975,74 @@ async def _finish_cycle_if_swept(
     starts = [c.cycle_started_at for c in cursors if c.cycle_started_at is not None]
     cycle_started = min(starts) if starts else datetime.now(timezone.utc)
 
+    vanished = [
+        Listing.supplier_id == supplier_id,
+        Listing.status == ListingStatus.ACTIVE,
+        # Seen, not verified: a listing kept alive by id alone was not
+        # re-priced, but the shop still says it sells it.
+        Listing.last_seen_at < cycle_started,
+    ]
+    if confirm is not None:
+        candidates = (
+            (
+                await session.execute(
+                    select(Listing)
+                    .where(*vanished)
+                    .order_by(Listing.last_seen_at.desc(), Listing.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if candidates:
+            # When the sweep finished: no cursor is touched while a cycle is held.
+            swept_at = max(c.updated_at for c in cursors)
+            if adapter.target_cycle_days:
+                wait = timedelta(days=adapter.target_cycle_days)
+            else:
+                wait = max(CONFIRM_MIN_WAIT, swept_at - cycle_started)
+            overdue = datetime.now(timezone.utc) - swept_at > wait
+            ids, hold = await confirm(list(candidates), overdue=overdue)
+            # Only these, and only if still unseen: a confirmed one moved on.
+            vanished.append(Listing.id.in_(ids))
+            archived = await _archive(session, vanished) if ids else 0
+            if hold:
+                return archived, {}
+        else:
+            archived = 0
+    else:
+        archived = await _archive(session, vanished)
+    for cursor in cursors:
+        cursor.exhausted = False
+        cursor.next_page = 1
+        cursor.cycle_started_at = None
+
+    # Completing a cycle resets the cursors, which erases the only evidence it
+    # happened. Stamp the run so cycle health stays inspectable afterwards —
+    # otherwise you can only ever see the cycle in flight and never judge whether
+    # it is behaving normally.
+    finished = datetime.now(timezone.utc)
+    cycle = {
+        "cycle_started_at": cycle_started.isoformat(),
+        "cycle_completed_at": finished.isoformat(),
+        "cycle_seconds": round((finished - cycle_started).total_seconds()),
+        "cycle_partitions": len(expected),
+        # Every page the cycle read, across its runs: the size the next cycle's
+        # adaptive budget (`target_cycle_days`) is planned from.
+        "cycle_pages": pages_this_run
+        + await _cycle_pages_since(
+            session, adapter.source_id, cycle_started, exclude=run.id if run else None
+        ),
+    }
+    return archived, cycle
+
+
+async def _archive(session: AsyncSession, where: list) -> int:
+    """Archive the listings matching `where`, dating the gap in their history."""
     archived = (
         await session.execute(
             update(Listing)
-            .where(
-                Listing.supplier_id == supplier_id,
-                Listing.status == ListingStatus.ACTIVE,
-                # Seen, not verified: a listing kept alive by id alone was not
-                # re-priced, but the shop still says it sells it.
-                Listing.last_seen_at < cycle_started,
-            )
+            .where(*where)
             .values(status=ListingStatus.ARCHIVED)
             .returning(Listing.id, Listing.price, Listing.currency, Listing.stock_signal)
         )
@@ -879,29 +1066,7 @@ async def _finish_cycle_if_swept(
                 for listing_id, price, currency, stock_signal in archived
             ],
         )
-    for cursor in cursors:
-        cursor.exhausted = False
-        cursor.next_page = 1
-        cursor.cycle_started_at = None
-
-    # Completing a cycle resets the cursors, which erases the only evidence it
-    # happened. Stamp the run so cycle health stays inspectable afterwards —
-    # otherwise you can only ever see the cycle in flight and never judge whether
-    # it is behaving normally.
-    finished = datetime.now(timezone.utc)
-    cycle = {
-        "cycle_started_at": cycle_started.isoformat(),
-        "cycle_completed_at": finished.isoformat(),
-        "cycle_seconds": round((finished - cycle_started).total_seconds()),
-        "cycle_partitions": len(expected),
-        # Every page the cycle read, across its runs: the size the next cycle's
-        # adaptive budget (`target_cycle_days`) is planned from.
-        "cycle_pages": pages_this_run
-        + await _cycle_pages_since(
-            session, adapter.source_id, cycle_started, exclude=run.id if run else None
-        ),
-    }
-    return len(archived), cycle
+    return len(archived)
 
 
 async def _cycle_pages_since(
@@ -1063,6 +1228,24 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
     return drift
 
 
+async def _last_source_report(session: AsyncSession, source_id: str) -> dict:
+    """`stats.source_report` of the source's newest finished, full (not `limit=`) run."""
+    report = (
+        await session.execute(
+            select(IngestionRun.stats["source_report"])
+            .where(
+                IngestionRun.source == source_id,
+                IngestionRun.finished_at.is_not(None),
+                IngestionRun.stats.has_key("source_report"),
+                ~IngestionRun.stats.has_key("limit"),
+            )
+            .order_by(IngestionRun.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return report if isinstance(report, dict) else {}
+
+
 async def _partitions_for_this_run(
     session: AsyncSession, adapter: SourceAdapter, partitions: list[str]
 ) -> list[str]:
@@ -1154,6 +1337,10 @@ async def _logged_run(
             # Bounded dev runs always sweep what they were asked for.
             partitions = await _partitions_for_this_run(session, adapter, partitions)
             budget = await _page_budget(session, adapter)
+            # What the last full run left for this one to finish (a short page
+            # whose verdict is the next page). A `limit=` run neither reads it
+            # nor, being left out here, hands anything on.
+            adapter.resume_from(await _last_source_report(session, source_id))
         run_page_budget = budget.get("pages")
 
         # Before any page: the adapter reads it while turning pages into listings.
@@ -1167,6 +1354,8 @@ async def _logged_run(
         tally: Counter = Counter()
         #: How this run's reads changed stored listings' categories (`stats.categories`).
         categories: Counter = Counter()
+        #: Requests outside the sweep and the details stage (confirmation), by label.
+        sent_extra: Counter = Counter()
 
         def checkpoint(more: Counter | None = None) -> None:
             """Put what the run has sent so far on its row, for the next commit.
@@ -1178,7 +1367,9 @@ async def _logged_run(
             `requests` and `pacing`, current to the last page; they cost one
             small JSONB update in a commit that happens anyway.
             """
-            sent = _requests_sent(tally, cycle_requests, adapter, log, more or Counter())
+            sent = _requests_sent(
+                tally, cycle_requests, adapter, log, (more or Counter()) + sent_extra
+            )
             stats = dict(run.stats or {})
             if sent:
                 stats["requests"] = sent
@@ -1246,10 +1437,35 @@ async def _logged_run(
                 break
 
         archived, cycle = 0, {}
+        confirm: Confirmer | None = None
         if limit is None:
+            # Never on a `limit=` run: it archives nothing, so has nothing to ask.
+            if type(adapter).confirm_listed is not SourceAdapter.confirm_listed:
+                confirm = Confirmer(
+                    session,
+                    run,
+                    adapter,
+                    supplier_id,
+                    cat_index,
+                    errors=errors,
+                    already_sent=lambda: bool(tally["pages"] or cycle_requests),
+                    may_send=lambda: (
+                        f"refused by its host: {halt[0]}"
+                        if halt
+                        else ("time budget spent" if _clock() >= deadline else None)
+                    ),
+                )
             archived, cycle = await _finish_cycle_if_swept(
-                session, adapter, supplier_id, run=run, pages_this_run=tally["pages"]
+                session,
+                adapter,
+                supplier_id,
+                run=run,
+                pages_this_run=tally["pages"],
+                confirm=confirm,
             )
+        if confirm is not None and confirm.requests:
+            sent_extra.update(confirm.requests)
+            checkpoint()
 
         details_requests: Counter = Counter()
         details: dict = {}
@@ -1265,7 +1481,7 @@ async def _logged_run(
                     adapter,
                     errors=errors,
                     pace=lambda: _pace(adapter),
-                    already_sent=bool(tally["pages"] or cycle_requests),
+                    already_sent=bool(tally["pages"] or cycle_requests or sent_extra),
                     checkpoint=checkpoint,
                 )
             except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
@@ -1298,8 +1514,14 @@ async def _logged_run(
             stats["not_products"] = dict(not_products.most_common(25))
         if details:
             stats["details"] = details
-        if requests := _requests_sent(tally, cycle_requests, adapter, log, details_requests):
+        if requests := _requests_sent(
+            tally, cycle_requests, adapter, log, details_requests + sent_extra
+        ):
             stats["requests"] = requests
+        if confirm is not None and confirm.report:
+            # What the cycle's archive candidates turned out to be (T4, T12).
+            # For `make status`; never on /how-we-crawl.
+            stats["archive_confirm"] = confirm.report
         # What the shop's server saw: requests sent (a retry is one more) and the
         # gaps between them, which is what /how-we-crawl publishes. `requests`
         # above counts by purpose; a page refused before sending (robots.txt, a
