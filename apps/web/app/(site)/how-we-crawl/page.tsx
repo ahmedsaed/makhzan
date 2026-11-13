@@ -528,7 +528,8 @@ function Keep() {
           ))}
         </DoList>
       </div>
-      <p className="mt-3 text-[14.5px] text-ink-2">{keep.readers}</p>
+      <p className="mt-3 text-[14.5px] text-ink-2">{keep.ownAi}</p>
+      <p className="mt-2 text-[14.5px] text-ink-2">{keep.readers}</p>
       <div
         id={SECTION.prices}
         className="mt-3.5 grid scroll-mt-[72px] grid-cols-[22px_minmax(0,1fr)] items-start gap-2.5 rounded-card border border-warn-line bg-warn px-3.5 py-3 text-[14.5px] text-warn-ink lg:scroll-mt-6"
