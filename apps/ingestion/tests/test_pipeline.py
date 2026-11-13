@@ -601,8 +601,9 @@ async def test_category_comes_from_the_crosswalk_not_the_title():
 async def test_item_is_normalized_with_its_own_domain_not_the_suppliers():
     """A marketplace's electronics part must be read by the electronics profile.
 
-    Identifier extraction is per-domain and the tools profile has none, so
-    normalizing against the supplier default would silently drop the part number
+    Identifier extraction is per-domain and the tools profile does not read
+    component part numbers, so normalizing against the supplier default would
+    silently drop the part number
     and stop the listing grouping with the same part from other suppliers.
     """
     await run_source(
@@ -614,13 +615,54 @@ async def test_item_is_normalized_with_its_own_domain_not_the_suppliers():
     assert listing.part_number == "1N4007", "electronics extractor must have been used"
 
 
-async def test_tools_item_gets_no_identifier():
-    """The same adapter, a tools category: no extractor, so no part number."""
-    await run_source("marketplace", MarketplaceAdapter("tape-measures", "LM358 Tape Measure 5m"))
+async def test_tools_item_is_read_by_the_tools_rules():
+    """The same adapter, a tools category: the tools rules, which read a
+    letter-led catalogue code and not a component part number, so "1N4007" —
+    which the electronics rules would read — gives nothing here."""
+    await run_source("marketplace", MarketplaceAdapter("tape-measures", "1N4007 Tape Measure 5m"))
 
     listing = await _marketplace_listing()
     assert listing.domain == "tools"
     assert listing.part_number is None
+
+
+async def test_a_sweep_keeps_the_identifier_the_regroup_wrote():
+    """The regroup owns `part_number` (family guard, product-page specs); a sweep
+    re-reading the card must not flip it back, or every rebuild would rewrite it."""
+    adapter = MarketplaceAdapter("zener-diodes", "1N4007 Rectifier Diode 1A 1000V")
+    await run_source("marketplace", adapter)
+    listing = await _marketplace_listing()
+    assert listing.part_number == "1N4007", "a new listing gets the title's reading"
+    async with SessionLocal() as s:
+        stored = await s.get(Listing, listing.id)
+        stored.part_number = "SET-BY-REGROUP"
+        await s.commit()
+
+    await run_source("marketplace", adapter)
+    assert (await _marketplace_listing()).part_number == "SET-BY-REGROUP"
+
+
+class StatedPartNumberAdapter(MarketplaceAdapter):
+    """An adapter that knows the part number itself, as `RawItem.part_number`."""
+
+    async def fetch_page(self, partition, page):
+        found = await super().fetch_page(partition, page)
+        for item in found.items:
+            item.part_number = "1N4007-ADAPTER"
+        return found
+
+
+async def test_an_adapters_own_part_number_overwrites_the_stored_one():
+    await run_source("marketplace", MarketplaceAdapter("zener-diodes", "1N4007 Diode 1A"))
+    async with SessionLocal() as s:
+        stored = await s.get(Listing, (await _marketplace_listing()).id)
+        stored.part_number = "SET-BY-REGROUP"
+        await s.commit()
+
+    await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    listing = await _marketplace_listing()
+    assert listing.part_number == "1N4007-ADAPTER"
+    assert listing.attributes["adapter_part_number"] == "1N4007-ADAPTER", "kept for the regroup"
 
 
 async def test_unmapped_category_stays_uncategorized():

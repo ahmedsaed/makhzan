@@ -182,8 +182,10 @@ Remaining: an admin path for adding a source other than editing the private
 `sources.toml`, and index-wide search settings — `search_attributes` comes from
 the default profile because Meilisearch settings are per index, so a vertical
 needing very different ranking will force a compromise order or a second index.
-Identifier extraction exists only for electronics; the other domains extract
-none and group less.
+Identifiers are read for electronics, tools, chemicals and seals-bearings
+(`makhzan_schemas/identifiers.py`, with a family guard); the other 12 domains
+have no rules yet — their codes are family-level or sizes and each is one shop
+today — and group less.
 
 ### 4. Open-sourcing — done
 The platform is public under Apache-2.0; the supplier configuration is not. The

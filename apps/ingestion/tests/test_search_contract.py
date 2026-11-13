@@ -50,6 +50,18 @@ def test_word_queries_are_not_treated_as_identifiers(query):
     assert looks_like_identifier(query) is False
 
 
+@pytest.mark.parametrize("query", ["DT-830", "dt830b", "ASR-6014", "TU-501", "608ZZ bearing"])
+def test_every_departments_codes_are_identifier_queries(query):
+    """Hyphenated hobby codes (electronics) and catalogue codes (tools) are read
+    by their departments' rules, so they search the identifier first too."""
+    assert looks_like_identifier(query) is True
+
+
+@pytest.mark.parametrize("query", ["awg-16 wire", "nema-17 motor", 'pipe wrench12"', "m8 bolt"])
+def test_measurements_are_not_identifier_queries(query):
+    assert looks_like_identifier(query) is False
+
+
 def test_long_phrases_are_never_identifiers():
     """A descriptive phrase can contain something identifier-shaped; it is still a phrase."""
     assert looks_like_identifier("cheap ESP32 development board kit") is False
