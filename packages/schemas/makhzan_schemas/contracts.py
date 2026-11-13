@@ -191,6 +191,7 @@ class DocumentRead(BaseModel):
 # passed through wholesale.
 _MAX_SPECS = 40
 _MAX_DOCUMENTS = 10
+#: Also the width of `products.min_price_option`, which holds an option title.
 _MAX_TEXT = 200
 
 
@@ -334,10 +335,38 @@ def variants_of(attributes: object) -> list[VariantRead]:
     return _items(attributes, "variants", _variant, _MAX_VARIANTS)
 
 
+def variants_checked_at_of(attributes: object) -> datetime | None:
+    """When the options were read, as `_ShopDetails.variants_checked_at` reads it.
+
+    None without options, or when the source reads them with the listing
+    itself and stamps nothing (they are then as fresh as the listing)."""
+    if not variants_of(attributes):
+        return None
+    stamp = _attribute(attributes, "variants_checked_at")
+    if not isinstance(stamp, str):
+        return None
+    try:
+        when = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def _quantity_of(attributes: object, key: str) -> int | None:
+    number = _whole(_attribute(attributes, key))
+    return number if number is not None and number > 1 else None
+
+
 def min_quantity_of(attributes: object) -> int | None:
     """The shop's minimum order, as `_ShopDetails.min_quantity` reads it (None: sold singly)."""
-    number = _whole(_attribute(attributes, "min_quantity"))
-    return number if number is not None and number > 1 else None
+    return _quantity_of(attributes, "min_quantity")
+
+
+def min_order_of(attributes: object) -> int | None:
+    """The fewest a buyer can actually order: the minimum, or the step when it is
+    larger (sold only in tens means at least ten). None: sold singly."""
+    rules = [q for q in (min_quantity_of(attributes), _quantity_of(attributes, "multiple_of")) if q]
+    return max(rules) if rules else None
 
 
 def is_price_on_request(price: object, attributes: object) -> bool:
@@ -389,8 +418,7 @@ class _ShopDetails(BaseModel):
     @field_validator("min_quantity", "multiple_of", mode="before")
     @classmethod
     def _quantity_rule(cls, value: object, info: ValidationInfo) -> int | None:
-        number = _whole(_attribute(value, info.field_name))
-        return number if number is not None and number > 1 else None
+        return _quantity_of(value, info.field_name)
 
     @field_validator("stock_quantity", mode="before")
     @classmethod
@@ -423,16 +451,7 @@ class _ShopDetails(BaseModel):
     @classmethod
     def _variants_checked_at(cls, value: object) -> datetime | None:
         # Only beside variants: on its own it dates nothing.
-        if not _items(value, "variants", _variant, _MAX_VARIANTS):
-            return None
-        stamp = _attribute(value, "variants_checked_at")
-        if not isinstance(stamp, str):
-            return None
-        try:
-            when = datetime.fromisoformat(stamp)
-        except ValueError:
-            return None
-        return when if when.tzinfo is not None else None
+        return variants_checked_at_of(value)
 
     @field_validator("price_breaks", mode="before")
     @classmethod
@@ -553,11 +572,12 @@ class ProductSummary(BaseModel):
     )
     supplier_count: int
     offer_count: int
-    #: The range of the offers' prices of one (makhzan_schemas.pricing): fresh
-    #: in-stock offers, each by its listing price or its cheapest in-stock
-    #: option, whichever is lower. Offers on request never enter it, and an
-    #: out-of-date offer counts only when no offer is fresh. Null when no
-    #: counted offer has a price: see `price_on_request`.
+    #: The range of the offers' prices of one (makhzan_schemas.pricing). Each
+    #: offer counts its cheapest in-stock option, else its listing price.
+    #: Counted: the fresh offers (every offer only when none is fresh), and of
+    #: those the in-stock ones, else the ones not known to be gone, else all,
+    #: as the web's summarizeOffers. Offers on request never enter it. Null
+    #: when no counted offer has a price: see `price_on_request`.
     min_price: float | None = None
     max_price: float | None = None
     #: The offer whose price of one is `min_price` (an id in `offers` on the
@@ -568,16 +588,16 @@ class ProductSummary(BaseModel):
     min_price_shop: PhotoShop | None = Field(
         default=None, validation_alias=AliasChoices("min_price_shop", "min_price_supplier")
     )
-    #: The option of that offer that sets `min_price`, when an option undercuts
-    #: the listing's own price ("Lowest is the “Without headers” option").
+    #: The option of that offer that sets `min_price`, when its price is not
+    #: the listing's own ("Lowest is the “Without headers” option").
     min_price_option: str | None = None
-    #: That offer's minimum order: `min_price` is then "each", and the least
+    #: That offer's minimum order, or its step when larger (sold only in tens:
+    #: 10). `min_price` is then "each", and the least
     #: a buyer can spend there is `min_price` x this. Null: sold singly.
     min_price_quantity: int | None = None
     #: Some offer in the range has a minimum order: the range reads "each".
     price_each: bool = False
-    #: Offers on request among those the range was taken from: the fresh
-    #: in-stock ones whenever there is one, priced or on request.
+    #: Offers on request among the counted ones (see `min_price`).
     on_request_count: int = 0
     currency: str
     in_stock: bool

@@ -716,10 +716,18 @@ def _withdraw(product: Product) -> None:
 
     The title, photo, category and last price range stay: they are what the
     "no longer listed" page shows, and what similar products are found from.
+    What named a live offer about that range goes: there is no offer left to
+    be the cheapest, carry a minimum or be on request.
     """
     product.offer_count = 0
     product.supplier_count = 0
     product.in_stock = False
+    product.min_price_listing_id = None
+    product.min_price_supplier_id = None
+    product.min_price_option = None
+    product.min_price_quantity = None
+    product.price_each = False
+    product.on_request_count = 0
 
 
 def _visible(product: Product) -> tuple:
@@ -733,6 +741,10 @@ def _visible(product: Product) -> tuple:
         product.title_en,
         product.min_price,
         product.max_price,
+        product.min_price_supplier_id,
+        product.min_price_option,
+        product.min_price_quantity,
+        product.price_each,
         product.on_request_count,
         product.in_stock,
         product.offer_count,

@@ -8,7 +8,9 @@ and how many offers are on request. Set by the product rebuild with
 first rebuild after this migration.
 
 Expand only: nullable columns or ones with a server default, which the release
-still serving during the deploy neither selects nor has to write.
+still serving during the deploy neither selects nor has to write. Fails
+after 5 s rather than wait for a lock on `products` (a rebuild in progress);
+re-run the deploy if it does.
 `min_price_listing_id` is deliberately not a foreign key: listings already
 point at products, and a second path between the two tables would make the
 ORM's joins between them ambiguous.
@@ -33,6 +35,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    # ALTER TABLE takes an exclusive lock on products. Behind a long rebuild
+    # transaction it would queue, and every API read of products would queue
+    # behind it. Fail fast instead: a deploy that times out here changed
+    # nothing and only needs re-running. LOCAL: the setting ends with the
+    # migration transaction, not with the pooled connection.
+    op.execute("SET LOCAL lock_timeout = '5s'")
     op.add_column("products", sa.Column("min_price_listing_id", sa.UUID(), nullable=True))
     op.add_column("products", sa.Column("min_price_supplier_id", sa.UUID(), nullable=True))
     op.add_column("products", sa.Column("min_price_option", sa.String(length=200), nullable=True))

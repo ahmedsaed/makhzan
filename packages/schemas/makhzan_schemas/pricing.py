@@ -2,27 +2,25 @@
 
 One definition, computed once per rebuild (`grouping.rebuild_products`) and
 stored on the product, so the card, the price sort, the price filter and the
-page's headline can never disagree. The rules are the product page's (approved
+page's headline say the same thing. The rules are the product page's (approved
 November 2026, docs/DESIGN.md C2b/C3):
 
 - Offers are compared by the **price of one**, as every shop publishes it. An
   offer with a minimum order still competes on its price of one; the summary
   then says "each" and names the minimum (`quantity`, `each`).
-- An offer's **lowest in-stock option** is its price: an option is a price the
-  shop publishes for this listing. An out-of-stock option never sets it. The
-  option that does is named (`option`).
+- An offer with options is priced by its **cheapest in-stock option**: an
+  option is a price the shop publishes for this listing, and the listing's own
+  price may be an out-of-stock option's (Shopify shows the first variant's,
+  WooCommerce the cheapest variation's, whatever their stock). The option is
+  named (`option`) when its price is not the listing's.
 - An offer **on request** has no price to compare: it never enters the range.
   It is counted (`on_request`), so a row can read "Price on request" rather
   than nothing, and tell it from an offer with no price at all.
-- Only **fresh, in-stock** offers count while there is one (priced or on
-  request). An out-of-date offer (C2b) counts nowhere, even when it is the
-  cheapest.
-
-When no fresh offer is in stock, the fresh out-of-stock offers set the range
-(the page's "Out of stock at all shops" still shows a price), and when no offer
-is fresh at all, every offer does (the page then warns that it is out of date):
-a product is never priced from a worse tier while a better one has anything to
-say. Each tier is computed the same way.
+- **Which offers count** mirrors the shipped web page (`apps/web/lib/product.ts`,
+  `summarizeOffers`): the fresh offers when any is fresh, every offer only when
+  none is (C2b: never a stale price while a fresh offer exists); among those,
+  the in-stock ones (low stock is stock), else those not known to be gone
+  (unknown, made to order), else all of them.
 """
 
 from __future__ import annotations
@@ -34,9 +32,17 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
-from makhzan_schemas.contracts import is_price_on_request, min_quantity_of, variants_of
+from makhzan_schemas.contracts import (
+    is_price_on_request,
+    min_order_of,
+    variants_checked_at_of,
+    variants_of,
+)
 from makhzan_schemas.enums import StockSignal
 from makhzan_schemas.freshness import fresh_since
+
+#: Low stock is still stock: the shop says it can sell one today.
+IN_STOCK_SIGNALS = frozenset({StockSignal.IN_STOCK, StockSignal.LOW_STOCK})
 
 
 class _Offer(Protocol):
@@ -57,58 +63,75 @@ class PriceSummary:
     #: The offer whose price of one is `min_price`, and its shop.
     listing_id: uuid.UUID | None = None
     supplier_id: uuid.UUID | None = None
-    #: The option of that offer giving `min_price`, when an option undercuts
-    #: the listing's own price. None: the listing's price.
+    #: The option of that offer giving `min_price`, when its price is not the
+    #: listing's own. None: the listing's price.
     option: str | None = None
-    #: That offer's minimum order. None: sold singly.
+    #: That offer's minimum order (or its step, when larger). None: sold singly.
     quantity: int | None = None
     #: Some offer in the range has a minimum order: the range reads "each".
     each: bool = False
-    #: Offers on request in the tier that set the range.
+    #: Offers on request among those counted.
     on_request: int = 0
 
 
-def unit_price(offer: _Offer) -> tuple[Decimal, str | None] | None:
-    """An offer's price of one: its price, or its cheapest in-stock option's.
+def _fresh_stamp(when: datetime | None, cutoff: int) -> bool:
+    return when is not None and when.timestamp() > cutoff
 
-    None for an offer with no price (on request, or none published). An option
-    is only a price beside a listing price: a listing with none is not priced
-    by its options, as the page's own row is not.
+
+def unit_price(offer: _Offer, now: datetime | None = None) -> tuple[Decimal, str | None] | None:
+    """An offer's price of one, and the option giving it (None: the listing's price).
+
+    Its cheapest in-stock option when it has options and any is in stock with
+    a price; otherwise its listing price. An option whose price or stock is
+    unknown never sets it, nor do options read more than STALE_AFTER_DAYS ago
+    (C2b). None for an offer on request, or with no price at all.
     """
-    if offer.price is None:
+    if is_price_on_request(offer.price, offer.attributes):
         return None
-    best, option = Decimal(offer.price), None
-    for variant in variants_of(offer.attributes):
-        if variant.in_stock is True and variant.price is not None:
+    listing = None if offer.price is None else Decimal(offer.price)
+    checked = variants_checked_at_of(offer.attributes)
+    if checked is None or _fresh_stamp(checked, fresh_since(now)):
+        best: tuple[Decimal, str] | None = None
+        for variant in variants_of(offer.attributes):
+            if variant.in_stock is not True or variant.price is None:
+                continue
             price = Decimal(str(variant.price))
-            if price < best:
-                best, option = price, variant.title
-    return best, option
+            if best is None or price < best[0]:
+                best = (price, variant.title)
+        if best is not None:
+            return best[0], (None if best[0] == listing else best[1])
+    return None if listing is None else (listing, None)
 
 
-def _fresh(offer: _Offer, cutoff: int) -> bool:
-    return offer.last_verified_at is not None and offer.last_verified_at.timestamp() > cutoff
+def _counted(offers: list[_Offer], cutoff: int) -> list[_Offer]:
+    """The offers the range is taken from: the web's `summarizeOffers` tiers."""
+    fresh = [o for o in offers if _fresh_stamp(o.last_verified_at, cutoff)]
+    pool = fresh or offers
+    in_stock = [o for o in pool if o.stock_signal in IN_STOCK_SIGNALS]
+    not_gone = [o for o in pool if o.stock_signal != StockSignal.OUT_OF_STOCK]
+    return in_stock or not_gone or pool
 
 
-def _summarize(tier: list[_Offer]) -> PriceSummary | None:
-    """The tier's summary, or None when it has nothing to say: no price, none on request."""
+def summarize_prices(offers: Iterable[_Offer], now: datetime | None = None) -> PriceSummary:
+    """The product's price summary over its active offers (see the module docstring)."""
+    counted = _counted(list(offers), fresh_since(now))
     priced: list[tuple[Decimal, str | None, _Offer]] = []
     on_request = 0
-    for offer in tier:
+    for offer in counted:
         if is_price_on_request(offer.price, offer.attributes):
             on_request += 1
             continue
-        unit = unit_price(offer)
+        unit = unit_price(offer, now)
         if unit is not None:
             priced.append((unit[0], unit[1], offer))
     if not priced:
-        return PriceSummary(on_request=on_request) if on_request else None
+        return PriceSummary(on_request=on_request)
     # Cheapest first; on a tie, the one a buyer can take singly, then the
     # freshest check, then a fixed order so a rebuild is reproducible.
     priced.sort(
         key=lambda p: (
             p[0],
-            min_quantity_of(p[2].attributes) is not None,
+            min_order_of(p[2].attributes) is not None,
             -(p[2].last_verified_at.timestamp() if p[2].last_verified_at else 0),
             str(p[2].id),
         )
@@ -120,20 +143,7 @@ def _summarize(tier: list[_Offer]) -> PriceSummary | None:
         listing_id=best.id,
         supplier_id=best.supplier_id,
         option=option,
-        quantity=min_quantity_of(best.attributes),
-        each=any(min_quantity_of(p[2].attributes) is not None for p in priced),
+        quantity=min_order_of(best.attributes),
+        each=any(min_order_of(p[2].attributes) is not None for p in priced),
         on_request=on_request,
     )
-
-
-def summarize_prices(offers: Iterable[_Offer], now: datetime | None = None) -> PriceSummary:
-    """The product's price summary over its active offers (see the module docstring)."""
-    cutoff = fresh_since(now)
-    offers = list(offers)
-    fresh = [o for o in offers if _fresh(o, cutoff)]
-    in_stock = [o for o in fresh if o.stock_signal == StockSignal.IN_STOCK]
-    for tier in (in_stock, fresh, offers):
-        summary = _summarize(tier)
-        if summary is not None:
-            return summary
-    return PriceSummary()

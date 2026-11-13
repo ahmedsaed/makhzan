@@ -9,6 +9,7 @@ order the range was taken in.
 from __future__ import annotations
 
 import pytest
+from makhzan_schemas.enums import ListingStatus
 
 from factories import make_category, make_listing, make_product, make_supplier
 
@@ -40,6 +41,33 @@ async def test_a_product_names_the_offer_shop_option_and_minimum_setting_its_low
     assert body["price_each"] is True
     assert body["on_request_count"] == 0
     assert body["price_on_request"] is None
+
+
+async def test_a_low_end_naming_an_offer_no_longer_listed_is_not_served(client, db):
+    """The low end is as of the last rebuild; an offer archived since is not
+    one the page can point at. The range itself stays."""
+    shop = await make_supplier(db, slug="cairo-makers", name="Cairo Makers")
+    product = await make_product(
+        db,
+        min_price="320",
+        min_price_supplier=shop,
+        min_price_option="Without headers",
+        min_price_quantity=10,
+    )
+    gone = await make_listing(
+        db, supplier=shop, product=product, price="320", status=ListingStatus.ARCHIVED
+    )
+    await make_listing(db, supplier=shop, product=product, price="360")
+    product.min_price_listing_id = gone.id
+    await db.commit()
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["min_price"] == 320
+    assert body["min_price_offer_id"] is None
+    assert body["min_price_shop"] is None
+    assert body["min_price_option"] is None
+    assert body["min_price_quantity"] is None
 
 
 async def test_a_product_before_its_first_rebuild_says_nothing_about_the_low_end(client, db):

@@ -3,8 +3,9 @@
 The approved product-page rules (makhzan_schemas.pricing): offers compared by
 the price of one; an offer's cheapest in-stock option counts and is named; on
 request never enters the range but is counted; out of date counts nowhere
-while anything is fresh; out of stock counts only when nothing fresh is in
-stock. The card, the price sort and filter, and the page's headline all read
+while anything is fresh; and the stock tiers of the shipped web page
+(apps/web/lib/product.ts): in stock (low stock included), else not known to be
+gone, else all. The card, the price sort and filter, and the page's headline all read
 the result, so it is pinned here once, then through the rebuild and into the
 search document.
 """
@@ -18,18 +19,19 @@ from decimal import Decimal
 
 from makhzan_schemas.contracts import ProductSummary
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.enums import SourceType, StockSignal
+from makhzan_schemas.enums import ListingStatus, SourceType, StockSignal
 from makhzan_schemas.grouping import rebuild_products
 from makhzan_schemas.models import Listing, Product, Supplier
 from makhzan_schemas.pricing import summarize_prices, unit_price
 from makhzan_schemas.search import build_product_document
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 NOW = datetime(2026, 11, 13, tzinfo=UTC)
 FRESH = NOW - timedelta(days=2)
 STALE = NOW - timedelta(days=81)
 IN, OUT = StockSignal.IN_STOCK, StockSignal.OUT_OF_STOCK
+LOW, UNKNOWN, MTO = StockSignal.LOW_STOCK, StockSignal.UNKNOWN, StockSignal.MADE_TO_ORDER
 
 
 @dataclass
@@ -75,11 +77,55 @@ def test_an_out_of_stock_option_never_sets_the_lowest():
 def test_an_offer_is_one_price_in_the_range_not_its_dearest_option():
     """max_price is the dearest offer's price of one, not any option's price:
     the range spans what each shop would charge at its cheapest."""
-    o = offer(300, attributes=options(("Big", 900, True)))
+    o = offer(300, attributes=options(("Small", 300, True), ("Big", 900, True)))
 
     summary = summarize_prices([o, offer(320)], NOW)
 
     assert (summary.min_price, summary.max_price) == (300, 320)
+    # The cheapest option costs what the listing says: nothing to name.
+    assert summary.option is None
+
+
+def test_a_listing_price_from_an_out_of_stock_option_gives_way_to_the_in_stock_one():
+    """Shopify shows the first variant's price and WooCommerce the cheapest
+    variation's, whatever their stock: the price a buyer can pay today is the
+    cheapest option in stock, even above the listing's."""
+    o = offer(250, attributes=options(("Black", 250, False), ("White", 280, True)))
+
+    assert unit_price(o, NOW) == (Decimal("280"), "White")
+    summary = summarize_prices([o, offer(300)], NOW)
+    assert (summary.min_price, summary.option) == (280, "White")
+
+
+def test_options_with_unknown_price_or_stock_never_set_the_price():
+    o = offer(
+        300,
+        attributes={
+            "variants": [
+                {"title": "No price", "in_stock": True},
+                {"title": "No stock flag", "price": 100},
+                {"title": "Null stock", "price": 120, "in_stock": None},
+            ]
+        },
+    )
+
+    assert unit_price(o, NOW) == (Decimal("300"), None)
+
+
+def test_options_read_over_45_days_ago_do_not_count():
+    attributes = options(("Without headers", 200, True))
+    old = offer(
+        300,
+        attributes={**attributes, "variants_checked_at": (NOW - timedelta(days=60)).isoformat()},
+    )
+    recent = offer(
+        300, attributes={**attributes, "variants_checked_at": (NOW - timedelta(days=3)).isoformat()}
+    )
+    unstamped = offer(300, attributes=attributes)  # read with the listing itself
+
+    assert unit_price(old, NOW) == (Decimal("300"), None)
+    assert unit_price(recent, NOW) == (Decimal("200"), "Without headers")
+    assert unit_price(unstamped, NOW) == (Decimal("200"), "Without headers")
 
 
 def test_on_request_never_enters_the_range_but_is_counted():
@@ -133,17 +179,60 @@ def test_out_of_stock_counts_only_when_nothing_fresh_is_in_stock():
     assert (summary.min_price, summary.max_price) == (40, 55)
 
 
-def test_an_in_stock_offer_with_no_price_at_all_says_nothing():
-    """No price and not on request: the out-of-stock shop's price is all there is."""
+def test_low_stock_is_stock():
+    summary = summarize_prices([offer(70, stock_signal=LOW), offer(50, stock_signal=UNKNOWN)], NOW)
+
+    assert (summary.min_price, summary.max_price) == (70, 70)
+
+
+def test_unknown_and_made_to_order_come_before_out_of_stock():
+    """The web's middle tier: not known to be gone ("stock not confirmed")."""
+    summary = summarize_prices(
+        [
+            offer(90, stock_signal=UNKNOWN),
+            offer(110, stock_signal=MTO),
+            offer(40, stock_signal=OUT),
+        ],
+        NOW,
+    )
+
+    assert (summary.min_price, summary.max_price) == (90, 110)
+
+
+def test_an_in_stock_offer_with_no_price_leaves_no_price():
+    """As the page's summary: the in-stock tier is the one counted, and it has
+    no price; an out-of-stock shop's price does not stand in for it."""
     summary = summarize_prices([offer(None), offer(70, stock_signal=OUT)], NOW)
 
-    assert summary.min_price == 70
+    assert summary.min_price is None
     assert summary.on_request == 0
 
 
-def test_with_nothing_fresh_every_offer_counts():
+def test_a_fresh_unpriced_offer_is_never_replaced_by_a_stale_price():
+    summary = summarize_prices([offer(None), offer(50, last_verified_at=STALE)], NOW)
+
+    assert summary.min_price is None
+
+
+def test_with_nothing_fresh_in_stock_comes_first_among_the_stale():
     summary = summarize_prices(
-        [offer(120, last_verified_at=STALE), offer(150, last_verified_at=STALE, stock_signal=OUT)],
+        [
+            offer(150, last_verified_at=STALE),
+            offer(120, last_verified_at=STALE, stock_signal=OUT),
+            offer(170, last_verified_at=STALE, stock_signal=LOW),
+        ],
+        NOW,
+    )
+
+    assert (summary.min_price, summary.max_price) == (150, 170)
+
+
+def test_with_nothing_fresh_and_nothing_in_stock_every_offer_counts():
+    summary = summarize_prices(
+        [
+            offer(120, last_verified_at=STALE, stock_signal=OUT),
+            offer(150, last_verified_at=STALE, stock_signal=OUT),
+        ],
         NOW,
     )
 
@@ -167,6 +256,15 @@ def test_the_range_reads_each_when_any_offer_in_it_has_a_minimum():
 
     assert summary.quantity is None
     assert summary.each is True
+
+
+def test_a_step_larger_than_the_minimum_is_the_minimum():
+    """Sold only in tens is at least ten, whatever min_quantity says."""
+    stepped = offer(1, attributes={"min_quantity": 2, "multiple_of": 10})
+    only_step = offer(1, attributes={"multiple_of": 5})
+
+    assert summarize_prices([stepped], NOW).quantity == 10
+    assert summarize_prices([only_step], NOW).quantity == 5
 
 
 def test_a_minimum_of_one_is_no_minimum():
@@ -283,3 +381,48 @@ async def test_an_all_on_request_product_has_no_price_and_says_why():
     assert product.min_price is None
     assert doc["price_on_request"] == "all"
     assert doc["min_price_shop"] is None
+
+
+async def test_a_withdrawn_product_keeps_its_range_but_names_no_offer():
+    await _listing("cairo-makers", 360, attributes={"min_quantity": 3})
+    await _listing("giza", None, attributes=ON_REQUEST)
+    before = await _rebuilt()
+    assert before.min_price_listing_id is not None and before.on_request_count == 1
+
+    async with SessionLocal() as session:
+        await session.execute(update(Listing).values(status=ListingStatus.ARCHIVED))
+        await session.commit()
+    product = await _rebuilt()
+
+    assert product.delisted_at is not None
+    assert product.min_price == 360  # the last range seen
+    assert product.min_price_listing_id is None
+    assert product.min_price_supplier_id is None
+    assert product.min_price_option is None
+    assert product.min_price_quantity is None
+    assert product.price_each is False
+    assert product.on_request_count == 0
+
+
+async def test_a_change_at_the_low_end_alone_is_a_content_change():
+    """The sitemap's lastmod: an option taking over the lowest price at the
+    same figure still changes what the page says."""
+    await _listing("cairo-makers", 300, attributes=options(("Black", 300, True)))
+    first = await _rebuilt()
+
+    async with SessionLocal() as session:
+        listing = (await session.execute(select(Listing))).scalar_one()
+        listing.attributes = options(("Black", 400, False), ("White", 300, True))
+        listing.price = Decimal("400")
+        await session.commit()
+    second = await _rebuilt()
+
+    assert (first.min_price, second.min_price) == (300, 300)
+    assert (first.min_price_option, second.min_price_option) == (None, "White")
+    assert second.content_changed_at > first.content_changed_at
+
+
+def test_the_option_column_fits_the_longest_option_title_kept():
+    from makhzan_schemas import contracts
+
+    assert Product.__table__.c.min_price_option.type.length == contracts._MAX_TEXT
