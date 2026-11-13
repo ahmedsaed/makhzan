@@ -58,6 +58,10 @@ Shopify shop and the Wix shop by email. Shop 5 has not been contacted yet.
   first; the community publishes later; featured projects appear on the home page.
 - **Blog** for news and changes, written by Ahmed only.
 - **Report a problem** on products: important (wrong price, stock, match, category).
+  Built (November 2026, the approved mockup): a button by the title, a two-step form, no
+  account, no CAPTCHA (honeypot, timing and per-address limits), reviewed on the server
+  with `./makhzan reports`, and a privacy page (`/privacy`) that shipped with it. Not yet:
+  turning accepted reports into labelled pairs for matching (docs/ai/plan.md, phase G).
 - **Supplier pages:** remove, add or correct a shop, as requests handled by hand for
   now (through code). Self-service comes with the supplier portal.
 - **Price history** on product pages.

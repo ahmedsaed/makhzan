@@ -142,7 +142,9 @@ test("a product page at 320px keeps the badge inside the page", async ({ page })
 test("on a phone, the several-shop product's thumbnail credits its shop", async ({ page }) => {
   await page.setViewportSize(PHONE);
   await page.goto("/products/p-two-shops");
-  const thumb = page.locator("h1").locator("xpath=../..").locator("img").first();
+  // The thumbnail sits beside the title's column (h1 › its row with the
+  // report button › the column › the row with the thumbnail).
+  const thumb = page.locator("h1").locator("xpath=../../..").locator("img").first();
   await expect(thumb).toHaveAttribute("alt", "SG90 Micro Servo 9g — photo from Shop A");
   await expect(page.locator('[data-photo-shop="compact"]:visible')).toHaveText("Shop A");
 });

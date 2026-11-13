@@ -48,6 +48,7 @@ export const routes = {
   shop: (slug: string) => `/shops/${encodeURIComponent(slug)}`,
   howWeCrawl: () => "/how-we-crawl",
   forSuppliers: () => "/for-suppliers",
+  privacy: () => "/privacy",
 };
 
 /**
