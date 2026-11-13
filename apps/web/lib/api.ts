@@ -147,6 +147,25 @@ export type ProductSummary = {
   in_stock: boolean;
   last_verified_at: string | null;
   category: CategoryRef | null;
+} & PriceOfOneSummary;
+
+/**
+ * Which offer set `min_price`, and what that price needs said, computed by the
+ * API by the same rules as lib/offers.ts (price of one, cheapest in-stock
+ * option, on-request offers left out). All optional: an API older than them
+ * must still render, and the product page computes its own from the offers.
+ */
+type PriceOfOneSummary = {
+  min_price_offer_id?: string | null;
+  min_price_shop?: PhotoShop | null;
+  /** The option whose price is `min_price`, when it is an option's. */
+  min_price_option?: string | null;
+  /** The minimum order of the offer setting `min_price` (> 1), when it has one. */
+  min_price_quantity?: number | null;
+  /** Any offer in the range has a minimum: the range reads "each". */
+  price_each?: boolean;
+  on_request_count?: number;
+  price_on_request?: "all" | "some" | null;
 };
 
 export type Offer = {
@@ -175,6 +194,52 @@ export type ShopDocument = { url: string; label: string | null };
 type ShopDetailsFields = {
   specs?: Record<string, string>;
   documents?: ShopDocument[];
+} & ShopTermsFields;
+
+/** One option of a listing ("Black", "1 kg / Red"), with its own price and stock. */
+export type Variant = {
+  title: string;
+  /** Null: the shop shows no separate price for this option ("see shop"). */
+  price: number | null;
+  /** Null: the shop does not say. */
+  in_stock: boolean | null;
+  /** A count the shop itself shows the public. */
+  stock_quantity: number | null;
+  sku?: string | null;
+};
+
+/** Buy at least `min_quantity` and pay `price` each. */
+export type PriceBreak = { min_quantity: number; price: number };
+
+/** A video the shop links from its listing. */
+export type ShopVideo = { url: string; label: string | null };
+
+/**
+ * The terms a shop sells on, as it states them (docs/PRODUCT.md, Phase 2).
+ * All optional: an API older than them, and a list endpoint that leaves the
+ * heavy ones out, must still render. `price` stays the price of one whatever
+ * the minimum.
+ */
+type ShopTermsFields = {
+  /** The shop sells at least this many (always > 1 when set)... */
+  min_quantity?: number | null;
+  /** ...and only in multiples of this (always > 1 when set). */
+  multiple_of?: number | null;
+  /** The shop sells it but publishes no price; `price` is null. */
+  price_on_request?: boolean;
+  /** A stock count the shop itself shows the public. */
+  stock_quantity?: number | null;
+  variants?: Variant[];
+  /** When `variants` were read; they can be older than `last_verified_at`. */
+  variants_checked_at?: string | null;
+  /** Quantity prices, smallest quantity first. */
+  price_breaks?: PriceBreak[];
+  /** What the part fits, as the shop states it. */
+  compatible_with?: string[];
+  ships_from_abroad?: boolean | null;
+  /** A manufacturer part number the shop states outright. */
+  mfr_part_number?: string | null;
+  videos?: ShopVideo[];
 };
 
 /**
@@ -235,7 +300,7 @@ export type SearchHit = {
   /** Whose photo `image` is; optional, as on ProductSummary. */
   image_shop?: PhotoShop | null;
   last_verified_at: number | null;
-};
+} & PriceOfOneSummary;
 
 export type Facets = Record<string, Record<string, number>>;
 

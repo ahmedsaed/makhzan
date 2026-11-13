@@ -26,7 +26,7 @@ import {
   type Product,
   type ProductSummary,
 } from "@/lib/api";
-import { formatCount, formatPrice } from "@/lib/format";
+import { formatCount, formatPrice, NO_PRICE, PRICE_ON_REQUEST } from "@/lib/format";
 import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshness";
 import { breadcrumbJsonLd, pageMetadata, productDescription } from "@/lib/metadata";
 import {
@@ -44,6 +44,17 @@ import {
   summarizeOffers,
   summaryText,
 } from "@/lib/product";
+import {
+  boxSpan,
+  isInStock,
+  isOnRequest,
+  leadNotes,
+  minimumLine,
+  minimumWithTotal,
+  needsEach,
+  unitPrice,
+  unitPriceText,
+} from "@/lib/offers";
 import { productIdFrom, routes } from "@/lib/routes";
 import { absoluteUrl } from "@/lib/site";
 import { departmentLabel } from "@/lib/departments";
@@ -54,6 +65,8 @@ import { Details } from "./details";
 import { Facts } from "./facts";
 import { Gallery } from "./gallery";
 import { Offers } from "./offers";
+import { PartNumberLines } from "./part-numbers";
+import { OptionsSection, PriceBreaksTable, TermPills } from "./terms";
 
 /**
  * One product: where a buyer decides, and leaves for the shop.
@@ -291,14 +304,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
               >
                 {title}
               </h1>
-              {product.part_number && (
-                <p className="text-[13px] text-ink-2 lg:text-sm">
-                  Part number{" "}
-                  <span data-identifier className="text-ink">
-                    {product.part_number}
-                  </span>
-                </p>
-              )}
+              <PartNumberLines partNumber={product.part_number} offers={product.offers} />
               {brand && (
                 <p data-brand className="text-[13px] text-ink-2 lg:text-sm">
                   Brand · <span className="text-ink">{brand}</span>
@@ -327,6 +333,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
                 title={title}
                 page={absoluteUrl(path)}
                 hoursOf={hoursOf}
+                now={now}
               />
             </>
           ) : (
@@ -350,7 +357,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
       <SimilarProducts similar={similar} now={now} />
 
-      {primary && <BottomBar offer={primary} now={now} />}
+      {primary && <BottomBar offer={primary} product={product} now={now} />}
     </Container>
   );
 }
@@ -471,7 +478,11 @@ function NoLongerListed({
 const PRIMARY =
   "inline-flex h-[50px] items-center justify-center gap-2 rounded-control bg-action px-5 text-base font-semibold text-action-ink";
 
-/** One offer: its price, stock, age and shop. */
+/**
+ * One offer: its price (or "Price on request"), stock, the terms its shop
+ * states (minimum order, what it fits, where it ships from, quantity prices),
+ * its age, and the way out; its options under the box; then the shop.
+ */
 function OneOffer({
   offer,
   now,
@@ -492,20 +503,67 @@ function OneOffer({
   const verified = parseVerified(offer.last_verified_at);
   const stale = verified !== null && freshnessTier(verified, now) === "warn";
   const supplier = offer.supplier;
+  const shopName = supplier?.name ?? "the shop";
+  // The same comparison the bottom bar reads, so the two say one price.
+  const lead = summarizeOffers([offer], now).best;
+  const span = lead ? boxSpan(offer, now) : null;
+  const onRequest = isOnRequest(offer);
+  const reach = supplier?.contact;
+  const reachable = Boolean(reach?.phone || reach?.whatsapp || reach?.email);
+  const minimum = lead ? minimumLine(offer, lead.price) : null;
   return (
     <>
       <div className="mt-3 flex flex-col gap-2.5 lg:mt-5 lg:rounded-card lg:border lg:border-line lg:bg-surface lg:p-4.5">
         <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-          <PriceRange
-            min={offer.price}
-            currency={offer.currency}
-            className="text-[26px] lg:text-3xl"
-          />
+          {!lead || !span ? (
+            onRequest ? (
+              <OnRequest className="text-[22px] lg:text-[26px]" />
+            ) : (
+              <NoPrice className="text-lg lg:text-xl" />
+            )
+          ) : needsEach(offer) ? (
+            <span className="flex items-baseline gap-x-1.5 whitespace-nowrap">
+              <PriceRange
+                min={lead.price}
+                currency={offer.currency}
+                className="text-[26px] lg:text-3xl"
+              />
+              <Each className="text-[15px]" />
+            </span>
+          ) : (
+            <PriceRange
+              min={span.min}
+              max={span.max}
+              currency={offer.currency}
+              className="text-[26px] lg:text-3xl"
+            />
+          )}
           <span data-stock className="text-sm text-ink-2">
-            <StockBadge signal={offer.stock_signal} className="text-sm" />
+            {onRequest && isInStock(offer.stock_signal) ? (
+              <span className="font-semibold text-ink">Available</span>
+            ) : (
+              <StockBadge
+                signal={offer.stock_signal}
+                quantity={offer.stock_quantity}
+                className="text-sm"
+              />
+            )}
             {supplier && ` at ${supplier.name}`}
           </span>
         </div>
+        {onRequest && (
+          <p data-on-request-note className="text-[13px] text-ink-2">
+            {shopName} gives this price on request:{" "}
+            {reachable ? "call or message them below." : "ask them on their site."}
+          </p>
+        )}
+        {minimum && (
+          <p data-minimum className="text-sm text-ink-2">
+            {minimum}
+          </p>
+        )}
+        <TermPills offer={offer} />
+        <PriceBreaksTable offer={offer} shop={shopName} />
         {/* Over 45 days the note says it, with what to do; under, a quiet line. */}
         {stale ? (
           <StaleNote lastVerified={verified} now={now} />
@@ -523,6 +581,8 @@ function OneOffer({
           </ShopLink>
         )}
       </div>
+
+      <OptionsSection offer={offer} shop={shopName} now={now} />
 
       {supplier && (
         <Link
@@ -564,25 +624,56 @@ function OneOffer({
   );
 }
 
+/** "Price on request" in the price slot: in the price face, never as EGP 0. */
+function OnRequest({ className }: { className?: string }) {
+  return (
+    <span data-price data-on-request className={cn("figure whitespace-nowrap text-ink", className)}>
+      {PRICE_ON_REQUEST}
+    </span>
+  );
+}
+
+/** An offer with no price and no "on request" from its shop: not free, not a request. */
+function NoPrice({ className }: { className?: string }) {
+  return (
+    <span data-price data-no-price className={cn("font-medium text-ink-2", className)}>
+      {NO_PRICE}
+    </span>
+  );
+}
+
+/** "each", beside a price of one that comes with a minimum order (C3). */
+function Each({ className }: { className?: string }) {
+  return (
+    <span data-each className={cn("font-sans font-medium text-ink-2", className)}>
+      each
+    </span>
+  );
+}
+
 /**
  * Several shops: each, once, with how to reach it, under the offers (rather
  * than on every row of a shop with several), and the way to report anything
- * wrong on the page.
+ * wrong on the page. In the offers' own order (price of one, then the folded
+ * ones), so the shop at the top of the list is the first one named here.
  */
 function ShopsContact({
   product,
   title,
   page,
   hoursOf,
+  now,
 }: {
   product: Product;
   title: string;
   page: string;
   /** Each shop's opening hours, by slug, as its profile has them. */
   hoursOf: Map<string, readonly string[]>;
+  now: Date;
 }) {
   const shops = new Map<string, { slug: string; name: string; reach: Offer["supplier"] }>();
-  for (const offer of product.offers) {
+  const { listed, outOfStock, stale } = splitOffers(product.offers, now);
+  for (const offer of [...listed, ...outOfStock, ...stale]) {
     if (offer.supplier && !shops.has(offer.supplier.slug)) {
       shops.set(offer.supplier.slug, {
         slug: offer.supplier.slug,
@@ -615,9 +706,15 @@ function ShopsContact({
 }
 
 /**
- * Several offers: how many are in stock where, for how much, and the way out.
- * Counted over the recently checked offers (C2b); when every offer is stale it
- * counts them all and says, once, that the prices may be out of date.
+ * Several offers: how many are in stock where, the range of prices of one,
+ * and the way out (lib/offers.ts holds the rules). Counted over the recently
+ * checked offers (C2b); when every offer is stale it counts them all and
+ * says, once, that the prices may be out of date.
+ *
+ * Under the range, whatever the lowest price needs said: its minimum order
+ * with the total, the option it is, and a quantity price that beats every
+ * price of one. Offers on request never enter the range or the button; with
+ * nothing priced the headline is "Price on request".
  */
 function Summary({
   product,
@@ -638,19 +735,60 @@ function Summary({
         .map((offer) => parseVerified(offer.last_verified_at))
         .reduce<Date | null>((a, b) => (b && (!a || b > a) ? b : a), null)
     : null;
+  const { hint } = summary;
+  // The lowest price, while it is in stock (or not known gone): what the
+  // notes under the range and the button explain.
+  const best = summary.state !== "out_of_stock" ? summary.best : null;
+  const leads = best !== null && primary?.id === best.offer.id;
+  const notes = leads ? leadNotes(best) : [];
+  const onRequestOnly = summary.priced.length === 0 && summary.onRequest.length > 0;
+  const bestShop = best?.offer.supplier?.name ?? "one shop";
   return (
     <section
       data-summary={summary.state}
       className="mt-3.5 flex flex-wrap items-center gap-x-6 gap-y-4 rounded-card border border-line bg-surface p-3.5 lg:mt-5 lg:p-4.5"
     >
-      <div className="flex flex-col gap-1">
-        <span className="text-[13px] text-ink-2">{summaryText(summary)}</span>
-        <PriceRange
-          min={summary.min}
-          max={summary.max}
-          currency={product.currency}
-          className="text-[26px] lg:text-3xl"
-        />
+      <div className="flex min-w-0 flex-col gap-1">
+        <span data-summary-text className="text-[13px] text-ink-2">
+          {summaryText(summary)}
+        </span>
+        {onRequestOnly ? (
+          <OnRequest className="text-[22px] lg:text-[26px]" />
+        ) : summary.min === null ? (
+          <NoPrice className="text-lg lg:text-xl" />
+        ) : (
+          <span className="flex flex-wrap items-baseline gap-x-1.5">
+            <PriceRange
+              min={summary.min}
+              max={summary.max}
+              currency={product.currency}
+              className="text-[26px] lg:text-3xl"
+            />
+            {summary.each && summary.min !== null && <Each className="text-[15px]" />}
+          </span>
+        )}
+        {best && needsEach(best.offer) && (
+          <p data-lowest-minimum className="text-sm text-ink-2">
+            Lowest needs a minimum order: {minimumWithTotal(best.offer, best.price)} at {bestShop}
+          </p>
+        )}
+        {best?.option && (
+          <p data-lowest-option className="text-[13px] text-ink-2">
+            Lowest is the “{best.option}” option at {bestShop}.
+          </p>
+        )}
+        {hint && (
+          <p data-quantity-hint className="text-[13px] text-ink-2">
+            Buying {hint.quantity} or more? {hint.shop} lists{" "}
+            <span className="figure text-ink">{formatPrice(hint.price, hint.currency)}</span> each
+            from {hint.quantity}.
+          </p>
+        )}
+        {onRequestOnly && (
+          <p className="text-[13px] text-ink-2">
+            No shop publishes a price for this: ask them, below.
+          </p>
+        )}
         {summary.state === "out_of_stock" && (
           <p className="mt-1 text-sm text-ink-2">
             No shop has this in stock right now. Their offers are still listed below.
@@ -659,16 +797,24 @@ function Summary({
         {allStale && <StaleNote lastVerified={newest} now={now} className="mt-1" />}
       </div>
       {primary?.source_url && primary.supplier && (
-        <ShopLink
-          href={primary.source_url}
-          shop={primary.supplier.slug}
-          className={cn(PRIMARY, "hidden lg:inline-flex", narrow ? "lg:w-full" : "ms-auto")}
-        >
-          {primary.price !== null && summary.state !== "out_of_stock"
-            ? `${formatPrice(primary.price, primary.currency)} at ${primary.supplier.name}`
-            : `View at ${primary.supplier.name}`}
-          <ExternalLink aria-hidden="true" className="size-4" />
-        </ShopLink>
+        <div className={cn("hidden lg:block", narrow ? "lg:w-full" : "ms-auto")}>
+          <ShopLink
+            href={primary.source_url}
+            shop={primary.supplier.slug}
+            data-primary
+            className={cn(PRIMARY, narrow && "w-full")}
+          >
+            {leads
+              ? `${unitPriceText(best)} at ${primary.supplier.name}`
+              : `View at ${primary.supplier.name}`}
+            <ExternalLink aria-hidden="true" className="size-4" />
+          </ShopLink>
+          {notes.length > 0 && (
+            <p data-primary-notes className="mt-1.5 text-[13px] text-ink-2">
+              {notes.join(" · ")}
+            </p>
+          )}
+        </div>
       )}
     </section>
   );
@@ -677,16 +823,62 @@ function Summary({
 /**
  * Phones only: the price, how old it is, and the way out, always on screen.
  * The body makes room for it (globals.css), so it never covers the footer.
+ *
+ * It says what the primary button says: the offer's price of one, with
+ * "each" and the minimum when it has one, the option it is and "ships from
+ * abroad" (`leadNotes`); "Price on request" for an offer with no price; for
+ * one shop, the same range as its box.
  */
-function BottomBar({ offer, now }: { offer: Offer; now: Date }) {
+function BottomBar({ offer, product, now }: { offer: Offer; product: Product; now: Date }) {
   if (!offer.source_url || !offer.supplier) return null;
+  const several = product.offers.length > 1;
+  // The comparison the summary, or the one-shop box, reads: one price everywhere.
+  const summary = summarizeOffers(several ? product.offers : [offer], now);
+  const unit = unitPrice(offer, now);
+  const lead =
+    summary.best && summary.state !== "out_of_stock" && summary.best.offer.id === offer.id
+      ? summary.best
+      : unit && { offer, ...unit };
+  const span = !several && lead ? boxSpan(offer, now) : null;
+  let price: React.ReactNode;
+  if (!lead) {
+    price = isOnRequest(offer) ? (
+      <OnRequest className="text-[15px]" />
+    ) : (
+      <NoPrice className="text-sm" />
+    );
+  } else {
+    price = (
+      <span className="flex items-baseline gap-1 whitespace-nowrap">
+        <PriceRange
+          min={needsEach(offer) ? lead.price : (span?.min ?? lead.price)}
+          max={needsEach(offer) ? null : (span?.max ?? null)}
+          currency={offer.currency}
+          className="text-[17px]"
+        />
+        {needsEach(offer) && <Each className="text-[13px]" />}
+      </span>
+    );
+  }
+  const notes = lead ? leadNotes(lead) : [];
   return (
     <div
       data-bottom-bar
       className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-line bg-surface px-4 pt-3 pb-[calc(1.25rem+env(safe-area-inset-bottom))] lg:hidden"
     >
-      <div className="flex min-w-0 flex-col">
-        <PriceRange min={offer.price} currency={offer.currency} className="text-[17px]" />
+      {/* The price side may shrink; the way out keeps room to read
+          "View at {shop}" (S4), and long notes stop at two lines. */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {price}
+        {notes.length > 0 && (
+          <span
+            data-bar-notes
+            title={notes.join(" · ")}
+            className="line-clamp-2 text-xs leading-snug break-words text-ink-2"
+          >
+            {notes.join(" · ")}
+          </span>
+        )}
         <Freshness
           compact
           lastVerified={parseVerified(offer.last_verified_at)}
@@ -697,10 +889,15 @@ function BottomBar({ offer, now }: { offer: Offer; now: Date }) {
       <ShopLink
         href={offer.source_url}
         shop={offer.supplier.slug}
-        className={cn(PRIMARY, "min-w-0 flex-1 px-3 text-[15px]")}
+        className={cn(
+          PRIMARY,
+          // At 320px the icon gives way and the text steps down, so the shop's
+          // name has the room rather than an ellipsis.
+          "w-[58%] max-w-64 min-w-[10rem] shrink-0 px-3 text-[15px] max-[359px]:px-2.5 max-[359px]:text-sm",
+        )}
       >
         <span className="truncate">View at {offer.supplier.name}</span>
-        <ExternalLink aria-hidden="true" className="size-4 shrink-0" />
+        <ExternalLink aria-hidden="true" className="size-4 shrink-0 max-[359px]:hidden" />
       </ShopLink>
     </div>
   );

@@ -1,4 +1,5 @@
 import type { StockSignal } from "@/lib/api";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const LABELS: Record<StockSignal, string> = {
@@ -10,20 +11,31 @@ const LABELS: Record<StockSignal, string> = {
 };
 
 /**
- * Availability is a hint, never a stock count — suppliers publish a state, not a
- * number. "Unknown" is rendered rather than hidden: a shop that says nothing is
- * different from one that says out of stock.
+ * Availability is a hint. Most suppliers publish a state, not a number; a count
+ * ("36 in stock") is shown only where the shop itself shows one (`quantity`),
+ * never estimated. "Unknown" is rendered rather than hidden: a shop that says
+ * nothing is different from one that says out of stock.
  *
  * No colour of its own: the palette has none to spare for stock, and weight
  * separates "in stock" from the rest well enough.
  */
-export function StockBadge({ signal, className }: { signal: StockSignal; className?: string }) {
+export function StockBadge({
+  signal,
+  quantity = null,
+  className,
+}: {
+  signal: StockSignal;
+  /** A count the shop itself publishes; shown only while it says it has stock. */
+  quantity?: number | null;
+  className?: string;
+}) {
   const positive = signal === "in_stock" || signal === "low_stock";
+  const counted = positive && quantity !== null && quantity > 0;
   return (
     <span
       className={cn("text-[13px]", positive ? "font-semibold text-ink" : "text-ink-2", className)}
     >
-      {LABELS[signal]}
+      {counted ? `${formatCount(quantity)} in stock` : LABELS[signal]}
     </span>
   );
 }

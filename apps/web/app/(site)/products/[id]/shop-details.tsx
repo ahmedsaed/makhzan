@@ -1,15 +1,15 @@
-import { FileText } from "lucide-react";
+import { ExternalLink, FileText, SquarePlay } from "lucide-react";
 
 import { ShopLink } from "@/components/shop-link";
 import type { ShopDetails as Details } from "@/lib/product";
 
 /**
- * The specs and datasheets one shop published: each section
+ * The specs, datasheets and videos one shop published: each section
  * only when there is something in it. Whose listing they came from (rule C4)
  * is said once, at the top of the shop's panel (Details).
  */
 export function ShopDetails({ details, idSuffix = "" }: { details: Details; idSuffix?: string }) {
-  const { offer, specs, datasheets } = details;
+  const { offer, specs, datasheets, videos } = details;
   return (
     <>
       {specs.length > 0 && (
@@ -57,6 +57,37 @@ export function ShopDetails({ details, idSuffix = "" }: { details: Details; idSu
                   <FileText aria-hidden="true" className="size-4 shrink-0" />
                   <span className="min-w-0 break-words">{doc.label}</span>
                 </ShopLink>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Videos are links, never embeds: an embed would load the host's
+          player and trackers on every visit. The one link out of makhzan that
+          is not a shop's own page besides contacts and datasheets (rule P4):
+          no `ref=makhzan`, which would mean nothing to the host. */}
+      {videos.length > 0 && (
+        <section data-videos aria-labelledby={`videos-heading${idSuffix}`} className="mt-6 lg:mt-5">
+          <h3 id={`videos-heading${idSuffix}`} className="text-[15px]">
+            {videos.length === 1 ? "Video" : "Videos"}
+          </h3>
+          <ul className="mt-1">
+            {videos.map((video) => (
+              <li key={video.url}>
+                <a
+                  href={video.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-video
+                  className="inline-flex min-h-11 max-w-full items-center gap-2 text-sm font-medium text-link underline"
+                >
+                  <SquarePlay aria-hidden="true" className="size-4 shrink-0" />
+                  <span className="min-w-0 break-words">
+                    {video.label} <span className="font-normal text-ink-3">on {video.host}</span>
+                  </span>
+                  <ExternalLink aria-hidden="true" className="size-3.5 shrink-0" />
+                </a>
               </li>
             ))}
           </ul>
