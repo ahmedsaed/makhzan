@@ -33,6 +33,7 @@ from makhzan_schemas.domains.base import DEFAULT_DOMAIN
 from makhzan_schemas.enums import SourceType
 
 from worker.http import POLITE_DELAY, CycleFetcher
+from worker.sources.short_page import ShortPageEnd
 
 if TYPE_CHECKING:
     from makhzan_schemas.models import Listing
@@ -44,6 +45,40 @@ SINGLE_PARTITION = ""
 #: The reference-data part that holds the shop's own contact details, which the
 #: pipeline writes to `Supplier.contact` as well as keeping.
 CONTACT_PART = "contact"
+
+
+class ConfirmStopped(Exception):
+    """Raised by the confirmation's fetcher before a request it may not send.
+
+    The run's page ceiling is spent, its time is up, or its host refused it.
+    `confirm_listed` catches it and returns what it has: the candidates not
+    yet asked about stay unasked, and wait for the next run.
+    """
+
+
+@dataclass
+class Confirmation:
+    """What a source said when asked about listings a cycle did not see (T4).
+
+    Built by `SourceAdapter.confirm_listed`, read by the pipeline before it
+    archives anything. Each candidate lands in at most one of these:
+
+      - `items`: the source returned the product with its price, so it is
+        upserted like any listing (seen *and* verified);
+      - `seen`: the source still lists it but gave no price (a product page
+        read only for its existence), so only `last_seen_at` moves;
+      - `absent`: the source was asked and does not list it, so it is archived.
+
+    A candidate in none of them was not asked (over a per-run cap, or a
+    sitemap held it for a product page there was no room to read): it is not
+    archived, and the cycle waits for the next run to ask.
+    """
+
+    items: list[RawItem] = field(default_factory=list)
+    seen: set[str] = field(default_factory=set)
+    absent: set[str] = field(default_factory=set)
+    #: What the run's report should say about how the answer was reached.
+    notes: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -615,9 +650,39 @@ class SourceAdapter(ABC):
 
         For checks only the adapter can make, such as a Wix shop's sitemap
         listing a product none of its configured galleries showed. A `warnings`
-        list in it is printed by `make status`. Empty by default.
+        list in it is printed by `make status`. By default, the short-page
+        tally (`short_page`) of an adapter that ends partitions that way.
         """
-        return {}
+        report = self.short_page.report() if self.short_page is not None else {}
+        return {"short_page": report} if report else {}
+
+    #: Ends a partition on a short page, or (in shadow) notes where it would
+    #: have: see worker/sources/short_page.py. None for an adapter that
+    #: cannot tell a short page, which keeps its own end signal alone.
+    short_page: ShortPageEnd | None = None
+
+    def resume_from(self, report: dict) -> None:
+        """Receive the last full run's `stats.source_report`, before any page.
+
+        What one run leaves for the next to finish: a short page read as a
+        run's last page is judged by the first page of the next.
+        """
+        if self.short_page is not None:
+            self.short_page.restore(report.get("short_page"))
+
+    async def confirm_listed(
+        self, listings: list[Listing], fetcher: CycleFetcher
+    ) -> Confirmation | None:
+        """Ask the source whether it still lists these, before they are archived (T4).
+
+        `listings` are the cycle's archive candidates: active, and not seen
+        since the cycle began. Every request goes through `fetcher` under the
+        label "confirm" (paced, counted, robots.txt checked on the full URL).
+        Return None when the source has no cheap way to answer, and the cycle
+        archives as it always has. Raise when asking failed: nothing is then
+        archived this run, and the next run asks again (see the pipeline).
+        """
+        return None
 
     @abstractmethod
     async def fetch_page(self, partition: str, page: int) -> Page:
