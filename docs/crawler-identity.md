@@ -192,9 +192,12 @@ One shop at a time, starting with one that does not sit behind a strict WAF.
 
 ## Not done yet
 
-- **Registration.** Nothing has been submitted to Cloudflare or Shopify, and
-  no key has been generated for production.
-- **The `/how-we-crawl` rewrite.** The page names the token and gives the block
-  snippet. It does not yet mention the key directory, the server IP or its
-  reverse DNS, or a takedown promise. Those wait for the owner's answers in the
-  research note.
+- **Cloudflare registration.** Submitted to Cloudflare's verified bots
+  directory on 2026-11-10; on 2026-11-12 Cloudflare requested changes, asking
+  for a registered business, which the operator does not have yet. Pending.
+  Nothing has been submitted to Shopify (see "Registering with Shopify"). The
+  production signing key exists and its directory is published.
+- **The `/how-we-crawl` redesign.** The page already explains the token, the
+  block snippet, Web Bot Auth and the key directory, and deliberately publishes
+  no IP address. A presentation redesign (cards, tabs, more on the activity
+  record) has an approved mockup and is being built.
