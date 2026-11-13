@@ -215,3 +215,8 @@ every Nth cycle, for category.
 - D6, importance weights before click data: the starting weights above.
 - D11, details backfill order: importance first, then newest.
 - D2, D7–D10 and D12 belong to Phases 0, 2 and 3.
+
+## Further reading
+
+- `docs/crawler-scheduling-plan.md`: the research behind this plan (change rates measured on production, the techniques T1–T13, metrics, invariants and decisions D1–D12).
+- `docs/crawler-phase3-design.md`: the design for Phase 3 (visits and change rates steering a gentler, longer coverage sweep); open decisions P3-D1–D12.
