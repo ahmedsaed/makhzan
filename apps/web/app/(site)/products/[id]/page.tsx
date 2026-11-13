@@ -98,12 +98,15 @@ function productPath(id: string, product: Product): string {
  * page, as "no longer listed" (`isGone`).
  */
 async function loadProduct(id: string): Promise<Product> {
-  const product = await fetchProduct(id);
+  const product = await fetchProduct(id, revalidate);
   if (!product) {
-    const moved = await fetchProductRedirect(id).catch(() => null);
+    // No `.catch` on either: an API failure here would be cached as a 404 or a
+    // redirect for a whole `revalidate`. Thrown, it is a 500 that is not
+    // cached, or, if this was a background refresh, the last good copy.
+    const moved = await fetchProductRedirect(id, revalidate);
     if (moved && moved !== id) {
       // Straight to the readable URL: one hop, not two.
-      const successor = await fetchProduct(moved).catch(() => null);
+      const successor = await fetchProduct(moved, revalidate);
       permanentRedirect(successor ? productPath(moved, successor) : routes.product(moved));
     }
     notFound();
@@ -151,7 +154,7 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   const now = new Date();
   const title = displayTitle(product);
   if (isGone(product)) {
-    const similar = await fetchSimilar(id, 8).catch(() => []);
+    const similar = await fetchSimilar(id, 8, revalidate);
     return <NoLongerListed product={product} title={title} similar={similar} now={now} />;
   }
   const several = product.offers.length >= 2;
@@ -167,13 +170,15 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   // like the tabs they feed, and in the offers' own order.
   const described = orderOffers(product.offers).slice(0, MAX_DETAIL_SOURCES);
 
-  // Everything but the product itself is garnish: a failure there must not
-  // take the page down with it.
+  // Everything but the product itself is garnish, but a failure fetching it
+  // still fails the page: the page is cached (`revalidate`), and a copy
+  // missing its descriptions or similar products would be served for hours.
+  // Failing keeps the last good copy, or answers a 500 that nothing caches.
   const [similar, categories, listings, shopProfiles] = await Promise.all([
-    fetchSimilar(id, 8).catch(() => []),
-    product.category ? fetchCategories().catch(() => []) : Promise.resolve([]),
-    Promise.all(described.map((offer) => fetchListing(offer.id).catch(() => null))),
-    Promise.all(shopSlugs.map((slug) => fetchSupplier(slug).catch(() => null))),
+    fetchSimilar(id, 8, revalidate),
+    product.category ? fetchCategories(undefined, revalidate) : Promise.resolve([]),
+    Promise.all(described.map((offer) => fetchListing(offer.id, revalidate))),
+    Promise.all(shopSlugs.map((slug) => fetchSupplier(slug, revalidate))),
   ]);
   const shop = soleShop ? (shopProfiles[shopSlugs.indexOf(soleShop)] ?? null) : null;
   const hoursOf = new Map(
@@ -707,10 +712,26 @@ function BottomBar({ offer, now }: { offer: Offer; now: Date }) {
 }
 
 /**
- * Rendered per request, not at build time. The catalogue lives in an API this
- * build has no access to. SSR still gives crawlers complete HTML.
+ * Cached for 6 hours, then served once more while a fresh copy renders in the
+ * background (ISR). A product changes at most daily (a crawl, then the
+ * rebuild), so 6 h is the price lag after a crawl, and also how far behind
+ * "checked N days ago" and the 45-day stale fold (C2b) can be: `now` is the
+ * moment of the render, not of the visit. A copy older than a day is never
+ * served (cache-handler.mjs). Every fetch here passes this as its own
+ * lifetime, because the shortest one would become the page's.
+ *
+ * The cache key is the path: the page reads no `searchParams`, so a
+ * cache-busting query string is served the same copy.
  */
-export const dynamic = "force-dynamic";
+export const revalidate = 21600;
+
+/**
+ * None at build time: the catalogue lives in an API the build has no access
+ * to. Each page is rendered on its first visit and cached from then on.
+ */
+export function generateStaticParams() {
+  return [];
+}
 
 /** `https://shop.example` for a photo URL, or null for anything unparseable. */
 function originOf(src: string | undefined): string | null {
