@@ -1,0 +1,11 @@
+{#- From vLLM v0.32.0 examples/pooling/score/template, except the ending: the card's prompt ends "</think>\n\n", written here as an explicit string because Jinja drops a template file's final newline (vLLM's copy ends "</think>\n" when rendered, a different token). -#}
+<|im_start|>system
+Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>
+<|im_start|>user
+<Instruct>: {{ instruction | default(instruct | default(messages | selectattr("role", "eq", "system") | map(attribute="content") | first | default("Given a web search query, retrieve relevant passages that answer the query", true), true), true) }}
+<Query>: {{ messages | selectattr("role", "eq", "query") | map(attribute="content") | first }}
+<Document>: {{ messages | selectattr("role", "eq", "document") | map(attribute="content") | first }}<|im_end|>
+<|im_start|>assistant
+<think>
+
+{{ "</think>\n\n" }}
