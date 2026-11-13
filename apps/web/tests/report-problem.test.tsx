@@ -439,6 +439,19 @@ describe("the opened-at token", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).token).toBe("tok-2");
   }, 10_000);
 
+  it("sends nothing when the dialog is closed during the wait", async () => {
+    tokenMock.mockResolvedValueOnce(reply(503, {}));
+    fetchMock.mockResolvedValue(reply(202, { reference: "R-11" }));
+    const { dialog } = await toStepTwo(/Wrong category/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send report" }));
+    expect(await within(dialog).findByText("Sending…")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // Past the 3.25 s wait: the closed attempt must not have posted.
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    expect(fetchMock).not.toHaveBeenCalled();
+  }, 10_000);
+
   it("says not sent, and sends nothing, when no token can be had", async () => {
     tokenMock.mockResolvedValue(reply(503, {}));
     const { dialog } = await toStepTwo(/Wrong category/);

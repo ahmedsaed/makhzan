@@ -10,7 +10,8 @@
 # Retention (scripts/lib/prune.sh): the 14 newest backups (old *.sql.gz and new
 # *.dump counted together), none older than 30 days except the newest, and
 # separately every *-pre-restore.dump safety copy from the last 7 days (never
-# fewer than 3), so repeated restore attempts never push out the
+# fewer than 3) but none older than 30 days, so repeated restore attempts
+# never push out the
 # last good backups, nor the safety copy taken before the trouble started.
 # A pruning failure is a warning, never a failed backup.
 # MAKHZAN_KEEP_FILE (a realpath) names one file never to prune: the one being restored.

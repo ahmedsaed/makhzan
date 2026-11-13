@@ -95,3 +95,25 @@ def test_the_file_being_restored_is_never_pruned(tmp_path):
         "makhzan-new.dump",
         "makhzan-keep.dump",
     }
+
+
+def test_thirty_days_means_thirty_days_not_thirty_one(tmp_path):
+    _backups(tmp_path, {"makhzan-new.dump": 1, "makhzan-30h.dump": 30.5})
+    assert _prune(tmp_path) == {"makhzan-new.dump"}
+
+
+def test_a_safety_copy_older_than_30_days_goes_even_among_the_three_newest(tmp_path):
+    _backups(
+        tmp_path,
+        {
+            "makhzan-new.dump": 1,
+            "makhzan-a-pre-restore.dump": 2,
+            "makhzan-b-pre-restore.dump": 20,
+            "makhzan-c-pre-restore.dump": 200,
+        },
+    )
+    assert _prune(tmp_path) == {
+        "makhzan-new.dump",
+        "makhzan-a-pre-restore.dump",
+        "makhzan-b-pre-restore.dump",
+    }
