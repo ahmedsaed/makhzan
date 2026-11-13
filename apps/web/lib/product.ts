@@ -6,54 +6,28 @@
  */
 import type { Crumb } from "@/components/breadcrumb";
 import type { Category, CategoryRef, Offer, Product, StockSignal } from "@/lib/api";
-import { plural } from "@/lib/format";
-import { isStaleCheck, parseVerified } from "@/lib/freshness";
+import {
+  checkedAt,
+  compareOffers,
+  comparisonText,
+  isInStock,
+  isOutOfStock,
+  isStaleOffer,
+  orderOffers,
+  preferFresh,
+  type Comparison,
+} from "@/lib/offers";
 import { routes } from "@/lib/routes";
 import { departmentLabel } from "@/lib/departments";
 
-/** Low stock is still stock: the shop says it can sell one today. */
-export function isInStock(signal: StockSignal): boolean {
-  return signal === "in_stock" || signal === "low_stock";
-}
-
-export function isOutOfStock(offer: Offer): boolean {
-  return offer.stock_signal === "out_of_stock";
-}
-
-function checkedAt(offer: Offer): number {
-  return parseVerified(offer.last_verified_at)?.getTime() ?? 0;
-}
-
-/** Last checked more than STALE_AFTER_DAYS ago (rule C2b). */
-export function isStaleOffer(offer: Offer, now: Date = new Date()): boolean {
-  return isStaleCheck(parseVerified(offer.last_verified_at), now);
-}
-
-/**
- * The offers the page leads with: the recently checked ones when there are
- * any, every offer when all of them are stale. A product whose every offer is
- * old still has a page (a direct link must work); it just says so (F2).
- */
-export function preferFresh(offers: Offer[], now: Date = new Date()): Offer[] {
-  const fresh = offers.filter((offer) => !isStaleOffer(offer, now));
-  return fresh.length > 0 ? fresh : offers;
-}
-
-/**
- * Lowest price first. An offer without a price goes after every priced one —
- * "Price on request" must never sort as free — and equal prices put the more
- * recently checked offer first, since it is the likelier to still be true.
- */
-export function orderOffers(offers: Offer[]): Offer[] {
-  return [...offers].sort((a, b) => {
-    if (a.price === null || b.price === null) {
-      if (a.price !== b.price) return a.price === null ? 1 : -1;
-    } else if (a.price !== b.price) {
-      return a.price - b.price;
-    }
-    return checkedAt(b) - checkedAt(a);
-  });
-}
+export {
+  checkedAt,
+  isInStock,
+  isOutOfStock,
+  isStaleOffer,
+  orderOffers,
+  preferFresh,
+} from "@/lib/offers";
 
 /**
  * The offers list, with the out-of-stock offers (rule C2) and the out-of-date
@@ -83,58 +57,21 @@ export function splitOffers(
   return { listed: fresh.filter((offer) => !isOutOfStock(offer)), outOfStock, stale };
 }
 
-/**
- * What the summary above the offers counts. `in_stock` when any shop says it
- * has stock; `unconfirmed` when none says so but some do not say it is gone
- * (an "unknown" signal is not a "no"); `out_of_stock` when every shop says it is.
- */
-export type OfferSummary = {
-  state: "in_stock" | "unconfirmed" | "out_of_stock";
-  offerCount: number;
-  shopCount: number;
-  min: number | null;
-  max: number | null;
-};
+/** What the summary above the offers counts: `compareOffers` (lib/offers.ts). */
+export type OfferSummary = Comparison;
 
 function shopsIn(offers: Offer[]): number {
   return new Set(offers.map((offer) => offer.supplier?.slug ?? offer.id)).size;
 }
 
-/**
- * Counted over the recently checked offers when there are any (C2b), so the
- * summary and the offers above the folds agree; over every offer when all are
- * stale, and the page says so.
- */
+/** The comparison the summary, facts, button and bottom bar share (lib/offers.ts). */
 export function summarizeOffers(all: Offer[], now: Date = new Date()): OfferSummary {
-  const offers = preferFresh(all, now);
-  const inStock = offers.filter((offer) => isInStock(offer.stock_signal));
-  const notGone = offers.filter((offer) => !isOutOfStock(offer));
-  const [state, counted]: [OfferSummary["state"], Offer[]] =
-    inStock.length > 0
-      ? ["in_stock", inStock]
-      : notGone.length > 0
-        ? ["unconfirmed", notGone]
-        : ["out_of_stock", offers];
-  const prices = counted.flatMap((offer) => (offer.price === null ? [] : [offer.price]));
-  return {
-    state,
-    offerCount: counted.length,
-    shopCount: shopsIn(counted),
-    min: prices.length ? Math.min(...prices) : null,
-    max: prices.length ? Math.max(...prices) : null,
-  };
+  return compareOffers(all, now);
 }
 
 /** "5 offers in stock at 3 shops". */
 export function summaryText(summary: OfferSummary): string {
-  const { offerCount, shopCount } = summary;
-  if (summary.state === "in_stock") {
-    return `${plural(offerCount, "offer")} in stock at ${plural(shopCount, "shop")}`;
-  }
-  if (summary.state === "unconfirmed") {
-    return `${plural(offerCount, "offer")} at ${plural(shopCount, "shop")}, stock not confirmed`;
-  }
-  return shopCount === 1 ? "Out of stock" : `Out of stock at all ${shopCount} shops`;
+  return comparisonText(summary);
 }
 
 /**
@@ -216,6 +153,8 @@ export function brandOf(product: Product): string | null {
 
 export type SpecRow = { name: string; value: string; identifier: boolean };
 export type DatasheetLink = { url: string; label: string };
+/** A video the shop links from its listing: "UT61E review on YouTube". */
+export type VideoLink = { url: string; label: string; host: string };
 
 export type ShopDetails = {
   offer: Offer;
@@ -223,6 +162,7 @@ export type ShopDetails = {
   shopName: string;
   specs: SpecRow[];
   datasheets: DatasheetLink[];
+  videos: VideoLink[];
 };
 
 /** Names a shop gives the row that holds a part number. */
@@ -248,6 +188,26 @@ export function datasheetLabel(url: string, label: string | null | undefined): s
   return "Datasheet";
 }
 
+/** Where a video is hosted, by name: "YouTube", "Vimeo", "Facebook", else the host. */
+export function videoHost(url: string): string {
+  let host: string;
+  try {
+    host = new URL(url).hostname.replace(/^(www|m)\./, "").toLowerCase();
+  } catch {
+    return "the web";
+  }
+  if (host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com")) {
+    return "YouTube";
+  }
+  if (host === "vimeo.com" || host.endsWith(".vimeo.com")) return "Vimeo";
+  if (host === "facebook.com" || host === "fb.watch" || host.endsWith(".facebook.com")) {
+    return "Facebook";
+  }
+  if (host === "instagram.com") return "Instagram";
+  if (host === "tiktok.com") return "TikTok";
+  return host;
+}
+
 /**
  * The specs and datasheets to show, from the lead offer only (rule C4): never
  * merged across shops, so every row has one source the page can name. Null
@@ -258,7 +218,7 @@ export function shopDetails(product: Product): ShopDetails | null {
   return offer ? offerDetails(offer) : null;
 }
 
-/** One offer's specs and datasheets, or null when its shop published neither. */
+/** One offer's specs, datasheets and videos, or null when its shop published none. */
 export function offerDetails(offer: Offer): ShopDetails | null {
   const specs = Object.entries(offer.specs ?? {})
     .filter(([name, value]) => name.trim() && typeof value === "string" && value.trim())
@@ -266,8 +226,15 @@ export function offerDetails(offer: Offer): ShopDetails | null {
   const datasheets = (offer.documents ?? [])
     .filter((doc) => /^https?:\/\//i.test(doc.url))
     .map((doc) => ({ url: doc.url, label: datasheetLabel(doc.url, doc.label) }));
-  if (specs.length === 0 && datasheets.length === 0) return null;
-  return { offer, shopName: offer.supplier?.name ?? "the shop", specs, datasheets };
+  const videos = (offer.videos ?? [])
+    .filter((video) => /^https:\/\//i.test(video.url))
+    .map((video) => ({
+      url: video.url,
+      label: video.label?.trim() || "Video",
+      host: videoHost(video.url),
+    }));
+  if (specs.length === 0 && datasheets.length === 0 && videos.length === 0) return null;
+  return { offer, shopName: offer.supplier?.name ?? "the shop", specs, datasheets, videos };
 }
 
 /** What one shop wrote about a product: the "From:" tabs on the product page. */
@@ -283,7 +250,7 @@ export type DetailSource = {
 export const MAX_DETAIL_SOURCES = 8;
 
 /**
- * Every offer whose shop wrote something (a description, specs or datasheets),
+ * Every offer whose shop wrote something (a description, specs, datasheets or videos),
  * richest first, so the page opens on the most informative one. Offers whose
  * shop wrote nothing get no tab: an empty tab is an empty section (rule C4).
  * Ties keep the offers' own order, cheapest in stock first.
@@ -300,7 +267,8 @@ export function detailSources(
       const score =
         (description ? 2 + Math.min(description.length, 1500) / 300 : 0) +
         (details?.specs.length ?? 0) +
-        3 * (details?.datasheets.length ?? 0);
+        3 * (details?.datasheets.length ?? 0) +
+        2 * (details?.videos.length ?? 0);
       return { offer, description, details, score, index };
     })
     .filter((source) => source.score > 0)

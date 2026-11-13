@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 import { crawlerActivity } from "./fixtures/crawler.mjs";
+import { phase2Fixture } from "./fixtures/phase2.mjs";
 import { productFixture } from "./fixtures/product.mjs";
 import { photoShopRoute } from "./fixtures/photo-shop.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
@@ -349,6 +350,9 @@ const server = createServer((req, res) => {
   }
   const photoProduct = PHOTO_PRODUCTS[path.replace(/^\/products\//, "")];
   if (photoProduct) return send(200, photoProduct);
+
+  const phase2 = phase2Fixture(path);
+  if (phase2) return send(...phase2);
 
   const shop = shopRoute(path);
   if (shop) return send(...shop);
