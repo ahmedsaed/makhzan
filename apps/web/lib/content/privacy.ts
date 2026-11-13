@@ -26,6 +26,10 @@ export const PRIVACY_UPDATED = "13 November 2026";
 /** How long our web server's access log, with IP addresses, is kept. */
 export const ACCESS_LOG_DAYS = 30;
 
+/** How much longer a backup of the database may hold what is erased from it
+ *  (scripts/lib/prune.sh, BACKUP_MAX_DAYS). */
+export const BACKUP_DAYS = 30;
+
 export type PrivacyBlock =
   | { kind: "p"; text: string }
   | { kind: "list"; items: string[] }
@@ -95,6 +99,10 @@ export const privacySections: PrivacySection[] = [
             kept: "Kept, so a correction or a matching change can be checked later. It says nothing about who you are, unless you write it in the text box, so please don’t.",
           },
         ],
+      },
+      {
+        kind: "p",
+        text: `Copies of the database kept as backups can hold this information for up to ${BACKUP_DAYS} more days before they are deleted.`,
       },
       {
         kind: "p",

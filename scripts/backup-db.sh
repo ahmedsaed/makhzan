@@ -7,9 +7,10 @@
 # Custom format (pg_dump -Fc): compressed, and pg_restore can list it, restore
 # selectively and restore into any database. Restore with ./makhzan restore FILE.
 #
-# Retention: the 14 newest backups (old *.sql.gz and new *.dump counted
-# together), and separately every *-pre-restore.dump safety copy from the last
-# 7 days (never fewer than 3), so repeated restore attempts never push out the
+# Retention (scripts/lib/prune.sh): the 14 newest backups (old *.sql.gz and new
+# *.dump counted together), none older than 30 days except the newest, and
+# separately every *-pre-restore.dump safety copy from the last 7 days (never
+# fewer than 3), so repeated restore attempts never push out the
 # last good backups, nor the safety copy taken before the trouble started.
 # A pruning failure is a warning, never a failed backup.
 # MAKHZAN_KEEP_FILE (a realpath) names one file never to prune: the one being restored.
@@ -62,28 +63,7 @@ echo "==> Wrote $out ($(du -h "$out" | cut -f1), $(grep -c 'TABLE DATA' <<<"$toc
 # Pruning never fails the backup: the dump above is written and verified, and
 # a restore would read a failure here as "the safety backup failed".
 #
-# prune KEEP DAYS FILE...: delete every FILE beyond the KEEP newest that is also
-# older than DAYS days (DAYS 0: age does not matter). Never MAKHZAN_KEEP_FILE.
-prune() {
-  local keep="$1" days="$2" f i=0
-  shift 2
-  [ "$#" -gt "$keep" ] || return 0
-  # shellcheck disable=SC2012 # our own names, no newlines
-  ls -1td -- "$@" | while read -r f; do
-    i=$((i + 1))
-    [ "$i" -gt "$keep" ] || continue
-    [ "$days" = 0 ] || [ -n "$(find "$f" -maxdepth 0 -mtime +"$days")" ] || continue
-    [ "$(realpath -- "$f")" != "${MAKHZAN_KEEP_FILE:-}" ] || continue
-    rm -- "$f" || echo "warning: could not prune $f" >&2
-  done
-}
-shopt -s nullglob
-regular=()
-for f in backups/makhzan-*.dump backups/makhzan-*.sql.gz; do
-  case "$f" in *-pre-restore.dump) ;; *) regular+=("$f") ;; esac
-done
-prune 14 0 "${regular[@]}" || echo "warning: pruning old backups failed; the new one is kept" >&2
-# Safety copies: a week of them, never fewer than the 3 newest. Repeated restore
-# attempts in one bad afternoon must not push out the copy taken before it began.
-prune 3 7 backups/makhzan-*-pre-restore.dump ||
-  echo "warning: pruning old safety copies failed; the new backup is kept" >&2
+# The rules are scripts/lib/prune.sh: the 14 newest regular backups, none
+# older than 30 days but the newest, and a week of safety copies.
+. scripts/lib/prune.sh
+prune_backups || echo "warning: pruning old backups failed; the new one is kept" >&2
