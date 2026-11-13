@@ -60,10 +60,16 @@ Measured on 60.9k active listings (November 2026).
 │   └── /shops/{shop}           Freshness, what they carry, its products as scoped results
 ├── /how-we-crawl               The crawling policy, written for suppliers, and what the crawler did (#activity)
 ├── /for-suppliers              Remove, add or correct a shop (requests, by email)
-└── /privacy                    What makhzan keeps about visitors, why and for how long (PDPL, Law 151 of 2020)
+├── /about                      What makhzan is, how it works, who pays, who runs it; live product and shop counts
+├── /faq                        Questions in groups, as <details> with linkable ids (/faq#price-differs); FAQPage JSON-LD
+├── /contact                    Which way reaches us for what: report, For suppliers, crawler@ for data, hello@ for the rest
+├── /privacy                    What makhzan keeps about visitors, why and for how long (PDPL, Law 151 of 2020)
+└── /terms                      Terms of use, with "Last updated"
 
-Everywhere: header (logo, search, Departments, Shops), footer (For suppliers,
-How we crawl, Privacy, theme toggle, Made by Merope), 404 and error pages.
+Everywhere: header (logo, search, Departments, Shops), footer (three labelled
+groups: makhzan — About, FAQ, Contact; For shops — For suppliers, How we crawl;
+Legal — Privacy, Terms; then the theme toggle and Made by Merope), 404 and error
+pages.
 ```
 
 - **No language in URLs.** `/en/…` and `/ar/…` redirect permanently to the same path
@@ -398,6 +404,18 @@ resume points, crosswalk drift, the review queue, internal ids or anything about
 servers. A shop removed at its request is retired with its runs, so it is simply absent.
 When the API cannot answer, the policy still renders and the section says the figures can't
 be shown right now.
+
+**About, FAQ, Contact, Terms** (the approved mockup of November 2026) are laid out as
+/privacy: one `max-w-2xl` column, an h1, a lead, h2 sections; their copy lives in
+`apps/web/lib/content/{about,faq,contact,terms}.ts`. About shows the catalogue's size
+live ("Today: N products from N shops in N departments", from `/stats` and
+`/categories`, cached five minutes); when the API cannot answer, or answers zero, it
+says "It lists products from shops across Egypt" instead, never an error or a zero.
+The FAQ's questions are `<details>` in four labelled groups, each with an id to link
+to, and open without JavaScript. Contact routes and does not collect: report a problem
+(the flag button drawn inline as an illustration, not a working button), For suppliers,
+crawler@ for personal data, hello@merope.dev for anything else. The other three fetch
+nothing. /privacy and /how-we-crawl each link to /contact.
 
 **Desktop.** Results get a side rail (category, price); the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
