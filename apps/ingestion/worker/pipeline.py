@@ -917,6 +917,11 @@ async def _page_budget(session: AsyncSession, adapter: SourceAdapter) -> dict:
     return out
 
 
+#: Unmapped names kept per run. Status unions a cycle's runs, so this only has
+#: to hold one run's slice; 15 was hit on every run of the biggest source.
+UNMAPPED_STORED = 100
+
+
 def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: bool) -> dict | None:
     """Compare the categories a sweep actually saw against the crosswalk.
 
@@ -950,10 +955,12 @@ def _crosswalk_drift(adapter: SourceAdapter, observed: Counter, *, complete: boo
         name: n for name, n in observed.items() if normalize_category_name(name) not in known
     }
     # Biggest first — a rename of a busy category matters more than a new
-    # one-product corner.
+    # one-product corner. Capped to keep the row small; `unmapped_count` and
+    # `unmapped_listings` cover every name, so status can say what the cap hid.
     drift: dict = {
         "observed": len(observed),
-        "unmapped": dict(Counter(unmapped).most_common(15)),
+        "unmapped": dict(Counter(unmapped).most_common(UNMAPPED_STORED)),
+        "unmapped_count": len(unmapped),
         "unmapped_listings": sum(unmapped.values()),
     }
     if complete:
@@ -1083,6 +1090,11 @@ async def _logged_run(
             stats["identity"] = identity.describe()
             if log.robots_state:
                 stats["robots"] = dict(log.robots_state)
+            # The names seen so far, so a run cut off mid-sweep (its cursors
+            # already advanced past these pages) still reports them. Never
+            # `unused`: only the finished run can know it saw everything.
+            if limit is None and (drift := _crosswalk_drift(adapter, observed, complete=False)):
+                stats["crosswalk"] = drift
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and
