@@ -31,9 +31,9 @@ describe("the privacy page", () => {
     expect(rules).toContain(`IP_HASH_KEPT = timedelta(hours=${IP_HASH_KEPT_HOURS})`);
   });
 
-  it("says backups may hold it 30 days more, as the backup script prunes", () => {
+  it("says what the backup script prunes, and that the newest backup is kept", () => {
     expect(COPY).toContain(
-      `Copies of the database kept as backups can hold this information for up to ${BACKUP_DAYS} more days before they are deleted.`,
+      `Each time, we delete backups more than ${BACKUP_DAYS} days old, keeping only the newest, so a backup can hold this information past the limits above until a newer one replaces it.`,
     );
     const prune = readFileSync(join(ROOT, "scripts/lib/prune.sh"), "utf8");
     expect(prune).toContain(`BACKUP_MAX_DAYS=${BACKUP_DAYS}`);

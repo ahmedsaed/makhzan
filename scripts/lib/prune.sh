@@ -29,7 +29,7 @@ prune() {
   ls -1td -- "$@" | while read -r f; do
     i=$((i + 1))
     [ "$i" -gt "$keep" ] || continue
-    [ "$days" = 0 ] || [ -n "$(find "$f" -maxdepth 0 -mtime +"$days")" ] || continue
+    [ "$days" = 0 ] || [ -n "$(find "$f" -maxdepth 0 -mmin +"$((days * 1440))")" ] || continue
     [ "$(realpath -- "$f")" != "${MAKHZAN_KEEP_FILE:-}" ] || continue
     rm -- "$f" || echo "warning: could not prune $f" >&2
   done

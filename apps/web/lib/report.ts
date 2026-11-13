@@ -457,10 +457,13 @@ export async function tokenToSend(
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<OpenedToken | null> {
-  const fresh = (t: OpenedToken | null) => t !== null && now() - t.fetchedAt < TOKEN_REFRESH_MS;
+  // A negative age means the page's clock stepped back: treat the token as
+  // stale rather than trust it, and never wait longer than the minimum.
+  const age = (t: OpenedToken) => now() - t.fetchedAt;
+  const fresh = (t: OpenedToken | null) => t !== null && age(t) >= 0 && age(t) < TOKEN_REFRESH_MS;
   const token = fresh(cached) ? cached : await openToken(fetcher, now);
   if (!token) return null;
-  const young = TOKEN_MIN_AGE_MS - (now() - token.fetchedAt);
+  const young = Math.min(TOKEN_MIN_AGE_MS, TOKEN_MIN_AGE_MS - age(token));
   if (young > 0) await sleep(young);
   return token;
 }

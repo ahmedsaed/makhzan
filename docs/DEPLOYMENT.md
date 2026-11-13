@@ -311,7 +311,10 @@ with a deploy or restore.)
    30 days more (`BACKUP_MAX_DAYS` in `scripts/lib/prune.sh`, `BACKUP_DAYS` in
    `apps/web/lib/content/privacy.ts`). Since pruning runs only when a backup is
    taken, take one at least monthly, or delete old dumps by hand; and a copy
-   taken off the box (step 2) must be deleted within 30 days too.
+   taken off the box (step 2) must be deleted within 30 days too, and so must
+   a production snapshot pulled to a laptop with `make db-pull` (written under
+   `seed/`, never pruned automatically). /privacy says what this means plainly:
+   a backup can hold the data past its limits until a newer one replaces it.
 2. **Copy it off the box**, from your laptop:
    `scp <user>@<server>:~/Documents/Projects/makhzan/backups/makhzan-<ts>.dump .`
 3. **Test-restore it into a scratch database** now and then, without touching the
