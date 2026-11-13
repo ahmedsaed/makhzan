@@ -33,8 +33,8 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
   deploy before api/ingestion start. The previous release keeps serving while it
   runs, so a migration must not drop or rename anything that release reads:
   add the new column in one release and drop the old one in a later one
-  (expand/contract). `suppliers.phone` is waiting on that second step
-  (docs/ROADMAP.md, Deferred).
+  (expand/contract). `suppliers.phone` went this way: kept by `2b656e4b5adc`,
+  dropped by `772533d06b60` once the live release no longer mapped it.
 
 Images: CI pushes `ghcr.io/<owner>/makhzan/{api,web,ingestion}`. The server pulls
 them (it can also `docker compose ... build` if you prefer).
