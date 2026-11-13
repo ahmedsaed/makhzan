@@ -14,7 +14,7 @@ import { routes } from "@/lib/routes";
 export const metadata: Metadata = pageMetadata({
   title: "Privacy",
   description:
-    "What makhzan keeps about you, why, and for how long. No account, no cookies; a report's email is deleted 90 days after it is closed.",
+    "What makhzan keeps about you, why, and for how long. No account, no cookies; a report's email is deleted 90 days after it is sent.",
   path: routes.privacy(),
 });
 
