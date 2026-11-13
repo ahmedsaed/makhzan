@@ -19,7 +19,8 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
                         └──────────────────────────────────────────────┘
 ```
 
-- **web** is the only published service (`WEB_PORT`); point your proxy at it.
+- **web** is the only published service (`WEB_BIND:WEB_PORT`, the Docker
+  bridge by default, never every interface); point your proxy at it.
   Next.js rewrites `/api/*` to the API (`API_INTERNAL_URL`, default
   `http://api:8000`) server-side, so the browser stays same-origin (no CORS) and
   the API is never exposed. Expose the API port yourself only if you need direct
@@ -92,6 +93,14 @@ Edit `.env.prod`:
 - strong `POSTGRES_PASSWORD` + `MEILI_MASTER_KEY` (`openssl rand -base64 32`);
   keep the password in `DATABASE_URL` in sync
 - `WEB_PORT` — the host port your proxy targets (the API stays internal)
+- `WEB_BIND` — the host address that port is published on, default `172.17.0.1`
+  (the Docker bridge, where Nginx Proxy Manager reaches it as
+  `172.17.0.1:3000`); `127.0.0.1` for a proxy on the host itself. **Never
+  `0.0.0.0`**: a port the internet can reach skips the proxy, and Next's
+  rewrite forwards whatever `X-Forwarded-For` a visitor sends, so the report
+  rate limit would count an address the visitor chose. Check with
+  `ss -ltnp | grep 3000` that it listens on the bridge only. The API publishes
+  no port at all.
 - `NEXT_PUBLIC_API_URL` — leave `/api` (the web app rewrites it to the API);
   `API_INTERNAL_URL` (default `http://api:8000`) is the internal rewrite target
 - `SITE_URL` — the site's public origin, e.g. `https://makhzan.merope.dev`.

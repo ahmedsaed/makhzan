@@ -119,10 +119,13 @@ fi
 
 set -a; . ./.env.prod; set +a
 port="${WEB_PORT:-3000}"
+# Where compose publishes the web app (WEB_BIND), not localhost: it is bound
+# to the Docker bridge only.
+bind="${WEB_BIND:-172.17.0.1}"
 
-echo "==> Health check on localhost:${port}/api/health"
+echo "==> Health check on ${bind}:${port}/api/health"
 for _ in $(seq 1 30); do
-  if curl -fsS --max-time 5 "http://localhost:${port}/api/health" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "http://${bind}:${port}/api/health" >/dev/null 2>&1; then
     echo "    healthy"
     exit 0
   fi
