@@ -203,13 +203,18 @@ the page container on desktop; each section is left out when its fetch fails.
   date" note.
 - **Comparing several offers** (`apps/web/lib/offers.ts`, one module for the summary,
   the facts line, the rows' order, the primary button and the bottom bar):
-  - Offers are compared by the **price of one**, as every shop publishes it, and each
-    counts its lowest **in-stock** option (an out-of-stock option, or one whose stock
-    is not stated, never sets it). The range, "lowest price first", the cheapest button
-    and the bar all use it. Wherever that price leads, the option is named ("Lowest is
+  - Offers are compared by the **price of one**, as every shop publishes it: an offer's
+    cheapest option the shop says is **in stock**, when it has any, else its listing
+    price. Options without a price or a stated stock never count, nor options read over
+    45 days ago; the stock tiers stay (low stock is in stock; unknown and made to order
+    are "not known to be gone"). The API's `min_price` uses the same rule, so a search
+    card and the page agree. The range, "lowest price first", the cheapest button and
+    the bar all use it. Wherever an option's price leads (one that is not the listing
+    price itself), the option is named ("Lowest is
     the “Without headers” option at Cairo Makers."; under the button and in the bar,
     "“Without headers” option").
-  - Wherever a price of one comes from an offer with a minimum, "each" and the minimum
+  - An offer's minimum is the larger of its stated minimum and its multiple. Wherever a
+    price of one comes from an offer with a minimum, "each" and the minimum
     with its total stand beside it: on the row, under the summary ("Lowest needs a
     minimum order: 10 (EGP 1.50) at Cairo Makers"), on the button ("EGP 0.15 each at
     Cairo Makers", with "min. 10 (EGP 1.50)" under it) and in the bar. The range and the

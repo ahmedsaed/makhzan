@@ -72,19 +72,31 @@ function optionInStock(variant: Variant): boolean {
 export type UnitPrice = { price: number; option: string | null };
 
 /**
- * The lowest price of one the offer has in stock: its listing price, or an
- * in-stock option's when that is lower (the option is then named wherever the
- * price leads). Null on request.
+ * Options read longer ago than this do not set the price of one: they are
+ * refreshed once a cycle, and an option list as old as a stale price (C2b)
+ * says no more than one.
  */
-export function unitPrice(offer: Offer): UnitPrice | null {
+function optionsCurrent(offer: Offer, now: Date): boolean {
+  return !isStaleCheck(parseVerified(offer.variants_checked_at ?? null), now);
+}
+
+/**
+ * The price of one the offer is compared by: its cheapest option the shop
+ * says is in stock, when it has any (the option is then named wherever the
+ * price leads, unless it is the listing price itself); else its listing
+ * price. Options without a price or a stated stock never count, nor options
+ * read over 45 days ago. Null on request. The API computes `min_price` by the
+ * same rule, so a search card and the page agree.
+ */
+export function unitPrice(offer: Offer, now: Date = new Date()): UnitPrice | null {
   if (offer.price === null) return null;
-  let best: UnitPrice = { price: offer.price, option: null };
-  for (const variant of offer.variants ?? []) {
-    if (optionInStock(variant) && variant.price !== null && variant.price < best.price) {
-      best = { price: variant.price, option: variant.title };
-    }
-  }
-  return best;
+  const options = optionsCurrent(offer, now)
+    ? (offer.variants ?? []).filter((v) => optionInStock(v) && v.price !== null)
+    : [];
+  if (options.length === 0) return { price: offer.price, option: null };
+  const cheapest = options.reduce((a, b) => ((b.price as number) < (a.price as number) ? b : a));
+  const price = cheapest.price as number;
+  return { price, option: price === offer.price ? null : cheapest.title };
 }
 
 export type Span = { min: number; max: number };
@@ -233,10 +245,10 @@ export function breaksText(offer: Offer): string | null {
  * request" must never sort as free, and equal prices put the more recently
  * checked offer first: it is the likelier to still be true.
  */
-export function orderOffers(offers: Offer[]): Offer[] {
+export function orderOffers(offers: Offer[], now: Date = new Date()): Offer[] {
   return [...offers].sort((a, b) => {
-    const pa = unitPrice(a)?.price ?? null;
-    const pb = unitPrice(b)?.price ?? null;
+    const pa = unitPrice(a, now)?.price ?? null;
+    const pb = unitPrice(b, now)?.price ?? null;
     if (pa === null || pb === null) {
       if (pa !== pb) return pa === null ? 1 : -1;
     } else if (pa !== pb) {
@@ -306,8 +318,8 @@ export function compareOffers(all: Offer[], now: Date = new Date()): Comparison 
         ? ["unconfirmed", notGone]
         : ["out_of_stock", offers];
 
-  const priced = orderOffers(counted).flatMap((offer) => {
-    const unit = unitPrice(offer);
+  const priced = orderOffers(counted, now).flatMap((offer) => {
+    const unit = unitPrice(offer, now);
     return unit ? [{ offer, ...unit }] : [];
   });
   const onRequest = counted.filter(isOnRequest).sort((a, b) => checkedAt(b) - checkedAt(a));

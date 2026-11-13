@@ -77,6 +77,90 @@ describe("one shop · options", () => {
   });
 });
 
+describe("the price of one (the rule the API's min_price shares)", () => {
+  const base = only("p2-breaks");
+  const opt = (title: string, price: number | null, inStock: boolean | null) => ({
+    title,
+    price,
+    in_stock: inStock,
+    stock_quantity: null,
+  });
+  const recent = new Date(now.getTime() - 3 * 86_400_000).toISOString();
+
+  it("is the cheapest in-stock option when there is one, even above the listing price", () => {
+    const offer = {
+      ...base,
+      price: 360,
+      variants: [opt("Type-C", 380, true), opt("Gold", 400, true), opt("Old", 300, false)],
+      variants_checked_at: recent,
+    };
+    expect(unitPrice(offer, now)).toEqual({ price: 380, option: "Type-C" });
+  });
+
+  it("names no option when its price is the listing price", () => {
+    const offer = {
+      ...base,
+      price: 47,
+      variants: [opt("Standard", 47, true), opt("Deluxe", 60, true)],
+      variants_checked_at: recent,
+    };
+    expect(unitPrice(offer, now)).toEqual({ price: 47, option: null });
+  });
+
+  it("falls back to the listing price when no option is in stock with a price", () => {
+    const offer = {
+      ...base,
+      variants: [opt("A", null, true), opt("B", 20, null), opt("C", 10, false)],
+      variants_checked_at: recent,
+    };
+    expect(unitPrice(offer, now)).toEqual({ price: 47, option: null });
+  });
+
+  it("ignores options read over 45 days ago", () => {
+    const offer = {
+      ...base,
+      variants: [opt("Cheap", 30, true)],
+      variants_checked_at: new Date(now.getTime() - 50 * 86_400_000).toISOString(),
+    };
+    expect(unitPrice(offer, now)).toEqual({ price: 47, option: null });
+  });
+
+  it("never uses a stale offer while any fresh one exists", () => {
+    const fresh = { ...base, id: "fresh", price: 60 };
+    const stale = {
+      ...base,
+      id: "stale",
+      price: 10,
+      last_verified_at: new Date(now.getTime() - 60 * 86_400_000).toISOString(),
+    };
+    const c = compareOffers([fresh, stale], now);
+    expect([c.min, c.max, c.best?.offer.id]).toEqual([60, 60, "fresh"]);
+    // Every offer stale: they are all that is left, and they count.
+    expect(compareOffers([stale], now).min).toBe(10);
+  });
+
+  it("keeps the stock tiers: low stock is in stock, unknown is not known to be gone", () => {
+    const low = { ...base, id: "low", stock_signal: "low_stock" as const, price: 50 };
+    const unknown = { ...base, id: "unk", stock_signal: "unknown" as const, price: 30 };
+    const made = { ...base, id: "mto", stock_signal: "made_to_order" as const, price: 20 };
+    const gone = { ...base, id: "gone", stock_signal: "out_of_stock" as const, price: 5 };
+    expect(compareOffers([low, unknown, gone], now)).toMatchObject({ state: "in_stock", min: 50 });
+    expect(compareOffers([unknown, made, gone], now)).toMatchObject({
+      state: "unconfirmed",
+      min: 20,
+      max: 30,
+    });
+    expect(compareOffers([gone], now)).toMatchObject({ state: "out_of_stock", min: 5 });
+  });
+
+  it("the effective minimum is the larger of minimum and multiple, when over 1", () => {
+    expect(minimumOrder({ ...base, min_quantity: 3, multiple_of: 5 })).toBe(5);
+    expect(minimumOrder({ ...base, min_quantity: 20, multiple_of: 5 })).toBe(20);
+    expect(minimumOrder({ ...base, min_quantity: 1, multiple_of: 1 })).toBeNull();
+    expect(minimumOrder({ ...base, min_quantity: null, multiple_of: null })).toBeNull();
+  });
+});
+
 describe("one shop · minimum order", () => {
   const offer = only("p2-minorder");
 
