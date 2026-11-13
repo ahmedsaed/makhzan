@@ -307,11 +307,12 @@ async def purge_reports(ctx: dict) -> dict:
     (makhzan_schemas.reports).
 
     An email 90 days after its report was sent, an address's hash 24 hours
-    after it: what
-    /privacy promises. Every 10 minutes, so an address's hash never outlives
-    its 24 hours by more than that; two indexed updates that usually touch
-    nothing. Not behind CRAWL_ENABLED: a paused crawl must not pause a privacy
-    promise.
+    after it: what /privacy promises. Every 10 minutes, so an address's hash
+    never outlives its 24 hours by more than that. Two small updates: the
+    hash one uses the (ip_hash, created_at) index; the email one scans the
+    table, which is fine at the number of reports a person can review, so it
+    has no index of its own. Not behind CRAWL_ENABLED: a paused crawl must not
+    pause a privacy promise.
     """
     async with SessionLocal() as session:
         counts = await purge_personal_data(session)
