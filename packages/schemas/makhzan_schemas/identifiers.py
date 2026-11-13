@@ -27,7 +27,7 @@ Two kinds of code, and the difference matters:
   different products (`grouping.assign_identifiers`). That guard needs no list:
   the shop itself is the evidence.
 
-Measurements are never codes. "AWG-16", "NEMA-17", "IP65", "M8", "P120" look like
+Measurements are never codes. "AWG-16", "NEMA-17", "IP65", "M8", "HSS-10" look like
 model codes and are readings on a scale (`values.SCALE_WORDS`); "HG-2000W" ends
 in a value (`values.is_value`). Both are refused by principle, so the next gauge
 or frame size needs no entry anywhere.
@@ -62,6 +62,7 @@ class Identifier:
 IdentifierRule = Callable[[str], Identifier | None]
 
 _SEPARATOR = re.compile(r"(?<!\d)[-\s./_]+|[-\s./_]+(?!\d)")
+_BETWEEN_DIGITS = re.compile(r"(?<=\d)[-\s/_]+(?=\d)")
 
 
 def fold_identifier(value: str) -> str:
@@ -70,14 +71,24 @@ def fold_identifier(value: str) -> str:
     "DT-830", "dt830" and "DT 830" are one code; so are "HC-SR04" and "HCSR04".
     A separator between two digits is kept, because there it separates numbers:
     "AMS1117-3.3" is not "AMS1117-33", and bearing "6205-2RS" is not a "62052".
+    It is written one way, a hyphen ("J58 210" is "J58-210"), except a decimal
+    point, which is part of the number.
     """
-    return _SEPARATOR.sub("", value.strip().upper())
+    folded = _SEPARATOR.sub("", value.strip().upper())
+    return _BETWEEN_DIGITS.sub("-", folded)
 
 
 def identifier_pattern(value: str) -> re.Pattern[str]:
     """A case-insensitive pattern matching any spelling of `value` in a title."""
-    key = fold_identifier(value)
-    return re.compile(r"[-\s./_]?".join(re.escape(ch) for ch in key), re.IGNORECASE)
+    parts = []
+    for ch in fold_identifier(value):
+        if ch == "-":
+            parts.append(r"[-\s/_]+")
+        else:
+            if parts and parts[-1] != r"[-\s/_]+":
+                parts.append(r"[-\s./_]?")
+            parts.append(re.escape(ch))
+    return re.compile("".join(parts), re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------- #
@@ -134,8 +145,14 @@ def hyphenated_model_code(title: str) -> Identifier | None:
 #: broad "any letters and digits" token (about 15%: it reads "6-in-1", "No.2",
 #: "6Piece"), and never a bare size ("5 inch", "3x140mm"), which is never identity.
 _MODEL_CODE = re.compile(
-    r"(?<![\w.\-/])([A-Za-z]{1,6})[-.]?"
-    r"(\d{2,}[A-Za-z0-9]{0,4}(?:[-./]\d{1,5}[A-Za-z0-9]{0,3}){0,2})(?!\w)"
+    r"(?<![\w.\-/])([A-Za-z]{1,6})(-?)"
+    r"(\d{2,}[A-Za-z0-9]{0,4}(?:[-./]\d{1,5}[A-Za-z0-9]{0,3}){0,2})(?!\w|\.\d)"
+)
+#: What follows a number that makes it a size, not a code: a quote or inch mark
+#: (WRENCH12"), a multiplication (PLUS10*450), or a unit word (KEY13 Mm).
+_SIZE_AFTER = re.compile(
+    r"^(?:\s*[\"”″'’]|\s*[*×xX]\s*\d|\s*(?:mm|cm|mtr|meters?|pcs?|inch(?:es)?|ml|kg|gm)\b)",
+    re.IGNORECASE,
 )
 #: A tail that is a number and a unit the value parser does not read ("16IN").
 _UNIT_TAIL = re.compile(r"^\d+(?:IN|INCH|PCS|PC|MIC)$")
@@ -143,10 +160,56 @@ _UNIT_TAIL = re.compile(r"^\d+(?:IN|INCH|PCS|PC|MIC)$")
 _LAST_SEGMENT = re.compile(r"[-./](\d{1,5}[A-Za-z0-9]{0,3})$")
 
 
+def _sized(title: str, start: int, end: int) -> bool:
+    """Whether the number ending at `end` is a size: followed by an inch mark,
+    a multiplication or a unit word. A quote that closes one opened before the
+    code ('"TNI-U TU-501"') is punctuation, not inches."""
+    after = _SIZE_AFTER.match(title[end:])
+    if not after:
+        return False
+    mark = after.group(0).strip()
+    before = title[:start]
+    if mark == '"' and before.count('"') % 2:
+        return False
+    if mark in "”’" and ("“" in before or "‘" in before):
+        return False
+    return True
+
+
+def _looks_like_a_word(letters: str, glued: bool, number: str, shouting: bool) -> bool:
+    """A word with a small number glued on (File10, Cutter14, WRENCH17), not a code.
+
+    Catalogue prefixes are short (ASR, TU, HSG) or capitals in a mixed-case
+    title (TIWLI20208), and carry long numbers. Four or more letters glued to a
+    one- or two-digit number are a word and a size — unless written in capitals
+    in a title that is otherwise not, where the capitals mark it as a code.
+    """
+    if not glued or len(letters) < 4 or len(number) > 2:
+        return False
+    return shouting or not letters.isupper()
+
+
+def _code_score(letters: str, separator: str, tail: str) -> tuple[int, ...]:
+    """How much a candidate looks like a catalogue code; the title's best wins.
+
+    "ASR-2064 Power Organizer Box-13" holds two candidates and the code is the
+    first only by luck; "Wrench 17mm N23-011" puts the word first. A hyphen after
+    a short prefix, a long number and a further segment are what codes have.
+    """
+    digits = sum(ch.isdigit() for ch in tail)
+    return (
+        int(len(letters) <= 3) + int(bool(separator)) + int(digits >= 3) + int("-" in tail),
+        digits,
+    )
+
+
 def model_code(title: str) -> Identifier | None:
-    """The first letter-led catalogue code that is not a reading or a reference."""
+    """The best letter-led catalogue code that is not a reading, a size, a word
+    or a reference; the leftmost wins a tie."""
+    best: tuple[tuple[int, ...], int, Identifier] | None = None
+    shouting = not re.search(r"[a-z]", title)
     for match in _MODEL_CODE.finditer(title):
-        letters, tail = match.groups()
+        letters, separator, tail = match.groups()
         code = match.group(0)
         while (last := _LAST_SEGMENT.search(code)) and is_value(last.group(1)):
             code = code[: last.start()]
@@ -154,7 +217,7 @@ def model_code(title: str) -> Identifier | None:
         if (
             len(compact) < 4
             or sum(ch.isdigit() for ch in compact) < 2
-            # "AWG-16", "M8", "P120": a scale and its reading; "ml-200": a unit
+            # "AWG-16", "M8", "HSS-10": a scale and its reading; "ml-200": a unit
             # (spelled out — a lone letter such as the "G" of G15-18-0200 is a
             # catalogue prefix far more often than grams).
             or is_scale_word(letters)
@@ -163,10 +226,14 @@ def model_code(title: str) -> Identifier | None:
             or is_value(tail)
             or _UNIT_TAIL.match(tail.upper())
             or _is_reference(title, match.start())
+            or _sized(title, match.start(), match.end())
+            or _looks_like_a_word(letters, not separator, re.match(r"\d+", tail).group(0), shouting)
         ):
             continue
-        return Identifier(code.upper(), family_checked=True)
-    return None
+        score = _code_score(letters, separator, code[len(letters) + len(separator) :])
+        if best is None or score > best[0]:
+            best = (score, match.start(), Identifier(code.upper(), family_checked=True))
+    return best[2] if best else None
 
 
 # --------------------------------------------------------------------------- #
@@ -192,13 +259,18 @@ _SEALS = {
 }  # fmt: skip
 
 
-def bearing_designation(title: str) -> Identifier | None:
+def bearing_designation(title: str, *, sealed_only: bool = False) -> Identifier | None:
     """A rolling bearing's designation, with the suffixes that make it a different product.
 
     6205, 6205-ZZ and 6205-2RS are three products (open, shielded, sealed), and
     C3 is a different internal clearance, so all of them stay in the identifier,
     with each maker's spelling of a seal folded to one ("6205-2RS1" is
     "6205-2RS"). Only read when the title says "bearing".
+
+    `sealed_only` reads only a designation that states its seal or shield
+    (608ZZ, 625-2RS): where bearings are a side line, a bare number beside the
+    word "bearing" is usually something else — "775 Motor with Ball Bearing",
+    "2020 Bearing Wheel".
     """
     if not _BEARING_WORD.search(title):
         return None
@@ -216,6 +288,8 @@ def bearing_designation(title: str) -> Identifier | None:
                 clearance = token
             else:
                 design.append(token)
+        if sealed_only and not seal:
+            continue
         value = f"{prefix or ''}{prefixed_core or core}{''.join(design)}"
         value += f"-{seal}" if seal else ""
         value += f"-{clearance}" if clearance else ""
@@ -242,6 +316,11 @@ def _number(text: str) -> str:
     except InvalidOperation:
         return text
     return format(number.normalize(), "f")
+
+
+def miniature_bearing(title: str) -> Identifier | None:
+    """A bearing designation only when it states its seal (see `bearing_designation`)."""
+    return bearing_designation(title, sealed_only=True)
 
 
 def o_ring_size(title: str) -> Identifier | None:

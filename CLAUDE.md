@@ -509,16 +509,32 @@ their **titles** agree they are the same thing (see `grouping._subcluster`).
 
 **Identifier rules are per department, and a model code can be a family.**
 Each `DomainProfile` lists its `identifier_rules` (`makhzan_schemas/identifiers.py`):
-electronics reads MPNs, miniature bearings and hyphenated hobby codes (DT-830);
-tools and chemicals letter-led catalogue codes (ASR-6014); seals-bearings
-designations (6205-2RS with its suffix, O-ring and oil-seal sizes). A shop's
-`mfr_part_number` or "Model" spec is a fallback only. Keys are folded
-(`DT-830` = `DT830`) and scoped to the department. A model code is dropped as
-an identity when one shop lists several different titles under it
-(`grouping.assign_identifiers`) — the catalogue is the evidence, never a list —
-and measurements (AWG-16, NEMA-17, M8, IP65) are refused as `values.SCALE_WORDS`.
-Rules apply at regroup (`rebuild_products(reidentify=True)`, which the worker's
-rebuild and `worker.regroup` use), so a rule change needs no re-crawl.
+electronics reads MPNs, miniature bearings that state their seal (608ZZ) and
+hyphenated hobby codes (DT-830); tools and chemicals letter-led catalogue codes
+(ASR-6014); seals-bearings designations (6205-2RS with its suffix, O-ring and
+oil-seal sizes). A shop's `mfr_part_number` or "Model" spec is a fallback only.
+Keys are folded (`DT-830` = `DT830`, `J58 210` = `J58-210`) and scoped to the
+department as `mpn:<domain>:<ID>`; electronics keys stay bare (`mpn:<ID>`).
+A model code is dropped as an identity when one shop lists it under titles that
+each say something the other does not, values aside (FC-40 male / female, not
+WD-40 200 ml / 330 ml) — `grouping.assign_identifiers`; the catalogue is the
+evidence, never a list. Measurements (AWG-16, NEMA-17, M8, IP65, HSS-10) are
+refused as `values.SCALE_WORDS`.
+
+**The regroup is the only writer of a stored listing's `part_number`.** It
+needs the whole catalogue (the family guard) and the product page's specs, so
+`rebuild_products(reidentify=True)` — the worker's rebuild and `worker.regroup`
+— re-reads every identifier, and a sweep keeps the stored value (a new listing
+starts with the title's reading). A rule change therefore needs no re-crawl, and
+on an unchanged catalogue the regroup changes nothing. An adapter's own
+`RawItem.part_number` is kept as `attributes.adapter_part_number` and wins.
+
+**The marketplace adapter reads `extract_identifier` too** (pending an owner
+decision). The private adapter appends a slug code to a title only when that
+does not change what the title's domain extracts. Before tools had rules every
+tools title qualified, so titles crawled then may end in a shop code that the
+tools rule now reads, until the next crawl rewrites them; from now on a code the
+rule would read is no longer appended, so those listings show the bare title.
 
 **Price is not evidence of identity.** It used to be sufficient on its own, and
 that was wrong: an extracted identifier is often a *family* prefix — `ESP32`,
