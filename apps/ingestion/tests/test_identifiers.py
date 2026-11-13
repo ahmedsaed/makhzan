@@ -419,6 +419,10 @@ def test_stated_codes_that_are_sizes_or_readings_are_refused():
     assert stated_identifiers({"mfr_part_number": "DIP-4P"}) == []
     assert stated_identifiers({"specs": {"Model": "M8X1.25"}}) == []
     assert stated_identifiers({"mfr_part_number": "P551808"})[0].value == "P551808"
+    for code in ("PN2222A", "M51231P", "M5155L", "ER18505M"):
+        assert stated_identifiers({"mfr_part_number": code})[0].value == code
+    for reading in ("X7R", "DC 12V", "TO-3P", "AC 220V"):
+        assert stated_identifiers({"mfr_part_number": reading}) == [], reading
     assert stated_identifiers({"specs": {"Supported Models": "CR-10"}}) == []
     assert stated_identifiers({"specs": {"Model": "Standard edition"}}) == []
 
