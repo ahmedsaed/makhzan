@@ -419,6 +419,14 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
     A crosswalk is a snapshot. When a supplier renames a category the mapping
     stops matching and those listings quietly lose it — which looks exactly like
     the supplier discontinuing stock. This makes the difference visible.
+
+    Each source shows its newest run that checked: a clean check is recorded as
+    an empty `unmapped`, so a fix (a mapping, an `ignore` entry) clears the
+    report on the next run instead of the last drifted run lingering. Runs from
+    before clean checks were recorded carry no `crosswalk` key and are skipped —
+    absence means "not checked", never "clean". `unused` comes from the newest
+    run that could speak for retirements (one that swept the whole catalogue
+    itself), which is the only kind that carries the key.
     """
     _header("CROSSWALK DRIFT")
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -431,17 +439,22 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
         query = query.where(IngestionRun.source == source_filter)
 
     latest: dict[str, dict] = {}
+    retired: dict[str, dict] = {}
     for run in (await session.execute(query)).scalars().all():
         drift = (run.stats or {}).get("crosswalk")
-        if drift and run.source not in latest:
-            latest[run.source] = drift
+        if not isinstance(drift, dict):
+            continue
+        latest.setdefault(run.source, drift)
+        if "unused" in drift:
+            retired.setdefault(run.source, drift)
     if not latest:
         print(f"  {DIM}no mapped source has reported yet{RESET}")
         return
 
     for source, drift in sorted(latest.items()):
         unmapped = drift.get("unmapped") or {}
-        unused = drift.get("unused") or []
+        complete = retired.get(source, {})
+        unused = complete.get("unused") or []
         if not unmapped and not unused:
             print(f"  {source:22s} {GREEN}crosswalk matches the source{RESET}")
             continue
@@ -456,7 +469,7 @@ async def crosswalk_drift(session, source_filter: str | None, days: int = 30) ->
         if unused:
             # Only reported after a complete cycle, so this really means "gone".
             print(
-                f"    {YELLOW}{drift.get('unused_count', len(unused))} entries never matched{RESET}"
+                f"    {YELLOW}{complete.get('unused_count', len(unused))} entries never matched{RESET}"
                 f" — retired or renamed away:"
             )
             print(f"      {DIM}{', '.join(unused[:6])}{RESET}")
@@ -582,6 +595,9 @@ async def content_coverage(session) -> dict[str, dict[str, int]]:
 async def catalog(session, source_filter: str | None) -> None:
     """Listings per supplier, with the things that signal a broken crawl."""
     _header("CATALOG")
+    # "Contact for price" is the shop's choice, not a broken crawl, so it is
+    # counted apart. Read as the API reads it: JSON true and no price.
+    on_request = Listing.attributes.contains({"price_on_request": True})
     rows = (
         await session.execute(
             select(
@@ -590,7 +606,8 @@ async def catalog(session, source_filter: str | None) -> None:
                 func.count(Listing.id),
                 func.count(Listing.id).filter(Listing.status == ListingStatus.ARCHIVED),
                 func.count(Listing.id).filter(Listing.category_id.is_(None)),
-                func.count(Listing.id).filter(Listing.price.is_(None)),
+                func.count(Listing.id).filter(Listing.price.is_(None), ~on_request),
+                func.count(Listing.id).filter(Listing.price.is_(None), on_request),
                 func.max(Listing.last_verified_at),
             )
             .join(Listing, Listing.supplier_id == Supplier.id)
@@ -604,9 +621,9 @@ async def catalog(session, source_filter: str | None) -> None:
 
     print(
         f"  {DIM}{'supplier':22s} {'domain':12s} {'total':>7} {'archived':>9}"
-        f" {'uncat':>7} {'no price':>9}  verified{RESET}"
+        f" {'uncat':>7} {'no price':>9} {'on req':>7}  verified{RESET}"
     )
-    for slug, domain, total, archived, uncategorized, unpriced, verified in rows:
+    for slug, domain, total, archived, uncategorized, unpriced, on_req, verified in rows:
         if source_filter and source_filter not in slug:
             continue
         # Uncategorized and unpriced are the two failure modes that look fine in
@@ -615,7 +632,7 @@ async def catalog(session, source_filter: str | None) -> None:
         noprice = f"{YELLOW}{unpriced:>9}{RESET}" if unpriced else f"{unpriced:>9}"
         print(
             f"  {slug:22s} {domain:12s} {total:>7} {archived:>9} {uncat} {noprice}"
-            f"  {_age(verified)}"
+            f" {on_req:>7}  {_age(verified)}"
         )
     await price_history(session)
 
