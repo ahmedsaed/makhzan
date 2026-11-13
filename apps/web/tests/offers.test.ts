@@ -116,6 +116,19 @@ describe("the price of one (the rule the API's min_price shares)", () => {
     expect(unitPrice(offer, now)).toEqual({ price: 47, option: null });
   });
 
+  it("counts options with no read stamp, as fresh as the listing", () => {
+    const offer = { ...base, variants: [opt("Cheap", 30, true)], variants_checked_at: null };
+    expect(unitPrice(offer, now)).toEqual({ price: 30, option: "Cheap" });
+  });
+
+  it("chooses the tier by offers, not prices: in stock on request beats priced but gone", () => {
+    const ask = { ...base, id: "ask", price: null, price_on_request: true };
+    const gone = { ...base, id: "gone", stock_signal: "out_of_stock" as const, price: 40 };
+    const c = compareOffers([ask, gone], now);
+    expect(c).toMatchObject({ state: "in_stock", min: null, max: null, best: null });
+    expect(comparisonText(c)).toBe("1 offer in stock at 1 shop, prices on request");
+  });
+
   it("ignores options read over 45 days ago", () => {
     const offer = {
       ...base,
