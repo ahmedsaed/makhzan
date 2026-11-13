@@ -109,6 +109,14 @@ def category_ref(domain: str | None, slug: str | None) -> str | None:
     return f"{domain or DEFAULT_DOMAIN}:{slug}"
 
 
+def price_on_request(min_price: Any, on_request_count: int | None) -> str | None:
+    """ "all", "some" or None: see `ProductSummary.price_on_request`, which
+    reads the same two fields."""
+    if not on_request_count:
+        return None
+    return "all" if min_price is None else "some"
+
+
 def _enum(value: Any) -> Any:
     return getattr(value, "value", value)
 
@@ -121,6 +129,7 @@ def build_product_document(
     supplier_slugs: list[str] | None = None,
     category_refs: list[str] | None = None,
     image_shop: dict | None = None,
+    min_price_shop: dict | None = None,
 ) -> dict:
     """Project a Product (with its aggregates) into a flat Meilisearch document.
 
@@ -135,6 +144,12 @@ def build_product_document(
     `image_shop` is `{"slug", "name"}` of the shop the photo comes from
     (`Product.image_supplier_id`), for the badge on it; null without a photo or
     a known shop. Display only: not searched, filtered or sorted on.
+
+    `min_price_shop` is `{"slug", "name"}` of the shop whose offer sets
+    `min_price` (`Product.min_price_supplier_id`). It and the other fields
+    about the low end (`min_price_option`, `min_price_quantity`, `price_each`,
+    `on_request_count`, `price_on_request`) are display only, and mean what
+    `ProductSummary` says they mean (makhzan_schemas.pricing).
     """
     lv = product.last_verified_at
     leaf = category_ref(category_domain or product.domain, category_slug)
@@ -157,6 +172,15 @@ def build_product_document(
         "offer_count": product.offer_count,
         "min_price": float(product.min_price) if product.min_price is not None else None,
         "max_price": float(product.max_price) if product.max_price is not None else None,
+        "min_price_offer_id": (
+            str(product.min_price_listing_id) if product.min_price_listing_id else None
+        ),
+        "min_price_shop": min_price_shop if product.min_price is not None else None,
+        "min_price_option": product.min_price_option,
+        "min_price_quantity": product.min_price_quantity,
+        "price_each": bool(product.price_each),
+        "on_request_count": product.on_request_count or 0,
+        "price_on_request": price_on_request(product.min_price, product.on_request_count),
         "currency": product.currency,
         "in_stock": product.in_stock,
         "image": product.image,

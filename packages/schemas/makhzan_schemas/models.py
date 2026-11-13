@@ -331,6 +331,24 @@ class Product(TimestampMixin, Base):
     supplier_count: Mapped[int] = mapped_column(default=0, nullable=False)
     min_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     max_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # What the page says about the low end of that range, from the same pass
+    # (makhzan_schemas.pricing, set by grouping.rebuild_products): the offer and
+    # shop setting `min_price`, the option of it that does when an option
+    # undercuts the listing, and its minimum order. The listing id is not a
+    # foreign key: listings already point at products, and a second path
+    # between the two tables would make every join between them ambiguous. It
+    # is as current as the last rebuild, like the rest of the aggregates.
+    min_price_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    min_price_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL")
+    )
+    min_price_option: Mapped[str | None] = mapped_column(String(200))
+    min_price_quantity: Mapped[int | None] = mapped_column()
+    # Some offer in the range has a minimum order: the range reads "each".
+    price_each: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    # Offers on request among those the range was taken from: with no
+    # `min_price`, the product reads "Price on request", not "no price".
+    on_request_count: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default=DEFAULT_CURRENCY, nullable=False)
     in_stock: Mapped[bool] = mapped_column(default=False, nullable=False)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -345,7 +363,8 @@ class Product(TimestampMixin, Base):
 
     listings: Mapped[list[Listing]] = relationship(back_populates="product")
     category: Mapped[Category | None] = relationship()
-    image_supplier: Mapped[Supplier | None] = relationship()
+    image_supplier: Mapped[Supplier | None] = relationship(foreign_keys=[image_supplier_id])
+    min_price_supplier: Mapped[Supplier | None] = relationship(foreign_keys=[min_price_supplier_id])
 
     @classmethod
     def is_listed(cls):

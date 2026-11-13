@@ -39,7 +39,7 @@ from makhzan_schemas.enums import (
     ListingStatus,
     StockSignal,
 )
-from makhzan_schemas.search import category_ref
+from makhzan_schemas.search import category_ref, price_on_request
 
 # --------------------------------------------------------------------------- #
 # Ingestion DTOs
@@ -329,6 +329,22 @@ def _items(attributes: object, key: str, read, cap: int) -> list:
     return [item for item in (read(v) for v in values) if item is not None][:cap]
 
 
+def variants_of(attributes: object) -> list[VariantRead]:
+    """A listing's options, as `_ShopDetails.variants` reads them."""
+    return _items(attributes, "variants", _variant, _MAX_VARIANTS)
+
+
+def min_quantity_of(attributes: object) -> int | None:
+    """The shop's minimum order, as `_ShopDetails.min_quantity` reads it (None: sold singly)."""
+    number = _whole(_attribute(attributes, "min_quantity"))
+    return number if number is not None and number > 1 else None
+
+
+def is_price_on_request(price: object, attributes: object) -> bool:
+    """The shop sells it and publishes no price. A price, when there is one, wins."""
+    return price is None and _attribute(attributes, "price_on_request") is True
+
+
 class _ShopDetails(BaseModel):
     """What the shop published beyond title and price, read from the listing's attributes.
 
@@ -503,7 +519,8 @@ class OfferRead(_ShopDetails):
 
 
 class PhotoShop(BaseModel):
-    """The shop a product's photo comes from: what the badge on the photo names."""
+    """A shop as a product names it: whose photo it is (the badge on it), whose
+    offer sets the lowest price."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -536,12 +553,45 @@ class ProductSummary(BaseModel):
     )
     supplier_count: int
     offer_count: int
+    #: The range of the offers' prices of one (makhzan_schemas.pricing): fresh
+    #: in-stock offers, each by its listing price or its cheapest in-stock
+    #: option, whichever is lower. Offers on request never enter it, and an
+    #: out-of-date offer counts only when no offer is fresh. Null when no
+    #: counted offer has a price: see `price_on_request`.
     min_price: float | None = None
     max_price: float | None = None
+    #: The offer whose price of one is `min_price` (an id in `offers` on the
+    #: product page), and its shop.
+    min_price_offer_id: uuid.UUID | None = Field(
+        default=None, validation_alias=AliasChoices("min_price_offer_id", "min_price_listing_id")
+    )
+    min_price_shop: PhotoShop | None = Field(
+        default=None, validation_alias=AliasChoices("min_price_shop", "min_price_supplier")
+    )
+    #: The option of that offer that sets `min_price`, when an option undercuts
+    #: the listing's own price ("Lowest is the “Without headers” option").
+    min_price_option: str | None = None
+    #: That offer's minimum order: `min_price` is then "each", and the least
+    #: a buyer can spend there is `min_price` x this. Null: sold singly.
+    min_price_quantity: int | None = None
+    #: Some offer in the range has a minimum order: the range reads "each".
+    price_each: bool = False
+    #: Offers on request among those the range was taken from: the fresh
+    #: in-stock ones whenever there is one, priced or on request.
+    on_request_count: int = 0
     currency: str
     in_stock: bool
     last_verified_at: datetime | None = None
     category: CategoryRead | None = None
+
+    @computed_field
+    @property
+    def price_on_request(self) -> Literal["all", "some"] | None:
+        """ "all": no offer counted has a price, and some are on request, so the
+        product reads "Price on request". "some": priced, plus offers on
+        request ("· 1 more on request"). Null: none on request; with no
+        `min_price` either, no price is listed at all."""
+        return price_on_request(self.min_price, self.on_request_count)
 
 
 class ProductRead(ProductSummary):

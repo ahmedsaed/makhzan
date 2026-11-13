@@ -142,7 +142,8 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
         )
     ).all():
         shops[product_id].add(slug)
-    # The shop each photo comes from, for the badge on it: the handful of
+    # The shop each photo comes from, for the badge on it, and the shop whose
+    # offer sets the lowest price: the handful of
     # shops, looked up once rather than joined into every product row.
     photo_shops = {
         shop.id: {"slug": shop.slug, "name": shop.name}
@@ -157,6 +158,7 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
             list(shops.get(product.id, ())),
             ancestry(cat.id, tree) if cat else [],
             photo_shops.get(product.image_supplier_id),
+            photo_shops.get(product.min_price_supplier_id),
         )
         for product, cat in rows
     ]
