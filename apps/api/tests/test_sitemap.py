@@ -1,8 +1,8 @@
 """/sitemap/products — every product page, keyset-paged by id, for the sitemap.
 
 What matters: a page is listed only while it would render (an active offer),
-paging by `after` visits every product exactly once, and `changed_at` is the
-content-change date, not the last recheck.
+paging by `after` visits every product exactly once, `changed_at` is the
+content-change date, not the last recheck, and `image` is the page's main photo.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ async def test_lists_id_title_and_content_change_date(client, db):
         db,
         shop,
         title_en="SG90 Micro Servo",
+        image="https://shop-a.test/sg90.jpg",
         content_changed_at=CHANGED,
         last_verified_at=datetime(2026, 11, 1, tzinfo=UTC),
     )
@@ -43,6 +44,7 @@ async def test_lists_id_title_and_content_change_date(client, db):
                 "title_ar": None,
                 "part_number": None,
                 "changed_at": "2026-03-04T05:06:00Z",
+                "image": "https://shop-a.test/sg90.jpg",
             }
         ],
         "next": None,

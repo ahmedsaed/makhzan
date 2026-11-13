@@ -24,6 +24,8 @@ import { agoText, daysSince, freshnessTier, parseVerified } from "@/lib/freshnes
 import { pageMetadata, shopDescription, pagedPath } from "@/lib/metadata";
 import { routes, withParams } from "@/lib/routes";
 import { absoluteUrl } from "@/lib/site";
+import { jsonLdText } from "@/lib/product";
+import { shopJsonLd } from "@/lib/structured-data";
 import {
   fetchResults,
   parseResultsQuery,
@@ -110,6 +112,12 @@ export default async function ShopPage({
 
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: jsonLdText(shopJsonLd(supplier, absoluteUrl(pathname))),
+        }}
+      />
       <ShopHeader supplier={supplier} narrow={narrow} activity={activity} />
 
       <Container className="flex flex-col gap-6 py-6 lg:gap-4">

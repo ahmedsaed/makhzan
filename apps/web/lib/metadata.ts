@@ -90,11 +90,6 @@ export function pageMetadata({
 }
 
 /**
- * schema.org for the home page: who runs the site, and how to search it, so a
- * search engine can offer a search box for it. `home` is the absolute URL of
- * `/`, on SITE_URL.
- */
-/**
  * schema.org BreadcrumbList for a page's trail (Google shows it in results in
  * place of the URL). Crumbs are what the page shows; the page itself closes
  * the list, named and without a link of its own, as Google allows.
@@ -114,13 +109,30 @@ export function breadcrumbJsonLd(crumbs: { label: string; href?: string }[], cur
   };
 }
 
+/**
+ * schema.org for the home page: the site, and who runs it. `home` is the
+ * absolute URL of `/`, on SITE_URL.
+ *
+ * A `WebSite` with the site's name and home URL, which is what Google's site
+ * names guidance asks for (developers.google.com/search/docs/appearance/site-names):
+ * no `alternateName`, since the site goes by no other name. No
+ * `SearchAction`: Google retired the sitelinks search box it fed (November
+ * 2024), and the markup now does nothing.
+ *
+ * An `Organization` with `name`, `url` and `logo`, per Google's organization
+ * guidance (developers.google.com/search/docs/appearance/structured-data/organization):
+ * the logo is the real 512 px icon in public/, square and over Google's
+ * 112 px minimum. Nothing else is claimed: makhzan publishes no address,
+ * phone or social profiles of its own. The two point at each other by `@id`,
+ * which shop pages reuse for `isPartOf`.
+ */
 export function homeJsonLd(home: string) {
   const url = new URL(home);
-  const search = new URL("/search", url);
   return [
     {
       "@context": "https://schema.org",
       "@type": "Organization",
+      "@id": organizationId(url),
       name: SITE_NAME,
       url: url.toString(),
       logo: new URL("/icon-512.png", url).toString(),
@@ -129,17 +141,24 @@ export function homeJsonLd(home: string) {
     {
       "@context": "https://schema.org",
       "@type": "WebSite",
+      "@id": websiteId(url),
       name: SITE_NAME,
       url: url.toString(),
       inLanguage: "en",
-      potentialAction: {
-        "@type": "SearchAction",
-        // Built by hand: URLSearchParams would encode the braces.
-        target: { "@type": "EntryPoint", urlTemplate: `${search}?q={search_term_string}` },
-        "query-input": "required name=search_term_string",
-      },
+      description: SITE_DESCRIPTION,
+      publisher: { "@id": organizationId(url) },
     },
   ];
+}
+
+/** The `@id` of makhzan's Organization node, on the site's origin. */
+export function organizationId(site: URL | string): string {
+  return new URL("/#organization", site).toString();
+}
+
+/** The `@id` of makhzan's WebSite node, on the site's origin. */
+export function websiteId(site: URL | string): string {
+  return new URL("/#website", site).toString();
 }
 
 // --------------------------------------------------------------------------- //

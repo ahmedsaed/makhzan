@@ -474,12 +474,15 @@ test("the head names the product and describes it to search engines", async ({ p
   );
   const data = await jsonLd(page, "Product");
   expect(data["@type"]).toBe("Product");
+  // The range the summary and the meta description state: the five offers in
+  // stock, not the out-of-stock ones (240 and 300) the page folds away.
   expect(data.offers).toMatchObject({
     "@type": "AggregateOffer",
     priceCurrency: "EGP",
-    lowPrice: 240,
-    highPrice: 300,
-    offerCount: 7,
+    lowPrice: 260,
+    highPrice: 295,
+    offerCount: 5,
+    availability: "https://schema.org/InStock",
   });
   // Absolute, on the configured SITE_URL (playwright.config.ts), never on the
   // host the request happened to name.

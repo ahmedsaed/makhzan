@@ -5,15 +5,19 @@
  * one is tested on its own.
  */
 import type { Crumb } from "@/components/breadcrumb";
-import type { Category, CategoryRef, Offer, Product, StockSignal } from "@/lib/api";
+import type { Category, CategoryRef, Offer, Product } from "@/lib/api";
 import {
+  boxSpan,
   checkedAt,
   compareOffers,
   comparisonText,
   isInStock,
   isOutOfStock,
   isStaleOffer,
+  minimumOrder,
+  needsEach,
   orderOffers,
+  partNumbers,
   preferFresh,
   type Comparison,
 } from "@/lib/offers";
@@ -314,15 +318,102 @@ export function categoryTrail(category: CategoryRef, categories: Category[]): Cr
 // Structured data
 // --------------------------------------------------------------------------- //
 
-const AVAILABILITY: Partial<Record<StockSignal, string>> = {
-  in_stock: "https://schema.org/InStock",
-  low_stock: "https://schema.org/LimitedAvailability",
-  out_of_stock: "https://schema.org/OutOfStock",
-  made_to_order: "https://schema.org/MadeToOrder",
-};
+const SCHEMA = "https://schema.org/";
 
 /** Longest description we put in structured data; the page has the rest. */
 const JSON_LD_DESCRIPTION = 500;
+
+/** Most spec rows marked up: the table on the page has the rest. */
+export const JSON_LD_SPECS = 20;
+
+/** Most models named as what a part fits. */
+export const JSON_LD_FITS = 20;
+
+/** Longest spec value marked up. */
+const JSON_LD_SPEC_VALUE = 200;
+
+/**
+ * The price the page shows in its headline, and what it is counted over: the
+ * numbers the structured data must repeat exactly (Google's structured data
+ * policies: "don't mark up content that is not visible to readers of the
+ * page", developers.google.com/search/docs/appearance/structured-data/sd-policies).
+ *
+ * - Two or more offers: the summary's range (`compareOffers`): the price of
+ *   one over the counted offers (fresh first, C2b; in stock first), on-request
+ *   offers left out.
+ * - One offer: its box. With a minimum order, the price of one alone ("EGP
+ *   0.15 each"); without, `boxSpan`, widened by its current in-stock options.
+ *
+ * Null when the page shows no price at all (on request only, or no price),
+ * when every offer is out of date (C2b: the page warns its prices may have
+ * changed, and markup cannot carry that warning), and for a withdrawn product.
+ */
+export type ShownPrice = {
+  min: number;
+  max: number;
+  /** How many offers the range is over: the summary's count. */
+  offerCount: number;
+  /** The fewest anyone in the range sells: over 1 only when every one has a minimum. */
+  fewest: number;
+  availability: string | null;
+};
+
+export function shownPrice(product: Product, now: Date = new Date()): ShownPrice | null {
+  if (product.status === "delisted" || product.offers.length === 0) return null;
+  if (product.offers.every((offer) => isStaleOffer(offer, now))) return null;
+  const comparison = compareOffers(product.offers, now);
+  if (comparison.min === null || comparison.max === null) return null;
+  let { min, max } = comparison;
+  if (product.offers.length === 1) {
+    const [only] = product.offers;
+    const span = needsEach(only) ? null : boxSpan(only, now);
+    if (span) ({ min, max } = span);
+  }
+  return {
+    min,
+    max,
+    offerCount: comparison.offerCount,
+    fewest: Math.min(...comparison.priced.map((p) => minimumOrder(p.offer) ?? 1)),
+    availability: availabilityOf(comparison),
+  };
+}
+
+/**
+ * The availability the summary states, as schema.org's ItemAvailability:
+ * in stock when a shop says so (limited when every one says low stock), out
+ * of stock when every shop does, made to order when every counted offer is.
+ * "Stock not confirmed" has no schema.org value, and none is claimed.
+ */
+function availabilityOf(comparison: Comparison): string | null {
+  const signals = comparison.priced.map((p) => p.offer.stock_signal);
+  if (comparison.state === "in_stock") {
+    return signals.includes("in_stock") ? `${SCHEMA}InStock` : `${SCHEMA}LimitedAvailability`;
+  }
+  if (comparison.state === "out_of_stock") return `${SCHEMA}OutOfStock`;
+  return signals.length > 0 && signals.every((s) => s === "made_to_order")
+    ? `${SCHEMA}MadeToOrder`
+    : null;
+}
+
+/**
+ * What one shop says a part fits, when exactly one offer says anything: the
+ * page shows "Fits …" per offer and never merges two shops' claims, so
+ * neither does the markup. Null when no offer states it, or more than one.
+ */
+export function fitsClaim(offers: Offer[]): string[] | null {
+  const claims = offers
+    .map((offer) => (offer.compatible_with ?? []).map((m) => m.trim()).filter(Boolean))
+    .filter((models) => models.length > 0);
+  return claims.length === 1 ? [...new Set(claims[0])] : null;
+}
+
+export type ProductJsonLdOptions = {
+  /** The description the page leads with (the richest shop's, else the summary). */
+  description?: string | null;
+  /** The shop the page's "What the shops say" opens on: its specs are marked up. */
+  details?: ShopDetails | null;
+  now?: Date;
+};
 
 /**
  * schema.org Product for search engines, marked up as what the page is: a
@@ -332,41 +423,68 @@ const JSON_LD_DESCRIPTION = 500;
  * is in stock), never an Offer, even for one shop. Google reads a page with an
  * Offer as a merchant selling the product there (a "merchant listing") and
  * then asks for what only a seller has: shipping, a return policy, a GTIN.
- * An AggregateOffer is what Google documents for product snippets on pages
- * that compare offers, and it states nothing about selling. The offers
+ * Google's product snippet guidance documents AggregateOffer for pages that
+ * aggregate offers from several sellers
+ * (developers.google.com/search/docs/appearance/structured-data/product-snippet,
+ * "AggregateOffer"), and it states nothing about selling. The offers
  * themselves are on the page and link to the shops.
  *
- * Identifiers only when we have them: the part number as `mpn`, the brand
- * when a shop states it. Never a guessed GTIN. Offers without a price are
- * left out: inventing zero would advertise the part as free.
+ * Its numbers are the page's own (`shownPrice`): the range the headline shows,
+ * over the offers the summary counts, never the stale or out-of-stock offers
+ * the page folds away. When every offer in the range needs a minimum order,
+ * the fewest is `eligibleQuantity` (allowed on AggregateOffer, a subtype of
+ * Offer). When only some do, no minimum is claimed: the range then includes
+ * an offer sold singly, and a minimum on the aggregate would say none is.
+ *
+ * No current price shown (on request only, no price, every offer out of
+ * date) or a withdrawn product means no Product node at all (null): an Offer
+ * without a price is invalid and inventing zero would advertise the part as
+ * free, and a Product with no offers, review or rating is an invalid item in
+ * Google's product snippet report. The page itself still says what it is.
+ *
+ * `mpn` only when a shop states the number (`statedPartNumber`, the same
+ * reading the title block shows): one number a shop states that differs from
+ * makhzan's, or makhzan's own when a shop states it too; none when shops
+ * disagree. Never makhzan's number alone: it is read from titles and is often
+ * a family prefix ("ESP32"), not a manufacturer part number. The brand the
+ * page shows. Never a guessed GTIN. The description and the specs
+ * (`additionalProperty`, PropertyValue, capped) both come from the one shop
+ * the page's "What the shops say" opens on (never merged across shops, C4);
+ * what the part fits as `isAccessoryOrSparePartFor`, only when one offer
+ * alone states it.
  */
 export function productJsonLd(
   product: Product,
   url: string,
   title: string,
-  description?: string | null,
+  { description, details, now = new Date() }: ProductJsonLdOptions = {},
 ) {
-  const priced = orderOffers(product.offers).filter((offer) => offer.price !== null);
-  let offers: object | undefined;
-  if (priced.length > 0) {
-    const prices = priced.map((item) => item.price as number);
-    const availability = priced.some((item) => isInStock(item.stock_signal))
-      ? "https://schema.org/InStock"
-      : AVAILABILITY[priced[0].stock_signal];
-    offers = {
-      "@type": "AggregateOffer",
-      priceCurrency: product.currency,
-      lowPrice: Math.min(...prices),
-      highPrice: Math.max(...prices),
-      offerCount: priced.length,
-      ...(availability && { availability }),
-      url,
-    };
-  }
+  const shown = shownPrice(product, now);
+  if (!shown) return null;
+  const offers = {
+    "@type": "AggregateOffer",
+    priceCurrency: product.currency,
+    lowPrice: shown.min,
+    highPrice: shown.max,
+    offerCount: shown.offerCount,
+    ...(shown.availability && { availability: shown.availability }),
+    ...(shown.fewest > 1 && {
+      // C62 is UN/CEFACT's "one": the minimum is a count of units.
+      eligibleQuantity: { "@type": "QuantitativeValue", minValue: shown.fewest, unitCode: "C62" },
+    }),
+    url,
+  };
 
   const text = description?.replace(/\s+/g, " ").trim();
   const images = galleryImages(product);
   const brand = brandOf(product);
+  const specs = (details?.specs ?? []).slice(0, JSON_LD_SPECS).map((row) => ({
+    "@type": "PropertyValue",
+    name: row.name.trim(),
+    value: clampText(row.value.replace(/\s+/g, " ").trim(), JSON_LD_SPEC_VALUE),
+  }));
+  const fits = fitsClaim(product.offers)?.slice(0, JSON_LD_FITS) ?? [];
+  const mpn = statedPartNumber(product);
   return {
     "@context": "https://schema.org",
     "@type": "Product",
@@ -374,11 +492,26 @@ export function productJsonLd(
     url,
     ...(text && { description: clampText(text, JSON_LD_DESCRIPTION) }),
     ...(images.length > 0 && { image: images }),
-    ...(product.part_number && { mpn: product.part_number }),
+    ...(mpn && { mpn }),
     ...(brand && { brand: { "@type": "Brand", name: brand } }),
     ...(product.category && { category: product.category.name_en }),
-    ...(offers && { offers }),
+    ...(specs.length > 0 && { additionalProperty: specs }),
+    ...(fits.length > 0 && {
+      isAccessoryOrSparePartFor: fits.map((name) => ({ "@type": "Product", name })),
+    }),
+    offers,
   };
+}
+
+/**
+ * The manufacturer part number a shop states, read as the title block reads
+ * it (`partNumbers`); null when no shop states one, or shops disagree.
+ */
+export function statedPartNumber(product: Product): string | null {
+  const { alsoStatedBy, stated, disagree } = partNumbers(product.part_number, product.offers);
+  if (disagree) return null;
+  if (stated) return stated.value;
+  return alsoStatedBy.length > 0 ? product.part_number : null;
 }
 
 /** `text` cut at a word boundary to at most `max` characters, with an ellipsis. */
