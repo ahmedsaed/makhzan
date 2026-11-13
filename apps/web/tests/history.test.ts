@@ -283,6 +283,79 @@ describe("why a stretch has no line", () => {
   });
 });
 
+describe("which offers say when recording began", () => {
+  const [a, b] = CASES["p2-mixedmin"].offers;
+  const checkedAgo = (days: number) => new Date(now.getTime() - days * DAY).toISOString();
+  const run = (tracks: [typeof a, ReturnType<typeof point>[]][]): PriceHistory | null =>
+    buildHistory(
+      {
+        product_id: "x",
+        since: "",
+        offers: tracks.map(([offer, points]) => ({ listing_id: offer.id, since: "", points })),
+      },
+      tracks.map(([offer]) => offer),
+      now,
+    ) as PriceHistory | null;
+
+  it("a stale shop's real history keeps the card when a new fresh shop joins", () => {
+    const stale = { ...a, last_verified_at: checkedAgo(50) };
+    const fresh = { ...b, last_verified_at: checkedAgo(1) };
+    const h = run([
+      [stale, [point(80, 10, true), point(60, 9, true)]],
+      [fresh, [point(10, 12, true)]],
+    ])!;
+    expect(h).not.toBeNull();
+    expect(daysAgo(h.start)).toBe(80);
+    expect(h.lowest).toMatchObject({ price: 9, shop: "Cairo Makers", outOfDate: true });
+  });
+
+  it("all offers stale with only their seeded baselines: no card, even after 12 weeks", () => {
+    // A baseline is dated at the offer's last check: never a value before it.
+    const offers = [a, b].map((offer, i) => ({
+      ...offer,
+      last_verified_at: checkedAgo(100 + i),
+    }));
+    expect(
+      run([
+        [offers[0], [point(100, 10, true)]],
+        [offers[1], [point(101, 12, true)]],
+      ]),
+    ).toBeNull();
+  });
+
+  it("a gap after a stale shop's last check is dated with that check, not a later shop's", () => {
+    const stale = { ...a, last_verified_at: checkedAgo(60) };
+    const fresh = { ...b, last_verified_at: checkedAgo(1) };
+    const h = run([
+      [stale, [point(80, 10, true)]],
+      [fresh, [point(40, 12, true)]],
+    ])!;
+    const gap = h.segments.find((s) => s.price === null)!;
+    expect(gap.gap).toBe("unchecked");
+    expect([daysAgo(gap.from), daysAgo(gap.to)]).toEqual([60, 40]);
+    expect(daysAgo(gap.checked!)).toBe(60);
+    expect(gapText(gap, false)).toBe(`Not checked since ${dayMonth(gap.checked!)}`);
+  });
+
+  it("a truncated history leaves no shaded stretch before its first point", () => {
+    const fresh = { ...a, last_verified_at: checkedAgo(1) };
+    const h = buildHistory(
+      {
+        product_id: "x",
+        since: "",
+        offers: [
+          { listing_id: fresh.id, since: "", points: [point(50, 10, true)], truncated: true },
+        ],
+      },
+      [fresh, { ...b, last_verified_at: checkedAgo(1) }],
+      now,
+    ) as PriceHistory;
+    expect(h.full).toBe(true);
+    expect(daysAgo(h.start)).toBe(50);
+    expect(h.segments.every((s) => s.price !== null)).toBe(true);
+  });
+});
+
 describe("axes", () => {
   it("months start on the first, inside the chart", () => {
     const start = Date.UTC(2026, 7, 15);

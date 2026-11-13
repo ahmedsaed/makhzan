@@ -1,0 +1,664 @@
+{
+ "captured_at": "2026-11-13T12:21:52.106257+00:00",
+ "note": "Production snapshot, 2026-11-13, shops anonymised.",
+ "products": {
+  "2b43372b-4471-4a32-81c5-9aae1cf32059": {
+   "id": "2b43372b-4471-4a32-81c5-9aae1cf32059",
+   "part_number": "TB6600",
+   "title_en": "TB6600 Stepper Motor Driver 4A",
+   "title_ar": null,
+   "brand": null,
+   "image": null,
+   "image_shop": null,
+   "supplier_count": 6,
+   "offer_count": 6,
+   "min_price": 425.0,
+   "max_price": 550.0,
+   "currency": "EGP",
+   "in_stock": true,
+   "last_verified_at": "2026-11-13T03:00:27.165365Z",
+   "category": null,
+   "offers": [
+    {
+     "id": "0b8c167b-ae57-42d2-beeb-540d3ad19246",
+     "title_en": "TB6600 Stepper Motor Driver 4A",
+     "title_ar": null,
+     "price": 425.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-13T03:00:27.165365Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": 366,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-a",
+      "slug": "real-shop-a",
+      "name": "Shop A",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-a.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-a.test/p/0b8c167b-ae57-42d2-beeb-540d3ad19246",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "e65bb05d-9250-40d2-bee9-626f8f71ae40",
+     "title_en": "TB6600 Stepper Motor Driver",
+     "title_ar": null,
+     "price": 429.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-11T03:00:57.988586Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-b",
+      "slug": "real-shop-b",
+      "name": "Shop B",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-b.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-b.test/p/e65bb05d-9250-40d2-bee9-626f8f71ae40",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "b3634fd5-d471-4971-8ec2-75abc258c46a",
+     "title_en": "TB6600 - 2 Phase Stepper Motor Driver",
+     "title_ar": null,
+     "price": 430.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-12T03:01:37.619285Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-c",
+      "slug": "real-shop-c",
+      "name": "Shop C",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-c.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-c.test/p/b3634fd5-d471-4971-8ec2-75abc258c46a",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "fc6ab372-237b-4dab-8785-ea1201194169",
+     "title_en": "CNC Router Single Axis 4A 9-42V TB6600 Stepper Motor Driver (NEW Upgraded)",
+     "title_ar": null,
+     "price": 435.0,
+     "currency": "EGP",
+     "stock_signal": "out_of_stock",
+     "last_verified_at": "2026-11-08T03:01:38.542584Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-d",
+      "slug": "real-shop-d",
+      "name": "Shop D",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-d.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-d.test/p/fc6ab372-237b-4dab-8785-ea1201194169",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "afb5b2d6-b082-492c-bb4b-45cfbe0e8ac3",
+     "title_en": "CNC Router Single Axis TB6600 Stepper Motor Driver 4A",
+     "title_ar": null,
+     "price": 504.0,
+     "currency": "EGP",
+     "stock_signal": "out_of_stock",
+     "last_verified_at": "2026-08-24T12:24:10.711815Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-e",
+      "slug": "real-shop-e",
+      "name": "Shop E",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-e.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-e.test/p/afb5b2d6-b082-492c-bb4b-45cfbe0e8ac3",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "35fe11bf-23ff-4d2f-877f-668d0121a3fe",
+     "title_en": "TB6600 Stepper Motor Driver",
+     "title_ar": null,
+     "price": 550.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-11T03:00:23.686668Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [
+      {
+       "title": "5 Amp.",
+       "price": null,
+       "in_stock": true,
+       "stock_quantity": null,
+       "sku": null
+      },
+      {
+       "title": "4 Amp.",
+       "price": 550.0,
+       "in_stock": true,
+       "stock_quantity": null,
+       "sku": null
+      }
+     ],
+     "variants_checked_at": "2026-11-09T03:02:00.069285Z",
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-f",
+      "slug": "real-shop-f",
+      "name": "Shop F",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-f.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-f.test/p/35fe11bf-23ff-4d2f-877f-668d0121a3fe",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    }
+   ]
+  },
+  "2c6f64b4-3855-40ec-998d-aa88b4f5ae59": {
+   "id": "2c6f64b4-3855-40ec-998d-aa88b4f5ae59",
+   "part_number": "UT33D",
+   "title_en": "UNI-T UT33D+ Palm Size Multimeters",
+   "title_ar": null,
+   "brand": "UNI-T",
+   "image": null,
+   "image_shop": null,
+   "supplier_count": 5,
+   "offer_count": 5,
+   "min_price": 495.0,
+   "max_price": 590.0,
+   "currency": "EGP",
+   "in_stock": true,
+   "last_verified_at": "2026-11-13T03:01:11.217925Z",
+   "category": null,
+   "offers": [
+    {
+     "id": "07de2405-9b12-49bd-9a8b-991692e248db",
+     "title_en": "UNI-T UT33D+ Palm Size Multimeters",
+     "title_ar": null,
+     "price": 495.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-11T03:03:51.952211Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": "UNI-T",
+     "supplier": {
+      "id": "sup-real-shop-d",
+      "slug": "real-shop-d",
+      "name": "Shop D",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-d.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-d.test/p/07de2405-9b12-49bd-9a8b-991692e248db",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "bdfdfdad-8675-4e32-a17c-975adb07335c",
+     "title_en": "UT33D+ Palm Size Digital Multimeter",
+     "title_ar": null,
+     "price": 525.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-11T03:06:17.495414Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": "UNI-T",
+     "supplier": {
+      "id": "sup-real-shop-c",
+      "slug": "real-shop-c",
+      "name": "Shop C",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-c.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-c.test/p/bdfdfdad-8675-4e32-a17c-975adb07335c",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "201e53f4-6b4f-4947-b3e3-edd50784e322",
+     "title_en": "UT33D Plus Digital Multimeter Palm-Size| UNI-T",
+     "title_ar": null,
+     "price": 525.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-13T03:01:11.217925Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": 9,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-a",
+      "slug": "real-shop-a",
+      "name": "Shop A",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-a.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-a.test/p/201e53f4-6b4f-4947-b3e3-edd50784e322",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "53aea630-13fe-4cea-a5e9-2366b5f2d673",
+     "title_en": "Uni-T UT33D+ Palm Size Multimeter",
+     "title_ar": null,
+     "price": 525.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-08-24T16:37:49.737220Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-g",
+      "slug": "real-shop-g",
+      "name": "Shop G",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-g.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-g.test/p/53aea630-13fe-4cea-a5e9-2366b5f2d673",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    },
+    {
+     "id": "706b5161-142d-4fc0-81bf-f47f6b7f7850",
+     "title_en": "Digital Voltmeter / Multimeter UNI-T ( UT33D+ )",
+     "title_ar": null,
+     "price": 590.0,
+     "currency": "EGP",
+     "stock_signal": "in_stock",
+     "last_verified_at": "2026-11-11T03:00:33.564102Z",
+     "min_quantity": null,
+     "multiple_of": null,
+     "price_on_request": false,
+     "stock_quantity": null,
+     "variants": [],
+     "variants_checked_at": null,
+     "price_breaks": [
+      {
+       "min_quantity": 10,
+       "price": 560.0
+      },
+      {
+       "min_quantity": 50,
+       "price": 535.0
+      }
+     ],
+     "compatible_with": [],
+     "ships_from_abroad": null,
+     "mfr_part_number": null,
+     "brand": null,
+     "supplier": {
+      "id": "sup-real-shop-b",
+      "slug": "real-shop-b",
+      "name": "Shop B",
+      "name_ar": null,
+      "area": null,
+      "governorate": null,
+      "website_url": "https://real-shop-b.test",
+      "contact": null
+     },
+     "source_url": "https://real-shop-b.test/p/706b5161-142d-4fc0-81bf-f47f6b7f7850",
+     "images": [],
+     "specs": {},
+     "documents": [],
+     "videos": []
+    }
+   ]
+  }
+ },
+ "histories": {
+  "2b43372b-4471-4a32-81c5-9aae1cf32059": {
+   "product_id": "2b43372b-4471-4a32-81c5-9aae1cf32059",
+   "since": "2026-08-15T12:20:42.434599Z",
+   "offers": [
+    {
+     "listing_id": "e65bb05d-9250-40d2-bee9-626f8f71ae40",
+     "since": "2026-08-15T12:20:42.434599Z",
+     "points": [
+      {
+       "observed_at": "2026-10-14T03:00:07.039459Z",
+       "price": 425.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      },
+      {
+       "observed_at": "2026-11-11T03:00:57.988586Z",
+       "price": 429.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "35fe11bf-23ff-4d2f-877f-668d0121a3fe",
+     "since": "2026-08-15T12:20:42.434599Z",
+     "points": [
+      {
+       "observed_at": "2026-10-26T03:00:08.570279Z",
+       "price": 550.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "afb5b2d6-b082-492c-bb4b-45cfbe0e8ac3",
+     "since": "2026-08-15T12:20:42.434599Z",
+     "points": [
+      {
+       "observed_at": "2026-08-24T12:24:10.711815Z",
+       "price": 504.0,
+       "currency": "EGP",
+       "stock_signal": "out_of_stock",
+       "in_stock": false,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "0b8c167b-ae57-42d2-beeb-540d3ad19246",
+     "since": "2026-08-15T12:20:42.434599Z",
+     "points": [
+      {
+       "observed_at": "2026-10-22T03:00:07.728699Z",
+       "price": 425.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "fc6ab372-237b-4dab-8785-ea1201194169",
+     "since": "2026-08-15T12:20:42.434599Z",
+     "points": [
+      {
+       "observed_at": "2026-11-08T03:01:38.542584Z",
+       "price": 435.0,
+       "currency": "EGP",
+       "stock_signal": "out_of_stock",
+       "in_stock": false,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "b3634fd5-d471-4971-8ec2-75abc258c46a",
+     "since": "2026-08-15T12:20:42.434599Z",
+     "points": [
+      {
+       "observed_at": "2026-10-23T03:04:38.906656Z",
+       "price": 430.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    }
+   ]
+  },
+  "2c6f64b4-3855-40ec-998d-aa88b4f5ae59": {
+   "product_id": "2c6f64b4-3855-40ec-998d-aa88b4f5ae59",
+   "since": "2026-08-15T12:20:42.455761Z",
+   "offers": [
+    {
+     "listing_id": "706b5161-142d-4fc0-81bf-f47f6b7f7850",
+     "since": "2026-08-15T12:20:42.455761Z",
+     "points": [
+      {
+       "observed_at": "2026-10-15T03:00:47.433410Z",
+       "price": 499.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      },
+      {
+       "observed_at": "2026-11-11T03:00:33.564102Z",
+       "price": 590.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "bdfdfdad-8675-4e32-a17c-975adb07335c",
+     "since": "2026-08-15T12:20:42.455761Z",
+     "points": [
+      {
+       "observed_at": "2026-10-23T03:01:45.037637Z",
+       "price": 475.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      },
+      {
+       "observed_at": "2026-11-10T03:12:22.665617Z",
+       "price": 525.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "07de2405-9b12-49bd-9a8b-991692e248db",
+     "since": "2026-08-15T12:20:42.455761Z",
+     "points": [
+      {
+       "observed_at": "2026-10-17T03:00:07.137588Z",
+       "price": 495.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "201e53f4-6b4f-4947-b3e3-edd50784e322",
+     "since": "2026-08-15T12:20:42.455761Z",
+     "points": [
+      {
+       "observed_at": "2026-10-22T03:00:50.606845Z",
+       "price": 495.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      },
+      {
+       "observed_at": "2026-11-13T03:01:11.217925Z",
+       "price": 525.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    },
+    {
+     "listing_id": "53aea630-13fe-4cea-a5e9-2366b5f2d673",
+     "since": "2026-08-15T12:20:42.455761Z",
+     "points": [
+      {
+       "observed_at": "2026-08-24T16:37:49.737220Z",
+       "price": 525.0,
+       "currency": "EGP",
+       "stock_signal": "in_stock",
+       "in_stock": true,
+       "available": true
+      }
+     ],
+     "truncated": false
+    }
+   ]
+  }
+ }
+}
