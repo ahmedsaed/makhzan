@@ -593,6 +593,35 @@ def _members_by_shop(groups):
     return sorted(sorted(i.source for i in items) for items in groups.values())
 
 
+def test_from_scratch_a_stated_only_code_cannot_evict_a_title_that_names_it():
+    """The marketplace's "1A 30V Schottky Barrier Diode" states 1N5817 beside
+    its title. Sorting first, it used to seed the group on a first build and
+    leave out a shop whose title names the 20 V part."""
+    listings = [_diode(src, title) for src, title in _SETTLED]
+    listings.append(_diode("aaa-marketplace", "1A 30V Schottky Barrier Diode"))
+    assert _members_by_shop(_group_listings(listings)) == [
+        ["aaa-marketplace"],
+        sorted(src for src, _ in _SETTLED),
+    ]
+
+
+def test_a_stated_only_member_keeps_no_incumbency_against_titles_naming_the_part():
+    """Day 1 the 30 V marketplace diode, stating 1N5817 beside its title, is
+    grouped with two titles silent on voltage; day 2 two 20 V shops arrive.
+    The silent titles join the 20 V shops, as they would from scratch."""
+    day1 = [_diode(s, t) for s, t in _SETTLED if s in ("makers", "ram")]
+    day1.append(_diode("aaa-marketplace", "1A 30V Schottky Barrier Diode"))
+    (first,) = _group_listings(day1).values()
+    product = uuid.uuid4()
+    for listing in first:
+        listing.product_id = product
+    day2 = day1 + [_diode(s, t) for s, t in _SETTLED if s in ("ampere", "most")]
+    assert _members_by_shop(_group_listings(day2)) == [
+        ["aaa-marketplace"],
+        sorted(src for src, _ in _SETTLED),
+    ]
+
+
 def test_a_contradicting_newcomer_does_not_break_a_settled_product():
     listings = [_diode(src, title, _PRODUCT) for src, title in _SETTLED]
     listings.append(_diode("aaa-marketplace", "1N5817 Schottky Diode 1A 30V"))
