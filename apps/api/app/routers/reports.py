@@ -61,6 +61,8 @@ router = APIRouter(tags=["reports"])
 
 _EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$")
 _LINK = re.compile(r"https?://|www\.", re.IGNORECASE)
+#: An opened-at token: milliseconds, a dot, 32 lowercase hex digits.
+_TOKEN = re.compile(r"([0-9]{1,16})\.([0-9a-f]{32})", re.ASCII)
 
 
 class ReportIn(BaseModel):
@@ -127,13 +129,14 @@ def issue_token(salt: bytes, now_ms: int | None = None) -> str:
 
 def _token_age(token: str | None, salt: bytes, now_ms: int) -> float | None:
     """Seconds since the form opened, or None for a token we did not sign."""
-    if not token or token.count(".") != 1:
+    # The shape first, ASCII only: compare_digest raises on a non-ASCII str,
+    # and `isdigit` accepts digits from any script ("١٢٣").
+    match = _TOKEN.fullmatch(token or "")
+    if match is None:
         return None
-    stamp, signature = token.split(".")
-    if not stamp.isdigit():
-        return None
+    stamp, signature = match.groups()
     expected = hmac.new(_token_key(salt), stamp.encode(), hashlib.sha256).hexdigest()[:32]
-    if not hmac.compare_digest(signature, expected):
+    if not hmac.compare_digest(signature.encode(), expected.encode()):
         return None
     return (now_ms - int(stamp)) / 1000
 
