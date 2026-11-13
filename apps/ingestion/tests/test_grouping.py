@@ -565,3 +565,82 @@ def test_values_conflict_only_when_both_state_the_dimension():
     assert not values_conflict(value_tokens("Module 3.3V 5V"), value_tokens("Module 5V"))
     assert values_conflict(value_tokens("Driver 3Pcs"), value_tokens("Driver"))
     assert not values_conflict(value_tokens("Battery (1 pc)"), value_tokens("Battery"))
+
+
+# --------------------------------------------------------------------------- #
+# Incumbency: a settled product is not reshuffled by a newcomer sorted first
+# --------------------------------------------------------------------------- #
+
+_PRODUCT = uuid.uuid4()
+#: The four shops already grouped as one 1N5817 product, two of them silent on
+#: the voltage, and the marketplace's contradicting listing ("30V"; a 1N5817
+#: is a 20 V part), whose source sorts ahead of all of them.
+_SETTLED = [
+    ("ampere", "1N5817 Schottky Diode 1A 20V DO-41"),
+    ("makers", "1N5817 Schottky Barrier Diode"),
+    ("most", "Schottky Diode 1N5817 1A 20V"),
+    ("ram", "1N5817 Schottky Diode"),
+]
+
+
+def _diode(source, title, product_id=None):
+    listing = _listing(title, 2, "1N5817", source=source)
+    listing.product_id = product_id
+    return listing
+
+
+def _members_by_shop(groups):
+    return sorted(sorted(i.source for i in items) for items in groups.values())
+
+
+def test_a_contradicting_newcomer_does_not_break_a_settled_product():
+    listings = [_diode(src, title, _PRODUCT) for src, title in _SETTLED]
+    listings.append(_diode("aaa-marketplace", "1N5817 Schottky Diode 1A 30V"))
+    assert _members_by_shop(_group_listings(listings)) == [
+        ["aaa-marketplace"],
+        ["ampere", "makers", "most", "ram"],
+    ]
+
+
+def test_on_a_first_build_the_plain_order_still_applies():
+    """No product ids yet: the same listings are placed in (source, id) order, as
+    before, so the early contradicting listing seeds and captures the silent."""
+    listings = [_diode(src, title) for src, title in _SETTLED]
+    listings.append(_diode("aaa-marketplace", "1N5817 Schottky Diode 1A 30V"))
+    assert _members_by_shop(_group_listings(listings)) == [
+        ["aaa-marketplace", "makers", "ram"],
+        ["ampere", "most"],
+    ]
+
+
+def test_a_newcomer_that_agrees_joins_the_settled_product():
+    listings = [_diode(src, title, _PRODUCT) for src, title in _SETTLED]
+    listings.append(_diode("aaa-marketplace", "1N5817 Schottky Diode 1A 20V"))
+    assert _members_by_shop(_group_listings(listings)) == [
+        ["aaa-marketplace", "ampere", "makers", "most", "ram"],
+    ]
+
+
+def test_a_wrong_existing_merge_still_splits():
+    """Incumbency is not immunity: members of one product that the vetoes now
+    reject leave it."""
+    product = uuid.uuid4()
+    listings = [
+        _diode("ampere", "1N5817 Schottky Diode 1A 20V", product),
+        _diode("makers", "1N5817 Schottky Diode 1A 20V", product),
+        _diode("most", "1N5817 Schottky Diode 1A 40V", product),
+    ]
+    groups = _group_listings(listings)
+    assert _members_by_shop(groups) == [["ampere", "makers"], ["most"]]
+    assert sum(len(items) for items in groups.values()) == len(listings), "each listing once"
+
+
+def test_two_existing_products_the_rules_now_join_merge():
+    first, second = uuid.uuid4(), uuid.uuid4()
+    listings = [
+        _diode("ampere", "1N5817 Schottky Diode 1A 20V", first),
+        _diode("makers", "1N5817 Schottky Diode 20V", first),
+        _diode("most", "1N5817 Schottky Diode 1A", second),
+        _diode("ram", "1N5817 Schottky Diode", second),
+    ]
+    assert _members_by_shop(_group_listings(listings)) == [["ampere", "makers", "most", "ram"]]

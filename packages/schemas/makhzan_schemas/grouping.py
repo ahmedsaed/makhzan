@@ -222,6 +222,38 @@ class _Cluster:
         if listing.price is not None:
             self.prices.append(listing.price)
 
+    def accepts(
+        self, other: _Cluster, threshold: float, ratio: float, strict: frozenset[str]
+    ) -> float | None:
+        """How well a whole cluster matches this one, or None if they may not
+        merge: every veto between every pair of members, as for one listing."""
+        if self.suppliers & other.suppliers:
+            return None
+        for ev in other.evidence:
+            if any(values_conflict(ev.values, known.values) for known in self.evidence):
+                return None
+            if any(_forms_conflict(ev.form, known.form, strict) for known in self.evidence):
+                return None
+        known = [p for p in [*self.prices, *other.prices] if p is not None and p > 0]
+        if len(known) >= 2 and max(known) / min(known) > Decimal(str(ratio)):
+            return None
+        best = max(_jaccard(a.tokens, b.tokens) for a in self.evidence for b in other.evidence)
+        return best if best >= threshold else None
+
+    def absorb(self, other: _Cluster) -> None:
+        for listing, ev in zip(other.members, other.evidence, strict=True):
+            self.add(listing, ev)
+
+
+def _new_cluster(listing: Listing, ev: _Evidence) -> _Cluster:
+    return _Cluster(
+        seed_tokens=ev.tokens,
+        evidence=[ev],
+        prices=[listing.price] if listing.price is not None else [],
+        members=[listing],
+        suppliers={listing.supplier_id},
+    )
+
 
 def _subcluster(
     mpn_key: str, items: list[Listing], domain: str | None = None
@@ -243,6 +275,25 @@ def _subcluster(
 
     Price still gets a veto. Identical titles priced 15x apart are a pack and a
     single unit, and merging them publishes a price range that is false.
+
+    **Incumbency.** Clustering is greedy, so the order listings are placed in
+    decides which of two incompatible listings seeds a cluster and captures the
+    members silent on their difference. Placed in plain (source, external id)
+    order, one newcomer whose title contradicts a settled product — the
+    marketplace's "1N5817 1A 30V" against a four-shop 1N5817 (a 20 V part) —
+    sorted ahead of it and broke it in three. So listings are placed in three
+    passes, each in a fixed order:
+
+    1. **Incumbents**: every product that already holds two or more of these
+       listings is rebuilt as a cluster from its own members, largest first.
+       Each member must still pass every veto against the others, so a wrong
+       merge from before still splits: what will not fit becomes a newcomer.
+    2. Those clusters merge with one another where every veto allows it (how a
+       rule change joins two existing products).
+    3. **Newcomers** — no product yet, alone in theirs, or evicted in pass 1 —
+       join the cluster they best match without contradicting it, or start one.
+
+    On a first build nobody has a product, so only pass 3 runs: the old order.
     """
     profile = get_profile(domain)
     threshold = profile.cluster_threshold
@@ -251,38 +302,84 @@ def _subcluster(
     # External ids are only unique within a source, so two shops' "1234" would
     # otherwise fall back to whatever order the query happened to return.
     ordered = sorted(items, key=_natural_order)
+    strict = profile.accessory_forms
 
-    clusters: list[_Cluster] = []
+    evidence: dict[uuid.UUID, _Evidence] = {}
     for listing in ordered:
         title = listing.title_en or listing.title_ar
         # Each listing's own spelling of the identifier is taken out of its own
         # title: the key is folded, so "HC-SR04" and "HCSR04" share a group.
         mpn = listing.part_number
-        ev = _Evidence(
+        evidence[listing.id] = _Evidence(
             tokens=_sig_tokens(title, mpn, domain),
             values=value_tokens(_without_identifier(title, mpn)),
             form=_form(title, mpn, domain),
         )
+
+    # Pass 1: incumbents, each existing product rebuilt from its own members.
+    by_product: dict[uuid.UUID, list[Listing]] = defaultdict(list)
+    for listing in ordered:
+        if listing.product_id is not None:
+            by_product[listing.product_id].append(listing)
+    incumbents = sorted(
+        (members for members in by_product.values() if len(members) > 1),
+        key=lambda members: (-len(members), _natural_order(members[0])),
+    )
+    clusters: list[_Cluster] = []
+    newcomers: list[Listing] = []
+    placed: set[uuid.UUID] = set()
+    for members in incumbents:
+        cluster = _new_cluster(members[0], evidence[members[0].id])
+        pending = members[1:]
+        # Repeat until nothing more fits: a member may only match the product
+        # through one placed after it.
+        while pending:
+            rest = [
+                listing
+                for listing in pending
+                if cluster.similarity(listing, evidence[listing.id], threshold, max_ratio, strict)
+                is None
+            ]
+            for listing in pending:
+                if listing not in rest:
+                    cluster.add(listing, evidence[listing.id])
+            if len(rest) == len(pending):
+                break
+            pending = rest
+        newcomers += pending  # evicted: placed again in pass 3
+        placed.update(listing.id for listing in members)
+        clusters.append(cluster)
+
+    # Pass 2: existing products that the current rules say are one.
+    merged: list[_Cluster] = []
+    for cluster in clusters:
+        best: tuple[float, _Cluster] | None = None
+        for target in merged:
+            score = target.accepts(cluster, threshold, max_ratio, strict)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, target)
+        if best is not None:
+            best[1].absorb(cluster)
+        else:
+            merged.append(cluster)
+    clusters = merged
+
+    # Pass 3: newcomers, in the plain order.
+    newcomers += [listing for listing in ordered if listing.id not in placed]
+    for listing in sorted(newcomers, key=_natural_order):
+        ev = evidence[listing.id]
         # The best-matching cluster, not the first that will have it: with a
         # shop's variants now kept apart, a listing can be admissible to several
         # sibling clusters and should join the one it most resembles.
-        best: tuple[float, _Cluster] | None = None
+        best = None
         for cluster in clusters:
-            score = cluster.similarity(listing, ev, threshold, max_ratio, profile.accessory_forms)
+            score = cluster.similarity(listing, ev, threshold, max_ratio, strict)
             if score is not None and (best is None or score > best[0]):
                 best = (score, cluster)
         if best is not None:
             best[1].add(listing, ev)
         else:
-            clusters.append(
-                _Cluster(
-                    seed_tokens=ev.tokens,
-                    evidence=[ev],
-                    prices=[listing.price] if listing.price is not None else [],
-                    members=[listing],
-                    suppliers={listing.supplier_id},
-                )
-            )
+            clusters.append(_new_cluster(listing, ev))
 
     result: dict[str, list[Listing]] = {}
     for cluster in clusters:
