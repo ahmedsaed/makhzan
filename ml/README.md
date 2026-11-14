@@ -340,7 +340,9 @@ Verdicts for the other models:
   2. `shortlist.py`: identifier-key blocks plus top-10 title-token Jaccard within one
      department, other shops only, Phase C pairs and listings excluded. Needs numpy.
   3. `vetoes.py`: today's vetoes and decisions per pair, in the ingestion venv.
-  4. `score.py`: Kev-4B title only (frozen I2-L0-0) on every non-vetoed pair, resumable.
-  5. `sample.py`: the stratified sample, with inclusion probabilities, and the blind files.
+  4. `score.py`: Kev-4B title only (frozen I2-L0-0) on every non-vetoed pair, resumable;
+     again with `--pool vetoed` on a random sample of each veto group, to test the vetoes.
+  5. `sample.py`: the stratified sample (gate, borderline, confident-no, one two-phase
+     stratum per veto group), with inclusion probabilities, and the blind files.
 
   All of it writes to a private directory you name: the outputs hold catalogue text.
