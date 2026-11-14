@@ -10,7 +10,14 @@ Strata over the Kev + vetoes score s (a vetoed pair scores 0), thresholds from f
 - `kev_positive`: not vetoed, s >= t_p98: what an automatic merge would accept (the gate).
 - `borderline`: not vetoed, t_f1 <= s < t_p98.
 - `confident_no`: not vetoed, s < t_f1 (estimates matches Kev misses).
-- `vetoed`: any of today's vetoes fired (estimates matches the vetoes block).
+- `veto:<group>`: one stratum per veto group (only-values, only-price, only-form, multiple), to
+  test the vetoes themselves. Two phases: score.py --pool vetoed scored a simple random sample
+  (the frame, m_g of the group's N_g pairs) with Kev, ignoring the veto. From the frame, pairs
+  with raw Kev s >= t_p98 (H, the likely false vetoes) and the rest (L) are sampled separately:
+  a proportional part of --veto-random pairs spread over H and L in proportion (marked
+  `veto_part: random`; on its own it is a self-weighting sample of the group, for a plain
+  Clopper-Pearson bound), plus up to --veto-high extra pairs from H (`oversample`). A pair's
+  inclusion probability is (m_g / N_g) * (n_H / |H|) or (m_g / N_g) * (n_L / |L|).
 
 Each stratum is a seeded simple random sample without replacement (all of it if smaller), so a
 pair's inclusion probability is n_h / N_h and Horvitz-Thompson weights N_h / n_h give
@@ -42,9 +49,10 @@ sys.path.insert(0, str(HERE.parent / "bakeoff"))
 sys.path.insert(0, str(HERE))
 from common import SEED  # noqa: E402
 from contexts import clean, shop_category  # noqa: E402
-from score import load_done, pair_key  # noqa: E402
+from score import load_done, pair_key, veto_group  # noqa: E402
 
-STRATA = ("kev_positive", "borderline", "confident_no", "vetoed")
+STRATA = ("kev_positive", "borderline", "confident_no")
+VETO_GROUPS = ("only-values", "only-price", "only-form", "multiple")
 SQL = r"""
 COPY (
   SELECT json_build_object('id', l.id, 'url', l.source_url, 'shop', s.name, 'currency', l.currency)
@@ -72,7 +80,10 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--db", default="makhzan_prod")
     ap.add_argument("--container", default="makhzan-db-1")
-    ap.add_argument("--n", default="kev_positive=400,borderline=150,confident_no=150,vetoed=60")
+    ap.add_argument("--n", default="kev_positive=400,borderline=120,confident_no=120")
+    ap.add_argument("--kev-vetoed", type=Path, required=True, help="score.py --pool vetoed out")
+    ap.add_argument("--veto-random", type=int, default=50)
+    ap.add_argument("--veto-high", type=int, default=25)
     args = ap.parse_args()
 
     frozen = json.loads(args.frozen.read_text())["combination"]
@@ -86,8 +97,22 @@ def main() -> None:
     titles = {lid: clean(r["title_en"] or r["title_ar"]) for lid, r in cat.items()}
     cand = {(c["a"], c["b"]): c for c in map(json.loads, args.candidates.open())}
     ab, ba = load_done(args.kev / "ab.jsonl"), load_done(args.kev / "ba.jsonl")
+    vab, vba = load_done(args.kev_vetoed / "ab.jsonl"), load_done(args.kev_vetoed / "ba.jsonl")
+    vmeta = json.loads((args.kev_vetoed / "meta.json").read_text())
+    group_size = vmeta["veto_group_sizes"]
+    frame = {(f["a"], f["b"]): f["group"] for f in map(json.loads, (args.kev_vetoed /
+             "frame.jsonl").open())}  # fmt: skip
+
+    def kev_of(a: str, b: str, sab: dict, sba: dict) -> tuple[float, int, dict] | None:
+        k = pair_key(a, b, titles[a], titles[b])
+        if k not in sab:
+            return None
+        s, orders = (min(sab[k], sba[k]), 2) if k in sba else (sab[k], 1)
+        return s, orders, {"kev_ab": sab[k], "kev_ba": sba.get(k)}
 
     pop: dict[str, list[dict]] = {s: [] for s in STRATA}
+    vetoed_count: Counter = Counter()
+    frames: dict[str, list[dict]] = {g: [] for g in VETO_GROUPS}
     missing = 0
     for v in map(json.loads, args.vetoes.open()):
         c = cand[(v["a"], v["b"])]
@@ -97,20 +122,31 @@ def main() -> None:
             "today_stored": v["today_stored"],
         }  # fmt: skip
         if v["any_veto"]:
-            rec.update(kev=0.0, kev_orders=0, stratum="vetoed")
-        else:
-            k = pair_key(v["a"], v["b"], titles[v["a"]], titles[v["b"]])
-            if k not in ab:
+            vetoed_count[veto_group(v)] += 1
+            group = frame.get((v["a"], v["b"]))
+            if group is None:
+                continue
+            got = kev_of(v["a"], v["b"], vab, vba)
+            if got is None:
                 missing += 1
                 continue
-            s, orders = (min(ab[k], ba[k]), 2) if k in ba else (ab[k], 1)
-            rec.update(kev_ab=ab[k], kev_ba=ba.get(k), kev=s, kev_orders=orders)
-            rec["stratum"] = (
-                "kev_positive" if s >= t_p98 else "borderline" if s >= t_f1 else "confident_no"
-            )
+            # The combined score of a vetoed pair is 0; `kev_raw` is Kev ignoring the veto.
+            rec.update(got[2], kev=0.0, kev_raw=got[0], kev_orders=got[1],
+                       stratum=f"veto:{group}", veto_group=group)  # fmt: skip
+            frames[group].append(rec)
+            continue
+        got = kev_of(v["a"], v["b"], ab, ba)
+        if got is None:
+            missing += 1
+            continue
+        s = got[0]
+        rec.update(got[2], kev=s, kev_orders=got[1])
+        rec["stratum"] = (
+            "kev_positive" if s >= t_p98 else "borderline" if s >= t_f1 else "confident_no"
+        )
         pop[rec["stratum"]].append(rec)
     if missing:
-        sys.exit(f"{missing} open pairs have no Kev score: finish score.py first")
+        sys.exit(f"{missing} pairs to sample have no Kev score: finish score.py first")
 
     rng = random.Random(SEED + 5)
     chosen = []
@@ -120,6 +156,35 @@ def main() -> None:
         for r in rng.sample(members, n):
             r["inclusion_prob"] = n / len(members)
             chosen.append(r)
+    veto_design = {}
+    for g in VETO_GROUPS:
+        members = sorted(frames[g], key=lambda r: (r["a"], r["b"]))
+        if not members:
+            continue
+        m, n_group = len(members), group_size[g]
+        high = [r for r in members if r["kev_raw"] >= t_p98]
+        low = [r for r in members if r["kev_raw"] < t_p98]
+        n_random = min(args.veto_random, m)
+        n_rand_high = round(n_random * len(high) / m)
+        rand_high = rng.sample(high, n_rand_high)
+        rand_low = rng.sample(low, min(n_random - n_rand_high, len(low)))
+        rest = [r for r in high if r not in rand_high]
+        extra = rng.sample(rest, min(args.veto_high, len(rest)))
+        n_h, n_l = len(rand_high) + len(extra), len(rand_low)
+        for part, rs in (("random", rand_high + rand_low), ("oversample", extra)):
+            for r in rs:
+                is_high = r["kev_raw"] >= t_p98
+                r["veto_kev_band"] = "high" if is_high else "low"
+                r["veto_part"] = part
+                r["inclusion_prob"] = (m / n_group) * (
+                    n_h / len(high) if is_high else n_l / len(low)
+                )
+                chosen.append(r)
+        veto_design[g] = {
+            "group_pairs": n_group, "frame_scored": m, "frame_high": len(high),
+            "frame_low": len(low), "random_high": len(rand_high), "random_low": len(rand_low),
+            "oversample_high": len(extra),
+        }  # fmt: skip
     rng.shuffle(chosen)
 
     extra = psql_rows(args.container, args.db)
@@ -151,21 +216,28 @@ def main() -> None:
             kf.write(json.dumps({"pair_id": pid, "listing_a": first, "listing_b": second,
                                  **{k: v for k, v in r.items() if k not in ("a", "b")}}) + "\n")  # fmt: skip
 
-    def hist(rs: list[dict]) -> dict:
+    def hist(rs: list[dict], field: str = "kev") -> dict:
         edges = [0, 0.01, 0.05, t_f1, 0.2, 0.4, t_p98, 0.8, 0.9, 0.95, 0.99, 1.01]
         out = Counter()
         for r in rs:
             for lo, hi in zip(edges, edges[1:], strict=False):
-                if lo <= r["kev"] < hi:
+                if lo <= r[field] < hi:
                     out[f"[{lo:.4g},{hi:.4g})"] += 1
                     break
         return dict(out)
 
     everyone = [r for s in STRATA for r in pop[s]]
+    names = [*STRATA, *(f"veto:{g}" for g in VETO_GROUPS)]
     summary = {
         "thresholds": {"p98": t_p98, "best_f1": t_f1},
-        "population": {s: len(pop[s]) for s in STRATA},
-        "sample": {s: sum(1 for r in chosen if r["stratum"] == s) for s in STRATA},
+        "population": {
+            **{s: len(pop[s]) for s in STRATA},
+            **{f"veto:{g}": vetoed_count[g] for g in VETO_GROUPS},
+        },  # fmt: skip
+        "sample": {s: sum(1 for r in chosen if r["stratum"] == s) for s in names},
+        "sample_total": len(chosen),
+        "veto_design": veto_design,
+        "veto_frame_raw_kev_histogram": {g: hist(frames[g], "kev_raw") for g in VETO_GROUPS},
         "today_stored_by_stratum": {s: sum(r["today_stored"] for r in pop[s]) for s in STRATA},
         "rules_pair_by_stratum": {s: sum(r["rules_pair"] for r in pop[s]) for s in STRATA},
         "via_key_by_stratum": {s: sum("key" in r["via"] for r in pop[s]) for s in STRATA},

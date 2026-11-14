@@ -16,7 +16,12 @@ minimum. To save half the GPU time without changing any decision, this scores in
 
 Results are appended per chunk to <out>/ab.jsonl and <out>/ba.jsonl ({key: p}), so a run can be
 stopped and resumed. --reuse takes earlier ab/ba files keyed the same way and keeps any score
-whose two titles are unchanged (the key includes a hash of both titles). Standard library.
+whose two titles are unchanged (the key includes a hash of both titles).
+
+`--pool vetoed --per-group N` scores vetoed pairs instead, to check the vetoes themselves: a
+seeded simple random sample of N pairs (all if fewer) from each veto group (only-values,
+only-price, only-form, multiple). The sample is written to <out>/frame.jsonl (ids and group)
+and the group sizes to meta.json, so sample.py can weight it. Standard library.
 """
 
 from __future__ import annotations
@@ -38,6 +43,15 @@ from makhzan_ml.client import Client  # noqa: E402
 
 QUESTION = KEV_QUESTIONS["I2"]
 CHUNK = 2000
+VETOES = ("values", "price", "form")
+
+
+def veto_group(p: dict) -> str | None:
+    """only-<veto> when exactly one of values/price/form fired, `multiple` for more."""
+    fired = [k for k in VETOES if p["veto"][k]]
+    if not fired:
+        return None
+    return f"only-{fired[0]}" if len(fired) == 1 else "multiple"
 
 
 def pair_key(a: str, b: str, ta: str, tb: str) -> str:
@@ -80,6 +94,8 @@ def main() -> None:
     ap.add_argument("--in-flight", type=int, default=8)
     ap.add_argument("--reuse", type=Path, help="a directory holding earlier ab.jsonl / ba.jsonl")
     ap.add_argument("--only", choices=["ab", "ba"], help="run one pass only")
+    ap.add_argument("--pool", choices=["open", "vetoed"], default="open")
+    ap.add_argument("--per-group", type=int, default=2000, help="--pool vetoed: pairs a group")
     args = ap.parse_args()
 
     titles = {}
@@ -87,17 +103,34 @@ def main() -> None:
         r = json.loads(line)
         titles[r["id"]] = clean(r["title_en"] or r["title_ar"])
     pairs = [json.loads(line) for line in args.vetoes.open()]
-    open_pairs = [p for p in pairs if not p["any_veto"]]
+    args.out.mkdir(parents=True, exist_ok=True)
+    group_sizes: dict[str, int] = {}
+    if args.pool == "vetoed":
+        groups: dict[str, list[dict]] = {}
+        for p in pairs:
+            if p["any_veto"] and not p["veto"]["same_shop"]:
+                groups.setdefault(veto_group(p), []).append(p)
+        open_pairs = []
+        with (args.out / "frame.jsonl").open("w") as frame:
+            for name in sorted(groups):
+                members = sorted(groups[name], key=lambda p: (p["a"], p["b"]))
+                group_sizes[name] = len(members)
+                rng = random.Random(f"{SEED}:{name}")
+                for p in rng.sample(members, min(args.per_group, len(members))):
+                    open_pairs.append(p)
+                    frame.write(json.dumps({"a": p["a"], "b": p["b"], "group": name}) + "\n")
+    else:
+        open_pairs = [p for p in pairs if not p["any_veto"]]
     if args.sample:
         open_pairs = random.Random(SEED).sample(open_pairs, min(args.sample, len(open_pairs)))
-    args.out.mkdir(parents=True, exist_ok=True)
     client = Client("kev-4b", batch_size=args.in_flight)
     meta_path = args.out / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     meta.update(
         service="kev-4b", variant="I2-L0-0", question=QUESTION, pairs=len(pairs),
         vetoed=len(pairs) - sum(1 for p in pairs if not p["any_veto"]),
-        open_pairs_scored=len(open_pairs), sample=args.sample,
+        open_pairs_scored=len(open_pairs), sample=args.sample, pool=args.pool,
+        veto_group_sizes=group_sizes, per_group=args.per_group if group_sizes else None,
         second_order_from=args.second_order_from, in_flight=args.in_flight,
     )  # fmt: skip
 
