@@ -535,6 +535,8 @@ def test_variants_with_colliding_signatures_get_keys_that_do_not_depend_on_sibli
         ("Battery (2 Pcs)", "quantity", {2}),
         ("Resistor pack of 10", "quantity", {10}),
         ("Linear Rail 1000mm", "length", {1000}),
+        ("Gear Motor 12V 130RPM", "speed", {130}),
+        ("Gear Motor 12V 170 RPM", "speed", {170}),
     ],
 )
 def test_value_tokens_are_read_from_titles(title, dimension, values):
@@ -565,6 +567,21 @@ def test_values_conflict_only_when_both_state_the_dimension():
     assert not values_conflict(value_tokens("Module 3.3V 5V"), value_tokens("Module 5V"))
     assert values_conflict(value_tokens("Driver 3Pcs"), value_tokens("Driver"))
     assert not values_conflict(value_tokens("Battery (1 pc)"), value_tokens("Battery"))
+
+
+def test_gear_motors_of_different_speeds_conflict():
+    """130 and 280 RPM GA25-370 motors share every other word; speed is the variant."""
+    slow = value_tokens("GA25-370 DC Gear Motor 12V 130RPM")
+    fast = value_tokens("GA25-370 DC Gear Motor 12V 280 RPM")
+    assert values_conflict(slow, fast)
+    assert not values_conflict(slow, value_tokens("GA25-370 Gear Motor 12V 130 RPM"))
+    groups = _group_listings(
+        [
+            _listing("GA25-370 DC Gear Motor 12V 130RPM", 250, "GA25-370", source="volta"),
+            _listing("GA25-370 DC Gear Motor 12V 280 RPM", 250, "GA25-370", source="ohmic"),
+        ]
+    )
+    assert len(groups) == 2
 
 
 # --------------------------------------------------------------------------- #
