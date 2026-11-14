@@ -59,16 +59,23 @@ class DomainProfile:
     #: Jaccard similarity above which two listings sharing an identifier are
     #: taken to be the same product.
     cluster_threshold: float = 0.34
-    #: Price ratio within which two listings sharing an identifier corroborate
-    #: each other even when their wording differs. Suppliers describe the same
-    #: part very differently, so price is the second opinion.
-    merge_price_ratio: float = 4.0
+    #: Price ratio at which two listings sharing an identifier are taken to be
+    #: different offers (a pack and a single unit) however alike their titles.
+    #: A veto only, never a reason to merge. Shops price one part very
+    #: differently: labelled pairs found 0.5 against 3 EGP capacitors and 10
+    #: against 50 EGP touch modules that were the same product, so below this a
+    #: price gap says nothing; a stated pack size is the values veto's to read.
+    merge_price_ratio: float = 10.0
     #: (form, pattern) pairs, highest priority first: what physical *form* a
     #: title says it is, when the noise list has stripped the words that say it.
     #: Two listings sharing an identifier but stating different forms are not
     #: merged — a bare TP4056 chip is not a TP4056 charger module. A title
     #: matching several patterns takes the first. Empty means no form check.
     form_markers: tuple[tuple[str, str], ...] = ()
+    #: Phrases that mention a form word without stating the listing's form
+    #: ("USB to Serial Adapter" is a converter, "(Heat Sink)" a gloss), taken
+    #: out of a title before `form_markers` are read.
+    form_glosses: tuple[str, ...] = ()
     #: Forms that a title stating *no* form can never be. Ordinarily silence is
     #: not a conflict ("TP4056 Lithium Battery Charger" may well be the module),
     #: but a bracket, holder or case names the part it fits, so a title that does

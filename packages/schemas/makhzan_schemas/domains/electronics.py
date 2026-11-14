@@ -355,21 +355,46 @@ _NOISE = {
 # "Surface Mount" and "DIN Rail Mount" say how a connector, switch or relay is
 # fitted, not that the listing is a mount for it, so they vetoed real merges; a
 # "servo mount" or "motor mount" is still an accessory. Likewise "ESP-01 with
-# adapter" is the module, sold with its adapter.
+# adapter" is the module, sold with its adapter: what follows "with" or "+" is
+# included, not what the listing is (`grouping._form` drops it, in every domain).
 _MOUNTING_STYLES = ("pcb", "panel", "surface", "rail", "chassis", "screw", "hole")
 _NOT_A_MOUNT = "".join(f"(?<!{style}{sep})" for style in _MOUNTING_STYLES for sep in " -")
+# What a holder, case or heat sink is called varies by shop: "Battery Holder" and
+# "Battery Clip", "Case Enclosure" and "Protective Shell", "Battery Spacer" and
+# "Single Battery Holder" are each one product, so the synonyms are accessory
+# words too — otherwise one title states an accessory and the other, silent,
+# reads as the part itself (the strict conflict below).
+#
+# Two phrases mention an accessory word without the listing being an accessory
+# (`_FORM_GLOSSES`, dropped before the markers are read):
+#
+# - an accessory word alone in parentheses, "Water Cooling Block (Heat Sink)", is
+#   a gloss for what the listing is;
+# - "USB to TTL Serial Adapter" is a converter, a device in its own right: "to
+#   <one or two words> adapter" names what it converts between. An adapter *for*
+#   a part ("ESP-01 Adapter Module", "SG90 Servo Adapter") is still an
+#   accessory, and so does not merge with the part.
+#
+# "SMD" is how a part is mounted, not that it is a bare chip: boards, LEDs and
+# chips all say it, and "Arduino Uno Rev3 SMD" is the board. A package name
+# ("SOP-8", "TO-220") still says chip.
+_ACCESSORY_WORDS = (
+    r"brackets?|holders?|mounting|cases?|covers?|enclosures?|housings?|shells?|stand"
+    r"|expansion|heat\s?sinks?|spacers?|clips?"
+)
+_FORM_GLOSSES = (
+    rf"\(\s*(?:{_ACCESSORY_WORDS})\s*\)",
+    r"\bto\s+[a-z0-9]+(?:\s+[a-z0-9]+)?\s+adapters?\b",
+)
 _FORM_MARKERS = (
     (
         "accessory",
-        r"\b(?:brackets?|holders?|mounting|cases?|covers?|enclosure|housing|stand"
-        r"|expansion|heat\s?sinks?)\b"
-        rf"|{_NOT_A_MOUNT}\bmounts?\b"
-        r"|(?<!with )(?<!with an )\badapters?\b",
+        rf"\b(?:{_ACCESSORY_WORDS})\b|{_NOT_A_MOUNT}\bmounts?\b|\badapters?\b",
     ),
     ("module", r"\b(?:modules?|boards?|shields?|kits?|breakout|devkit|development)\b"),
     (
         "chip",
-        r"\b(?:ics?|chips?|smd|p?dip|soic|sop|[st]?ssop|msop|[lt]?qfp|qfn|sot-?\d+|to-?\d+)\b",
+        r"\b(?:ics?|chips?|p?dip|soic|sop|[st]?ssop|msop|[lt]?qfp|qfn|sot-?\d+|to-?\d+)\b",
     ),
 )
 
@@ -387,6 +412,7 @@ ELECTRONICS = register_profile(
         noise_tokens=frozenset(_NOISE),
         cluster_threshold=0.34,
         form_markers=_FORM_MARKERS,
+        form_glosses=_FORM_GLOSSES,
         accessory_forms=frozenset({"accessory"}),
         # Electronics search is part-number driven, so the identifier ranks first.
         search_attributes=("part_number", "title_en", "title_ar", "brand"),
