@@ -54,6 +54,7 @@ has its own profile. There are also four group profiles:
 | `rr-qwen3-0.6b` | Qwen/Qwen3-Reranker-0.6B | vLLM `v0.32.0`, bf16 | 8104 |
 | `rr-qwen3-4b` | Qwen/Qwen3-Reranker-4B | vLLM `v0.32.0`, bf16 | 8105 |
 | `kev-4b` | jaredpalmer/kev-4b | `kev.serve`, built here (`kev/Dockerfile`), bf16 | 8106 |
+| `gen-qwen3-4b` | Qwen/Qwen3-4B-Instruct-2507 (generative, attribute extraction) | vLLM `v0.32.0`, bf16 | 8107 |
 | `*-cpu` | the four small models | vLLM CPU `vllm-openai-cpu:v0.32.0-x86_64`, bf16 | 8111–8114 |
 | `compare` | the engine that lost for each model | TEI or vLLM | 8121–8133 |
 
@@ -334,3 +335,22 @@ Verdicts for the other models:
 
   Each script's docstring gives its exact command. Catalogue text goes to a private directory
   you name. `ml/out/bakeoff/` gets pair ids, scores and counts.
+
+## Improvement experiments (`improve/`)
+
+Scripts for the Phase E follow-up: four ways to raise the number of cross-shop matches that can
+merge automatically at a proven precision of 0.98, scored on the 900 labelled Phase E pairs.
+They read the private labelling run and write only to `ml/out/improve/` (git-ignored).
+
+- `build.py`: joins key.jsonl, the final labels and the catalogue rows of the labelled listings.
+- `metric.py`: the one metric (population estimate, per-cell Clopper-Pearson bound).
+- `vetoes2.py`: experiment 1, recalibrated price / quantity / form vetoes beside today's.
+- `extract.py`: experiment 2, attribute extraction with `gen-qwen3-4b` (`client.chat_json`,
+  structured outputs) and the code that turns a stated contradiction into a veto.
+- `enrich.py`: experiment 3, Kev on title + URL slug + shop category (+ spec table).
+- `population.py`: the whole shortlist with scores and both veto sets, for experiment 4's
+  mutual-best and complete-link checks.
+- `report.py`: scores every rule and the best combination, with a 2-fold held-out check.
+
+`gen-qwen3-4b` needs the weights in `ml/.cache` first (`HF_HUB_OFFLINE=0` once, as above).
+
