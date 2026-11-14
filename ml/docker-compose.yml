@@ -205,6 +205,46 @@ services:
       retries: 3
       start_period: 1200s
 
+  # Phase E judge candidates (ml/models/). Each needs most of the card: run ONE, alone.
+  #
+  # perplexity-ai/pplx-decider-flash-v1.3 at a pinned revision, on its own pplx_decider package
+  # (pplx/Dockerfile: no general engine runs its noncausal attention and separate readout).
+  pplx-decider:
+    <<: [*common, *gpu]
+    profiles: [pplx-decider, big]
+    build: ./pplx
+    image: makhzan-ml/pplx-decider:1.3
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      <<: *env
+      HF_HOME: /home/pplx/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /home/pplx/.cache/huggingface/hub
+      # Padded tokens per forward pass. Titles are short; 8,192 keeps the peak well inside 12 GB.
+      BATCH_TOKENS: ${PPLX_BATCH_TOKENS:-8192}
+    volumes:
+      - ${ML_CACHE_DIR:-./.cache}/huggingface:/home/pplx/.cache/huggingface:z
+      - ${ML_CACHE_DIR:-./.cache}/triton:/home/pplx/.triton:z
+    ports: ["127.0.0.1:8108:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 1200s
+
+  # Qwen/Qwen3.5-4B (the instruct model; Kev and pplx-decider are both built on it), text only
+  # (--language-model-only skips the vision tower), scored as a judge from the logprobs of "yes"
+  # and "no" at the first answer token with thinking off (models/judge.py). Pinned revision.
+  gen-qwen3.5-4b:
+    <<: *vllm-gpu
+    profiles: [gen-qwen3.5-4b, big]
+    command: >-
+      Qwen/Qwen3.5-4B --revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+      --served-model-name qwen3.5-4b --language-model-only
+      --dtype bfloat16 --max-model-len ${QWEN35_MAX_LEN:-1024} --max-num-seqs 32
+      --gpu-memory-utilization ${GPU_UTIL_BIG:-0.85} --max-logprobs 20 ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8109:8000"]
+
   # ======================= CPU (no GPU reservation) =======================
   # vLLM's CPU backend (bf16 on this Zen 4's AVX-512) measured 5.1-7.8x TEI's CPU build on all three
   # models TEI could serve (README, "Engines").
