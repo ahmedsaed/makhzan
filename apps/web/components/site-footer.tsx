@@ -38,6 +38,10 @@ export const FOOTER_GROUPS = [
  * "Made by Merope". From `md`, the groups sit in a row beside the logo and
  * the toggle moves to the right. Every link is 44 px tall (S4).
  *
+ * One "Footer" landmark holds the three groups, each a list named by its
+ * visible heading: three navs made a screen reader's landmark list three
+ * entries longer for one footer.
+ *
  * No data fetching, for the same reason as the header: it renders on error
  * pages and must not depend on the API.
  */
@@ -52,26 +56,36 @@ export function SiteFooter() {
         >
           <Logo className="text-lg" />
         </Link>
-        <div className="grid flex-[1_1_100%] grid-cols-2 gap-x-6 gap-y-1 md:flex-[0_1_auto] md:grid-cols-[repeat(3,auto)] md:gap-x-14">
-          {FOOTER_GROUPS.map((group) => (
-            <div key={group.title} data-footer-group={group.title}>
-              <h2 className="mt-2.5 font-sans text-xs font-semibold tracking-[0.06em] text-ink-3 uppercase">
-                {group.title}
-              </h2>
-              <nav aria-label={group.title} className="flex flex-col items-start">
-                {group.links.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className="flex h-11 items-center text-ink-2 hover:text-ink"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-              </nav>
-            </div>
-          ))}
-        </div>
+        <nav
+          aria-label="Footer"
+          className="grid flex-[1_1_100%] grid-cols-2 gap-x-6 gap-y-1 md:flex-[0_1_auto] md:grid-cols-[repeat(3,auto)] md:gap-x-14"
+        >
+          {FOOTER_GROUPS.map((group) => {
+            const headingId = `footer-group-${group.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+            return (
+              <div key={group.title} data-footer-group={group.title}>
+                <h2
+                  id={headingId}
+                  className="mt-2.5 font-sans text-xs font-semibold tracking-[0.06em] text-ink-3 uppercase"
+                >
+                  {group.title}
+                </h2>
+                <ul aria-labelledby={headingId} className="flex flex-col items-start">
+                  {group.links.map((link) => (
+                    <li key={link.href}>
+                      <Link
+                        href={link.href}
+                        className="flex h-11 items-center text-ink-2 hover:text-ink"
+                      >
+                        {link.label}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </nav>
         <div className="flex flex-[1_1_100%] flex-wrap items-center gap-x-6 gap-y-3 md:flex-[1_1_auto] md:justify-end md:self-center">
           <ThemeToggle />
           <p className="text-ink-2">

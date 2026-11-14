@@ -14,9 +14,9 @@ Suppliers are named by role only (see the private configuration's README).
 | Phase | What | State |
 |---|---|---|
 | A | Survey current local models (decision models, rerankers, embeddings) | Done — `model-shortlist.md` |
-| B | Rules first: identifiers for every department, a family guard, grouping that respects existing products | PR #45 — measurement in `phase-b-identifier-measurement.md` |
+| B | Rules first: identifiers for every department, a family guard, grouping that respects existing products | Deployed — PR #45 and #47; regrouped on production 2026-11-13: 264 merges, 1,043 multi-shop products; on the 494 labelled pairs, precision 0.945 → 0.951 and recall 0.640 → 0.720 (PR #45's description; measured before #47's ordering fixes) |
 | C | Labelled dataset: 494 pairs (validation/test), owner spot-check of 100, adjudicated test set | Done (data kept out of the repo) |
-| D | Validate: Docker model serving on the RTX 3060; bake-off of candidate finding (text similarity vs embeddings) and pair judging (rules vs Qwen3-Reranker vs Kev-4B), precision/recall per department | Setting up |
+| D | Validate: Docker model serving on the RTX 3060; bake-off of candidate finding (text similarity vs embeddings) and pair judging (rules vs Qwen3-Reranker vs Kev-4B), precision/recall per department | Model serving merged (PR #49, `ml/README.md`); bake-off in progress |
 | E | Integrate the winner: suggestions in the review queue first; automatic merges per department only past a precision gate (lower 95% bound ≥ 0.98 on the frozen test set) | After D |
 | F | Fine-tune a small judge on our pairs — only if D shows off-the-shelf models fall short | After D |
 | G | Feedback loop: a structured "Report a problem" form (button) on product pages → review queue → reviewed reports become labelled pairs (wrong-merge and missed-match) for training and testing. Unreviewed reports never feed training. | Form, `POST /reports` and review on the server (`./makhzan reports`) built; turning accepted reports into pairs not yet |

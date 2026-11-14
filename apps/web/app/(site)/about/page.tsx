@@ -8,6 +8,9 @@ import { departmentsFrom } from "@/lib/departments";
 import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 
+/** How long About waits for each count before it falls back to words. */
+const ABOUT_FETCH_TIMEOUT_MS = 3000;
+
 export const metadata: Metadata = pageMetadata({
   title: "About",
   description:
@@ -23,11 +26,13 @@ export const metadata: Metadata = pageMetadata({
  * reads go through lib/api.ts's data cache (five minutes, like the home
  * page's totals), so a busy About page asks the API at most once in five
  * minutes, though the page itself renders per request for its canonical link.
+ * Each read gives up after ABOUT_FETCH_TIMEOUT_MS, so a hung API with an empty
+ * cache costs the page a few seconds and the fixed wording, never the page.
  */
 export default async function AboutPage() {
   const [stats, categories] = await Promise.all([
-    fetchStats().catch(() => null),
-    fetchCategories().catch(() => null),
+    fetchStats({ timeoutMs: ABOUT_FETCH_TIMEOUT_MS }).catch(() => null),
+    fetchCategories(undefined, { timeoutMs: ABOUT_FETCH_TIMEOUT_MS }).catch(() => null),
   ]);
   const departments = categories
     ? departmentsFrom(categories).filter((department) => department.count > 0).length
