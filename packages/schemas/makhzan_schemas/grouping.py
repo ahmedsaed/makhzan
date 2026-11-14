@@ -22,7 +22,7 @@ any of these vetoes a merge outright —
   - their titles state different forms (a bare chip vs a module, or an
     accessory such as a bracket vs the part it fits) — see
     `DomainProfile.form_markers`;
-  - their prices are implausibly far apart.
+  - their prices are ten times apart or more (`DomainProfile.merge_price_ratio`).
 
 A group key says which listings form one product; it is not the product's
 identity. `plan_identity` matches each group to the product its listings already
@@ -133,30 +133,52 @@ def _span_ok(prices: list[Decimal], candidate: Decimal | None, max_ratio: float)
     band centred on one mid-priced member reached from 65 to 1040 EGP and
     swallowed the family.
 
+    The ratio is ten (`DomainProfile.merge_price_ratio`), not the four it was:
+    shops price one part very differently, and owner-labelled pairs found the
+    four-times veto blocking about one real match in forty it fired on alone —
+    0.5 against 3 EGP ceramic capacitors, 1 against 8.5 EGP audio jacks, 10
+    against 50 EGP touch modules. A pack that says so ("3Pcs", "Pack of Two")
+    is kept apart by the values veto at any price.
+
     A missing price is not evidence either way, so it neither blocks nor widens.
     """
     known = [p for p in [*prices, candidate] if p is not None and p > 0]
     if len(known) < 2:
         return True
-    return (max(known) / min(known)) <= Decimal(str(max_ratio))
+    return (max(known) / min(known)) < Decimal(str(max_ratio))
 
 
-_FORM_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+_FORM_CACHE: dict[str, tuple[list[re.Pattern[str]], list[tuple[str, re.Pattern[str]]]]] = {}
+
+#: What a title says comes *with* the listing: "TMC2208 Driver Module with Heat
+#: Sink", "Piezo Element + Aluminium Shell", "ESP-01 with adapter". The words
+#: after the connector, up to three and never past punctuation, name an included
+#: part, not the listing's form, so they are dropped before the form is read.
+#: "Battery Holder 9V + DC Plug" is still a holder: the word before stays.
+_INCLUDED = re.compile(r"(?:\bwith\b|\bw/|\+|\bplus\b|\bincluding\b)\s*(?:[^\s,;:()|/]+\s*){0,3}")
 
 
 def _form(title: str | None, mpn: str | None, domain: str | None = None) -> str | None:
     """The physical form a title states ("chip", "module"...), or None if silent.
 
     Read before noise stripping, because the noise list is exactly where the
-    words that say it ("ic", "module", "board") are thrown away.
+    words that say it ("ic", "module", "board") are thrown away. Form words must
+    say what the listing *is*: an included part (`_INCLUDED`) and the profile's
+    glosses (`DomainProfile.form_glosses`) are taken out first.
     """
     profile = get_profile(domain)
     compiled = _FORM_CACHE.get(profile.slug)
     if compiled is None:
-        compiled = [(form, re.compile(pattern)) for form, pattern in profile.form_markers]
+        compiled = (
+            [re.compile(pattern) for pattern in profile.form_glosses],
+            [(form, re.compile(pattern)) for form, pattern in profile.form_markers],
+        )
         _FORM_CACHE[profile.slug] = compiled
-    text = _without_identifier(title, mpn)
-    return next((form for form, pattern in compiled if pattern.search(text)), None)
+    glosses, markers = compiled
+    text = _INCLUDED.sub(" ", _without_identifier(title, mpn))
+    for gloss in glosses:
+        text = gloss.sub(" ", text)
+    return next((form for form, pattern in markers if pattern.search(text)), None)
 
 
 def _forms_conflict(a: str | None, b: str | None, strict: frozenset[str]) -> bool:
@@ -241,7 +263,7 @@ class _Cluster:
             if any(_forms_conflict(ev.form, known.form, strict) for known in self.evidence):
                 return None
         known = [p for p in [*self.prices, *other.prices] if p is not None and p > 0]
-        if len(known) >= 2 and max(known) / min(known) > Decimal(str(ratio)):
+        if len(known) >= 2 and max(known) / min(known) >= Decimal(str(ratio)):
             return None
         best = max(_jaccard(a.tokens, b.tokens) for a in self.evidence for b in other.evidence)
         return best if best >= threshold else None

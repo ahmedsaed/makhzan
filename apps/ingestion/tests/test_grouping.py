@@ -6,7 +6,7 @@ kit with 4x SG90" — and merging those puts a mounting bracket inside a servo.
 
 Two listings sharing an identifier are therefore only merged when their titles
 agree that they are the same thing, and nothing vetoes it: the same shop, a
-different value of the same unit, a different form, or an implausible price gap.
+different value of the same unit, a different form, or a price gap of 10x or more.
 
 The shops in these tests are fictional; the titles are real ones that were
 merged wrongly.
@@ -197,8 +197,8 @@ def test_the_price_veto_measures_the_whole_cluster_not_its_first_member():
         [
             _listing("XL4015 Buck Converter Module", 100, "XL4015", source="a"),
             _listing("XL4015 Buck Converter Module", 300, "XL4015", source="b"),
-            # Within 4x of b, but 9x of a — the cluster would span too far.
-            _listing("XL4015 Buck Converter Module", 900, "XL4015", source="c"),
+            # Within 10x of b, but 12x of a — the cluster would span too far.
+            _listing("XL4015 Buck Converter Module", 1200, "XL4015", source="c"),
         ]
     )
     assert len(groups) == 2
@@ -535,6 +535,8 @@ def test_variants_with_colliding_signatures_get_keys_that_do_not_depend_on_sibli
         ("Battery (2 Pcs)", "quantity", {2}),
         ("Resistor pack of 10", "quantity", {10}),
         ("Linear Rail 1000mm", "length", {1000}),
+        ("Gear Motor 12V 130RPM", "speed", {130}),
+        ("Gear Motor 12V 170 RPM", "speed", {170}),
     ],
 )
 def test_value_tokens_are_read_from_titles(title, dimension, values):
@@ -792,3 +794,271 @@ def test_a_second_grouping_from_the_first_changes_nothing():
             listing.product_id = uuid.uuid5(uuid.NAMESPACE_URL, key)
     second = _group_listings(listings)
     assert _members_by_shop(second) == _members_by_shop(first)
+
+
+# --------------------------------------------------------------------------- #
+# Relaxed vetoes: what owner-labelled pairs showed the vetoes blocking wrongly
+# --------------------------------------------------------------------------- #
+#
+# Each pair below is two shops' listings of one product, judged so by the owner,
+# that a veto kept apart. Several carry no identifier in the catalogue (so they
+# are never compared today); they are given a code that is not in either title
+# here, because what is under test is the veto, not identifier extraction.
+
+
+def _fired(a, b, part_number, price_a=10, price_b=10):
+    """Which vetoes keep two titles apart, read exactly as grouping reads them."""
+    from makhzan_schemas.domains import get_profile
+    from makhzan_schemas.grouping import _form, _forms_conflict, _span_ok, _without_identifier
+
+    profile = get_profile("electronics")
+    fired = set()
+    va = value_tokens(_without_identifier(a, part_number))
+    vb = value_tokens(_without_identifier(b, part_number))
+    if values_conflict(va, vb):
+        fired.add("values")
+    form_a, form_b = _form(a, part_number), _form(b, part_number)
+    if _forms_conflict(form_a, form_b, profile.accessory_forms):
+        fired.add("form")
+    prices = [Decimal(str(price_a))]
+    if not _span_ok(prices, Decimal(str(price_b)), profile.merge_price_ratio):
+        fired.add("price")
+    return fired
+
+
+@pytest.mark.parametrize(
+    ("a", "price_a", "b", "price_b"),
+    [
+        ("Ceramic Capacitor 47PF – 50v (47PF)", "0.5", "Capacitors Ceramic 47pf. 50v (47)", 3),
+        ("Ceramic Capacitor 220pF 50V", "0.5", "Capacitors Ceramic 220pf. 50v (221)", 3),
+        (
+            "Audio Plug - Miniature Jack Socket - 3.5mm Mono",
+            "8.5",
+            "Audio Plug 3.5mm Mono Miniature Jack Socket",
+            1,
+        ),
+        ("TTP223 Capacitive Touch Sensor Red", 10, "Touch Switch Module TTP223", 50),
+    ],
+)
+def test_a_price_gap_under_ten_times_is_not_a_veto(a, price_a, b, price_b):
+    """Shops price one part very differently. At 4x, the price veto alone was
+    wrong on about one pair in forty it fired on; these were among them."""
+    assert _fired(a, b, "TESTCODE", price_a, price_b) == set()
+
+
+def test_the_same_capacitor_at_six_times_the_price_merges():
+    groups = _group_listings(
+        [
+            _listing("Ceramic Capacitor 220pF 50V", "0.5", "CC220", source="volta"),
+            _listing("Capacitors Ceramic 220pf. 50v (221)", 3, "CC220", source="ohmic"),
+        ]
+    )
+    assert len(groups) == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known remaining false veto: a branded sensor at 15x a generic one is the "
+    "same product (brand alone does not make a different product), but 15x is past "
+    "the 10x price veto and nothing else tells it from a pack",
+)
+def test_a_branded_sensor_far_above_a_generic_one_is_the_same_product():
+    assert "price" not in _fired(
+        "OSEPP HUMI-01 DHT11 Humidity & Temperature Sensor",
+        "DHT11 Temperature And Humidity Sensor Module with LED",
+        "DHT11",
+        680,
+        45,
+    )
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "part_number"),
+    [
+        # A USB-serial converter, called a "cable" and a "... to Serial Adapter".
+        (
+            "FTDI FT232RL USB to TTL Converter Module",
+            "USB TO UART TTL FTDI 5V 3.3V FT232RL Download Cable To Serial Adapter Module "
+            "For Arduino",
+            "FT232RL",
+        ),
+        # The same case, two words for it.
+        (
+            "Clear Acrylic Case Enclosure for Arduino UNO",
+            "Acrylic Casefor Arduino UNO Protective Shell",
+            "TESTCODE",
+        ),
+        # A heat sink that comes with the driver is not what the listing is.
+        (
+            "TMC2208 Stepper Motor Driver Module with Heat Sink for 3D Printer Part",
+            "TMC2208 V1.2 Stepper Motor Driver for 3D Printer",
+            "TMC2208",
+        ),
+        # One battery holder, called a spacer and a holder.
+        (
+            "Battery Spacer ( 1 x 18650 ) imported",
+            "18650 1×1 Spacer Single Battery 1 Cell Holder",
+            "TESTCODE",
+        ),
+        # SMD is how the board's chip is mounted; it is still the board.
+        ("Arduino Uno Rev3 SMD", "Arduino Board – Arduino UNO Rev3", "TESTCODE"),
+        # "(Heat Sink)" glosses what the cooling block is.
+        (
+            "Aluminium Water Cooling Block Head 40x40x12mm (Heat Sink)",
+            "Aluminum Water Cooling Block for Peltier 40x40mm",
+            "TESTCODE",
+        ),
+        # A holder and a clip, each with a DC plug.
+        (
+            "Battery Holder 9V + Standard 2.1mm DC Male Plug",
+            "9V Battery Clip with standard DC Male Plug",
+            "TESTCODE",
+        ),
+        # A cover or shell that comes with the element.
+        (
+            "Piezo Buzzer Element with Aluminum Cover",
+            "Piezoelectric Piezo Ceramic 15mm + Aluminum shell",
+            "TESTCODE",
+        ),
+    ],
+)
+def test_form_words_that_do_not_say_what_the_listing_is_do_not_veto(a, b, part_number):
+    assert _fired(a, b, part_number) == set()
+
+
+def test_a_driver_with_a_heat_sink_merges_with_the_driver():
+    groups = _group_listings(
+        [
+            _listing(
+                "TMC2208 Stepper Motor Driver Module with Heat Sink for 3D Printer Part",
+                200,
+                "TMC2208",
+                source="volta",
+            ),
+            _listing("TMC2208 V1.2 Stepper Motor Driver for 3D Printer", 290, "TMC2208", "ohmic"),
+        ]
+    )
+    assert len(groups) == 1
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        (
+            "Energizer Alkaline AAA 1.5V Battery 2 PCS (Made in China)",
+            "Energizer Alkaline AAA 1.5V Two Batteries",
+        ),
+        (
+            "Energizer Alkaline AAA 1.5V Two Batteries",
+            "Energizer 1.5V AAA Size Battery Alkaline (Pack of 2)",
+        ),
+        ("AAA Battery Pack of Two", "AAA Battery 2 Pieces"),
+    ],
+)
+def test_a_count_spelled_out_is_the_same_pack(a, b):
+    assert _fired(a, b, "TESTCODE") == set()
+
+
+@pytest.mark.parametrize(
+    ("title", "quantity"),
+    [
+        ("Energizer AAA Two Batteries", 2),
+        ("Resistor Pack of Two", 2),
+        ("Header Three Pcs", 3),
+        ("Fuse twelve pieces", 12),
+        ("Pair of Wheels", 2),
+        ("Battery 2 Pieces", 2),
+    ],
+)
+def test_counts_written_as_words_are_read(title, quantity):
+    assert value_tokens(title)["quantity"] == {Decimal(quantity)}
+
+
+@pytest.mark.parametrize("title", ["Relay One Channel", "Two Way Switch", "Three Phase Motor"])
+def test_a_number_word_that_counts_something_else_is_not_a_pack(title):
+    assert "quantity" not in value_tokens(title)
+
+
+def test_a_counted_pack_still_does_not_merge_with_one_unit():
+    assert "values" in _fired("AAA Battery Two Batteries", "AAA Battery", "TESTCODE")
+    assert "values" in _fired("AAA Battery Pack of 4", "AAA Battery Two Pcs", "TESTCODE")
+
+
+# The look-alikes the relaxed vetoes must still keep out.
+
+
+def test_an_adapter_board_for_a_module_does_not_merge_with_the_module():
+    """An adapter for a part is an accessory of it, even when called a module."""
+    module = "ESP-01 ESP8266 Serial WIFI Wireless Transceiver Module"
+    adapter = "ESP-01 Adapter Module"
+    programmer = "USB to UART/ESP8266 Adapter Programmer for ESP-01 WiFi Modules with CH340G Chip"
+    groups = _group_listings(
+        [
+            _listing(module, 90, "ESP-01", source="a"),
+            _listing(adapter, 40, "ESP-01", source="b"),
+            _listing(programmer, 65, "ESP-01", source="c"),
+        ]
+    )
+    assert not _together(groups, module, adapter)
+    assert not _together(groups, module, programmer)
+    assert "form" in _fired(module, adapter, "ESP-01")
+    assert "form" in _fired(module, programmer, "ESP-01")
+
+
+def test_a_laptop_dc_jack_is_not_a_panel_jack_adapter():
+    """Never compared — they read different identifiers — and, if they were,
+    the panel jack's "adapter" is not the "to X adapter" of a converter."""
+    from makhzan_schemas.domains import get_profile
+
+    laptop = "DC Power Jack Female Socket Connector for Laptop 5.5mmx2.1mm"
+    panel = "2.1×5.5mm 2.1mm Jack Adapter Female DC Power Plastic Socket Panel Mount for Box DC022B"
+    profile = get_profile("electronics")
+    listings = [
+        _listing(laptop, "4.5", profile.extract_identifier(laptop), source="a"),
+        _listing(panel, 7, profile.extract_identifier(panel), source="b"),
+    ]
+    assert len(_group_listings(listings)) == 2
+    assert "form" in _fired(laptop, panel, "TESTCODE", "4.5", 7)
+
+
+def test_a_different_regulator_family_reads_a_different_identifier():
+    """A 78R12 is a low-dropout regulator, not an LM7812, and at 6x the price
+    the price veto no longer says so. Identifiers do: they never share a group."""
+    from makhzan_schemas.domains import get_profile
+
+    profile = get_profile("electronics")
+    titles = ["Voltage Regulator 78R12", "LM7812 Voltage Regulator Integrated Circuit Chip"]
+    listings = [
+        _listing(t, p, profile.extract_identifier(t), source=s)
+        for t, p, s in zip(titles, (5, 30), ("a", "b"), strict=True)
+    ]
+    assert listings[0].part_number != listings[1].part_number
+    assert len(_group_listings(listings)) == 2
+
+
+@pytest.mark.parametrize(
+    ("accessory", "part"),
+    [
+        ("HC-SR04 Ultrasonic Sensor Mounting Bracket with Screws", "HC-SR04 Ultrasonic Sensor"),
+        ("18650 Battery Holder", "18650 Battery 3.7V"),
+        ("18650 Battery Clip", "18650 Battery 3.7V"),
+        ("Raspberry Pi 4 Case + Fan", "Raspberry Pi 4 Model B"),
+        ("Heat Sink for TO-220", "LM7805 Regulator TO-220"),
+    ],
+)
+def test_an_accessory_named_as_such_still_does_not_merge_with_its_part(accessory, part):
+    assert "form" in _fired(accessory, part, "TESTCODE")
+
+
+def test_gear_motors_of_different_speeds_do_not_merge():
+    """A bracket used to keep these apart by accident (an accessory word); with
+    "with Bracket" read as included, the speed is what tells them apart."""
+    groups = _group_listings(
+        [
+            _listing(
+                "GA25-370 DC Gear Motor with Encoder 12V 280RPM with Bracket", 475, "GA25-370"
+            ),
+            _listing("GA25-370 DC Gear Motor with Encoder 12V 130RPM 4.4kg.cm", 450, "GA25-370"),
+        ]
+    )
+    assert len(groups) == 2

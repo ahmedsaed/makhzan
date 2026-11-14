@@ -19,7 +19,9 @@ switching 5-60 VDC against one switching 5-200 VDC).
 Two titles conflict when both state a dimension and they share no value of it.
 Silence is not a conflict — "MG996R Servo" says nothing about rotation — with one
 exception: a quantity. A title that says "3Pcs" is a pack, and a title that says
-nothing is one unit, so they are not the same offer.
+nothing is one unit, so they are not the same offer. A count may be spelled out
+("Two Batteries", "Pack of Two"): read as a number, or "2 PCS" and "Two
+Batteries" — the same pack — would conflict.
 """
 
 from __future__ import annotations
@@ -73,6 +75,9 @@ _unit("resistance", "1", "ohm", "ohms", "ω", "r")
 _unit("resistance", "1000", "k", "kohm", "kω")
 _unit("resistance", "1000000", "mohm", "mω")
 _unit("dof", "1", "dof")
+# A gear motor's speed is the variant a shop sells it by: 130 and 280 RPM GA25-370
+# motors share every other word (and once a bracket stopped vetoing, a title).
+_unit("speed", "1", "rpm")
 _unit("bit", "1", "bit", "bits")
 _unit("quantity", "1", "pcs", "pc", "piece", "pieces", "pack")
 
@@ -110,6 +115,22 @@ _PHRASES: list[tuple[re.Pattern[str], str, Decimal]] = [
     (re.compile(r"\bpack\s+of\s+(\d+)\b"), "quantity", Decimal(0)),
 ]
 
+# A count written as a word: "Two Batteries", "Pack of Two", "Three Pcs". Only
+# before a word that counts the units sold — pieces, packs, batteries —
+# or after "pack of", so "One Channel" or "Two Way" stay what they are (a
+# channel count is read as a channel, never as a pack).
+_NUMBER_WORDS = {
+    word: Decimal(n)
+    for n, word in enumerate(
+        "one two three four five six seven eight nine ten eleven twelve".split(), start=1
+    )
+}
+_COUNTED = r"(?:pcs|pc|pieces?|packs?|units?|batter(?:y|ies))"
+_WORDS_ALT = "|".join(_NUMBER_WORDS)
+_QUANTITY_WORDS = re.compile(
+    rf"\b(?:pack\s+of\s+({_WORDS_ALT})|({_WORDS_ALT})\s*-?\s*{_COUNTED})\b|\b(pair)\s+of\b"
+)
+
 #: How a title that states no quantity is read: one unit.
 _DEFAULT_QUANTITY = frozenset({Decimal(1)})
 
@@ -146,6 +167,10 @@ def value_tokens(title: str | None) -> dict[str, frozenset]:
         for match in pattern.finditer(text):
             magnitude = Decimal(match.group(1)) if match.groups() else value
             found.setdefault(dimension, set()).add(magnitude.normalize())
+    for match in _QUANTITY_WORDS.finditer(text):
+        word = next(group for group in match.groups() if group)
+        count = Decimal(2) if word == "pair" else _NUMBER_WORDS[word]
+        found.setdefault("quantity", set()).add(count)
     return {dimension: frozenset(values) for dimension, values in found.items()}
 
 
@@ -203,7 +228,7 @@ def without_values(title: str | None) -> str:
     text = _VALUE.sub(" ", text)
     for pattern, _, _ in _PHRASES:
         text = pattern.sub(" ", text)
-    return text
+    return _QUANTITY_WORDS.sub(" ", text)
 
 
 def is_unit(word: str | None) -> bool:
