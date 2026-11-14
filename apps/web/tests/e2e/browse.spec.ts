@@ -170,10 +170,13 @@ test("the footer groups its links: makhzan, for shops, legal", async ({ page }) 
       ],
     ],
   ];
+  // One landmark, the groups inside it as lists named by their headings.
+  await expect(footer.getByRole("navigation")).toHaveCount(1);
+  const nav = footer.getByRole("navigation", { name: "Footer" });
   for (const [title, links] of groups) {
-    const nav = footer.getByRole("navigation", { name: title });
+    const list = nav.getByRole("list", { name: title, exact: true });
     for (const [name, href] of links) {
-      await expect(nav.getByRole("link", { name, exact: true })).toHaveAttribute("href", href);
+      await expect(list.getByRole("link", { name, exact: true })).toHaveAttribute("href", href);
     }
   }
 });

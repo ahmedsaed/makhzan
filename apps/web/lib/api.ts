@@ -339,12 +339,25 @@ export type SearchParams = {
   facets?: boolean;
 };
 
-type FetchOptions = { revalidate?: number | false };
+/**
+ * `timeoutMs` is opt-in: without it a call waits as long as fetch does, as
+ * every page did before it existed. A page whose data is a nicety with wording
+ * to fall back on (About's counts) passes one, so a hung API with an empty
+ * cache cannot hold the page: the call rejects with the abort, and the
+ * caller's `.catch` takes the fallback.
+ */
+export type TimeoutOption = { timeoutMs?: number };
 
-async function get<T>(path: string, { revalidate = DETAIL_TTL }: FetchOptions = {}): Promise<T> {
+type FetchOptions = { revalidate?: number | false } & TimeoutOption;
+
+async function get<T>(
+  path: string,
+  { revalidate = DETAIL_TTL, timeoutMs }: FetchOptions = {},
+): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     // `false` means "never cache" for a per-visitor query; a number caches it.
     ...(revalidate === false ? { cache: "no-store" as const } : { next: { revalidate } }),
+    ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
     headers: { accept: "application/json" },
   });
   if (!res.ok) {
@@ -387,13 +400,19 @@ function query(params: Record<string, string | number | boolean | undefined>): s
 
 // --------------------------------------------------------------------------- //
 
-export function fetchStats(): Promise<Stats> {
-  return get<Stats>("/stats", { revalidate: TAXONOMY_TTL });
+export function fetchStats({ timeoutMs }: TimeoutOption = {}): Promise<Stats> {
+  return get<Stats>("/stats", { revalidate: TAXONOMY_TTL, timeoutMs });
 }
 
 /** The whole taxonomy, or one vertical's slice of it. */
-export function fetchCategories(domain?: string): Promise<Category[]> {
-  return get<Category[]>(`/categories${query({ domain })}`, { revalidate: TAXONOMY_TTL });
+export function fetchCategories(
+  domain?: string,
+  { timeoutMs }: TimeoutOption = {},
+): Promise<Category[]> {
+  return get<Category[]>(`/categories${query({ domain })}`, {
+    revalidate: TAXONOMY_TTL,
+    timeoutMs,
+  });
 }
 
 export function searchProducts(params: SearchParams): Promise<SearchResponse> {

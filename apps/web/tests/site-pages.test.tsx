@@ -188,6 +188,20 @@ describe("the FAQ", () => {
     );
   });
 
+  it("names each group's section by its visible heading, not a copy of it", async () => {
+    const { default: FaqPage } = await import("@/app/(site)/faq/page");
+    const { container } = render(<FaqPage />);
+    const sections = [...container.querySelectorAll("section")];
+    expect(sections).toHaveLength(faqGroups.length);
+    for (const [i, section] of sections.entries()) {
+      expect(section).not.toHaveAttribute("aria-label");
+      const heading = section.querySelector("h2")!;
+      expect(heading.id).not.toBe("");
+      expect(section).toHaveAttribute("aria-labelledby", heading.id);
+      expect(screen.getByRole("region", { name: faqGroups[i].title })).toBe(section);
+    }
+  });
+
   it("carries FAQPage structured data with every question and its plain answer", async () => {
     const { default: FaqPage } = await import("@/app/(site)/faq/page");
     const { container } = render(<FaqPage />);

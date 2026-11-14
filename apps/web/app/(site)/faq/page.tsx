@@ -37,8 +37,11 @@ export default function FaqPage() {
       <OpenFromHash />
       <Paragraph parts={faqLead} />
       {faqGroups.map((group) => (
-        <section key={group.title} aria-label={group.title}>
-          <h2 className="mt-7 font-sans text-xs font-semibold tracking-[0.06em] text-ink-3 uppercase">
+        <section key={group.title} aria-labelledby={groupHeadingId(group.title)}>
+          <h2
+            id={groupHeadingId(group.title)}
+            className="mt-7 font-sans text-xs font-semibold tracking-[0.06em] text-ink-3 uppercase"
+          >
             {group.title}
           </h2>
           <div className="mt-3 overflow-hidden rounded-card border border-line bg-surface">
@@ -68,6 +71,12 @@ export default function FaqPage() {
       ))}
     </ContentPage>
   );
+}
+
+/** The id of a group's heading, which names its section. Prefixed so it can
+ *  never take a question's id (questions are linked by theirs). */
+function groupHeadingId(title: string) {
+  return `faq-group-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
 /** Per request, so its canonical link and structured data use the runtime
