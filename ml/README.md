@@ -334,3 +334,13 @@ Verdicts for the other models:
 
   Each script's docstring gives its exact command. Catalogue text goes to a private directory
   you name. `ml/out/bakeoff/` gets pair ids, scores and counts.
+- `labelling/`: the Phase E labelling sample for the precision gate (real shortlists, scored
+  by the Phase D finalist, stratified for blind labelling). Run in this order:
+  1. `bakeoff/catalogue.py` (with `--db` for the database copy) and `bakeoff/rules.py`.
+  2. `shortlist.py`: identifier-key blocks plus top-10 title-token Jaccard within one
+     department, other shops only, Phase C pairs and listings excluded. Needs numpy.
+  3. `vetoes.py`: today's vetoes and decisions per pair, in the ingestion venv.
+  4. `score.py`: Kev-4B title only (frozen I2-L0-0) on every non-vetoed pair, resumable.
+  5. `sample.py`: the stratified sample, with inclusion probabilities, and the blind files.
+
+  All of it writes to a private directory you name: the outputs hold catalogue text.
