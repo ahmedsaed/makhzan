@@ -1,0 +1,18 @@
+# pplx-decider-flash-v1.3 on CPU: the GPU image (pplx/Dockerfile, built first as
+# makhzan-ml/pplx-decider:1.3) minus flash-linear-attention.
+#
+# serve.py runs the card's reference path (fast=False: padded batches, SDPA with the
+# checkpoint's noncausal mask), which has a CPU path of its own; fla is only for the packed fast
+# path, which needs CUDA. But with fla importable, transformers' Qwen3.5 layers take fla's Triton
+# kernels even on CPU, and Triton has no CPU driver, so it is removed here. serve.py takes
+# --device cpu / DEVICE=cpu; the card's code then runs fp32, DTYPE=bf16 loads bf16 instead.
+# Parity and speed: ml/README.md, "CPU serving".
+ARG BASE=makhzan-ml/pplx-decider:1.3
+FROM ${BASE}
+USER root
+RUN uv pip uninstall flash-linear-attention fla-core \
+ && python -c "import importlib.util as u; assert u.find_spec('fla') is None"
+# serve.py again: the base image holds whichever serve.py it was built with.
+COPY serve.py /opt/pplx/serve.py
+RUN chmod a+r /opt/pplx/serve.py
+USER pplx

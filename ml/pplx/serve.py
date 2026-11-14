@@ -21,15 +21,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import torch
 from huggingface_hub import snapshot_download
 from pplx_decider import Decider, RequestError
+from pplx_decider import model as pplx_model
 from pplx_decider.protocol import answer
 
 
 def build(args: argparse.Namespace) -> Decider:
     path = snapshot_download(args.model, revision=args.revision)
-    return Decider.from_pretrained(
-        path, device="cuda", locate=False, batch_tokens=args.batch_tokens,
-        cpu_threads=os.cpu_count() or 4,
+    if args.device == "cpu" and args.dtype == "bf16":
+        # The card's code picks bf16 on CUDA and fp32 elsewhere (Decider.__init__). bf16 on CPU is
+        # our choice, not the card's: load the backbone in bf16 directly (fp32 first would need
+        # ~18 GB) and cast the 255-row readout after. Parity vs the GPU scores is in ml/README.md.
+        backbone = pplx_model._backbone
+        pplx_model._backbone = lambda ckpt, cfg, _dtype: backbone(ckpt, cfg, torch.bfloat16)
+    threads = int(os.environ.get("OMP_NUM_THREADS") or len(os.sched_getaffinity(0)))
+    decider = Decider.from_pretrained(
+        path, device=args.device, locate=False, batch_tokens=args.batch_tokens,
+        cpu_threads=threads,
     )  # fmt: skip
+    if args.device == "cpu" and args.dtype == "bf16":
+        decider.readout.to(torch.bfloat16)
+    return decider
 
 
 def main() -> None:
@@ -38,11 +49,20 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--model", required=True)
     ap.add_argument("--revision", required=True)
+    ap.add_argument("--device", choices=["cuda", "cpu"], default=os.environ.get("DEVICE", "cuda"))
+    ap.add_argument(
+        "--dtype", choices=["auto", "fp32", "bf16"], default=os.environ.get("DTYPE", "auto"),
+        help="auto (= fp32 on CPU): the card's choice, bf16 on CUDA; bf16: also on CPU",
+    )  # fmt: skip
     ap.add_argument("--batch-tokens", type=int, default=int(os.environ.get("BATCH_TOKENS", 8192)))
     args = ap.parse_args()
     decider = build(args)
     scale = decider.temperature
-    print(f"loaded {args.model}@{args.revision} T={scale:.4f}", flush=True)
+    print(
+        f"loaded {args.model}@{args.revision} on {args.device} "
+        f"({next(decider.backbone.parameters()).dtype}) T={scale:.4f}",
+        flush=True,
+    )
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, body: dict) -> None:
