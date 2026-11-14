@@ -1,0 +1,15 @@
+# Kev-4B on CPU: the GPU image (kev/Dockerfile, built first as makhzan-ml/kev:1.0) minus
+# flash-linear-attention.
+#
+# With fla importable, transformers' Qwen3.5 layers take fla's Triton kernels for the gated delta
+# rule and l2norm even on CPU, and Triton has no CPU driver ("0 active drivers"), so every request
+# fails with HTTP 500. Without fla they fall back to transformers' own PyTorch reference
+# (torch_chunk_gated_delta_rule), which is what runs here. Same lockfile, same torch 2.8.0, same
+# weights; kev.serve picks the CPU itself when no GPU is visible, and KEV_DTYPE (compose) picks
+# bf16, since its CPU default is fp32. Parity and speed: ml/README.md, "CPU serving".
+ARG BASE=makhzan-ml/kev:1.0
+FROM ${BASE}
+USER root
+RUN uv pip uninstall flash-linear-attention fla-core \
+ && python -c "import importlib.util as u; assert u.find_spec('fla') is None"
+USER kev

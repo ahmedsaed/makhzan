@@ -57,6 +57,7 @@ has its own profile. There are also four group profiles:
 | `pplx-decider` | perplexity-ai/pplx-decider-flash-v1.3 @ `d06fb3f` | `pplx_decider`, built here (`pplx/Dockerfile`), bf16 | 8108 |
 | `gen-qwen3.5-4b` | Qwen/Qwen3.5-4B @ `851bf6e` (text only) | vLLM `v0.32.0`, bf16 | 8109 |
 | `gen-qwen3-4b` | Qwen/Qwen3-4B-Instruct-2507 (generative, attribute extraction) | vLLM `v0.32.0`, bf16 | 8107 |
+| `kev-4b-cpu` / `pplx-decider-cpu` | the two merge judges on CPU (`*/Dockerfile.cpu`), fp32; `JUDGE_CPU_DTYPE=bf16` where AVX-512 has it ("CPU serving") | 8116 / 8118 |
 | `*-cpu` | the four small models | vLLM CPU `vllm-openai-cpu:v0.32.0-x86_64`, bf16 | 8111–8114 |
 | `compare` | the engine that lost for each model | TEI or vLLM | 8121–8133 |
 
@@ -317,6 +318,64 @@ Verdicts for the other models:
 - **Not done: int8 for the CPU path.** Examples are ONNX/OpenVINO int8, or GGUF via llama.cpp.
   This is the one place quantisation might pay, because CPU throughput is 6–29 pairs/s. It was
   not measured, so CPU serving stays bf16 until it is.
+
+## CPU serving of the merge judges (2026-11-14)
+
+The merge rule (Kev ≥ 0.9 and pplx ≥ 0.5, each the min of both orders) is to run on a CPU-only
+worker, an i7-3770: Ivy Bridge, 4 cores / 8 threads, AVX only (no AVX2, no AVX-512, no bf16),
+about 22 GB of free RAM. Services `kev-4b-cpu` and `pplx-decider-cpu` (profile `judges-cpu`) are
+the GPU images minus flash-linear-attention. With fla importable, transformers' Qwen3.5 layers
+use its Triton kernels even on CPU, and Triton has no CPU driver, so every request fails. Without
+it they use transformers' own PyTorch reference layers. pplx's `serve.py` takes `--device cpu`.
+Its card's code then runs fp32. `DTYPE=bf16` loads bf16 instead. Compose serves both in fp32
+unless `JUDGE_CPU_DTYPE=bf16`.
+
+**How it was measured.** On this desktop, emulating the worker: cpuset 0-3,6-9 (4 cores, 8
+threads), `OMP_NUM_THREADS=8`, `ATEN_CPU_CAPABILITY=default`, `ONEDNN_MAX_CPU_ISA=AVX`,
+`MKL_ENABLE_INSTRUCTIONS=AVX`, `--memory 22g`, no GPU. The data was 100 Phase E pairs, both
+orders, compared with the saved GPU bf16 scores. 60 of the pairs were picked for being the
+closest to Kev 0.9, so flips at 0.9 are over-represented on purpose. Throughput is requests/s;
+one pair is two requests, or about 1.3 with the two-pass rule in `models/judge.py`.
+
+| Judge, precision | Profile | req/s | RSS | Spearman | max \|Δp\| | agree@0.5 | agree@0.9 |
+|---|---|---|---|---|---|---|---|
+| Kev fp32 | emulated i7-3770 | 0.26 | 17.0 GB | 0.9978 | 0.029 | 100% | 97% (3 flips) |
+| Kev bf16 | emulated i7-3770 | 0.04 | 7.7 GB | - | - | - | - |
+| Kev bf16 | 8 threads, full Zen 4 ISA | 0.75 | 7.8 GB | 0.9955 | 0.036 | 100% | 93% (7) |
+| Kev bf16 | 4 threads, full Zen 4 ISA | 0.52 | 8.0 GB | - | - | - | - |
+| pplx fp32 | emulated i7-3770 | 0.35 | 18.1 GB | 0.9998 | 0.033 | 99% (1 flip) | - |
+| pplx bf16 | 8 threads, full Zen 4 ISA | 0.51 | 8.0 GB | 0.9998 | 0.023 | 100% | - |
+
+- **Precision.** fp32 on the worker. Without AVX-512 bf16 has no fast path, and it ran 6.5×
+  slower than fp32.
+- **Flips.** Every flip was a pair within 0.01 of the line on the GPU. Kev at 0.9: E0012, E0082
+  and E0121 go from 0.894–0.8995 to 0.902–0.906, and the labels say "unsure", "same" and "same".
+  pplx at 0.5: E0121 goes from 0.500 to 0.492. Its Kev score of 0.8995 kept it out of the merge
+  rule anyway. Over all 900 Phase E pairs, 37 have a GPU Kev min in [0.89, 0.91). The decision
+  is therefore stable except for pairs sitting on the line, where GPU fp32 and bf16 also differ.
+- **Memory.** Neither model fits beside the other in 22 GB, so they run one after the other:
+  Kev for the night's pairs, then pplx for the few that passed. With the weights in the page
+  cache a load takes 13–19 s. Read cold, it is however long the disk takes to read about 9 GB
+  per model.
+- **The emulation is approximate.** fp32 sgemm under the emulation measured 360–380 GFLOPS.
+  The i7-3770's peak is 4 cores × ~3.7 GHz × 16 FLOP/cycle (AVX, no FMA), about 237 GFLOPS,
+  so it does roughly 200 in practice, 1.8× less. Its memory bandwidth (DDR3-1600, about 20 GB/s
+  in practice, against 68 GB/s measured here) is about 3.4× less. The non-matmul work (the
+  reference gated-delta loop, scalar ATen) scales with clock and IPC, at about 2×. **Divide
+  the emulated rates by about 2.5, with a range of 2 to 3.5.** That gives Kev ≈ 0.10 req/s and
+  pplx ≈ 0.14 req/s on the worker. Confirm this with one run on the worker itself.
+- **Disk is the blocker on that worker.** These images carry CUDA torch. The Kev image is
+  26 GB and the pplx image 19.6 GB, and the weights add 20 GB (Qwen3.5-4B-Base 11 GB, pplx
+  9 GB), against 24 GB free. A lean image (python-slim with the CPU wheel of the same torch
+  version, about 2–3 GB) is the fix. Its parity then needs re-checking. Even so, the weights
+  alone nearly fill the disk.
+- **Daily load.** Over 14 days the local copy gained about 24 new electronics listings a day,
+  with peak days of 118 and 145. Take 10 candidates each, of which 39% are not vetoed. About 6%
+  of the open pairs reach Kev ≥ 0.9 (`kev_open.json`). A typical day is then about 120 Kev
+  requests (two-pass) and about 12 pplx requests: 20–35 minutes on the worker. A 150-listing
+  day takes 2–4.5 hours. Onboarding a shop of 5,000 listings is 25–39k Kev requests: 12–18
+  nights on the worker, or about an hour on the GPU.
+- **int8 was not measured.** fp32 fits that load, so it was not needed.
 
 ## Scripts
 

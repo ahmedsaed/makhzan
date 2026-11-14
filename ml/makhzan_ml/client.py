@@ -73,6 +73,10 @@ SERVICES: dict[str, Service] = {
     "emb-harrier-cpu": Service("vllm-embed", 8112, "harrier-oss-v1-270m", _HAR, True),
     "rr-bge-cpu": Service("vllm-score", 8113, "bge-reranker-v2-m3", _BGE, False),
     "rr-qwen3-0.6b-cpu": Service("vllm-score", 8114, "qwen3-reranker-0.6b", _Q3R6, True),
+    "kev-4b-cpu": Service("kev", 8116, "kev-latest", "jaredpalmer/kev-4b", True),
+    "pplx-decider-cpu": Service(
+        "decider", 8118, "pplx-decider-flash-v1.3", "perplexity-ai/pplx-decider-flash-v1.3", True
+    ),
     # engine comparison (the engine that lost for each model)
     "emb-qwen3-tei": Service("tei-embed", 8121, _Q3E, _Q3E, True),
     "emb-harrier-tei": Service("tei-embed", 8122, _HAR, _HAR, True),
