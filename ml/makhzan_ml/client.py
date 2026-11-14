@@ -39,7 +39,7 @@ Pair = tuple[str, str]
 
 @dataclass(frozen=True)
 class Service:
-    kind: str  # tei-embed | vllm-embed | tei-rerank | vllm-score | kev
+    kind: str  # tei-embed | vllm-embed | tei-rerank | vllm-score | kev | vllm-chat
     port: int
     model: str  # what the server is asked for (vLLM served name / Kev model) or the HF id
     hf_id: str
@@ -61,6 +61,9 @@ SERVICES: dict[str, Service] = {
     "rr-qwen3-0.6b": Service("vllm-score", 8104, "qwen3-reranker-0.6b", _Q3R6, True),
     "rr-qwen3-4b": Service("vllm-score", 8105, "qwen3-reranker-4b", _Q3R4, True),
     "kev-4b": Service("kev", 8106, "kev-latest", "jaredpalmer/kev-4b", True),
+    "gen-qwen3-4b": Service(
+        "vllm-chat", 8107, "qwen3-4b-instruct", "Qwen/Qwen3-4B-Instruct-2507", True
+    ),
     # CPU
     "emb-qwen3-cpu": Service("vllm-embed", 8111, "qwen3-embedding-0.6b", _Q3E, True),
     "emb-harrier-cpu": Service("vllm-embed", 8112, "harrier-oss-v1-270m", _HAR, True),
@@ -204,6 +207,36 @@ class Client:
         return out["answers"]["same"]["noul"]
 
     # -- plumbing ---------------------------------------------------------------------------
+    def chat_json(
+        self, prompts: Sequence[str], schema: dict, system: str = "", max_tokens: int = 400
+    ) -> list[dict]:
+        """One JSON object per prompt from a generative service, decoded against `schema`
+        (vLLM structured outputs), greedy. `batch_size` prompts are in flight at once."""
+        if self.svc.kind != "vllm-chat":
+            raise ModelError(f"{self.name} is not a generative service")
+
+        def one(prompt: str) -> dict:
+            messages = ([{"role": "system", "content": system}] if system else []) + [
+                {"role": "user", "content": prompt}
+            ]
+            out = _post(
+                f"{self.base}/v1/chat/completions",
+                {
+                    "model": self.svc.model,
+                    "messages": messages,
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {"name": "listing", "schema": schema},
+                    },
+                },
+                self.timeout,
+            )
+            return json.loads(out["choices"][0]["message"]["content"])
+
+        return self._map(lambda b: [one(p) for p in b], list(prompts), size=1)
+
     def _map(self, fn, items: list, size: int | None = None) -> list:
         batches = list(_chunks(items, size or self.batch_size))
         # One item per request (Kev): batch_size is then exactly the number in flight.

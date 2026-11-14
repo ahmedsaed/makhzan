@@ -155,6 +155,18 @@ services:
       --chat-template /templates/qwen3_reranker.jinja
     ports: ["127.0.0.1:8105:8000"]
 
+  # Generative model for attribute extraction (ml/improve/extract.py). Not a judge: it reads one
+  # listing and returns a small JSON schema, which code compares. bf16 in about 8 GB of weights;
+  # 4,096 tokens is ample for one title. Run it alone, like the other 4B models.
+  gen-qwen3-4b:
+    <<: *vllm-gpu
+    profiles: [gen-qwen3-4b, big]
+    command: >-
+      Qwen/Qwen3-4B-Instruct-2507 --served-model-name qwen3-4b-instruct
+      --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${GPU_UTIL_BIG:-0.85}
+      ${QUANT_ARGS:-} ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8107:8000"]
+
   kev-4b:
     <<: [*common, *gpu]
     profiles: [kev-4b, big]
