@@ -64,6 +64,10 @@ SERVICES: dict[str, Service] = {
     "gen-qwen3-4b": Service(
         "vllm-chat", 8107, "qwen3-4b-instruct", "Qwen/Qwen3-4B-Instruct-2507", True
     ),
+    "pplx-decider": Service(
+        "decider", 8108, "pplx-decider-flash-v1.3", "perplexity-ai/pplx-decider-flash-v1.3", True
+    ),
+    "gen-qwen3.5-4b": Service("vllm-chat", 8109, "qwen3.5-4b", "Qwen/Qwen3.5-4B", True),
     # CPU
     "emb-qwen3-cpu": Service("vllm-embed", 8111, "qwen3-embedding-0.6b", _Q3E, True),
     "emb-harrier-cpu": Service("vllm-embed", 8112, "harrier-oss-v1-270m", _HAR, True),
@@ -205,6 +209,106 @@ class Client:
             self.timeout,
         )
         return out["answers"]["same"]["noul"]
+
+    def decide_noul(self, pairs: Sequence[Pair], question: str) -> list[tuple[float, float]]:
+        """pplx-decider: (P(true) at the checkpoint's saved temperature, raw logit margin
+        true - false) per pair, the state spelled as Kev's. `batch_size` pairs per call."""
+        if self.svc.kind != "decider":
+            raise ModelError(f"{self.name} is not a decider service")
+
+        def batch(b: list[Pair]) -> list[tuple[float, float]]:
+            reqs = [
+                {"state": f"Listing A: {a}\nListing B: {c}",
+                 "questions": {"same": {"type": "noul", "instructions": question}}}
+                for a, c in b
+            ]  # fmt: skip
+            out = _post(f"{self.base}/v1/decide", {"requests": reqs}, self.timeout)
+            res = []
+            for r, lg in zip(out["responses"], out["logits"], strict=True):
+                f, t = lg["same"]  # option order: false, true (pplx_decider.protocol.options)
+                res.append((r["answers"]["same"]["noul"], t - f))
+            return res
+
+        return self._map(batch, list(pairs))
+
+    def yes_no_margin(self, prompts: Sequence[str], top: int = 20) -> list[float]:
+        """Generative service: log P(yes) - log P(no) at the first answer token of a chat turn,
+        thinking off, greedy. Case and leading-space variants of each word are pooled
+        (logsumexp). A word missing from the top `top` gets a bound: the smallest listed
+        logprob minus log 2 (recorded as is; it only matters for saturated pairs)."""
+        if self.svc.kind != "vllm-chat":
+            raise ModelError(f"{self.name} is not a generative service")
+
+        def lse(xs: list[float]) -> float:
+            m = max(xs)
+            return m + math.log(sum(math.exp(x - m) for x in xs))
+
+        def one(prompt: str) -> float:
+            out = _post(
+                f"{self.base}/v1/chat/completions",
+                {
+                    "model": self.svc.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": 1,
+                    "logprobs": True,
+                    "top_logprobs": top,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+                self.timeout,
+            )
+            tops = out["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+            floor = min(t["logprob"] for t in tops) - math.log(2)
+            yes = [t["logprob"] for t in tops if t["token"].strip().lower() == "yes"]
+            no = [t["logprob"] for t in tops if t["token"].strip().lower() == "no"]
+            return (lse(yes) if yes else floor) - (lse(no) if no else floor)
+
+        return self._map(lambda b: [one(p) for p in b], list(prompts), size=1)
+
+    def think_yes_no_margin(
+        self, prompts: Sequence[str], max_tokens: int = 2048, top: int = 20
+    ) -> list[tuple[float | None, int]]:
+        """As yes_no_margin, with thinking on: greedy generation, then the margin at the first
+        yes/no token after `</think>`. Returns (margin or None when the thinking did not finish
+        within max_tokens, completion tokens)."""
+        if self.svc.kind != "vllm-chat":
+            raise ModelError(f"{self.name} is not a generative service")
+
+        def lse(xs: list[float]) -> float:
+            m = max(xs)
+            return m + math.log(sum(math.exp(x - m) for x in xs))
+
+        def one(prompt: str) -> tuple[float | None, int]:
+            out = _post(
+                f"{self.base}/v1/chat/completions",
+                {
+                    "model": self.svc.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                    "logprobs": True,
+                    "top_logprobs": top,
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "skip_special_tokens": False,
+                },
+                self.timeout,
+            )
+            used = out["usage"]["completion_tokens"]
+            toks = out["choices"][0]["logprobs"]["content"]
+            after = False
+            for t in toks:
+                if "</think>" in t["token"]:
+                    after = True
+                    continue
+                if after and t["token"].strip().lower() in ("yes", "no"):
+                    tops = t["top_logprobs"]
+                    floor = min(x["logprob"] for x in tops) - math.log(2)
+                    yes = [x["logprob"] for x in tops if x["token"].strip().lower() == "yes"]
+                    no = [x["logprob"] for x in tops if x["token"].strip().lower() == "no"]
+                    return (lse(yes) if yes else floor) - (lse(no) if no else floor), used
+            return None, used
+
+        return self._map(lambda b: [one(p) for p in b], list(prompts), size=1)
 
     # -- plumbing ---------------------------------------------------------------------------
     def chat_json(

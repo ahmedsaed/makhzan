@@ -54,12 +54,17 @@ has its own profile. There are also four group profiles:
 | `rr-qwen3-0.6b` | Qwen/Qwen3-Reranker-0.6B | vLLM `v0.32.0`, bf16 | 8104 |
 | `rr-qwen3-4b` | Qwen/Qwen3-Reranker-4B | vLLM `v0.32.0`, bf16 | 8105 |
 | `kev-4b` | jaredpalmer/kev-4b | `kev.serve`, built here (`kev/Dockerfile`), bf16 | 8106 |
+| `pplx-decider` | perplexity-ai/pplx-decider-flash-v1.3 @ `d06fb3f` | `pplx_decider`, built here (`pplx/Dockerfile`), bf16 | 8108 |
+| `gen-qwen3.5-4b` | Qwen/Qwen3.5-4B @ `851bf6e` (text only) | vLLM `v0.32.0`, bf16 | 8109 |
 | `gen-qwen3-4b` | Qwen/Qwen3-4B-Instruct-2507 (generative, attribute extraction) | vLLM `v0.32.0`, bf16 | 8107 |
 | `*-cpu` | the four small models | vLLM CPU `vllm-openai-cpu:v0.32.0-x86_64`, bf16 | 8111–8114 |
 | `compare` | the engine that lost for each model | TEI or vLLM | 8121–8133 |
 
 The licences are all permissive: Apache-2.0 (Qwen3 ×3, bge, Kev, and Qwen3.5-4B-Base under
-Kev) and MIT (Harrier). No model needs a Hugging Face token.
+Kev, Qwen3.5-4B, and pplx-decider-flash-v1.3, read on its card 2026-11-14) and MIT (Harrier).
+No model needs a Hugging Face token. pplx-decider's card still says "The repository is private:
+authenticate with a Hugging Face token", but the Hub reports it public and ungated and it
+downloaded without one (its release-manifest.json also says `"private": true`, from release).
 
 ### Files
 
@@ -323,6 +328,10 @@ Verdicts for the other models:
   - `--cpu-set 0-3` pins the CPU services to fewer cores.
 - `quant.py`: compares two score files with the adoption rule.
 - `parity_qwen3_reranker.py`: compares the served reranker with the model card's own code.
+- `models/`: the Phase E judge bake-off (Kev with a rules prompt, pplx-decider-flash-v1.3,
+  Qwen3.5-4B) on the Phase E labels: `judge.py` scores pairs with one running service,
+  `edges.py` lists the neighbourhood edges complete-link needs, `score.py` evaluates on the
+  improvement experiments' metric (`improve/metric.py`). Docstrings give the commands.
 - `bakeoff/`: the Phase D bake-off (candidate finding and pair judging, with the prompt study).
   Run in this order:
   1. `catalogue.py`: dump the local database copy.
