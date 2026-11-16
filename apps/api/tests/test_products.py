@@ -195,6 +195,29 @@ async def test_the_fallback_never_lets_the_product_title_outrank_stock(client, d
     assert body["representative_offer_id"] == str(stocked.id)
 
 
+async def test_the_fallback_ranks_a_photo_ahead_of_the_product_title(client, db):
+    # Both in stock and English: the photo is part of the ranking's key, so
+    # the offer with one wins, though the other carries the product's title.
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    product = await make_product(db, title_en="LM358 Dual Op-Amp DIP-8")
+    await make_listing(
+        db, supplier=shop_a, product=product, title_en="LM358 Dual Op-Amp DIP-8", price="9.00"
+    )
+    pictured = await make_listing(
+        db,
+        supplier=shop_b,
+        product=product,
+        title_en="LM358 Op-Amp IC",
+        price="12.00",
+        images=["b.jpg"],
+    )
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(pictured.id)
+
+
 @pytest.mark.parametrize("titled", [0, 1])
 async def test_on_a_tied_score_the_fallback_names_the_offer_with_the_products_title(
     client, db, titled
