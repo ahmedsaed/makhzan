@@ -17,7 +17,8 @@ report also records the ruling it stands for in `grouping_overrides`
 "these offers aren't the same product" keeps every ticked offer apart from
 every unticked one (never_merge), "the same as another product" joins the
 two products (one must_merge, between a listing of each). Rejecting a report
-withdraws whatever rulings it made, so a mistaken accept can be put right.
+withdraws whatever rulings it made (their rows kept, marked removed), so a
+mistaken accept can be put right.
 `./makhzan overrides` lists them and makes or removes one by hand. Correcting
 the page for other reasons, and turning accepted reports into labelled pairs
 for matching (docs/ai/plan.md, phase G), are later steps done by hand or by a
@@ -38,10 +39,12 @@ import sys
 import textwrap
 from collections.abc import Sequence
 
+from sqlalchemy import select
+
 from makhzan_schemas import overrides as rulings
 from makhzan_schemas import reports as rules
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.models import Report
+from makhzan_schemas.models import GroupingOverride, Report
 
 REASON_TEXT = {
     "offers_not_same": "These offers aren't the same product",
@@ -138,10 +141,21 @@ async def _list(limit: int) -> int:
 async def _show(report_id: int) -> int:
     async with SessionLocal() as session:
         report = await session.get(Report, report_id)
+        made = list(
+            await session.scalars(
+                select(GroupingOverride)
+                .where(GroupingOverride.report_id == report_id)
+                .order_by(GroupingOverride.id)
+            )
+        )
     if report is None:
         print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
         return 1
     print(format_report(report, full=True))
+    if made:
+        print("  Grouping overrides it made:")
+        for row in made:
+            print(printable("\n".join("    " + line for line in override_lines(row))))
     return 0
 
 
@@ -188,11 +202,38 @@ async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int
                 for added in added_all:
                     print("  " + ruling_line(added))
             else:
-                withdrawn = await rulings.withdraw_report(session, report_id)
+                withdrawn = await rulings.withdraw_report(
+                    session, report_id, removed_by=f"{who(by)} (report rejected)"
+                )
                 if withdrawn:
                     print(f"  withdrew {withdrawn} grouping override(s) it had made")
             await session.commit()
     return 1 if missing else 0
+
+
+def override_lines(row: GroupingOverride) -> list[str]:
+    """One ruling: what, from where, by whom, and what the last regroup found."""
+    origin = f"report R-{row.report_id}" if row.report_id else "manual"
+    lines = [
+        f"#{row.id} {row.kind}{' forced' if row.forced else ''}  {origin}  "
+        f"{row.created_at:%Y-%m-%d %H:%M} UTC by {row.created_by}"
+    ]
+    if row.removed_at is not None:
+        lines.append(f"    removed {row.removed_at:%Y-%m-%d %H:%M} UTC by {row.removed_by}")
+    elif row.status is None:
+        lines.append("    not yet checked: applies at the next regroup")
+    else:
+        when = f" (checked {row.checked_at:%Y-%m-%d %H:%M} UTC)" if row.checked_at else ""
+        label = {
+            "in_effect": "in effect",
+            "blocked": "BLOCKED",
+            "inactive": "inactive",
+            "removed": "removed",
+        }.get(row.status, row.status)
+        lines.append(f"    {label}{when}")
+        if row.blocked_reason:
+            lines.append(f"    why: {row.blocked_reason}")
+    return lines
 
 
 def ruling_line(added: rulings.Added) -> str:

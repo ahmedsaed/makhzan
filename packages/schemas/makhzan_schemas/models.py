@@ -25,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     and_,
     func,
+    text,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -745,8 +746,19 @@ class GroupingOverride(Base):
     Keyed by listing ids, because they are permanent and a product's
     membership is what the ruling is about (a product id would follow its
     offers wherever a regroup took them). The pair is unordered, stored with
-    `listing_a < listing_b`, so a pair has one ruling: a new one about the same
-    pair must replace it, deliberately.
+    `listing_a < listing_b`, so a pair has one *standing* ruling: a new one
+    about the same pair must replace it, deliberately.
+
+    Removing a ruling keeps its row (`removed_at`, `removed_by`): the regroup
+    and `load_overrides` ignore it, the regroup that undoes its effect cites
+    it by id, and the pair may be ruled on again, as a new row (the unique
+    index covers standing rows only).
+
+    After every regroup, `status` says whether the ruling holds:
+    `in_effect`, `blocked` (a must_merge whose two listings are in different
+    products; `blocked_by` and `blocked_reason` say which listing and veto
+    kept them apart), `inactive` (a listing is not active, so the ruling acts
+    on nothing) or `removed`. It describes; it never feeds back into grouping.
 
     `source` says who ruled: `report` (an accepted "Report a problem",
     `report_id`; `./makhzan reports accept`) or `manual` (`./makhzan overrides
@@ -756,7 +768,21 @@ class GroupingOverride(Base):
 
     __tablename__ = "grouping_overrides"
     __table_args__ = (
-        UniqueConstraint("listing_a", "listing_b", name="uq_grouping_override_pair"),
+        Index(
+            "uq_grouping_override_standing_pair",
+            "listing_a",
+            "listing_b",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+        CheckConstraint(
+            "(removed_at IS NULL) = (removed_by IS NULL)",
+            name="ck_grouping_override_removed_by",
+        ),
+        CheckConstraint(
+            "status IS NULL OR status IN ('in_effect', 'blocked', 'inactive', 'removed')",
+            name="ck_grouping_override_status",
+        ),
         CheckConstraint("listing_a < listing_b", name="ck_grouping_override_ordered"),
         CheckConstraint("kind IN ('never_merge', 'must_merge')", name="ck_grouping_override_kind"),
         CheckConstraint(
@@ -800,3 +826,13 @@ class GroupingOverride(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    #: When and by whom it was withdrawn; the row stays.
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_by: Mapped[str | None] = mapped_column(String(100))
+    #: What the last regroup found (`grouping.override_status`); NULL until one has run.
+    status: Mapped[str | None] = mapped_column(String(16))
+    #: For `blocked`: the listing whose veto kept the pair apart (one of the two
+    #: when they veto each other), and why, in words.
+    blocked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

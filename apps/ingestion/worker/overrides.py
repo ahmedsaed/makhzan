@@ -1,9 +1,9 @@
 """Grouping overrides by hand: a person's ruling that two listings are, or are not, one product.
 
-    python -m worker.overrides                       # list every override, newest first
-    python -m worker.overrides list [--limit N]
+    python -m worker.overrides                       # standing overrides, newest first
+    python -m worker.overrides list [--limit N] [--all]   # --all: removed ones too
     python -m worker.overrides add LISTING LISTING --kind never|must [--forced] --note "why"
-    python -m worker.overrides remove ID [ID ...]
+    python -m worker.overrides remove ID [ID ...]    # keeps the row, marked removed
 
 `./makhzan overrides ...` runs this in the production worker, and `make
 overrides ARGS="..."` against the local database. Accepting a grouping report
@@ -11,9 +11,15 @@ overrides ARGS="..."` against the local database. Accepting a grouping report
 
 A ruling takes effect at the next regroup, which every crawl queues, or at
 once with `./makhzan reindex` (`worker.regroup`). What each kind does is
-`makhzan_schemas.overrides`; a pair has one ruling, so to change one, remove
-it and add the other. Every product a ruling changes cites it in
-`product_events`.
+`makhzan_schemas.overrides`; a pair has one standing ruling, so to change
+one, remove it and add the other (a new row; the removed one stays, with who
+removed it and when). Every product a ruling changes cites it in
+`product_events`, and so does the regroup that undoes a removed one.
+
+The list shows what the last regroup found for each ruling: in effect,
+BLOCKED (and by which listing and veto: an existing product wins over a
+ruling it contradicts, forced or not), inactive (a listing is archived) or
+removed.
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ from makhzan_schemas.models import GroupingOverride, Listing
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from worker.reports import printable, ruling_line, who
+from worker.reports import override_lines, printable, ruling_line, who
 
 
 def _describe_listing(listing: Listing | None, listing_id: uuid.UUID) -> str:
@@ -41,13 +47,12 @@ def _describe_listing(listing: Listing | None, listing_id: uuid.UUID) -> str:
     return f"    {listing.id} {title} | {shop} | {listing.status} | product {listing.product_id}"
 
 
-async def _list(limit: int) -> int:
+async def _list(limit: int, everything: bool = False) -> int:
     async with SessionLocal() as session:
-        rows = list(
-            await session.scalars(
-                select(GroupingOverride).order_by(GroupingOverride.id.desc()).limit(limit)
-            )
-        )
+        query = select(GroupingOverride).order_by(GroupingOverride.id.desc()).limit(limit)
+        if not everything:
+            query = query.where(GroupingOverride.removed_at.is_(None))
+        rows = list(await session.scalars(query))
         ids = {i for row in rows for i in (row.listing_a, row.listing_b)}
         listings = {
             listing.id: listing
@@ -59,10 +64,8 @@ async def _list(limit: int) -> int:
         print("No grouping overrides.")
         return 0
     for row in rows:
-        origin = f"report R-{row.report_id}" if row.report_id else "manual"
         lines = [
-            f"#{row.id} {row.kind}{' forced' if row.forced else ''}  {origin}  "
-            f"{row.created_at:%Y-%m-%d %H:%M} UTC by {row.created_by}",
+            *override_lines(row),
             _describe_listing(listings.get(row.listing_a), row.listing_a),
             _describe_listing(listings.get(row.listing_b), row.listing_b),
         ]
@@ -100,16 +103,19 @@ async def _add(a: uuid.UUID, b: uuid.UUID, kind: str, forced: bool, note: str, b
     return 1 if added.outcome == "conflict" else 0
 
 
-async def _remove(ids: Sequence[int]) -> int:
+async def _remove(ids: Sequence[int], by: str) -> int:
     missing = 0
     async with SessionLocal() as session:
         for override_id in ids:
-            row = await rulings.remove(session, override_id)
+            row = await rulings.remove(session, override_id, removed_by=by)
             if row is None:
                 print(f"No override #{override_id}.", file=sys.stderr)
                 missing += 1
             else:
-                print(f"Removed #{override_id} {row.kind} (applies at the next regroup).")
+                print(
+                    f"Removed #{override_id} {row.kind} by {row.removed_by} "
+                    "(row kept; applies at the next regroup)."
+                )
         await session.commit()
     return 1 if missing else 0
 
@@ -124,8 +130,9 @@ def _override_id(value: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="overrides", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command")
-    listing = sub.add_parser("list", help="every override, newest first")
+    listing = sub.add_parser("list", help="standing overrides and their status, newest first")
     listing.add_argument("--limit", type=int, default=100)
+    listing.add_argument("--all", action="store_true", help="removed overrides too")
     add = sub.add_parser("add", help="rule that two listings are never, or must be, one product")
     add.add_argument("a", type=uuid.UUID, help="a listing id")
     add.add_argument("b", type=uuid.UUID, help="the other listing id")
@@ -135,8 +142,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     add.add_argument("--note", required=True, help="why: kept with the ruling")
     add.add_argument("--by", help="who is ruling (default: login)")
-    remove = sub.add_parser("remove", help="delete one or more overrides")
+    remove = sub.add_parser("remove", help="withdraw one or more overrides (rows are kept)")
     remove.add_argument("ids", type=_override_id, nargs="+")
+    remove.add_argument("--by", help="who is removing (default: login)")
     return parser
 
 
@@ -144,9 +152,9 @@ async def run(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command in (None, "list"):
-        return await _list(getattr(args, "limit", 100))
+        return await _list(getattr(args, "limit", 100), getattr(args, "all", False))
     if args.command == "remove":
-        return await _remove(args.ids)
+        return await _remove(args.ids, who(args.by))
     kind = rulings.NEVER if args.kind == "never" else rulings.MUST
     if args.forced and kind != rulings.MUST:
         parser.error("--forced goes with --kind must")
