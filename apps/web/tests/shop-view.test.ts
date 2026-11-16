@@ -173,6 +173,10 @@ describe("what follows a pick", () => {
     expect(shopViewUrl("https://makhzan.test/products/p1?shop=nile-parts", "volt-corner")).toBe(
       "/products/p1?shop=volt-corner",
     );
+    // No shop: the param goes, the rest stays.
+    expect(shopViewUrl("https://makhzan.test/products/p1?shop=nile-parts&x=1#o", null)).toBe(
+      "/products/p1?x=1#o",
+    );
   });
 });
 

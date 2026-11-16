@@ -103,9 +103,11 @@ export function detailIndexOf(offer: Offer, sources: DetailSource[]): number | n
   return shops < 0 ? null : shops;
 }
 
-/** The page's URL with `?shop=` set to a shop, every other parameter kept. */
-export function shopViewUrl(current: string, slug: string): string {
+/** The page's URL with `?shop=` set to a shop, or removed for none, every
+ *  other parameter kept. */
+export function shopViewUrl(current: string, slug: string | null): string {
   const url = new URL(current);
-  url.searchParams.set("shop", slug);
+  if (slug) url.searchParams.set("shop", slug);
+  else url.searchParams.delete("shop");
   return `${url.pathname}${url.search}${url.hash}`;
 }

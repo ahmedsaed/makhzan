@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, Eye } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import {
   createContext,
   type MouseEvent,
@@ -30,6 +31,12 @@ import { jumpStrip } from "./carousel";
  * state it chose (the cheapest offer, or `?shop=`'s), so the page is complete
  * without JavaScript; picking another shop here swaps them in place and
  * rewrites `?shop=` with replaceState, adding nothing to the history.
+ *
+ * The URL is the source of truth for which shop is shown. Next keeps a page
+ * as the server first rendered it, so Back onto a page whose `?shop=` was
+ * rewritten here restores a render for the old shop under the new URL. The
+ * provider therefore reads `?shop=` from the router (which follows
+ * replaceState) when it mounts and whenever it changes, and shows that shop.
  */
 
 /** What the page needs to know about each offer to follow it. */
@@ -62,51 +69,97 @@ type ShopView = {
   pick: (offerId: string) => void;
 };
 
+type Picked = { picked: string; detail: number; photo: number; picks: number };
+
 const ShopViewContext = createContext<ShopView | null>(null);
+
+/** `state` with `offerId` picked: its tab and photo, where it has them. */
+function select(state: Picked, offerId: string, meta: PickMeta, picks: number): Picked {
+  return {
+    picked: offerId,
+    detail: meta.detail ?? state.detail,
+    photo: meta.photo ?? state.photo,
+    picks,
+  };
+}
 
 export function ShopViewProvider({
   initial,
   explicit,
   primary,
   meta,
+  leads,
   children,
 }: {
-  /** The offer picked on load. */
+  /** The offer the server picked. */
   initial: string;
   /** Picked by `?shop=` rather than by price: the gallery opens on its photo. */
   explicit: boolean;
   primary: string | null;
   meta: Record<string, PickMeta>;
+  /** Each shop's lead offer (lib/shop-view.ts `shopLead`), by slug: what
+   *  `?shop=` picks, as the server would. */
+  leads: Record<string, string>;
   children: ReactNode;
 }) {
-  const start = meta[initial];
-  const [picked, setPicked] = useState(initial);
-  const [detail, setDetail] = useState(start?.detail ?? 0);
-  // On a plain load the gallery stays on the product's own first photo, as
-  // before the shop view (it is the page's largest paint); a linked shop view
-  // opens on that shop's.
-  const [photo, setPhoto] = useState(explicit ? (start?.photo ?? 0) : 0);
-  const [picks, setPicks] = useState(0);
+  // `?shop=` as the router has it now: on a fresh load the one the server
+  // rendered; after Back, possibly one a pick wrote since. Null outside a
+  // Next router (unit tests).
+  const shop = useSearchParams()?.get("shop") ?? null;
+  // The URL's shop's lead offer, when the URL names a shop other than the
+  // one already picked.
+  const fromUrl = (current: string): string | null => {
+    const lead = shop ? leads[shop] : undefined;
+    return lead && meta[lead] && meta[current]?.slug !== shop ? lead : null;
+  };
+
+  const [state, setState] = useState<Picked>(() => {
+    const start = meta[initial];
+    // On a plain load the gallery stays on the product's own first photo, as
+    // before the shop view (it is the page's largest paint); a linked shop
+    // view opens on that shop's.
+    const base: Picked = {
+      picked: initial,
+      detail: start?.detail ?? 0,
+      photo: explicit ? (start?.photo ?? 0) : 0,
+      picks: 0,
+    };
+    // The same on a fresh load (the server rendered the URL's shop); after
+    // Back onto a rewritten URL, the URL's shop, opened as a linked view.
+    const restored = fromUrl(initial);
+    if (!restored) return base;
+    return { ...select(base, restored, meta[restored], 0), photo: meta[restored].photo ?? 0 };
+  });
+
+  // `?shop=` changed under a mounted page (a navigation to another shop's
+  // view of it): show that shop. A pick's own rewrite already agrees.
+  const [seen, setSeen] = useState(shop);
+  if (shop !== seen) {
+    setSeen(shop);
+    const lead = fromUrl(state.picked);
+    if (lead) setState(select(state, lead, meta[lead], state.picks));
+  }
+
+  // A row folded away (out of stock, out of date) opens, so the highlight is
+  // seen, however it came to be picked.
+  const { picked } = state;
+  useEffect(() => {
+    const row = document.querySelector(`[data-offer="${CSS.escape(picked)}"]`);
+    const fold = row?.closest("details");
+    if (fold) fold.open = true;
+  }, [picked]);
 
   const pick = useCallback(
     (offerId: string) => {
       const next = meta[offerId];
       if (!next) return;
-      setPicked(offerId);
-      if (next.detail !== null) setDetail(next.detail);
-      if (next.photo !== null) setPhoto(next.photo);
-      setPicks((count) => count + 1);
-      // A row folded away (out of stock, out of date) opens, so the highlight
-      // is seen.
-      const row = document.querySelector(`[data-offer="${CSS.escape(offerId)}"]`);
-      const fold = row?.closest("details");
-      if (fold) fold.open = true;
-      if (next.slug) {
-        try {
-          window.history.replaceState(null, "", shopViewUrl(window.location.href, next.slug));
-        } catch {
-          // A sandboxed frame may refuse; the view has switched either way.
-        }
+      setState((current) => select(current, offerId, next, current.picks + 1));
+      // An offer with no shop has no `?shop=`: the param goes, so the URL
+      // never names a shop the page is not showing.
+      try {
+        window.history.replaceState(null, "", shopViewUrl(window.location.href, next.slug));
+      } catch {
+        // A sandboxed frame may refuse; the view has switched either way.
       }
     },
     [meta],
@@ -116,13 +169,13 @@ export function ShopViewProvider({
     () => ({
       picked,
       action: meta[picked]?.linkable ? picked : primary,
-      detail,
-      photo,
-      picks,
+      detail: state.detail,
+      photo: state.photo,
+      picks: state.picks,
       meta,
       pick,
     }),
-    [picked, primary, detail, photo, picks, meta, pick],
+    [picked, primary, state.detail, state.photo, state.picks, meta, pick],
   );
   return <ShopViewContext.Provider value={value}>{children}</ShopViewContext.Provider>;
 }
@@ -244,15 +297,18 @@ export function PickerRadio({
       />
     );
   }
+  const checked = view.detail === index;
   const choose = () => view.pick(offer);
+  // One pick per click: a click on an unchecked radio fires change (and
+  // click), so only the open tab, which fires no change, listens to clicks.
   return (
     <input
       type="radio"
       name="details-source"
       id={id}
-      checked={view.detail === index}
+      checked={checked}
       onChange={choose}
-      onClick={choose}
+      onClick={checked ? choose : undefined}
       aria-label={label}
       className={className}
     />

@@ -306,6 +306,22 @@ test.describe("on a phone", () => {
     await noSidewaysScroll(page);
   });
 
+  test("an out-of-stock shop's bar shows no price, as its button does", async ({ page }) => {
+    await page.goto(`${URL}?shop=sinai-spares`);
+    await expect(bar(page).getByRole("link")).toHaveText("View at Sinai Spares");
+    await expect(bar(page).locator("[data-bar-stock]")).toHaveText("Out of stock");
+    await expect(bar(page)).not.toContainText("EGP");
+    // Picked in place rather than by link: the same.
+    await page.goto(URL);
+    await expect(bar(page)).toContainText("EGP 385");
+    await page.locator("details[data-out-of-stock] summary").tap();
+    await row(page, "o-ai-sinai")
+      .getByRole("link", { name: /View Sinai Spares’s listing/ })
+      .tap();
+    await expect(bar(page).getByRole("link")).toHaveText("View at Sinai Spares");
+    await expect(bar(page)).not.toContainText("EGP");
+  });
+
   test("a tap opens the badge's tooltip, inside the screen", async ({ page }) => {
     await page.goto(URL);
     await row(page, "o-ai-volt").locator("[data-ai-badge]").tap();
@@ -415,5 +431,65 @@ test.describe("a linked shop view", () => {
     expect(plain.canonical).toBe("https://makhzan.test/products/p-ai");
     expect(plain.jsonLd.join("")).toContain(PRODUCT_TITLE);
     expect(plain.jsonLd.join("")).not.toContain(VOLT_TITLE);
+  });
+});
+
+test.describe("back and forward", () => {
+  test.use({ viewport: DESKTOP });
+
+  // The shop shown must always be the URL's: Next keeps the page as the
+  // server first rendered it, and `?shop=` is rewritten in place, so a Back
+  // onto the page restores a render for another shop under the new URL.
+  const departments = (page: Page) =>
+    page.locator("header").getByRole("link", { name: "Departments" }).first();
+
+  test("a linked shop view, another shop picked, away and Back: the URL's shop", async ({
+    page,
+  }) => {
+    await page.goto(`${URL}?shop=volt-corner`);
+    await expect(page.locator("h1")).toHaveText(VOLT_TITLE);
+    await row(page, "o-ai-oasis")
+      .getByRole("link", { name: /View Oasis Parts Lab’s listing/ })
+      .click();
+    await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
+    await expect(page.locator("h1")).toHaveText(OASIS_TITLE);
+
+    await departments(page).click();
+    await expect(page).toHaveURL(/\/departments$/);
+    await page.goBack();
+
+    await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
+    await expect(page.locator("h1")).toHaveText(OASIS_TITLE);
+    await expect(row(page, "o-ai-oasis")).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[aria-current]")).toHaveCount(1);
+    await expect(tab(page, /^Oasis Parts Lab/)).toBeChecked();
+    await expect(primary(page)).toHaveText("EGP 450 at Oasis Parts Lab");
+
+    // And forward and back again change nothing.
+    await page.goForward();
+    await expect(page).toHaveURL(/\/departments$/);
+    await page.goBack();
+    await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
+    await expect(page.locator("h1")).toHaveText(OASIS_TITLE);
+    await expect(row(page, "o-ai-oasis")).toHaveAttribute("aria-current", "true");
+  });
+
+  test("a plain load, a shop picked, away and Back: the picked shop", async ({ page }) => {
+    await page.goto(URL);
+    await expect(page.locator("h1")).toHaveText(NILE_TITLE);
+    await row(page, "o-ai-oasis")
+      .getByRole("link", { name: /View Oasis Parts Lab’s listing/ })
+      .click();
+    await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
+
+    await departments(page).click();
+    await expect(page).toHaveURL(/\/departments$/);
+    await page.goBack();
+
+    await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
+    await expect(page.locator("h1")).toHaveText(OASIS_TITLE);
+    await expect(row(page, "o-ai-oasis")).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[aria-current]")).toHaveCount(1);
+    await expect(primary(page)).toHaveText("EGP 450 at Oasis Parts Lab");
   });
 });

@@ -55,6 +55,7 @@ import {
   minimumLine,
   minimumWithTotal,
   needsEach,
+  quotedLead,
   unitPrice,
   unitPriceText,
 } from "@/lib/offers";
@@ -66,6 +67,7 @@ import {
   detailIndexOf,
   initialPick,
   photoIndexOf,
+  shopLead,
   shopParam,
 } from "@/lib/shop-view";
 import { absoluteUrl } from "@/lib/site";
@@ -298,6 +300,14 @@ export default async function ProductPage({
       },
     ]),
   );
+  // Each shop's lead offer: what `?shop=` picks, so the client can follow a
+  // URL the server did not render (Back onto a rewritten `?shop=`).
+  const leads: Record<string, string> = Object.fromEntries(
+    shopSlugs.flatMap((slug) => {
+      const lead = shopLead(product.offers, slug, now);
+      return lead ? [[slug, lead.id]] : [];
+    }),
+  );
   const headingClass = cn(
     "min-w-0 flex-1",
     several ? "text-lg leading-tight lg:text-[26px]" : "text-xl leading-tight lg:text-[26px]",
@@ -413,7 +423,7 @@ export default async function ProductPage({
         >
           {several ? (
             <>
-              <Summary product={product} primary={primary} narrow={split} now={now} />
+              <Summary product={product} narrow={split} now={now} />
               <Offers
                 {...splitOffers(product.offers, now)}
                 productTitle={title}
@@ -465,6 +475,7 @@ export default async function ProductPage({
       explicit={pick.explicit}
       primary={primary?.id ?? null}
       meta={pickMeta}
+      leads={leads}
     >
       {page}
     </ShopViewProvider>
@@ -809,12 +820,10 @@ function ShopsContact({
  */
 function Summary({
   product,
-  primary,
   narrow,
   now,
 }: {
   product: Product;
-  primary: Offer | null;
   /** In the narrow column: the button takes the full width under the price. */
   narrow: boolean;
   now: Date;
@@ -830,8 +839,6 @@ function Summary({
   // The lowest price, while it is in stock (or not known gone): what the
   // notes under the range and the button explain.
   const best = summary.state !== "out_of_stock" ? summary.best : null;
-  const leads = best !== null && primary?.id === best.offer.id;
-  const notes = leads ? leadNotes(best) : [];
   const onRequestOnly = summary.priced.length === 0 && summary.onRequest.length > 0;
   const bestShop = best?.offer.supplier?.name ?? "one shop";
   return (
@@ -891,11 +898,10 @@ function Summary({
           shop's (the primary offer's on load), so it follows the pick. */}
       {linkableOffers(product.offers).map((offer) => {
         if (!offer.source_url || !offer.supplier) return null;
-        // The primary offer says what it always has; another shop's offer
-        // its own price of one while it is not known to be gone.
-        const unit = offer.id === primary?.id || isOutOfStock(offer) ? null : unitPrice(offer, now);
-        const lead = offer.id === primary?.id ? (leads ? best : null) : unit && { offer, ...unit };
-        const own = offer.id === primary?.id ? notes : lead ? leadNotes(lead) : [];
+        // The bottom bar quotes the same (quotedLead): no price for an offer
+        // known to be gone.
+        const lead = quotedLead(offer, summary, now);
+        const own = lead ? leadNotes(lead) : [];
         return (
           <WhenAction key={offer.id} offer={offer.id}>
             <div className={cn("hidden lg:block", narrow ? "lg:w-full" : "ms-auto")}>
@@ -938,8 +944,11 @@ function BottomBar({ offer, product, now }: { offer: Offer; product: Product; no
   // The comparison the summary, or the one-shop box, reads: one price everywhere.
   const summary = summarizeOffers(several ? product.offers : [offer], now);
   const unit = unitPrice(offer, now);
-  const lead =
-    summary.best && summary.state !== "out_of_stock" && summary.best.offer.id === offer.id
+  // With several offers, what the primary button quotes for the same offer
+  // (quotedLead): an offer known to be gone shows that instead of a price.
+  const lead = several
+    ? quotedLead(offer, summary, now)
+    : summary.best && summary.state !== "out_of_stock" && summary.best.offer.id === offer.id
       ? summary.best
       : unit && { offer, ...unit };
   const span = !several && lead ? boxSpan(offer, now) : null;
@@ -947,6 +956,10 @@ function BottomBar({ offer, product, now }: { offer: Offer; product: Product; no
   if (!lead) {
     price = isOnRequest(offer) ? (
       <OnRequest className="text-[15px]" />
+    ) : several && isOutOfStock(offer) ? (
+      <span data-bar-stock>
+        <StockBadge signal={offer.stock_signal} className="text-[15px]" />
+      </span>
     ) : (
       <NoPrice className="text-sm" />
     );
