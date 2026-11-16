@@ -232,10 +232,14 @@ the page container on desktop; each section is left out when its fetch fails.
 - **The shop view** (several offers; the approved mockup of November 2026, version 2;
   `lib/shop-view.ts`, `app/(site)/products/[id]/shop-view.tsx`). One shop's offer is
   *picked*; on a plain load the product's **representative** listing, the one its title
-  comes from (the regroup's choice: in stock, then has a photo, then an English title,
-  then cheapest; the API's `representative_offer_id`), so the h1 and `<title>` name the
-  same listing (owner decision, November 2026). The web never ranks it itself; an API
-  that does not name one falls back to the cheapest. Picking
+  comes from (the regroup's choice, `grouping.representative`: in stock, then has an
+  English title, then has a photo, then cheapest; its category, brand and domain are the
+  product's too; the API's `representative_offer_id`), so the h1 and `<title>` name the
+  same listing (owner decisions, November 2026). For a product not rebuilt since, or
+  whose recorded listing was archived, the API applies the same ranking to the current
+  offers, and only among those sharing the top score does the one carrying the
+  product's title win. The web never ranks it itself; an API that does not name one
+  falls back to the cheapest. Picking
   another, by its "What the shops say" tab or by **View listing** on its row, swaps the
   h1 to that shop's own listing title (no chip, no subtitle), moves the gallery to that
   shop's first photo (the phone's thumbnail too; a shop with none keeps the photo

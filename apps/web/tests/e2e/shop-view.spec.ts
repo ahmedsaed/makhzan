@@ -503,7 +503,9 @@ test.describe("back and forward", () => {
     await expect(row(page, "o-ai-oasis")).toHaveAttribute("aria-current", "true");
   });
 
-  test("a URL that lost ?shop=, away and Back: the plain load's pick", async ({ page }) => {
+  test("a URL that loses ?shop=: the plain load's pick, mounted and after Back", async ({
+    page,
+  }) => {
     await page.goto(`${URL}?shop=volt-corner`);
     await expect(page.locator("h1")).toHaveText(VOLT_TITLE);
     // A pick first, which also proves the page is hydrated (Next has taken
@@ -512,10 +514,12 @@ test.describe("back and forward", () => {
       .getByRole("link", { name: /View Oasis Parts Lab’s listing/ })
       .click();
     await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
-    // Then what picking an offer with no shop does to the URL (no fixture
-    // shop lacks one): the param goes, in place.
+    // Then the URL loses ?shop= in place, by a change the page did not make
+    // itself (not a pick): the mounted view follows it to the plain load's
+    // pick, and so does the page restored by Back below.
     await page.evaluate(() => window.history.replaceState(null, "", window.location.pathname));
     await expect(page).toHaveURL(/\/products\/p-ai$/);
+    await expect(page.locator("h1")).toHaveText(NILE_TITLE);
 
     await departments(page).click();
     await expect(page).toHaveURL(/\/departments$/);
