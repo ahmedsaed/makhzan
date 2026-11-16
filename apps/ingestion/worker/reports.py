@@ -159,6 +159,22 @@ async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int
     missing = 0
     async with SessionLocal() as session:
         for report_id in ids:
+            pairs = None
+            if status == "accepted":
+                # The rulings first: a report no ruling could act on is
+                # refused, not shown accepted with nothing behind it.
+                found = await session.get(Report, report_id)
+                if found is not None:
+                    try:
+                        pairs = await rulings.report_pairs(session, found)
+                    except rulings.ReportRefused as refused:
+                        print(
+                            f"{rules.reference(report_id)} not accepted: {refused}. "
+                            "Reject it, or rule by hand with `overrides add`.",
+                            file=sys.stderr,
+                        )
+                        missing += 1
+                        continue
             report = await rules.review(session, report_id, status)
             if report is None:
                 print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
@@ -166,7 +182,10 @@ async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int
                 continue
             print(f"{rules.reference(report_id)} {status}.")
             if status == "accepted":
-                for added in await rulings.accept_report(session, report, created_by=who(by)):
+                added_all = await rulings.accept_report(
+                    session, report, created_by=who(by), pairs=pairs
+                )
+                for added in added_all:
                     print("  " + ruling_line(added))
             else:
                 withdrawn = await rulings.withdraw_report(session, report_id)
