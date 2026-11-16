@@ -9,6 +9,29 @@ are marked **confounded** where it applies.
 "Owner" = decided by the owner. "Session" = chosen by Claude or an agent and not
 put to the owner. Results that rest on a session choice are not settled.
 
+## Labelling rules in force (summary)
+
+The full text, with examples, is in `ml/out/labels/README.md` (git-ignored with
+the labels). Labels are same / different / variant / unsure; for matching,
+variant and different both count as not same, and unsure is excluded.
+
+1. **Brands:** a different brand alone never makes a different product.
+2. **Silence:** a detail only one listing states is compatible; only a stated
+   contradiction separates two listings.
+3. **What "same" means:** a buyer could take either as the identical part.
+   Drop-in revisions are the same (IRF630 / IRF630N); a suffix that changes
+   package, pinout, rating or function is different (ATmega328 / 328P); stated
+   contradictions (NC/NO, module vs bare IC, size, rating, pins, connector) and
+   different chip families (CD4011 / 7400) are different.
+4. **Size tolerance:** measurements within about 5% are the same.
+5. **Implied package:** a bare standard part number implies its standard
+   package (1N4007 vs the SMD M7 are different).
+6. **Bundles:** "with" another component (an I2C adapter, a cable, a case) is
+   different; a gray zone, so a wrong merge there is a soft error.
+7. **Confirmed calls:** 7476 = 74LS76 (no family named); BZX55 = BZX79 (drop-in).
+8. **Pack size:** a different stated pack size is different; an unstated one is
+   compatible.
+
 ## 1. What the judges actually saw
 
 Every judge result since the bake-off (Kev, pplx, Qwen3.5, the context test)
@@ -93,7 +116,7 @@ is the decision that should have come back to the owner.
 | D18 | Group check | Complete-link; one best match per other shop; Kev < 0.05 inside a group blocks it | Session, concept approved | gain (2,336 merges) | confirm thresholds |
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
 | D20 | Quantisation | Rejected unless proven harmless | Owner | serving | settled |
-| D21 | Serving | Workers on CPU servers (home-server 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs | Owner | pipeline | settled |
+| D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/` | Owner rule, after loss | — | settled |
 
 ### What still holds, whatever the prompt
@@ -235,6 +258,9 @@ New labelling rules (also in `ml/out/labels/README.md`):
 6. Bundles ("with" another component: an I2C adapter, a cable, a case) are
    different; a gray zone, so a wrong merge here is a soft error.
 7. Confirmed: 7476 = 74LS76 (no family named), BZX55 = BZX79 (drop-in).
+8. Pack size ("A for now"): a different *stated* pack size is different; an
+   unstated pack size is compatible. Later (B): pack size never separates, once
+   product pages show pack size and price per unit.
 
 Buyers verify on the shop's own page before buying, which is why rare
 gray-zone merges are tolerable under option B.
@@ -258,8 +284,11 @@ Owner decisions:
 - **Operating point "safest":** merge when Kev (K2, description capped at 150
   words) ≥ 0.8 **and** pplx (K1, full description) ≥ 0.95, behind today's
   vetoes. In-sample: 209 accepted, 0 errors; held-out halves 100% / 100%;
-  about 6,800 estimated matches (the old title-only plan: about 5,100).
-- **No two-stage screening.** Review in a few weeks whether home-server keeps
+  about 6,800 estimated matches. For comparison, the earlier title-only plan
+  (Kev ≥ 0.9 AND pplx ≥ 0.5 on titles, measured on answer key v1) was
+  estimated at about 5,100; on key v2 the title-only Kev baseline alone is
+  about 5,400.
+- **No two-stage screening.** Review in a few weeks whether the CPU worker keeps
   up with the full prompt.
 - **Report-driven overrides** (never-merge / must-merge pairs keyed by listing
   id, honoured by the regroup) are the safety net for regressions such as
