@@ -818,6 +818,10 @@ def _group_with_overrides(
                 continue  # sub-clustered with the first of its keys
             items = [listing for k in keys for listing in base[k]]
             first = min(items, key=_natural_order)
+            # Known limit: a must_merge may join listings of two departments,
+            # and the group then takes its threshold, price ratio and strict
+            # (accessory) forms from the first listing's profile. Each
+            # listing's evidence is still read by its own department.
             own = {listing.id: key_of[listing.id] for listing in items}
             rulings = _rulings(items, by_listing, own)
             groups.update(_subcluster(key_of[first.id], items, first.domain, current, rulings))
