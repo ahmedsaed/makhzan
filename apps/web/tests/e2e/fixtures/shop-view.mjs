@@ -130,6 +130,66 @@ function product(port) {
     category: CATEGORY,
     offers,
     ai_matched_count: 2,
+    // The regroup's representative (photo, English title, in stock, cheapest):
+    // Nile, the cheapest in stock too.
+    representative_offer_id: "o-ai-nile",
+  };
+}
+
+/**
+ * /products/p-rep: the representative is not the cheapest. Delta Bench is the
+ * cheapest in stock but has no photo, so the regroup took Volt Corner's
+ * listing (photo, English title, in stock), and the product's title is Volt's.
+ *
+ *     Sinai Spares     EGP 300, out of stock, one photo
+ *     Delta Bench      EGP 380, in stock, no photo
+ *     Volt Corner      EGP 410, in stock, one photo: the representative
+ */
+function repProduct(port) {
+  const offers = [
+    offer(port, "o-rep-sinai", SINAI, "TB6600 Driver Board, old stock", 300, "out_of_stock", 6, [
+      "sinai-1",
+    ]),
+    offer(
+      port,
+      "o-rep-delta",
+      DELTA,
+      "TB6600 Stepper Motor Driver Controller",
+      380,
+      "in_stock",
+      2,
+      [],
+    ),
+    offer(
+      port,
+      "o-rep-volt",
+      VOLT,
+      "TB6600 4A Stepper Driver Module for NEMA 17 / NEMA 23",
+      410,
+      "in_stock",
+      3,
+      ["volt-1"],
+    ),
+  ];
+  return {
+    id: "p-rep",
+    part_number: "TB6600",
+    title_en: "TB6600 4A Stepper Driver Module for NEMA 17 / NEMA 23",
+    title_ar: null,
+    brand: null,
+    image: offers[2].images[0],
+    image_shop: { slug: VOLT.slug, name: VOLT.name },
+    supplier_count: 3,
+    offer_count: 3,
+    min_price: 380,
+    max_price: 410,
+    currency: "EGP",
+    in_stock: true,
+    last_verified_at: daysAgo(2),
+    category: CATEGORY,
+    offers,
+    ai_matched_count: 0,
+    representative_offer_id: "o-rep-volt",
   };
 }
 
@@ -146,6 +206,8 @@ const DESCRIPTIONS = {
 export function shopViewFixture(path, port) {
   if (path === "/products/p-ai/similar") return [200, []];
   if (path === "/products/p-ai") return [200, product(port)];
+  if (path === "/products/p-rep/similar") return [200, []];
+  if (path === "/products/p-rep") return [200, repProduct(port)];
   const listingId = path.match(/^\/listings\/(o-ai-[a-z]+)$/)?.[1];
   const found = listingId && product(port).offers.find((o) => o.id === listingId);
   if (found) {

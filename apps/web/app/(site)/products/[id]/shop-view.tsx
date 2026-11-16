@@ -28,7 +28,7 @@ import { jumpStrip } from "./carousel";
 /**
  * The shop view (lib/shop-view.ts): which offer is picked, and the pieces of
  * the page that follow it. The server renders every piece in the picked
- * state it chose (the cheapest offer, or `?shop=`'s), so the page is complete
+ * state it chose (the representative offer, or `?shop=`'s), so the page is complete
  * without JavaScript; picking another shop here swaps them in place and
  * rewrites `?shop=` with replaceState, adding nothing to the history.
  *

@@ -107,18 +107,31 @@ describe("matched by AI", () => {
 });
 
 describe("picking on load", () => {
-  it("opens on the cheapest offer: the one the primary button opens", () => {
+  it("opens on the product's representative, the listing its title comes from", () => {
+    // Owner decision (November 2026): the h1 and <title> name one listing.
+    // The API names it; Volt's is dearer than Nile's, and still picked.
+    expect(initialPick(ALL, null, NOW, VOLT.id)).toEqual({ offer: VOLT, explicit: false });
+  });
+
+  it("?shop= picks that shop's lead offer, whatever the representative", () => {
+    expect(initialPick(ALL, "volt-corner", NOW, NILE.id)).toEqual({ offer: VOLT, explicit: true });
+    expect(initialPick(ALL, "sinai-spares", NOW, NILE.id)).toEqual({
+      offer: SINAI,
+      explicit: true,
+    });
+  });
+
+  it("an unknown shop falls back to the representative", () => {
+    expect(initialPick(ALL, "no-such-shop", NOW, VOLT.id)).toEqual({
+      offer: VOLT,
+      explicit: false,
+    });
+  });
+
+  it("without a representative among the offers (an older API), the cheapest", () => {
     // Sinai is cheaper but out of stock: the primary offer is Nile's.
     expect(initialPick(ALL, null, NOW)).toEqual({ offer: NILE, explicit: false });
-  });
-
-  it("?shop= picks that shop's lead offer", () => {
-    expect(initialPick(ALL, "volt-corner", NOW)).toEqual({ offer: VOLT, explicit: true });
-    expect(initialPick(ALL, "sinai-spares", NOW)).toEqual({ offer: SINAI, explicit: true });
-  });
-
-  it("an unknown shop falls back to the cheapest", () => {
-    expect(initialPick(ALL, "no-such-shop", NOW)).toEqual({ offer: NILE, explicit: false });
+    expect(initialPick(ALL, null, NOW, "o-not-here")).toEqual({ offer: NILE, explicit: false });
   });
 
   it("a shop with several offers leads with its cheapest in stock", () => {

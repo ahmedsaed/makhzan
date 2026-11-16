@@ -636,6 +636,11 @@ class ProductRead(ProductSummary):
     #: How many of `offers` AI matching put here (`matched_by == "ai"`), for
     #: the page's "2 of 5 offers were matched automatically by AI" note.
     ai_matched_count: int = 0
+    #: The offer whose listing the product's title, brand and category come
+    #: from (`grouping.representative`, chosen by the regroup): what the page's
+    #: shop view picks on a plain load, so its h1 and <title> name the same
+    #: listing. An id in `offers`; null only with no offers.
+    representative_offer_id: uuid.UUID | None = None
 
 
 class PricePoint(BaseModel):

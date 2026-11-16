@@ -113,6 +113,44 @@ async def test_an_ai_matched_offer_is_marked_and_counted(client, db, monkeypatch
     assert body["ai_matched_count"] == 1
 
 
+async def test_the_representative_offer_is_the_one_the_rebuild_recorded(client, db):
+    # The page picks it on a plain load, so its h1 and <title> are one listing's.
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(db, supplier=shop_a, product=product, price="9.50", images=["a.jpg"])
+    recorded = await make_listing(db, supplier=shop_b, product=product, price="14.00")
+    product.representative_listing_id = recorded.id
+    await db.commit()
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    # The stored choice wins, though the rule over today's offers differs.
+    assert body["representative_offer_id"] == str(recorded.id)
+
+
+async def test_without_a_recorded_one_the_representative_is_found_by_the_same_rule(client, db):
+    # Not rebuilt since the column came (or the recorded offer archived since):
+    # grouping.representative over the offers there are. The cheapest has no
+    # photo, so the representative is the dearer one that has.
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(db, supplier=shop_a, product=product, price="9.50")
+    pictured = await make_listing(
+        db, supplier=shop_b, product=product, price="14.00", images=["b.jpg"]
+    )
+    gone = await make_listing(
+        db, supplier=shop_a, product=product, status=ListingStatus.ARCHIVED, images=["c.jpg"]
+    )
+    product.representative_listing_id = gone.id
+    await db.commit()
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(pictured.id)
+
+
 async def test_offers_without_a_price_sort_last_not_first(client, db):
     """A missing price is unknown, not zero — sorting it first would put a
     "price on request" offer above the genuinely cheapest one."""

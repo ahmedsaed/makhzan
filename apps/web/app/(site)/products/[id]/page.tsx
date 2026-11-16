@@ -110,7 +110,7 @@ import { OptionsSection, PriceBreaksTable, TermPills } from "./terms";
  * title, summary, primary action and offers right — and the bar goes away.
  *
  * With several offers the page is a shop view (lib/shop-view.ts): one shop's
- * offer is picked (the cheapest, or `?shop=`'s) and the h1, photo, ringed row,
+ * offer is picked (the representative, or `?shop=`'s) and the h1, photo, ringed row,
  * open tab, primary button and bottom bar follow it; the metadata stays the
  * product's. Offers matched by AI are badged, and counted under the title.
  *
@@ -210,8 +210,11 @@ export default async function ProductPage({
   const several = product.offers.length >= 2;
   const primary = primaryOffer(product.offers, now);
   // The shop view (lib/shop-view.ts), with several offers: `?shop=`'s offer,
-  // or the cheapest. One offer has nothing to pick between.
-  const pick = several ? initialPick(product.offers, shopSlug, now) : null;
+  // or the product's representative (whose title the product's is). One
+  // offer has nothing to pick between.
+  const pick = several
+    ? initialPick(product.offers, shopSlug, now, product.representative_offer_id ?? null)
+    : null;
   const aiCount = several ? aiMatchedCount(product) : 0;
   const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
@@ -455,8 +458,8 @@ export default async function ProductPage({
 
       <SimilarProducts similar={similar} now={now} />
 
-      {/* The bar opens the picked shop's offer (the cheapest on load), or
-          the cheapest when the picked one has no link out. */}
+      {/* The bar opens the picked shop's offer (the representative on a
+          plain load), or the cheapest when the picked one has no link out. */}
       {several
         ? linkableOffers(product.offers).map((offer) => (
             <WhenAction key={offer.id} offer={offer.id}>
