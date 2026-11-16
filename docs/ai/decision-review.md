@@ -238,3 +238,31 @@ New labelling rules (also in `ml/out/labels/README.md`):
 
 Buyers verify on the shop's own page before buying, which is why rare
 gray-zone merges are tolerable under option B.
+
+## 5. Results and the judge setup (owner, 2026-11-16)
+
+The prompt grid (14 configurations, the rules-based prompt, 900 pairs scored on
+answer key v2, both orders, one request per call, bit-identical repeats) and
+the offline combination analysis (`ml/out/prompt-grid/`):
+
+- The rules roughly double Kev's recall at the same precision (title-only 29%
+  vs K1-capped 60%, ~94.5% precision each, without vetoes).
+- `criteria` lowered precision (86%); pplx with the rules accepts almost
+  everything at 0.5 and is only useful at ≥ 0.95.
+- Each judge does best with its own layout: Kev K2, pplx K1.
+- New prompts fixed KSD301 NC/NO, IRF250/IRFP250, MPU-6500/6050 and the 33 pF
+  pair; ATmega328 vs 328P regressed (every model now calls it the same).
+
+Owner decisions:
+
+- **Operating point "safest":** merge when Kev (K2, description capped at 150
+  words) ≥ 0.8 **and** pplx (K1, full description) ≥ 0.95, behind today's
+  vetoes. In-sample: 209 accepted, 0 errors; held-out halves 100% / 100%;
+  about 6,800 estimated matches (the old title-only plan: about 5,100).
+- **No two-stage screening.** Review in a few weeks whether home-server keeps
+  up with the full prompt.
+- **Report-driven overrides** (never-merge / must-merge pairs keyed by listing
+  id, honoured by the regroup) are the safety net for regressions such as
+  ATmega328/328P.
+- Home-server benchmark of the chosen setup: prepared on the desktop while the
+  server is down for maintenance; run when it is back.
