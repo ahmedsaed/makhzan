@@ -503,6 +503,31 @@ test.describe("back and forward", () => {
     await expect(row(page, "o-ai-oasis")).toHaveAttribute("aria-current", "true");
   });
 
+  test("a URL that lost ?shop=, away and Back: the plain load's pick", async ({ page }) => {
+    await page.goto(`${URL}?shop=volt-corner`);
+    await expect(page.locator("h1")).toHaveText(VOLT_TITLE);
+    // A pick first, which also proves the page is hydrated (Next has taken
+    // over history), as it is when a visitor picks.
+    await row(page, "o-ai-oasis")
+      .getByRole("link", { name: /View Oasis Parts Lab’s listing/ })
+      .click();
+    await expect(page).toHaveURL(/\?shop=oasis-parts-lab$/);
+    // Then what picking an offer with no shop does to the URL (no fixture
+    // shop lacks one): the param goes, in place.
+    await page.evaluate(() => window.history.replaceState(null, "", window.location.pathname));
+    await expect(page).toHaveURL(/\/products\/p-ai$/);
+
+    await departments(page).click();
+    await expect(page).toHaveURL(/\/departments$/);
+    await page.goBack();
+
+    await expect(page).toHaveURL(/\/products\/p-ai$/);
+    await expect(page.locator("h1")).toHaveText(NILE_TITLE);
+    await expect(row(page, "o-ai-nile")).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[aria-current]")).toHaveCount(1);
+    await expect(primary(page)).toHaveText("EGP 385 at Nile Parts");
+  });
+
   test("a plain load, a shop picked, away and Back: the picked shop", async ({ page }) => {
     await page.goto(URL);
     await expect(page.locator("h1")).toHaveText(NILE_TITLE);

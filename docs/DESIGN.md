@@ -254,7 +254,10 @@ the page container on desktop; each section is left out when its fetch fails.
     once the page runs); an unknown or absent slug gives the representative. A pick
     rewrites `?shop=` with `replaceState`, adding no history, and an offer with no shop
     removes it. The shown shop always follows the URL: after Back onto a rewritten
-    `?shop=`, the page reads it from the router and shows that shop. Canonical URL, `<title>`, meta
+    `?shop=`, the page reads it from the router and shows what a load of that URL would,
+    that shop's **lead** offer opened on its photo (not a non-lead offer of the shop the
+    visitor had picked; the URL names only the shop), and with no `?shop=` the plain
+    load's pick on the product's photo. Canonical URL, `<title>`, meta
     description, Open Graph and Twitter cards, JSON-LD and breadcrumbs stay the
     product's: the shop view is a UI feature only. A slug redirect keeps `?shop=`.
   - *Without JavaScript* the server's view is complete, the tabs still switch the text

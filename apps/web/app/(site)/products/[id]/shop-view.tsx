@@ -69,13 +69,22 @@ type ShopView = {
   pick: (offerId: string) => void;
 };
 
-type Picked = { picked: string; detail: number; photo: number; picks: number };
+type Picked = {
+  picked: string;
+  detail: number;
+  photo: number;
+  picks: number;
+  /** The `?shop=` this pick stands for: the URL's when it was followed, the
+   *  one a pick wrote (null for an offer with no shop) otherwise. */
+  shop: string | null;
+};
 
 const ShopViewContext = createContext<ShopView | null>(null);
 
 /** `state` with `offerId` picked: its tab and photo, where it has them. */
 function select(state: Picked, offerId: string, meta: PickMeta, picks: number): Picked {
   return {
+    ...state,
     picked: offerId,
     detail: meta.detail ?? state.detail,
     photo: meta.photo ?? state.photo,
@@ -86,6 +95,7 @@ function select(state: Picked, offerId: string, meta: PickMeta, picks: number): 
 export function ShopViewProvider({
   initial,
   explicit,
+  fallback,
   primary,
   meta,
   leads,
@@ -95,6 +105,9 @@ export function ShopViewProvider({
   initial: string;
   /** Picked by `?shop=` rather than by price: the gallery opens on its photo. */
   explicit: boolean;
+  /** The offer a plain load picks (the representative): what a URL without
+   *  `?shop=`, or with a shop not here, shows. */
+  fallback: string;
   primary: string | null;
   meta: Record<string, PickMeta>;
   /** Each shop's lead offer (lib/shop-view.ts `shopLead`), by slug: what
@@ -106,11 +119,33 @@ export function ShopViewProvider({
   // rendered; after Back, possibly one a pick wrote since. Null outside a
   // Next router (unit tests).
   const shop = useSearchParams()?.get("shop") ?? null;
-  // The URL's shop's lead offer, when the URL names a shop other than the
-  // one already picked.
-  const fromUrl = (current: string): string | null => {
-    const lead = shop ? leads[shop] : undefined;
-    return lead && meta[lead] && meta[current]?.slug !== shop ? lead : null;
+
+  /** What the URL's `?shop=` shows, as the server would render it: that
+   *  shop's lead offer, opened on its photo; else the plain load's pick. */
+  const target = (slug: string | null): { offer: string; explicit: boolean } => {
+    const lead = slug ? leads[slug] : undefined;
+    return lead && meta[lead]
+      ? { offer: lead, explicit: true }
+      : { offer: fallback, explicit: false };
+  };
+  /** Whether `offer` already stands for that URL: an offer of the named
+   *  shop, or, with no shop (or one not here), the plain load's pick. */
+  const agrees = (offer: string, slug: string | null): boolean => {
+    const lead = slug ? leads[slug] : undefined;
+    return lead && meta[lead] ? meta[offer]?.slug === slug : offer === fallback;
+  };
+  /** `state` showing what the URL says. */
+  const follow = (state: Picked, slug: string | null): Picked => {
+    const { offer, explicit: linked } = target(slug);
+    const next = meta[offer];
+    if (!next) return { ...state, shop: slug };
+    return {
+      ...select(state, offer, next, state.picks),
+      // As a load of that URL: a shop's view on its photo, a plain one on
+      // the product's own.
+      photo: linked ? (next.photo ?? 0) : 0,
+      shop: slug,
+    };
   };
 
   const [state, setState] = useState<Picked>(() => {
@@ -123,21 +158,21 @@ export function ShopViewProvider({
       detail: start?.detail ?? 0,
       photo: explicit ? (start?.photo ?? 0) : 0,
       picks: 0,
+      shop,
     };
-    // The same on a fresh load (the server rendered the URL's shop); after
-    // Back onto a rewritten URL, the URL's shop, opened as a linked view.
-    const restored = fromUrl(initial);
-    if (!restored) return base;
-    return { ...select(base, restored, meta[restored], 0), photo: meta[restored].photo ?? 0 };
+    // The same on a fresh load (the server rendered this URL); after Back
+    // onto a URL a pick rewrote, what that URL shows.
+    return agrees(initial, shop) ? base : follow(base, shop);
   });
 
-  // `?shop=` changed under a mounted page (a navigation to another shop's
-  // view of it): show that shop. A pick's own rewrite already agrees.
+  // `?shop=` changed under a mounted page. A pick's own rewrite already
+  // agrees (`state.shop` is what it wrote, even with no shop); any other
+  // change, a navigation to another shop's view or to the plain page, is
+  // shown as a load of that URL would show it.
   const [seen, setSeen] = useState(shop);
   if (shop !== seen) {
     setSeen(shop);
-    const lead = fromUrl(state.picked);
-    if (lead) setState(select(state, lead, meta[lead], state.picks));
+    if (shop !== state.shop) setState(follow(state, shop));
   }
 
   // A row folded away (out of stock, out of date) opens, so the highlight is
@@ -153,7 +188,10 @@ export function ShopViewProvider({
     (offerId: string) => {
       const next = meta[offerId];
       if (!next) return;
-      setState((current) => select(current, offerId, next, current.picks + 1));
+      setState((current) => ({
+        ...select(current, offerId, next, current.picks + 1),
+        shop: next.slug,
+      }));
       // An offer with no shop has no `?shop=`: the param goes, so the URL
       // never names a shop the page is not showing.
       try {

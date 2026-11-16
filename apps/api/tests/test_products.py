@@ -151,6 +151,30 @@ async def test_without_a_recorded_one_the_representative_is_found_by_the_same_ru
     assert body["representative_offer_id"] == str(pictured.id)
 
 
+@pytest.mark.parametrize("titled", [0, 1])
+async def test_on_a_tied_score_the_fallback_names_the_offer_with_the_products_title(
+    client, db, titled
+):
+    # Two listings the rule cannot tell apart (both pictured, English, in
+    # stock, one price) under different titles: the rule alone names whichever
+    # comes first, and the offers come in another order than the rebuild's.
+    # The fallback names the one whose title the product carries, either way.
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    titles = ["LM358 Dual Op-Amp DIP-8", "LM358 Op-Amp IC"]
+    product = await make_product(db, title_en=titles[titled])
+    tied = [
+        await make_listing(
+            db, supplier=shop, product=product, title_en=title, price="12.00", images=["x.jpg"]
+        )
+        for shop, title in zip([shop_a, shop_b], titles, strict=True)
+    ]
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(tied[titled].id)
+
+
 async def test_offers_without_a_price_sort_last_not_first(client, db):
     """A missing price is unknown, not zero — sorting it first would put a
     "price on request" offer above the genuinely cheapest one."""
