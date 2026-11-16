@@ -905,7 +905,12 @@ test.describe("a merged product id", () => {
 
     await page.goto("/products/p-merged");
     await expect(page).toHaveURL(/\/products\/p-multi$/);
-    await expect(page.locator("h1")).toHaveText("ESP32 Development Board 30 pin");
+    // The product's own title names the page; the h1 is the cheapest shop's
+    // listing, the one the shop view opens on.
+    await expect(page).toHaveTitle("ESP32 Development Board 30 pin · makhzan");
+    await expect(page.locator("h1")).toHaveText(
+      "ESP32 Development Board 30 pin (WIFI - Bluetooth)",
+    );
   });
 
   test("an id deleted before ids were permanent still redirects", async ({ page }) => {
