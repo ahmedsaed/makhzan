@@ -74,10 +74,25 @@ async def _list(limit: int) -> int:
 
 async def _add(a: uuid.UUID, b: uuid.UUID, kind: str, forced: bool, note: str, by: str) -> int:
     async with SessionLocal() as session:
-        found = set(await session.scalars(select(Listing.id).where(Listing.id.in_([a, b]))))
-        missing = [str(x) for x in (a, b) if x not in found]
+        shops = dict(
+            (
+                await session.execute(
+                    select(Listing.id, Listing.supplier_id).where(Listing.id.in_([a, b]))
+                )
+            ).all()
+        )
+        missing = [str(x) for x in (a, b) if x not in shops]
         if missing:
             print(f"No listing {', '.join(missing)}.", file=sys.stderr)
+            return 1
+        if kind == rulings.MUST and shops[a] == shops[b]:
+            # The same shop never merges, forced or not (grouping._Rulings), so
+            # this ruling would sit in the table and never act.
+            print(
+                "Both listings are from the same shop, which never merges: a must_merge "
+                "between them would do nothing. Not recorded.",
+                file=sys.stderr,
+            )
             return 1
         added = await rulings.add(session, a, b, kind, forced=forced, note=note, created_by=by)
         await session.commit()
