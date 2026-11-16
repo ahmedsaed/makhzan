@@ -7,23 +7,34 @@ after it read the same answer.
 
 PARTIAL: AI matching is not built yet (`ml/`, `docs/ai/`), so every listing is
 matched by the rules today and the page shows no badge and no note. When the AI
-decisions table exists, `matched_by` reads it: a listing is "ai" when the merge
+decisions table exists, `matched_by` reads it, in one query for all of a
+product's listings: a listing is "ai" when the merge
 that put it in its current product was an AI decision the rules alone would not
 have made. Nothing else needs to change for the badge to appear.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Iterable
+from typing import Literal, Protocol
+from uuid import UUID
 
 MatchedBy = Literal["rules", "ai"]
 
 
-def matched_by(listing: object) -> MatchedBy:
-    """How `listing` came to be an offer of its product.
+class _HasId(Protocol):
+    id: UUID
 
-    TODO(ai-matching): read the AI decisions table once it exists. Until then
-    no merge is an AI one, so this is "rules" for every listing.
+
+def matched_by(listings: Iterable[_HasId]) -> dict[UUID, MatchedBy]:
+    """How each of `listings` came to be an offer of its product, by listing id.
+
+    Takes all of a product's listings at once so that, once it reads the AI
+    decisions table, the product page costs one query rather than one per
+    offer.
+
+    STUB: the AI decisions table does not exist yet, so no merge is an AI one
+    and this answers "rules" for every listing without reading anything.
+    TODO(ai-matching): read that table here, one query for every id given.
     """
-    del listing
-    return "rules"
+    return {listing.id: "rules" for listing in listings}

@@ -100,7 +100,7 @@ async def test_an_ai_matched_offer_is_marked_and_counted(client, db, monkeypatch
     # was merged here by AI matching.
     monkeypatch.setattr(
         "app.routers.products.matched_by",
-        lambda listing: "ai" if listing.id == by_ai.id else "rules",
+        lambda listings: {o.id: "ai" if o.id == by_ai.id else "rules" for o in listings},
     )
 
     body = (await client.get(f"/products/{product.id}")).json()
