@@ -149,6 +149,21 @@ def _span_ok(prices: list[Decimal], candidate: Decimal | None, max_ratio: float)
     return (max(known) / min(known)) <= Decimal(str(max_ratio))
 
 
+def _prices_apart(a: Decimal | None, b: Decimal | None, max_ratio: float) -> bool:
+    """The price veto between two listings: both priced, and too far apart.
+
+    Under overrides the span is checked pair by pair, which says the same as
+    `_span_ok` over a cluster (its span is its widest pair) except that a
+    forced must_merge can lift it for its own pair and no other. Lifting it for
+    the whole cluster once let a forced pair's far price carry a third listing
+    in (110 EGP beside 2,000), refused every later newcomer, and flipped
+    between two groupings on each rebuild.
+    """
+    if a is None or b is None or a <= 0 or b <= 0:
+        return False
+    return max(a, b) / min(a, b) > Decimal(str(max_ratio))
+
+
 _FORM_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
 
 
@@ -201,7 +216,9 @@ class _Rulings:
       say. The value, form and price vetoes still apply between the two unless
       the ruling is forced; between either of them and every *other* member
       they apply as always, so a forced pair never drags a third listing past
-      a veto. The same shop never merges, forced or not: a shop lists two SKUs
+      a veto. The price veto is checked pair by pair here (`_prices_apart`)
+      for that reason: a forced pair far apart in price admits only listings
+      whose price is near both. The same shop never merges, forced or not: a shop lists two SKUs
       because they differ (see `_Cluster.similarity`), and a product's page
       shows each shop's offer once, so a ruling that two of one shop's listings
       are one product says the shop lists it twice, which is the shop's
@@ -330,14 +347,14 @@ class _Cluster:
         """`similarity` under overrides (`_Rulings`); the same shop is already refused."""
         if rulings.never_with(listing.id, self.members):
             return None
-        forced = False
         for member, known in zip(self.members, self.evidence, strict=True):
             if rulings.forced(listing.id, member.id):
-                forced = True
                 continue
             if values_conflict(ev.values, known.values):
                 return None
             if _forms_conflict(ev.form, known.form, strict):
+                return None
+            if _prices_apart(listing.price, member.price, ratio):
                 return None
         scores = [
             score
@@ -345,10 +362,6 @@ class _Cluster:
             if (score := rulings.score(listing.id, ev, member.id, known)) is not None
         ]
         if not scores or max(scores) < threshold:
-            return None
-        # A forced join is past the price veto too; the span then stands
-        # against everything that joins later.
-        if not forced and not _span_ok(self.prices, listing.price, ratio):
             return None
         return max(scores)
 
@@ -393,7 +406,6 @@ class _Cluster:
         rulings: _Rulings,
     ) -> float | None:
         """`accepts` under overrides (`_Rulings`); shared shops are already refused."""
-        forced = False
         best: float | None = None
         for member, ev in zip(other.members, other.evidence, strict=True):
             if rulings.never_with(member.id, self.members):
@@ -403,16 +415,13 @@ class _Cluster:
                 if score is not None and (best is None or score > best):
                     best = score
                 if rulings.forced(member.id, known_member.id):
-                    forced = True
                     continue
                 if values_conflict(ev.values, known.values):
                     return None
                 if _forms_conflict(ev.form, known.form, strict):
                     return None
-        if not forced:
-            prices = [p for p in [*self.prices, *other.prices] if p is not None and p > 0]
-            if len(prices) >= 2 and max(prices) / min(prices) > Decimal(str(ratio)):
-                return None
+                if _prices_apart(member.price, known_member.price, ratio):
+                    return None
         return best if best is not None and best >= threshold else None
 
     def absorb(self, other: _Cluster) -> None:

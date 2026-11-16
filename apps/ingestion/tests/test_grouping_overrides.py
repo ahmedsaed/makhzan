@@ -138,6 +138,50 @@ def test_a_forced_pair_drags_no_third_listing_past_a_veto():
     assert not _together(groups, a, c)
 
 
+_BUCK = "LM2596 DC-DC Step Down Buck Converter Module"
+
+
+def test_a_forced_pair_drags_no_third_listing_past_the_price_veto():
+    """Forced lifts the price veto for its own pair only: a third listing is
+    measured against both, so 110 EGP never sits beside 2,000."""
+    b = _mem(_BUCK, "shop-a", "LM2596", price=2000)
+    a = _mem(_BUCK, "shop-c", "LM2596", price=100)
+    x = _mem(_BUCK, "shop-b", "LM2596", price=110)
+    groups = _group_listings([a, b, x], None, _must((a, b), forced=True))
+    assert not _together(groups, b, x)
+    assert _together(groups, a, b) or _together(groups, a, x)
+
+
+def _regroup(listings, current, overrides):
+    groups = _group_listings(listings, current, overrides)
+    after = {}
+    for members in groups.values():
+        product = uuid.uuid4()
+        after.update({m.id: product for m in members})
+    shape = sorted(sorted(m.source for m in members) for members in groups.values())
+    return after, shape
+
+
+def test_a_forced_pair_far_apart_in_price_converges():
+    """The reviewer's case: products {A, X} and {B}, a forced must_merge A-B,
+    prices 100 / 110 / 2,000. It used to flip between {A, X, B} and
+    {A, B}, {X} on every rebuild."""
+    b = _mem(_BUCK, "shop-a", "LM2596", price=2000)
+    x = _mem(_BUCK, "shop-b", "LM2596", price=110)
+    a = _mem(_BUCK, "shop-c", "LM2596", price=100)
+    ruled = _must((a, b), forced=True)
+    p, q = uuid.uuid4(), uuid.uuid4()
+    current, first = _regroup([a, x, b], {a.id: p, x.id: p, b.id: q}, ruled)
+    current, second = _regroup([a, x, b], current, ruled)
+    _, third = _regroup([a, x, b], current, ruled)
+    assert first == second == third
+    assert ["shop-a", "shop-b"] not in first and ["shop-a", "shop-b", "shop-c"] not in first
+    # A fourth shop priced like the cheap side is not refused for the far one.
+    c = _mem(_BUCK, "shop-d", "LM2596", price=120)
+    _, with_c = _regroup([a, x, b, c], current, ruled)
+    assert ["shop-b", "shop-c", "shop-d"] in with_c
+
+
 def test_forced_must_merge_is_past_the_price_veto_too():
     a = _mem("Relay Module 5V 1 Channel", "shop-a", "SRD05VDC", price=40)
     b = _mem("Relay Module 5V 1 Channel", "shop-b", "SRD05VDC", price=900)
