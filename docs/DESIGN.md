@@ -127,7 +127,8 @@ the page container on desktop; each section is left out when its fetch fails.
 - **Report a problem** (the approved mockup of November 2026, variant F): one outlined
   button, a flag and "Report a problem", at the far right of the title's row; on a phone a
   44px flag-only square named "Report a problem", so the title keeps its width. It is the
-  page's only way to report anything: no button on the offer rows, and no "Something
+  page's only way to report anything (the AI note's "tell us" opens the same dialog): no
+  button on the offer rows, and no "Something
   wrong? Tell us" email under the contacts (the shop page keeps its own). It opens a Base
   UI dialog (a sheet from the bottom on a phone): step 1, what is wrong (offers aren't the
   same product, only with 2+ offers; the same as another product; wrong price or stock;
@@ -203,7 +204,8 @@ the page container on desktop; each section is left out when its fetch fails.
   strip, the selected tab in `ink` with a 2px `action` underline and the rest in
   `ink-2`. The tabs are a radio group (one tab stop, arrow keys between shops) and work
   without JavaScript. With one shop there is no strip. A shop that wrote nothing gets
-  no tab; absent data means no section, never an empty one.
+  no tab; absent data means no section, never an empty one. With several offers the
+  open tab is the picked shop's (the shop view, below); choosing a tab picks its shop.
 - The description is clamped to 25 lines (CSS `line-clamp`), faded at the cut, with
   **Read more** and **Show less** in a `<details>`, so it works without JavaScript.
   Whether a text is long is decided on the server, by estimated lines (paragraphs
@@ -223,9 +225,49 @@ the page container on desktop; each section is left out when its fetch fails.
   P3). Out-of-stock offers fold
   under "Show N out of stock offers", out-of-date ones (any stock) under "Show N out of
   date offers". The summary counts the recently checked offers, and the bottom bar
-  points to the cheapest of them. When every offer is out of date nothing folds for
+  points to the picked shop's offer: on load the cheapest of them (the shop view). When every offer is out of date nothing folds for
   age: the page lists them all, and the summary carries the "Price may be out of
   date" note.
+- **The shop view** (several offers; the approved mockup of November 2026, version 2;
+  `lib/shop-view.ts`, `app/(site)/products/[id]/shop-view.tsx`). One shop's offer is
+  *picked*; on load the cheapest (the offer the primary button already opened). Picking
+  another, by its "What the shops say" tab or by **View listing** on its row, swaps the
+  h1 to that shop's own listing title (no chip, no subtitle), moves the gallery to that
+  shop's first photo (the phone's thumbnail too; a shop with none keeps the photo
+  shown), rings its row (an inset 2px `link` ring on the `ground` fill, "Showing this
+  listing" in place of View listing), opens its tab (a shop that wrote nothing has no
+  tab, and the open one stays), and points the primary button and the bottom bar at it:
+  "EGP 410 at Volt Corner", or "View at {shop}" when it has no price of one or is out
+  of stock; one with no link out leaves them on the cheapest. A folded row opens its
+  fold. The facts line, part number, summary, history and contacts stay the product's.
+  Nothing scrolls on a pick; a screen reader hears "Showing {shop}'s listing". A shop
+  with several offers leads with its cheapest in stock, and only the picked row is
+  ringed. On a plain load the gallery stays on the product's own first photo (its
+  largest paint).
+  - *Linkable*: `?shop=<shop slug>` (the slug of `/shops/{slug}`) server-renders that
+    shop's view (h1, ring, tab, button, bar, thumbnail, an open fold; the gallery moves
+    once the page runs); an unknown or absent slug gives the cheapest. A pick rewrites
+    `?shop=` with `replaceState`, adding no history. Canonical URL, `<title>`, meta
+    description, Open Graph and Twitter cards, JSON-LD and breadcrumbs stay the
+    product's: the shop view is a UI feature only. A slug redirect keeps `?shop=`.
+  - *Without JavaScript* the server's view is complete, the tabs still switch the text
+    (but not the title or button), and View listing is a link to `?shop=`, so it loads
+    that shop's view.
+- **Matched by AI.** An offer AI matching put into the product (the API's per-offer
+  `matched_by: "ai"`, `ai_matched_count` on the product) carries a neutral pill (the
+  "Fits" pill's `line-strong` outline on `surface`, `ink-2`, an inline sparkles icon and
+  "AI", never the `badge` colours) beside its shop on its row: a button named "Matched by
+  AI: check the shop's page before buying" whose popover (hover, focus, tap, Enter; Esc
+  closes; in a portal so the list cannot clip it) says "Matched by AI. makhzan's AI
+  judged this the same product as the others; the rules alone didn't. Check the shop's
+  page before buying." Its shop's tab carries the same pill, hidden from screen readers,
+  the tab named "Volt Corner, matched by AI", the text as its tooltip. Under the title,
+  after the facts: "2 of 5 offers were matched automatically by AI. If one isn't the same
+  product, tell us.", where "tell us" opens Report a problem at step two on "These
+  offers aren't the same product", the AI-matched offers listed first, none ticked. No
+  AI-matched offer, no pill and no note. **Partial:** AI matching is not built, so the
+  API's `makhzan_schemas.matching.matched_by` says "rules" for every listing, and the
+  pill and note appear only once the AI decisions table feeds it.
 - **Comparing several offers** (`apps/web/lib/offers.ts`, one module for the summary,
   the facts line, the rows' order, the primary button and the bottom bar):
   - Offers are compared by the **price of one**, as every shop publishes it: an offer's
