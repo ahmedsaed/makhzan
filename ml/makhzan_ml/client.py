@@ -235,11 +235,15 @@ class Client:
 
         return self._map(batch, list(pairs))
 
-    def yes_no_margin(self, prompts: Sequence[str], top: int = 20) -> list[float]:
+    def yes_no_margin(
+        self, prompts: Sequence[str | list[dict]], top: int = 20, usage: list | None = None
+    ) -> list[float]:
         """Generative service: log P(yes) - log P(no) at the first answer token of a chat turn,
         thinking off, greedy. Case and leading-space variants of each word are pooled
         (logsumexp). A word missing from the top `top` gets a bound: the smallest listed
-        logprob minus log 2 (recorded as is; it only matters for saturated pairs)."""
+        logprob minus log 2 (recorded as is; it only matters for saturated pairs). A prompt is
+        one user turn, or a full chat message list sent as given; `usage`, when passed,
+        collects each response's token usage in order (one request at a time)."""
         if self.svc.kind != "vllm-chat":
             raise ModelError(f"{self.name} is not a generative service")
 
@@ -247,12 +251,13 @@ class Client:
             m = max(xs)
             return m + math.log(sum(math.exp(x - m) for x in xs))
 
-        def one(prompt: str) -> float:
+        def one(prompt: str | list[dict]) -> float:
+            messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
             out = _post(
                 f"{self.base}/v1/chat/completions",
                 {
                     "model": self.svc.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0,
                     "max_tokens": 1,
                     "logprobs": True,
@@ -261,6 +266,8 @@ class Client:
                 },
                 self.timeout,
             )
+            if usage is not None:
+                usage.append(out.get("usage"))
             tops = out["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
             floor = min(t["logprob"] for t in tops) - math.log(2)
             yes = [t["logprob"] for t in tops if t["token"].strip().lower() == "yes"]
