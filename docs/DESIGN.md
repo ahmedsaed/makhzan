@@ -232,7 +232,7 @@ the page container on desktop; each section is left out when its fetch fails.
 - **The shop view** (several offers; the approved mockup of November 2026, version 2;
   `lib/shop-view.ts`, `app/(site)/products/[id]/shop-view.tsx`). One shop's offer is
   *picked*; on a plain load the product's **representative** listing, the one its title
-  comes from (the regroup's choice: has a photo, then an English title, then in stock,
+  comes from (the regroup's choice: in stock, then has a photo, then an English title,
   then cheapest; the API's `representative_offer_id`), so the h1 and `<title>` name the
   same listing (owner decision, November 2026). The web never ranks it itself; an API
   that does not name one falls back to the cheapest. Picking
