@@ -211,6 +211,25 @@ test.describe("photo arrows", () => {
     await expect(previous).toBeDisabled();
   });
 
+  test("the strip shows no scrollbar, takes no room for one, and still scrolls", async ({
+    page,
+  }) => {
+    await page.goto("/products/p-single");
+    const gallery = page.locator("[data-gallery]");
+    const bar = await gallery.evaluate((track: HTMLElement) => ({
+      width: getComputedStyle(track).scrollbarWidth,
+      // A classic scrollbar would make the box taller than its content.
+      room: track.offsetHeight - track.clientHeight,
+    }));
+    expect(bar).toEqual({ width: "none", room: 0 });
+    // The arrows and the counter stay the visible controls.
+    await expect(page.getByRole("button", { name: "Next photo" })).toBeVisible();
+    await expect(gallery.getByText("1 / 2")).toBeAttached();
+    // Keyboard and trackpad still move it.
+    await gallery.evaluate((track) => track.scrollBy({ left: 400, behavior: "instant" }));
+    await expect.poll(() => scrollOf(page, "[data-gallery]")).toBeGreaterThan(100);
+  });
+
   test("one photo has none", async ({ page }) => {
     await page.goto("/products/p-bare");
     await expect(page.locator("a[data-photo]")).toHaveCount(1);
