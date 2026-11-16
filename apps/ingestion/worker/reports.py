@@ -11,10 +11,17 @@
 ARGS="..."` against the local database. There is no web page for it on
 purpose: the owner decided review happens on the server.
 
-Accepting or rejecting sets `status` and `reviewed_at`; nothing else happens
-yet. Correcting the page, and turning accepted reports into labelled pairs for
-matching (docs/ai/plan.md, phase G), are later steps done by hand or by a tool
-not written yet. An email is erased 90 days after the report was sent,
+Accepting or rejecting sets `status` and `reviewed_at`. Accepting a grouping
+report also records the ruling it stands for in `grouping_overrides`
+(`makhzan_schemas.overrides.report_pairs`), which the next regroup applies:
+"these offers aren't the same product" keeps every ticked offer apart from
+every unticked one (never_merge), "the same as another product" joins the
+two products (one must_merge, between a listing of each). Rejecting a report
+withdraws whatever rulings it made, so a mistaken accept can be put right.
+`./makhzan overrides` lists them and makes or removes one by hand. Correcting
+the page for other reasons, and turning accepted reports into labelled pairs
+for matching (docs/ai/plan.md, phase G), are later steps done by hand or by a
+tool not written yet. An email is erased 90 days after the report was sent,
 reviewed or not.
 
 The listing shows each report's snapshot (what the page showed when it was
@@ -26,10 +33,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import sys
 import textwrap
 from collections.abc import Sequence
 
+from makhzan_schemas import overrides as rulings
 from makhzan_schemas import reports as rules
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import Report
@@ -136,7 +145,17 @@ async def _show(report_id: int) -> int:
     return 0
 
 
-async def _review(ids: Sequence[int], status: str) -> int:
+def who(by: str | None) -> str:
+    """Who is acting: as given, else the login running the command."""
+    if by and by.strip():
+        return by.strip()
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return "cli"
+
+
+async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int:
     missing = 0
     async with SessionLocal() as session:
         for report_id in ids:
@@ -144,9 +163,31 @@ async def _review(ids: Sequence[int], status: str) -> int:
             if report is None:
                 print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
                 missing += 1
+                continue
+            print(f"{rules.reference(report_id)} {status}.")
+            if status == "accepted":
+                for added in await rulings.accept_report(session, report, created_by=who(by)):
+                    print("  " + ruling_line(added))
             else:
-                print(f"{rules.reference(report_id)} {status}.")
+                withdrawn = await rulings.withdraw_report(session, report_id)
+                if withdrawn:
+                    print(f"  withdrew {withdrawn} grouping override(s) it had made")
+            await session.commit()
     return 1 if missing else 0
+
+
+def ruling_line(added: rulings.Added) -> str:
+    """One recorded (or refused) ruling, for the command's output."""
+    row = added.row
+    said = {
+        "created": "override",
+        "exists": "already there: override",
+        "conflict": "NOT recorded, the pair has the other ruling: override",
+    }[added.outcome]
+    return (
+        f"{said} #{row.id} {row.kind}{' forced' if row.forced else ''} "
+        f"{row.listing_a} {row.listing_b} (applies at the next regroup)"
+    )
 
 
 async def _purge() -> int:
@@ -173,6 +214,7 @@ def _parser() -> argparse.ArgumentParser:
     for verb in ("accept", "reject"):
         p = sub.add_parser(verb, help=f"{verb} one or more reports")
         p.add_argument("ids", type=_report_id, nargs="+")
+        p.add_argument("--by", help="who is reviewing, recorded on any override (default: login)")
     sub.add_parser("purge", help="erase expired emails and address hashes now")
     return parser
 
@@ -185,7 +227,8 @@ async def run(argv: Sequence[str] | None = None) -> int:
         return await _show(args.id)
     if args.command == "purge":
         return await _purge()
-    return await _review(args.ids, "accepted" if args.command == "accept" else "rejected")
+    status = "accepted" if args.command == "accept" else "rejected"
+    return await _review(args.ids, status, args.by)
 
 
 if __name__ == "__main__":
