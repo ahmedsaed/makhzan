@@ -144,7 +144,8 @@ the page container on desktop; each section is left out when its fetch fails.
   is there, never empty: "Sold by 1 shop · checked 3 days ago" (several shops: "Sold by
   3 shops · in stock at 2 · EGP 260 – 295"), and "8 similar products, from EGP 40",
   linking down to them.
-- Photos: a swipeable strip (scroll snap, works without JavaScript) with previous and
+- Photos: a swipeable strip (scroll snap, works without JavaScript; no scrollbar in any
+  browser, still scrolled by touch, trackpad and keys) with previous and
   next arrows (44px, disabled at the ends, absent with one photo). Each photo is a link
   to the image; with JavaScript it opens a full-screen viewer instead: a native modal
   dialog on the `scrim` colour, the photo in its white frame as large as the screen
