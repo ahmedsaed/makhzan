@@ -39,6 +39,7 @@ from makhzan_schemas.enums import (
     ListingStatus,
     StockSignal,
 )
+from makhzan_schemas.matching import MatchedBy
 from makhzan_schemas.search import category_ref, price_on_request
 
 # --------------------------------------------------------------------------- #
@@ -535,6 +536,10 @@ class OfferRead(_ShopDetails):
     last_verified_at: datetime
     supplier: SupplierRead | None = None
     brand: str | None = None
+    #: How it came to be an offer of this product: by the grouping rules, or
+    #: by AI matching (`makhzan_schemas.matching`; "rules" for every offer
+    #: until AI matching exists). The page badges the "ai" ones.
+    matched_by: MatchedBy = "rules"
 
 
 class PhotoShop(BaseModel):
@@ -628,6 +633,9 @@ class ProductRead(ProductSummary):
     status: Literal["listed", "delisted"] = "listed"
     delisted_at: datetime | None = None
     offers: list[OfferRead] = Field(default_factory=list)
+    #: How many of `offers` AI matching put here (`matched_by == "ai"`), for
+    #: the page's "2 of 5 offers were matched automatically by AI" note.
+    ai_matched_count: int = 0
 
 
 class PricePoint(BaseModel):

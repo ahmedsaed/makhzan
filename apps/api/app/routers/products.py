@@ -10,6 +10,7 @@ from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
 from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.matching import matched_by
 from makhzan_schemas.models import Listing, Product, ProductRedirect
 from makhzan_schemas.pricing import unit_price
 from sqlalchemy import func, or_, select, update
@@ -72,6 +73,13 @@ async def get_product(
     # the range itself stays, as on a withdrawn product.
     names_an_offer = product.min_price_listing_id in {o.id for o in offers}
 
+    # Which offers AI matching merged here: "rules" for all of them until AI
+    # matching exists (makhzan_schemas.matching says so, and is the one place
+    # to change).
+    reads = [
+        OfferRead.model_validate(o).model_copy(update={"matched_by": matched_by(o)}) for o in offers
+    ]
+
     return ProductRead(
         id=product.id,
         part_number=product.part_number,
@@ -96,7 +104,8 @@ async def get_product(
         category=product.category,
         status="delisted" if product.delisted_at is not None else "listed",
         delisted_at=product.delisted_at,
-        offers=[OfferRead.model_validate(o) for o in offers],
+        offers=reads,
+        ai_matched_count=sum(read.matched_by == "ai" for read in reads),
     )
 
 
