@@ -751,8 +751,8 @@ def representative(items: Sequence[Listing]) -> Listing:
     the product page's shop view picks it on a plain load
     (`representative_listing_id`, and the API's fallback for a product not
     rebuilt since that column came). The one place this ranking lives: nothing
-    else re-implements it. The product's photo is chosen apart (`_pictured`):
-    the pick's own when it has one, else the first listing that has one.
+    else re-implements it. The product's photo is chosen by the same key among
+    the listings that have one (`_pictured`): the pick's own when it has one.
 
     Owner decisions (November 2026). Stock first: with the photo first, an
     out-of-stock listing that was the only one with a photo became the plain
@@ -768,12 +768,19 @@ def representative(items: Sequence[Listing]) -> Listing:
     return min(items, key=representative_key)
 
 
-def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:
-    """The listing whose first photo is the product's: the representative's
-    when it has one, else the first listing in the group that does."""
-    if rep.images:
-        return rep
-    return next((i for i in items if i.images), None)
+def _pictured(items: list[Listing]) -> Listing | None:
+    """The listing whose first photo is the product's: of the listings that
+    have a photo, the best by the representative's ranking
+    (`representative_key`), so an in-stock shop's photo wins over an
+    out-of-stock one's. The representative's own when it has one (it ranks
+    first); null when no listing has a photo.
+
+    Owner decision (November 2026). With the English title ranked ahead of the
+    photo, the representative can be an in-stock English listing with no
+    photo; this used to fall back to the first pictured listing in group
+    order, even one out of stock.
+    """
+    return min((i for i in items if i.images), key=representative_key, default=None)
 
 
 def _group_listings(
@@ -1282,7 +1289,7 @@ async def rebuild_products(
         product.brand = rep.brand
         product.category_id = rep.category_id
         product.supplier_name = rep.supplier.name if rep.supplier else None
-        pictured = _pictured(rep, items)
+        pictured = _pictured(items)
         product.image = pictured.images[0] if pictured else None
         # The photo's own shop, read off the listing it was taken from: the
         # badge on it names whose photo it is, which is not always the shop

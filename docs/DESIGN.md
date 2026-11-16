@@ -252,7 +252,9 @@ the page container on desktop; each section is left out when its fetch fails.
   Nothing scrolls on a pick; a screen reader hears "Showing {shop}'s listing". A shop
   with several offers leads with its cheapest in stock, and only the picked row is
   ringed. On a plain load the gallery stays on the product's own first photo (its
-  largest paint).
+  largest paint). That photo is chosen by the same ranking among the listings that have
+  one (`grouping._pictured`): the representative's own when it has one, else an in-stock
+  shop's before an out-of-stock one's (owner decision, November 2026).
   - *Linkable*: `?shop=<shop slug>` (the slug of `/shops/{slug}`) server-renders that
     shop's view (h1, ring, tab, button, bar, thumbnail, an open fold; the gallery moves
     once the page runs); an unknown or absent slug gives the representative. A pick
