@@ -179,15 +179,20 @@ def _snapshot_ids(listings: list[dict], *, ticked: bool | None = None) -> list[u
     return out
 
 
-async def _representative(session: AsyncSession, ids: list[uuid.UUID]) -> uuid.UUID | None:
-    """The listing of a product most likely to stay: active first, then the
+class ReportRefused(ValueError):
+    """An accepted report that cannot stand for any ruling that would act."""
+
+
+async def _ranked(session: AsyncSession, ids: list[uuid.UUID]) -> list:
+    """A product's listings, those most likely to stay first: active, then the
     earliest seen, then the natural key (source, external id)."""
     if not ids:
-        return None
+        return []
     rows = (
         await session.execute(
             select(
                 Listing.id,
+                Listing.supplier_id,
                 Listing.status,
                 Listing.first_seen_at,
                 Listing.source,
@@ -195,9 +200,7 @@ async def _representative(session: AsyncSession, ids: list[uuid.UUID]) -> uuid.U
             ).where(Listing.id.in_(ids))
         )
     ).all()
-    if not rows:
-        return None
-    best = min(
+    return sorted(
         rows,
         key=lambda r: (
             r.status != ListingStatus.ACTIVE,
@@ -207,7 +210,21 @@ async def _representative(session: AsyncSession, ids: list[uuid.UUID]) -> uuid.U
             str(r.id),
         ),
     )
-    return best.id
+
+
+def _representatives(mine: list, theirs: list) -> Pair | None:
+    """One listing of each product, from different shops (the same shop never
+    merges, so a same-shop must_merge would never act): the pair whose worse
+    rank is best, then the better rank, then this product's rank."""
+    best = None
+    for i, a in enumerate(mine):
+        for j, b in enumerate(theirs):
+            if a.supplier_id == b.supplier_id or a.id == b.id:
+                continue
+            rank = (max(i, j), i + j, i)
+            if best is None or rank < best[0]:
+                best = (rank, pair(a.id, b.id))
+    return best[1] if best else None
 
 
 async def report_pairs(session: AsyncSession, report: Report) -> list[tuple[Pair, str]]:
@@ -220,7 +237,8 @@ async def report_pairs(session: AsyncSession, report: Report) -> list[tuple[Pair
     - `offers_not_same`: never_merge between every ticked offer and every
       offer left unticked. Nothing is said about ticked against ticked.
     - `same_as_other`: one must_merge, between a representative listing of
-      each product (`_representative`). One pair is enough: admission is
+      each product, from two different shops (`_representatives`; refused
+      with `ReportRefused` when there is no such pair). One pair is enough: admission is
       single-link (a cluster takes a candidate on its best-matching member)
       while every veto is checked against every member, so it joins the two
       products and still refuses any member that contradicts the other. Every
@@ -244,17 +262,36 @@ async def report_pairs(session: AsyncSession, report: Report) -> list[tuple[Pair
                     pairs.append((pair(a, b), NEVER))
     elif report.reason == "same_as_other":
         other = snap.get("other_product") or {}
-        a = await _representative(session, _snapshot_ids(listings))
-        b = await _representative(session, _snapshot_ids(other.get("listings") or []))
-        if a is not None and b is not None and a != b:
-            pairs.append((pair(a, b), MUST))
+        joined = _representatives(
+            await _ranked(session, _snapshot_ids(listings)),
+            await _ranked(session, _snapshot_ids(other.get("listings") or [])),
+        )
+        if joined is None:
+            raise ReportRefused(
+                "no listing of one product is from a different shop than a listing of the "
+                "other (or none exists any more): the same shop never merges, so no ruling "
+                "could join them"
+            )
+        pairs.append((joined, MUST))
     return sorted(set(pairs), key=lambda p: (str(p[0][0]), str(p[0][1])))
 
 
-async def accept_report(session: AsyncSession, report: Report, *, created_by: str) -> list[Added]:
-    """Write the rulings an accepted report stands for (flushed, not committed)."""
+async def accept_report(
+    session: AsyncSession,
+    report: Report,
+    *,
+    created_by: str,
+    pairs: list[tuple[Pair, str]] | None = None,
+) -> list[Added]:
+    """Write the rulings an accepted report stands for (flushed, not committed).
+
+    `pairs` are `report_pairs`' answer when the caller already has it; that
+    raises `ReportRefused` for a report no ruling could act on.
+    """
     results = []
-    for (a, b), kind in await report_pairs(session, report):
+    if pairs is None:
+        pairs = await report_pairs(session, report)
+    for (a, b), kind in pairs:
         results.append(await add(session, a, b, kind, created_by=created_by, report_id=report.id))
     return results
 

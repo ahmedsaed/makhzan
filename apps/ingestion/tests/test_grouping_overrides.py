@@ -439,6 +439,49 @@ async def test_accepting_same_as_other_joins_one_listing_of_each(capsys):
     assert (row.kind, row.forced, row.report_id) == (rulings.MUST, False, report_id)
 
 
+async def test_same_as_other_picks_listings_from_two_shops():
+    """The earliest listing of each product is the same shop here; a ruling
+    between them would never act, so the next-best pair across shops is taken."""
+    shop_a, shop_b = await _supplier("shop-a"), await _supplier("shop-b")
+    a1 = await _listing(shop_a, "Chip A", None, seen=T0)
+    a2 = await _listing(shop_b, "Chip A again", None, seen=T0 + timedelta(days=2))
+    b1 = await _listing(shop_a, "Chip B", None, seen=T0 + timedelta(days=1))
+    report_id = await _report("same_as_other", [[a1, a2]], [b1])
+    assert await reports_cli.run(["accept", str(report_id)]) == 0
+    (row,) = await _overrides()
+    assert (row.listing_a, row.listing_b) == pair(a2, b1)
+
+
+async def test_same_as_other_within_one_shop_is_refused_not_accepted(capsys):
+    shop = await _supplier("shop-a")
+    a = await _listing(shop, "Chip A", None)
+    b = await _listing(shop, "Chip B", None)
+    report_id = await _report("same_as_other", [[a]], [b])
+    assert await reports_cli.run(["accept", str(report_id)]) == 1
+    assert "not accepted" in capsys.readouterr().err
+    assert await _overrides() == []
+    async with SessionLocal() as session:
+        assert (await session.get(Report, report_id)).status == "new"
+
+
+async def test_a_same_shop_must_merge_by_hand_is_refused(capsys):
+    shop = await _supplier("shop-a")
+    a = await _listing(shop, "SG90 Micro Servo 9g", "SG90")
+    b = await _listing(shop, "SG90 Micro Servo 9g blue", "SG90")
+    argv = ["add", str(a), str(b), "--kind", "must", "--note", "same", "--by", "owner"]
+    assert await overrides_cli.run(argv) == 1
+    assert "same shop" in capsys.readouterr().err
+    assert await _overrides() == []
+
+
+async def test_an_unknown_listing_is_named_not_a_traceback(capsys):
+    a = await _listing(await _supplier("shop-a"), "SG90 Micro Servo 9g", "SG90")
+    ghost = uuid.uuid4()
+    argv = ["add", str(a), str(ghost), "--kind", "never", "--note", "x", "--by", "owner"]
+    assert await overrides_cli.run(argv) == 1
+    assert f"No listing {ghost}" in capsys.readouterr().err
+
+
 async def test_other_reasons_make_no_ruling():
     a = await _listing(await _supplier("shop-a"), "SG90 Micro Servo 9g", "SG90")
     report_id = await _report("wrong_category", [[a]])
