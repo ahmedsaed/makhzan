@@ -612,6 +612,33 @@ Suppliers do publish SKUs, but they are **private catalogue codes, not MPNs**
 (one shop uses numeric ids, another descriptive ones). Across ~10k SKUs only 15
 are shared by two suppliers, and those are coincidences. Do not group on them.
 
+## AI and model work
+
+Matching with local models (`ml/`, `docs/ai/`) is design work the owner decides.
+An agent or a session recommends; it does not choose.
+
+- **Show before running.** Before any experiment, put the full prompt in front of
+  the owner as options with real snippets: the instructions and rules, how to
+  compare, what counts as the same product, the question, how each listing's
+  data is injected (labelled fields, how a missing field is shown, what is left
+  out, e.g. price), the label policy, thresholds, the sample design and how
+  candidates are found.
+- **A judge's prompt carries the owner's policy.** The labelling rulings
+  (`ml/out/labels/README.md`, mirrored in `docs/ai/decision-review.md`) apply to
+  the judges, not only to labellers: a brand alone never makes a different
+  product; a missing or unmentioned field is compatible, never a difference;
+  drop-in revisions are the same; a stated contradiction in value, size,
+  rating, form or pack size is different. Listings are injected as clearly
+  labelled fields with missing ones marked as not stated.
+- **No silent defaults.** A choice an earlier experiment made ("simplest within
+  noise", an agent's prompt, a threshold) does not carry into later work
+  unreviewed. When a finding changes its premise (new rulings, new data),
+  revisit it with the owner. Every AI decision, and who made it, is recorded in
+  `docs/ai/decision-review.md`.
+- **Labels are hard-won.** Pairs, keys and answers live in git-ignored
+  `ml/out/labels/` with the listing ids beside each label, never only in a
+  session's scratch folder: a reboot erased the Phase C labels that way.
+
 ## Conventions
 
 - Python: ruff, line length 100. `make fmt` before committing. CI pins ruff — do
