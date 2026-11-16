@@ -602,6 +602,27 @@ id gets `merged_into` and redirects), splits (the core keeps the id), empties
 that lists products filters on `Product.is_listed()`. Before deploying a grouping
 change, `make regroup-dry-run` shows how many ids it merges and splits.
 
+**A person's ruling outranks the rules** (`grouping_overrides`,
+`makhzan_schemas.overrides`). Keyed by the unordered listing pair, because
+listing ids are permanent: `never_merge` is one more veto between those two
+listings, checked wherever the others are; `must_merge` admits the pair without
+title agreement or a shared identifier (their identifier groups are
+sub-clustered together, title agreement still admitting only within one), and
+the value, form and price vetoes still apply unless `forced`, which lifts them
+for that pair only. The same shop never merges, forced or not. The regroup is
+the only reader that acts on them; every merge or split one carries out cites
+its id under `overrides` in `product_events.detail`. An existing product wins
+over a ruling it contradicts, forced or not (owner, November 2026); after each
+regroup every ruling's `status` says in effect, BLOCKED (with the listing and
+veto), inactive or removed — `./makhzan overrides list` and `reports show`
+print it. Removal is soft (`removed_at`/`removed_by`; re-ruling makes a new
+row), and the regroup that undoes a removed ruling cites it under
+`removed_overrides`. `./makhzan reports accept` writes them (ticked × unticked
+offers → never; "same as another" → one must between listings of two shops),
+`reject` withdraws them, `./makhzan overrides` lists, adds (note required) and
+removes. AI matching must read the same set
+(`load_overrides`), never re-ask a model about a ruled pair.
+
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
 under exactly "Services". Narrow on purpose — a false positive deletes real stock.

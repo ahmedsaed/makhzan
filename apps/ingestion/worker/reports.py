@@ -11,10 +11,18 @@
 ARGS="..."` against the local database. There is no web page for it on
 purpose: the owner decided review happens on the server.
 
-Accepting or rejecting sets `status` and `reviewed_at`; nothing else happens
-yet. Correcting the page, and turning accepted reports into labelled pairs for
-matching (docs/ai/plan.md, phase G), are later steps done by hand or by a tool
-not written yet. An email is erased 90 days after the report was sent,
+Accepting or rejecting sets `status` and `reviewed_at`. Accepting a grouping
+report also records the ruling it stands for in `grouping_overrides`
+(`makhzan_schemas.overrides.report_pairs`), which the next regroup applies:
+"these offers aren't the same product" keeps every ticked offer apart from
+every unticked one (never_merge), "the same as another product" joins the
+two products (one must_merge, between a listing of each). Rejecting a report
+withdraws whatever rulings it made (their rows kept, marked removed), so a
+mistaken accept can be put right.
+`./makhzan overrides` lists them and makes or removes one by hand. Correcting
+the page for other reasons, and turning accepted reports into labelled pairs
+for matching (docs/ai/plan.md, phase G), are later steps done by hand or by a
+tool not written yet. An email is erased 90 days after the report was sent,
 reviewed or not.
 
 The listing shows each report's snapshot (what the page showed when it was
@@ -26,13 +34,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import sys
 import textwrap
 from collections.abc import Sequence
 
+from sqlalchemy import select
+
+from makhzan_schemas import overrides as rulings
 from makhzan_schemas import reports as rules
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.models import Report
+from makhzan_schemas.models import GroupingOverride, Report
 
 REASON_TEXT = {
     "offers_not_same": "These offers aren't the same product",
@@ -129,24 +141,113 @@ async def _list(limit: int) -> int:
 async def _show(report_id: int) -> int:
     async with SessionLocal() as session:
         report = await session.get(Report, report_id)
+        made = list(
+            await session.scalars(
+                select(GroupingOverride)
+                .where(GroupingOverride.report_id == report_id)
+                .order_by(GroupingOverride.id)
+            )
+        )
     if report is None:
         print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
         return 1
     print(format_report(report, full=True))
+    if made:
+        print("  Grouping overrides it made:")
+        for row in made:
+            print(printable("\n".join("    " + line for line in override_lines(row))))
     return 0
 
 
-async def _review(ids: Sequence[int], status: str) -> int:
+def who(by: str | None) -> str:
+    """Who is acting: as given, else the login running the command."""
+    if by and by.strip():
+        return by.strip()
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return "cli"
+
+
+async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int:
     missing = 0
     async with SessionLocal() as session:
         for report_id in ids:
+            pairs = None
+            if status == "accepted":
+                # The rulings first: a report no ruling could act on is
+                # refused, not shown accepted with nothing behind it.
+                found = await session.get(Report, report_id)
+                if found is not None:
+                    try:
+                        pairs = await rulings.report_pairs(session, found)
+                    except rulings.ReportRefused as refused:
+                        print(
+                            f"{rules.reference(report_id)} not accepted: {refused}. "
+                            "Reject it, or rule by hand with `overrides add`.",
+                            file=sys.stderr,
+                        )
+                        missing += 1
+                        continue
             report = await rules.review(session, report_id, status)
             if report is None:
                 print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
                 missing += 1
+                continue
+            print(f"{rules.reference(report_id)} {status}.")
+            if status == "accepted":
+                added_all = await rulings.accept_report(
+                    session, report, created_by=who(by), pairs=pairs
+                )
+                for added in added_all:
+                    print("  " + ruling_line(added))
             else:
-                print(f"{rules.reference(report_id)} {status}.")
+                withdrawn = await rulings.withdraw_report(
+                    session, report_id, removed_by=f"{who(by)} (report rejected)"
+                )
+                if withdrawn:
+                    print(f"  withdrew {withdrawn} grouping override(s) it had made")
+            await session.commit()
     return 1 if missing else 0
+
+
+def override_lines(row: GroupingOverride) -> list[str]:
+    """One ruling: what, from where, by whom, and what the last regroup found."""
+    origin = f"report R-{row.report_id}" if row.report_id else "manual"
+    lines = [
+        f"#{row.id} {row.kind}{' forced' if row.forced else ''}  {origin}  "
+        f"{row.created_at:%Y-%m-%d %H:%M} UTC by {row.created_by}"
+    ]
+    if row.removed_at is not None:
+        lines.append(f"    removed {row.removed_at:%Y-%m-%d %H:%M} UTC by {row.removed_by}")
+    elif row.status is None:
+        lines.append("    not yet checked: applies at the next regroup")
+    else:
+        when = f" (checked {row.checked_at:%Y-%m-%d %H:%M} UTC)" if row.checked_at else ""
+        label = {
+            "in_effect": "in effect",
+            "blocked": "BLOCKED",
+            "inactive": "inactive",
+            "removed": "removed",
+        }.get(row.status, row.status)
+        lines.append(f"    {label}{when}")
+        if row.blocked_reason:
+            lines.append(f"    why: {row.blocked_reason}")
+    return lines
+
+
+def ruling_line(added: rulings.Added) -> str:
+    """One recorded (or refused) ruling, for the command's output."""
+    row = added.row
+    said = {
+        "created": "override",
+        "exists": "already there: override",
+        "conflict": "NOT recorded, the pair has the other ruling: override",
+    }[added.outcome]
+    return (
+        f"{said} #{row.id} {row.kind}{' forced' if row.forced else ''} "
+        f"{row.listing_a} {row.listing_b} (applies at the next regroup)"
+    )
 
 
 async def _purge() -> int:
@@ -173,6 +274,7 @@ def _parser() -> argparse.ArgumentParser:
     for verb in ("accept", "reject"):
         p = sub.add_parser(verb, help=f"{verb} one or more reports")
         p.add_argument("ids", type=_report_id, nargs="+")
+        p.add_argument("--by", help="who is reviewing, recorded on any override (default: login)")
     sub.add_parser("purge", help="erase expired emails and address hashes now")
     return parser
 
@@ -185,7 +287,8 @@ async def run(argv: Sequence[str] | None = None) -> int:
         return await _show(args.id)
     if args.command == "purge":
         return await _purge()
-    return await _review(args.ids, "accepted" if args.command == "accept" else "rejected")
+    status = "accepted" if args.command == "accept" else "rejected"
+    return await _review(args.ids, status, args.by)
 
 
 if __name__ == "__main__":

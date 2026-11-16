@@ -24,6 +24,13 @@ any of these vetoes a merge outright —
     `DomainProfile.form_markers`;
   - their prices are implausibly far apart.
 
+A person's ruling outranks both (`makhzan_schemas.overrides`, the
+`grouping_overrides` table): a never_merge pair is one more veto between those
+two listings, checked wherever the others are, and a must_merge pair admits its
+two listings to one group without title agreement or a shared identifier
+(joining their shared-identifier groups for the purpose), every veto still
+applying between them unless the ruling is forced. See `_Rulings`.
+
 A group key says which listings form one product; it is not the product's
 identity. `plan_identity` matches each group to the product its listings already
 belong to, so a product's id (its URL) survives a second shop selling it, the
@@ -38,7 +45,7 @@ import hashlib
 import re
 import uuid
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -47,7 +54,14 @@ from functools import lru_cache
 from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
 from makhzan_schemas.identifiers import Identifier, fold_identifier, identifier_pattern
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
-from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
+from makhzan_schemas.models import (
+    GroupingOverride,
+    Listing,
+    Product,
+    ProductEvent,
+    ProductRedirect,
+)
+from makhzan_schemas.overrides import Overrides, pair
 from makhzan_schemas.pricing import summarize_prices
 from makhzan_schemas.values import value_tokens, values_conflict, without_values
 from sqlalchemy import select, text, update
@@ -141,6 +155,21 @@ def _span_ok(prices: list[Decimal], candidate: Decimal | None, max_ratio: float)
     return (max(known) / min(known)) <= Decimal(str(max_ratio))
 
 
+def _prices_apart(a: Decimal | None, b: Decimal | None, max_ratio: float) -> bool:
+    """The price veto between two listings: both priced, and too far apart.
+
+    Under overrides the span is checked pair by pair, which says the same as
+    `_span_ok` over a cluster (its span is its widest pair) except that a
+    forced must_merge can lift it for its own pair and no other. Lifting it for
+    the whole cluster once let a forced pair's far price carry a third listing
+    in (110 EGP beside 2,000), refused every later newcomer, and flipped
+    between two groupings on each rebuild.
+    """
+    if a is None or b is None or a <= 0 or b <= 0:
+        return False
+    return max(a, b) / min(a, b) > Decimal(str(max_ratio))
+
+
 _FORM_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
 
 
@@ -177,6 +206,94 @@ class _Evidence:
     form: str | None
 
 
+#: What a must_merge pair scores as a match: above any title agreement (a
+#: Jaccard is at most 1), so a ruled partner is a candidate's best match.
+_RULED = 2.0
+
+
+@dataclass(frozen=True)
+class _Rulings:
+    """The overrides that bear on one group's listings, indexed by listing.
+
+    - `never`: a veto between the two listings, like the others: no cluster may
+      hold both, and it counts as a conflict when an incumbent's members are
+      ordered.
+    - `must`: the pair scores `_RULED`, which admits it whatever its titles
+      say. The value, form and price vetoes still apply between the two unless
+      the ruling is forced; between either of them and every *other* member
+      they apply as always, so a forced pair never drags a third listing past
+      a veto. The price veto is checked pair by pair here (`_prices_apart`)
+      for that reason: a forced pair far apart in price admits only listings
+      whose price is near both. The same shop never merges, forced or not: a shop lists two SKUs
+      because they differ (see `_Cluster.similarity`), and a product's page
+      shows each shop's offer once, so a ruling that two of one shop's listings
+      are one product says the shop lists it twice, which is the shop's
+      duplicate to show, not ours to fold.
+    - `base`: each listing's shared-identifier key, when a must_merge joined
+      several groups into one (empty otherwise). Title agreement admits only
+      within one key: the ruling joins its own two listings, not two codes'
+      worth of similar titles.
+    """
+
+    never: dict[uuid.UUID, frozenset[uuid.UUID]]
+    must: dict[uuid.UUID, dict[uuid.UUID, bool]]
+    base: dict[uuid.UUID, str]
+
+    def never_with(self, listing_id: uuid.UUID, members: list[Listing]) -> bool:
+        barred = self.never.get(listing_id)
+        return bool(barred) and any(m.id in barred for m in members)
+
+    def forced(self, a: uuid.UUID, b: uuid.UUID) -> bool:
+        return self.must.get(a, {}).get(b, False)
+
+    def score(self, a: uuid.UUID, ea: _Evidence, b: uuid.UUID, eb: _Evidence) -> float | None:
+        """How well two listings match: a ruling, else their titles (within one key)."""
+        if b in self.must.get(a, ()):
+            return _RULED
+        if self.base and self.base[a] != self.base[b]:
+            return None
+        return _jaccard(ea.tokens, eb.tokens)
+
+
+def _index_overrides(
+    overrides: Overrides,
+) -> dict[uuid.UUID, list[tuple[uuid.UUID, str, bool]]]:
+    """Each listing's rulings: (partner, kind, forced)."""
+    by_listing: dict[uuid.UUID, list[tuple[uuid.UUID, str, bool]]] = defaultdict(list)
+    for kind, pairs in (("never", overrides.never), ("must", overrides.must)):
+        for a, b in pairs:
+            forced = (a, b) in overrides.forced
+            by_listing[a].append((b, kind, forced))
+            by_listing[b].append((a, kind, forced))
+    return by_listing
+
+
+def _rulings(
+    items: list[Listing],
+    by_listing: dict[uuid.UUID, list[tuple[uuid.UUID, str, bool]]],
+    base: dict[uuid.UUID, str] | None = None,
+) -> _Rulings | None:
+    """The rulings between these listings, or None when there are none (and
+    the group is one key), so a group no ruling touches is grouped exactly as
+    it would be without the table."""
+    ids = {listing.id for listing in items}
+    never: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    must: dict[uuid.UUID, dict[uuid.UUID, bool]] = defaultdict(dict)
+    for listing in items:
+        for partner, kind, forced in by_listing.get(listing.id, ()):
+            if partner not in ids:
+                continue
+            if kind == "never":
+                never[listing.id].add(partner)
+            else:
+                must[listing.id][partner] = forced
+    if not never and not must and not base:
+        return None
+    return _Rulings(
+        never={k: frozenset(v) for k, v in never.items()}, must=dict(must), base=base or {}
+    )
+
+
 @dataclass
 class _Cluster:
     """One sub-product being accumulated out of a shared-identifier group."""
@@ -197,6 +314,7 @@ class _Cluster:
         threshold: float,
         ratio: float,
         strict: frozenset[str] = frozenset(),
+        rulings: _Rulings | None = None,
     ) -> float | None:
         """How well a candidate matches, or None if it may not join at all.
 
@@ -212,6 +330,8 @@ class _Cluster:
         # is the honest under-merge.
         if listing.supplier_id in self.suppliers:
             return None
+        if rulings is not None:
+            return self._ruled_similarity(listing, ev, threshold, ratio, strict, rulings)
         if any(values_conflict(ev.values, known.values) for known in self.evidence):
             return None
         if any(_forms_conflict(ev.form, known.form, strict) for known in self.evidence):
@@ -221,6 +341,36 @@ class _Cluster:
             return None
         return best
 
+    def _ruled_similarity(
+        self,
+        listing: Listing,
+        ev: _Evidence,
+        threshold: float,
+        ratio: float,
+        strict: frozenset[str],
+        rulings: _Rulings,
+    ) -> float | None:
+        """`similarity` under overrides (`_Rulings`); the same shop is already refused."""
+        if rulings.never_with(listing.id, self.members):
+            return None
+        for member, known in zip(self.members, self.evidence, strict=True):
+            if rulings.forced(listing.id, member.id):
+                continue
+            if values_conflict(ev.values, known.values):
+                return None
+            if _forms_conflict(ev.form, known.form, strict):
+                return None
+            if _prices_apart(listing.price, member.price, ratio):
+                return None
+        scores = [
+            score
+            for member, known in zip(self.members, self.evidence, strict=True)
+            if (score := rulings.score(listing.id, ev, member.id, known)) is not None
+        ]
+        if not scores or max(scores) < threshold:
+            return None
+        return max(scores)
+
     def add(self, listing: Listing, ev: _Evidence) -> None:
         self.members.append(listing)
         self.evidence.append(ev)
@@ -229,12 +379,19 @@ class _Cluster:
             self.prices.append(listing.price)
 
     def accepts(
-        self, other: _Cluster, threshold: float, ratio: float, strict: frozenset[str]
+        self,
+        other: _Cluster,
+        threshold: float,
+        ratio: float,
+        strict: frozenset[str],
+        rulings: _Rulings | None = None,
     ) -> float | None:
         """How well a whole cluster matches this one, or None if they may not
         merge: every veto between every pair of members, as for one listing."""
         if self.suppliers & other.suppliers:
             return None
+        if rulings is not None:
+            return self._ruled_accepts(other, threshold, ratio, strict, rulings)
         for ev in other.evidence:
             if any(values_conflict(ev.values, known.values) for known in self.evidence):
                 return None
@@ -245,6 +402,33 @@ class _Cluster:
             return None
         best = max(_jaccard(a.tokens, b.tokens) for a in self.evidence for b in other.evidence)
         return best if best >= threshold else None
+
+    def _ruled_accepts(
+        self,
+        other: _Cluster,
+        threshold: float,
+        ratio: float,
+        strict: frozenset[str],
+        rulings: _Rulings,
+    ) -> float | None:
+        """`accepts` under overrides (`_Rulings`); shared shops are already refused."""
+        best: float | None = None
+        for member, ev in zip(other.members, other.evidence, strict=True):
+            if rulings.never_with(member.id, self.members):
+                return None
+            for known_member, known in zip(self.members, self.evidence, strict=True):
+                score = rulings.score(member.id, ev, known_member.id, known)
+                if score is not None and (best is None or score > best):
+                    best = score
+                if rulings.forced(member.id, known_member.id):
+                    continue
+                if values_conflict(ev.values, known.values):
+                    return None
+                if _forms_conflict(ev.form, known.form, strict):
+                    return None
+                if _prices_apart(member.price, known_member.price, ratio):
+                    return None
+        return best if best is not None and best >= threshold else None
 
     def absorb(self, other: _Cluster) -> None:
         for listing, ev in zip(other.members, other.evidence, strict=True):
@@ -265,6 +449,7 @@ def _subcluster(
     items: list[Listing],
     domain: str | None = None,
     current: dict[uuid.UUID, uuid.UUID | None] | None = None,
+    rulings: _Rulings | None = None,
 ) -> dict[str, list[Listing]]:
     """Split a shared-identifier group into sub-products by corroborating evidence.
 
@@ -328,6 +513,14 @@ def _subcluster(
 
     On a first build nobody has a product, so passes 3 to 5 only.
 
+    **Overrides** (`rulings`, see `_Rulings`) act in every pass: a never_merge
+    pair is a veto like the others (and a conflict when an incumbent's members
+    are ordered), a must_merge pair a match that needs no title agreement.
+    When a must_merge joined several keys' groups into this one, `rulings.base`
+    holds each listing's own key, title agreement admits only within a key,
+    and each result is keyed after its first member's own key (bare when that
+    listing is alone, as it would be without the ruling).
+
     A group's key depends only on its membership (it is named after the member
     first in natural order), so reaching the same groups another way gives the
     same keys. Ids are matched by membership (`plan_identity`) in any case; only
@@ -342,16 +535,21 @@ def _subcluster(
     ordered = sorted(items, key=_natural_order)
     strict = profile.accessory_forms
 
+    base_of = rulings.base if rulings is not None else {}
+
     evidence: dict[uuid.UUID, _Evidence] = {}
     for listing in ordered:
         title = listing.title_en or listing.title_ar
         # Each listing's own spelling of the identifier is taken out of its own
         # title: the key is folded, so "HC-SR04" and "HCSR04" share a group.
         mpn = listing.part_number
+        # Groups joined by a ruling may span departments: each listing is read
+        # by its own.
+        own = listing.domain if base_of else domain
         evidence[listing.id] = _Evidence(
-            tokens=_sig_tokens(title, mpn, domain),
+            tokens=_sig_tokens(title, mpn, own),
             values=value_tokens(_without_identifier(title, mpn)),
-            form=_form(title, mpn, domain),
+            form=_form(title, mpn, own),
         )
 
     # Pass 1: incumbents, each existing product rebuilt from its own members.
@@ -377,7 +575,11 @@ def _subcluster(
         members = sorted(
             members,
             key=lambda m: (
-                sum(_vetoed(m, other, evidence, strict) for other in members if other is not m),
+                sum(
+                    _vetoed(m, other, evidence, strict, rulings)
+                    for other in members
+                    if other is not m
+                ),
                 _natural_order(m),
             ),
         )
@@ -391,7 +593,7 @@ def _subcluster(
             # including those added earlier in this sweep.
             for listing in pending:
                 ev = evidence[listing.id]
-                if cluster.similarity(listing, ev, threshold, max_ratio, strict) is None:
+                if cluster.similarity(listing, ev, threshold, max_ratio, strict, rulings) is None:
                     rest.append(listing)
                 else:
                     cluster.add(listing, ev)
@@ -403,7 +605,7 @@ def _subcluster(
         clusters.append(cluster)
 
     # Pass 2: existing products that the current rules say are one.
-    clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+    clusters = _merge_clusters(clusters, threshold, max_ratio, strict, rulings)
 
     # Pass 3: newcomers, in the plain order. Those whose title names the
     # identifier are placed and merged first (pass 4); those that have it only
@@ -413,16 +615,16 @@ def _subcluster(
     newcomers += [listing for listing in ordered if listing.id not in placed]
     titled = [m for m in newcomers if not _stated_only(m)]
     stated = [m for m in newcomers if _stated_only(m)]
-    _place(clusters, titled, evidence, threshold, max_ratio, strict)
+    _place(clusters, titled, evidence, threshold, max_ratio, strict, rulings)
 
     # Pass 4: the same merge over everything, so one rebuild converges.
-    clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+    clusters = _merge_clusters(clusters, threshold, max_ratio, strict, rulings)
 
     # Pass 5: every stated-only listing, with a product or not, then the merge
     # once more.
     if stated:
-        _place(clusters, stated, evidence, threshold, max_ratio, strict)
-        clusters = _merge_clusters(clusters, threshold, max_ratio, strict)
+        _place(clusters, stated, evidence, threshold, max_ratio, strict, rulings)
+        clusters = _merge_clusters(clusters, threshold, max_ratio, strict, rulings)
 
     # Keys depend on membership alone: named after the member first in natural
     # order, whichever member happened to seed the cluster, and assigned in that
@@ -433,10 +635,17 @@ def _subcluster(
         ((min(cluster.members, key=_natural_order), cluster.members) for cluster in clusters),
         key=lambda pair: _natural_order(pair[0]),
     )
+    sizes = Counter(base_of.values())
     result: dict[str, list[Listing]] = {}
     for first, members in named:
+        own_key = base_of.get(first.id, mpn_key)
+        if base_of and len(members) == 1 and sizes[own_key] == 1:
+            # Alone, as it would be without the ruling that joined its group
+            # to another: its key is the one it would have had.
+            result[own_key] = members
+            continue
         sig = "-".join(sorted(evidence[first.id].tokens)) or "base"
-        key = f"{mpn_key}:{sig}"
+        key = f"{own_key}:{sig}"
         if key in result:
             # Variants of one shop often word their titles identically apart from
             # the value ("Thermal Switch NC 40°C" / "… 90°C"), so signatures
@@ -449,9 +658,21 @@ def _subcluster(
     return result
 
 
-def _vetoed(a: Listing, b: Listing, evidence: dict, strict: frozenset[str]) -> bool:
-    """Whether a veto keeps two listings apart (same shop, values, form)."""
+def _vetoed(
+    a: Listing,
+    b: Listing,
+    evidence: dict,
+    strict: frozenset[str],
+    rulings: _Rulings | None = None,
+) -> bool:
+    """Whether a veto keeps two listings apart (same shop, values, form, or a
+    never_merge ruling; a forced must_merge leaves only the same shop)."""
     ea, eb = evidence[a.id], evidence[b.id]
+    if rulings is not None:
+        if a.supplier_id == b.supplier_id or b.id in rulings.never.get(a.id, ()):
+            return True
+        if rulings.forced(a.id, b.id):
+            return False
     return (
         a.supplier_id == b.supplier_id
         or values_conflict(ea.values, eb.values)
@@ -460,7 +681,11 @@ def _vetoed(a: Listing, b: Listing, evidence: dict, strict: frozenset[str]) -> b
 
 
 def _merge_clusters(
-    clusters: list[_Cluster], threshold: float, ratio: float, strict: frozenset[str]
+    clusters: list[_Cluster],
+    threshold: float,
+    ratio: float,
+    strict: frozenset[str],
+    rulings: _Rulings | None = None,
 ) -> list[_Cluster]:
     """Merge clusters every veto allows to merge, largest first, then by their
     seed's natural key; each joins the earlier cluster it best matches."""
@@ -469,7 +694,7 @@ def _merge_clusters(
     for cluster in ordered:
         best: tuple[float, _Cluster] | None = None
         for target in merged:
-            score = target.accepts(cluster, threshold, ratio, strict)
+            score = target.accepts(cluster, threshold, ratio, strict, rulings)
             if score is not None and (best is None or score > best[0]):
                 best = (score, target)
         if best is not None:
@@ -479,7 +704,7 @@ def _merge_clusters(
     return merged
 
 
-def _place(clusters, listings, evidence, threshold, max_ratio, strict) -> None:
+def _place(clusters, listings, evidence, threshold, max_ratio, strict, rulings=None) -> None:
     """Each listing, in the plain order, joins the cluster it best matches
     without contradicting it, or starts one."""
     for listing in sorted(listings, key=_natural_order):
@@ -489,7 +714,7 @@ def _place(clusters, listings, evidence, threshold, max_ratio, strict) -> None:
         # sibling clusters and should join the one it most resembles.
         best = None
         for cluster in clusters:
-            score = cluster.similarity(listing, ev, threshold, max_ratio, strict)
+            score = cluster.similarity(listing, ev, threshold, max_ratio, strict, rulings)
             if score is not None and (best is None or score > best[0]):
                 best = (score, cluster)
         if best is not None:
@@ -525,15 +750,26 @@ def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:
 
 
 def _group_listings(
-    listings: list[Listing], current: dict[uuid.UUID, uuid.UUID | None] | None = None
+    listings: list[Listing],
+    current: dict[uuid.UUID, uuid.UUID | None] | None = None,
+    overrides: Overrides | None = None,
 ) -> dict[str, list[Listing]]:
-    """Two-phase grouping: base key, then sub-cluster ambiguous family groups."""
+    """Two-phase grouping: base key, then sub-cluster ambiguous family groups.
+
+    `overrides` are a person's rulings (`_Rulings`). A must_merge between two
+    listings of different keys joins their groups into one, sub-clustered
+    together, so the ruling can admit the pair; title agreement still admits
+    only within a key.
+    """
     base: dict[str, list[Listing]] = defaultdict(list)
     for listing in listings:
         key = base_key(
             listing.part_number, listing.source, listing.external_id, listing.id, listing.domain
         )
         base[key].append(listing)
+
+    if overrides:
+        return _group_with_overrides(base, current, overrides)
 
     groups: dict[str, list[Listing]] = {}
     for key, items in base.items():
@@ -546,6 +782,58 @@ def _group_listings(
         # to expect the next one to be either.
         if key.startswith("mpn:") and len(items) > 1:
             groups.update(_subcluster(key, items, domain, current))
+        else:
+            groups[key] = items
+    return groups
+
+
+def _group_with_overrides(
+    base: dict[str, list[Listing]],
+    current: dict[uuid.UUID, uuid.UUID | None] | None,
+    overrides: Overrides,
+) -> dict[str, list[Listing]]:
+    """`_group_listings` under rulings: keys joined by a must_merge are
+    sub-clustered as one group; every other group as before, with whatever
+    never_merge rulings fall inside it."""
+    by_listing = _index_overrides(overrides)
+    key_of = {listing.id: key for key, items in base.items() for listing in items}
+    parent: dict[str, str] = {}
+
+    def find(key: str) -> str:
+        while parent.get(key, key) != key:
+            key = parent[key]
+        return key
+
+    for a, b in sorted(overrides.must, key=lambda p: (str(p[0]), str(p[1]))):
+        ka, kb = key_of.get(a), key_of.get(b)
+        if ka is None or kb is None or ka == kb:
+            continue  # a listing not active, or one key already
+        ra, rb = find(ka), find(kb)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    joined: dict[str, set[str]] = defaultdict(set)
+    for key in parent:
+        joined[find(key)].add(key)
+
+    groups: dict[str, list[Listing]] = {}
+    for key, items in base.items():
+        root = find(key)
+        if root in joined:
+            keys = sorted(joined[root] | {root})
+            if key != keys[0]:
+                continue  # sub-clustered with the first of its keys
+            items = [listing for k in keys for listing in base[k]]
+            first = min(items, key=_natural_order)
+            # Known limit: a must_merge may join listings of two departments,
+            # and the group then takes its threshold, price ratio and strict
+            # (accessory) forms from the first listing's profile. Each
+            # listing's evidence is still read by its own department.
+            own = {listing.id: key_of[listing.id] for listing in items}
+            rulings = _rulings(items, by_listing, own)
+            groups.update(_subcluster(key_of[first.id], items, first.domain, current, rulings))
+        elif key.startswith("mpn:") and len(items) > 1:
+            domain = items[0].domain if items else None
+            groups.update(_subcluster(key, items, domain, current, _rulings(items, by_listing)))
         else:
             groups[key] = items
     return groups
@@ -857,7 +1145,11 @@ async def rebuild_products(
     intact); `plan_identity` then decides which existing product each group is.
     Nothing is deleted: a product whose offers joined another is marked
     `merged_into` it, and one whose offers are all gone is marked `delisted_at`.
-    Each merge, split, emptying and revival is recorded in `product_events`.
+    Each merge, split, emptying and revival is recorded in `product_events`;
+    one a person's ruling bears on (`grouping_overrides`) cites the ruling's id
+    under `overrides` in its detail, and one that undoes a removed ruling's
+    effect cites it under `removed_overrides` (`_cite_overrides`). Each
+    ruling's `status` is then written (`override_status`).
 
     `reidentify` first re-reads every active listing's identifier with the
     current rules and the family guard (`assign_identifiers`): what makes a rule
@@ -888,13 +1180,47 @@ async def rebuild_products(
     delisted = {p.id for p in products.values() if p.merged_into is None and p.delisted_at}
     current = {listing.id: _resolve(listing.product_id, merged_into) for listing in listings}
     # Grouping reads the products listings belong to now (incumbency).
-    groups = _group_listings(listings, current)
+    # Standing rulings, and removed ones whose removal no regroup has yet
+    # carried out (cited on the change that undoes them, then marked removed).
+    ruling_rows = list(
+        await session.scalars(
+            select(GroupingOverride)
+            .where(
+                GroupingOverride.removed_at.is_(None)
+                | GroupingOverride.status.is_distinct_from("removed")
+            )
+            .order_by(GroupingOverride.id)
+        )
+    )
+    standing = [row for row in ruling_rows if row.removed_at is None]
+    removed = [row for row in ruling_rows if row.removed_at is not None]
+    overrides = Overrides.of(standing)
+    groups = _group_listings(listings, current, overrides)
     dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] = defaultdict(list)
     for p in products.values():
         if p.merged_into is not None:
             dormant[p.group_key].append((p.id, p.merged_into, p.created_at))
 
     plan = plan_identity(groups, current, matchable, delisted, dormant)
+    cited = _Cited()
+    _cite_overrides(
+        cited,
+        "overrides",
+        _by_kind(standing, "never_merge"),
+        _by_kind(standing, "must_merge"),
+        groups,
+        current,
+        plan,
+    )
+    _cite_overrides(
+        cited,
+        "removed_overrides",
+        _by_kind(removed, "must_merge"),
+        _by_kind(removed, "never_merge"),
+        groups,
+        current,
+        plan,
+    )
 
     now = datetime.now(UTC)
     changed = created = 0
@@ -974,7 +1300,10 @@ async def rebuild_products(
             product_id=product_id,
             kind=ProductEventKind.REVIVED,
             other_id=survivor_id,
-            detail={"group_key": products[product_id].group_key, "unmerged": True},
+            detail=cited.on(
+                ("unmerged", product_id),
+                {"group_key": products[product_id].group_key, "unmerged": True},
+            ),
         )
         for product_id, survivor_id in sorted(plan.unmerged.items(), key=lambda kv: str(kv[0]))
     ]
@@ -983,7 +1312,9 @@ async def rebuild_products(
             product_id=product_id,
             kind=ProductEventKind.SPLIT,
             other_id=group_product[key].id,
-            detail={"group_key": key, "offers": len(groups[key])},
+            detail=cited.on(
+                ("split", product_id, key), {"group_key": key, "offers": len(groups[key])}
+            ),
         )
         for product_id, key in plan.splits
     ]
@@ -998,11 +1329,14 @@ async def rebuild_products(
                 product_id=absorbed_id,
                 kind=ProductEventKind.MERGE,
                 other_id=survivor_id,
-                detail={
-                    "group_key": products[survivor_id].group_key,
-                    "offers_before": plan.offers_before.get(absorbed_id, 0),
-                    "survivor_offers_before": plan.offers_before.get(survivor_id, 0),
-                },
+                detail=cited.on(
+                    ("merge", absorbed_id),
+                    {
+                        "group_key": products[survivor_id].group_key,
+                        "offers_before": plan.offers_before.get(absorbed_id, 0),
+                        "survivor_offers_before": plan.offers_before.get(survivor_id, 0),
+                    },
+                ),
             )
         )
     if plan.merges:
@@ -1031,6 +1365,7 @@ async def rebuild_products(
         )
 
     session.add_all(events)
+    _record_statuses(ruling_rows, listings, groups, overrides, now)
     await session.flush()
     stats = {
         "products": len(groups),
@@ -1052,6 +1387,192 @@ async def rebuild_products(
     else:
         await session.commit()
     return stats
+
+
+@dataclass
+class _Cited:
+    """Override ids per event and per detail key ("overrides" for standing
+    rulings, "removed_overrides" for withdrawn ones whose effect is undone).
+    Events are keyed ("split", product, group key), ("merge", absorbed
+    product) or ("unmerged", product)."""
+
+    by_event: dict[tuple, dict[str, set[int]]] = field(
+        default_factory=lambda: defaultdict(lambda: defaultdict(set))
+    )
+
+    def on(self, event: tuple, detail: dict) -> dict:
+        """The event's detail, with the rulings behind it, if any."""
+        cited = self.by_event.get(event)
+        if not cited:
+            return detail
+        return {**detail, **{label: sorted(ids) for label, ids in sorted(cited.items())}}
+
+
+def _cite_overrides(
+    cited: _Cited,
+    label: str,
+    apart: dict[tuple[uuid.UUID, uuid.UUID], int],
+    together: dict[tuple[uuid.UUID, uuid.UUID], int],
+    groups: dict[str, list[Listing]],
+    current: dict[uuid.UUID, uuid.UUID | None],
+    plan: IdentityPlan,
+) -> None:
+    """Which rulings each membership change carries out, under `label`.
+
+    - A pair to keep `apart` whose two listings shared a product and now sit
+      in different groups: cited on the split (or un-merge) that took one
+      away. That is a standing never_merge, or a removed must_merge undone.
+    - A pair to put `together` whose two listings came from different products
+      (or one from none) and now share a group: cited on the merge that joined
+      the products, or on the split that took a listing from its old product.
+      That is a standing must_merge, or a removed never_merge undone.
+
+    This says the change carries the ruling (or its removal) out, not that
+    nothing else would have made it: a split the vetoes would have made anyway
+    cites a never_merge pair it separates too. A ruling that changes nothing
+    about an existing product (two newcomers kept apart) is cited nowhere,
+    since no event is written.
+    """
+    group_of = {listing.id: key for key, items in groups.items() for listing in items}
+    splits = set(plan.splits)
+    unmerged_key = {
+        key: product_id
+        for key, product_id in plan.assigned.items()
+        if product_id is not None and product_id in plan.unmerged
+    }
+    for (a, b), override_id in sorted(apart.items(), key=lambda kv: kv[1]):
+        ka, kb = group_of.get(a), group_of.get(b)
+        pa, pb = current.get(a), current.get(b)
+        if ka is None or kb is None or pa is None or pa != pb or ka == kb:
+            continue  # a listing not active, or nothing separated
+        for key in (ka, kb):
+            if (pa, key) in splits:
+                cited.by_event[("split", pa, key)][label].add(override_id)
+            if key in unmerged_key and plan.unmerged[unmerged_key[key]] == pa:
+                cited.by_event[("unmerged", unmerged_key[key])][label].add(override_id)
+    for (a, b), override_id in sorted(together.items(), key=lambda kv: kv[1]):
+        ka, kb = group_of.get(a), group_of.get(b)
+        pa, pb = current.get(a), current.get(b)
+        if ka is None or ka != kb or pa == pb:
+            continue  # a listing not active, or nothing joined
+        survivor = plan.assigned.get(ka)
+        for product_id in (pa, pb):
+            if product_id is None:
+                continue
+            if (product_id, ka) in splits:
+                cited.by_event[("split", product_id, ka)][label].add(override_id)
+            if plan.merges.get(product_id) == survivor and survivor is not None:
+                cited.by_event[("merge", product_id)][label].add(override_id)
+
+
+def _by_kind(rows: list[GroupingOverride], kind: str) -> dict[tuple[uuid.UUID, uuid.UUID], int]:
+    return {(row.listing_a, row.listing_b): row.id for row in rows if row.kind == kind}
+
+
+def _listing_name(listing: Listing) -> str:
+    title = (listing.title_en or listing.title_ar or "(untitled)")[:60]
+    return f"{listing.id} ({listing.source}: {title})"
+
+
+def _pair_veto(a: Listing, b: Listing) -> str | None:
+    """Which veto keeps two listings apart, in words, or None (same shop
+    aside): value, form or price, read as the regroup reads them."""
+    domain = a.domain or b.domain
+    profile = get_profile(domain)
+    ta, tb = a.title_en or a.title_ar, b.title_en or b.title_ar
+    if values_conflict(
+        value_tokens(_without_identifier(ta, a.part_number)),
+        value_tokens(_without_identifier(tb, b.part_number)),
+    ):
+        return "value veto (their titles state different values)"
+    fa, fb = _form(ta, a.part_number, domain), _form(tb, b.part_number, domain)
+    if _forms_conflict(fa, fb, profile.accessory_forms):
+        return f"form veto ({fa or 'unstated'} vs {fb or 'unstated'})"
+    if _prices_apart(a.price, b.price, profile.merge_price_ratio):
+        return f"price veto ({a.price} vs {b.price})"
+    return None
+
+
+def override_status(
+    row: GroupingOverride,
+    listings: dict[uuid.UUID, Listing],
+    group_of: dict[uuid.UUID, str],
+    groups: dict[str, list[Listing]],
+    overrides: Overrides,
+) -> tuple[str, uuid.UUID | None, str | None]:
+    """Whether a standing ruling holds after a regroup: (status, blocked_by,
+    reason). Diagnostic only: nothing here changes a group.
+
+    - `inactive`: a listing is not active, so the ruling acts on nothing.
+    - `in_effect`: never_merge listings in different products, must_merge in one.
+    - `blocked`: a must_merge whose listings ended apart, with the first
+      reason found: the same shop; a veto between the two (unless forced);
+      else, between a member of one's product and a member of the other's
+      (pairs involving the two first), the same shop, a never_merge, or a
+      value, form or price veto. `blocked_by` is the listing on the far side
+      of that veto. An existing product wins over a forced ruling it
+      contradicts (the owner's decision), and this is how that shows.
+    """
+    a, b = row.listing_a, row.listing_b
+    for listing_id in (a, b):
+        if listing_id not in group_of:
+            return "inactive", None, f"listing {listing_id} is not active (archived or gone)"
+    together = group_of[a] == group_of[b]
+    if row.kind == "never_merge":
+        if together:
+            return "blocked", None, "both listings are in one product despite the ruling"
+        return "in_effect", None, None
+    if together:
+        return "in_effect", None, None
+    la, lb = listings[a], listings[b]
+    if la.supplier_id == lb.supplier_id:
+        return "blocked", None, "same shop: one shop's two listings never merge"
+    if not row.forced and (veto := _pair_veto(la, lb)):
+        return "blocked", b, f"{veto} between the two listings"
+    pairs = [(x, y) for x in groups[group_of[a]] for y in groups[group_of[b]]]
+    pairs.sort(key=lambda p: (p[0].id not in (a, b)) + (p[1].id not in (a, b)))
+    for x, y in pairs:
+        if {x.id, y.id} == {a, b}:
+            continue
+        far = y if x.id in (a, b) else x
+        if x.supplier_id == y.supplier_id:
+            return (
+                "blocked",
+                far.id,
+                f"same shop: {_listing_name(x)} and {_listing_name(y)} are in the two products",
+            )
+        if overrides.kind(x.id, y.id) == "never_merge":
+            ruling = overrides.ids.get(pair(x.id, y.id))
+            return (
+                "blocked",
+                far.id,
+                f"never_merge #{ruling} between {_listing_name(x)} and {_listing_name(y)}",
+            )
+        if overrides.is_forced(x.id, y.id):
+            continue
+        if veto := _pair_veto(x, y):
+            return "blocked", far.id, f"{veto} with {_listing_name(far)}"
+    return "blocked", None, "not joined, and no veto found between the two products"
+
+
+def _record_statuses(
+    rows: list[GroupingOverride],
+    listings: list[Listing],
+    groups: dict[str, list[Listing]],
+    overrides: Overrides,
+    now: datetime,
+) -> None:
+    """Write each ruling's status (`override_status`); a removed one, whose
+    undoing this regroup has just cited, is marked `removed`."""
+    by_id = {listing.id: listing for listing in listings}
+    group_of = {listing.id: key for key, items in groups.items() for listing in items}
+    for row in rows:
+        if row.removed_at is not None:
+            status, blocked_by, reason = "removed", None, None
+        else:
+            status, blocked_by, reason = override_status(row, by_id, group_of, groups, overrides)
+        row.status, row.blocked_by, row.blocked_reason = status, blocked_by, reason
+        row.checked_at = now
 
 
 def describe(stats: dict) -> str:

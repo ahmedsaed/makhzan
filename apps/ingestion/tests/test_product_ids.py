@@ -101,7 +101,7 @@ async def _set_status(listing_id: uuid.UUID, status: ListingStatus) -> None:
 def _rules(monkeypatch, table: dict[str, str]) -> None:
     """Group by a fixed title → key table instead of the real heuristics."""
 
-    def group(listings, current=None):
+    def group(listings, current=None, overrides=None):
         groups: dict[str, list[Listing]] = {}
         for listing in listings:
             groups.setdefault(table[listing.title_en], []).append(listing)
@@ -167,7 +167,9 @@ async def test_an_id_survives_a_rule_change_that_only_renames_keys(monkeypatch):
     monkeypatch.setattr(
         grouping,
         "_group_listings",
-        lambda listings, current=None: {f"v2|{k}": v for k, v in real(listings, current).items()},
+        lambda listings, current=None, overrides=None: {
+            f"v2|{k}": v for k, v in real(listings, current, overrides).items()
+        },
     )
     stats = await _rebuild()
 
