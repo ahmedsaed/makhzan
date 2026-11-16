@@ -73,6 +73,46 @@ async def test_offers_are_cheapest_first(client, db):
     assert [o["supplier"]["slug"] for o in body["offers"]] == ["shop-b", "shop-c", "shop-a"]
 
 
+async def test_every_offer_is_matched_by_the_rules_until_ai_matching_exists(client, db):
+    # PARTIAL by design: makhzan_schemas.matching answers "rules" for every
+    # listing until the AI decisions table feeds it, so no badge shows yet.
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(db, supplier=shop_a, product=product, price="14.00")
+    await make_listing(db, supplier=shop_b, product=product, price="9.50")
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert [o["matched_by"] for o in body["offers"]] == ["rules", "rules"]
+    assert body["ai_matched_count"] == 0
+
+
+async def test_an_ai_matched_offer_is_marked_and_counted(client, db, monkeypatch):
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    shop_c = await make_supplier(db, slug="shop-c", name="Shop C")
+    await make_listing(db, supplier=shop_a, product=product, price="14.00")
+    by_ai = await make_listing(db, supplier=shop_b, product=product, price="9.50")
+    await make_listing(db, supplier=shop_c, product=product, price="12.00")
+    # What the AI decisions table will say once it exists: shop B's listing
+    # was merged here by AI matching.
+    monkeypatch.setattr(
+        "app.routers.products.matched_by",
+        lambda listing: "ai" if listing.id == by_ai.id else "rules",
+    )
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert [(o["supplier"]["slug"], o["matched_by"]) for o in body["offers"]] == [
+        ("shop-b", "ai"),
+        ("shop-c", "rules"),
+        ("shop-a", "rules"),
+    ]
+    assert body["ai_matched_count"] == 1
+
+
 async def test_offers_without_a_price_sort_last_not_first(client, db):
     """A missing price is unknown, not zero — sorting it first would put a
     "price on request" offer above the genuinely cheapest one."""
