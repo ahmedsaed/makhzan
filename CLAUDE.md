@@ -611,10 +611,16 @@ sub-clustered together, title agreement still admitting only within one), and
 the value, form and price vetoes still apply unless `forced`, which lifts them
 for that pair only. The same shop never merges, forced or not. The regroup is
 the only reader that acts on them; every merge or split one carries out cites
-its id under `overrides` in `product_events.detail`. `./makhzan reports accept`
-writes them (ticked × unticked offers → never; "same as another" → one must
-between a listing of each), `reject` withdraws them, `./makhzan overrides`
-lists, adds (note required) and removes. AI matching must read the same set
+its id under `overrides` in `product_events.detail`. An existing product wins
+over a ruling it contradicts, forced or not (owner, November 2026); after each
+regroup every ruling's `status` says in effect, BLOCKED (with the listing and
+veto), inactive or removed — `./makhzan overrides list` and `reports show`
+print it. Removal is soft (`removed_at`/`removed_by`; re-ruling makes a new
+row), and the regroup that undoes a removed ruling cites it under
+`removed_overrides`. `./makhzan reports accept` writes them (ticked × unticked
+offers → never; "same as another" → one must between listings of two shops),
+`reject` withdraws them, `./makhzan overrides` lists, adds (note required) and
+removes. AI matching must read the same set
 (`load_overrides`), never re-ask a model about a ruled pair.
 
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
