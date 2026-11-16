@@ -130,7 +130,7 @@ function product(port) {
     category: CATEGORY,
     offers,
     ai_matched_count: 2,
-    // The regroup's representative (in stock, photo, English title, cheapest):
+    // The regroup's representative (in stock, English title, photo, cheapest):
     // Nile, the cheapest in stock too.
     representative_offer_id: "o-ai-nile",
   };
@@ -139,7 +139,7 @@ function product(port) {
 /**
  * /products/p-rep: the representative is not the cheapest. Delta Bench is the
  * cheapest in stock but has no photo, so the regroup took Volt Corner's
- * listing (in stock, photo, English title), and the product's title is Volt's.
+ * listing (in stock, English title, photo), and the product's title is Volt's.
  *
  *     Sinai Spares     EGP 300, out of stock, one photo
  *     Delta Bench      EGP 380, in stock, no photo

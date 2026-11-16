@@ -12,7 +12,7 @@ import uuid
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType, StockSignal
-from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.grouping import rebuild_products, representative, representative_key
 from makhzan_schemas.models import Listing, Product, Supplier
 from sqlalchemy import select, update
 
@@ -155,3 +155,28 @@ async def test_an_in_stock_listing_outranks_an_out_of_stock_one_with_the_only_ph
     assert product.title_en == "SG90 Servo, B"
     assert product.image == "https://shop-a.test/sg90.jpg"
     assert product.image_supplier_id == gone_shop.id
+
+
+def test_the_representative_ranks_stock_then_english_title_then_photo_then_price():
+    """Owner decisions (November 2026), on the one ranking (a pure function, so
+    the order is tested without the grouping deciding what shares a product)."""
+    shop = _shop("shop-a")
+
+    def listing(price: int, images: list[str], english: bool, stock=StockSignal.IN_STOCK):
+        item = _listing(shop, price, images)
+        item.title_en = "SG90 Servo" if english else None
+        item.stock_signal = stock
+        return item
+
+    english_bare = listing(95, [], english=True)
+    arabic_pictured = listing(80, ["x.jpg"], english=False)
+    gone_full = listing(60, ["y.jpg"], english=True, stock=StockSignal.OUT_OF_STOCK)
+    english_pictured_dear = listing(120, ["z.jpg"], english=True)
+
+    # Stock first: the cheapest, pictured, English listing is out of stock.
+    assert representative([gone_full, arabic_pictured]) is arabic_pictured
+    # Then the English title, ahead of the photo.
+    assert representative([arabic_pictured, english_bare]) is english_bare
+    # Then the photo, ahead of the price.
+    assert representative([english_bare, english_pictured_dear]) is english_pictured_dear
+    assert representative_key(english_pictured_dear) < representative_key(english_bare)

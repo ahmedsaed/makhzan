@@ -319,14 +319,15 @@ class Product(TimestampMixin, Base):
     #: is shown can credit that shop (it is hotlinked from the shop's own site,
     #: decision 0003). Recorded from the listing the photo was taken from rather
     #: than read off `supplier_name`, which is a display name only and names the
-    #: representative listing: the badge must stay right if that ranking ever
-    #: stops putting photos first. Set with `image` by
+    #: representative listing: the badge must stay right now that ranking no
+    #: longer puts photos first (grouping.representative_key). Set with `image` by
     #: grouping.rebuild_products; null when there is no photo, and on rows not
     #: rebuilt since the column was added.
     image_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL")
     )
-    # Representative (cheapest) offer's supplier name — for single-supplier cards.
+    # The representative listing's supplier name (grouping.representative) —
+    # for single-supplier cards.
     supplier_name: Mapped[str | None] = mapped_column(String(255))
 
     # Aggregates over the product's offers.
@@ -343,7 +344,7 @@ class Product(TimestampMixin, Base):
     # is as current as the last rebuild, like the rest of the aggregates.
     min_price_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     # The listing the product's title, brand, category and domain were copied
-    # from (grouping._representative): the product page's shop view picks it on
+    # from (grouping.representative): the product page's shop view picks it on
     # a plain load, so the h1 and <title> name the same listing. Not a foreign
     # key, for the reason above; as current as the last rebuild, like the title.
     representative_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

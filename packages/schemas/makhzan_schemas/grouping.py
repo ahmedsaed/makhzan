@@ -728,31 +728,44 @@ def _natural_order(listing: Listing) -> tuple[str, str]:
     return (listing.source, listing.external_id or str(listing.id))
 
 
-def representative(items: Sequence[Listing]) -> Listing:
-    """Pick the best listing to represent the product: in stock, then has a photo,
-    then has an English title, then cheapest.
+def representative_key(listing: Listing) -> tuple:
+    """How `representative` ranks a listing, lowest first: in stock, then has an
+    English title, then has a photo, then cheapest.
 
-    The product's title, brand, category and domain are copied from it, and the
-    product page's shop view picks it on a plain load (`representative_listing_id`,
-    and the API's fallback for a product not rebuilt since that column came).
-    The one place this ranking lives: nothing else re-implements it.
-
-    Stock comes first (owner decision, November 2026). With the photo first, an
-    out-of-stock listing that was the only one with a photo became the plain
-    load's pick, so the page's default buttons opened a shop that had none while
-    another had it in stock. The product's photo is unaffected when the pick
-    has none: `_pictured` takes the first listing that has one.
+    Exposed so that anything which must agree with the ranking (the API's
+    fallback breaking a tie) reads this key rather than a second copy of it.
     """
+    return (
+        0 if listing.stock_signal == StockSignal.IN_STOCK else 1,
+        0 if listing.title_en else 1,
+        0 if listing.images else 1,
+        listing.price if listing.price is not None else Decimal("Infinity"),
+    )
 
-    def score(listing: Listing):
-        return (
-            0 if listing.stock_signal == StockSignal.IN_STOCK else 1,
-            0 if listing.images else 1,
-            0 if listing.title_en else 1,
-            listing.price if listing.price is not None else Decimal("Infinity"),
-        )
 
-    return min(items, key=score)
+def representative(items: Sequence[Listing]) -> Listing:
+    """Pick the best listing to represent the product (`representative_key`):
+    in stock, then has an English title, then has a photo, then cheapest.
+
+    The product's title, brand, category and domain are all copied from it, and
+    the product page's shop view picks it on a plain load
+    (`representative_listing_id`, and the API's fallback for a product not
+    rebuilt since that column came). The one place this ranking lives: nothing
+    else re-implements it. The product's photo is chosen apart (`_pictured`):
+    the pick's own when it has one, else the first listing that has one.
+
+    Owner decisions (November 2026). Stock first: with the photo first, an
+    out-of-stock listing that was the only one with a photo became the plain
+    load's pick, so the page's default buttons opened a shop that had none
+    while another had it in stock. Then the English title, ahead of the photo,
+    so a pictured listing titled only in Arabic does not name the product while
+    an English one is in stock. Stock still outranks the title: when the only
+    in-stock listing is titled only in Arabic, it names the product.
+
+    A min() with no tie-break: on a tied key the first in `items` wins, so the
+    result depends on their order.
+    """
+    return min(items, key=representative_key)
 
 
 def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:

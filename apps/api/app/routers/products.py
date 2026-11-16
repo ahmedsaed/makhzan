@@ -10,7 +10,7 @@ from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
 from makhzan_schemas.enums import ListingStatus
-from makhzan_schemas.grouping import representative
+from makhzan_schemas.grouping import representative, representative_key
 from makhzan_schemas.matching import matched_by
 from makhzan_schemas.models import Listing, Product, ProductRedirect
 from makhzan_schemas.pricing import unit_price
@@ -77,16 +77,23 @@ async def get_product(
     # The offer the product's title came from, which the page picks on a plain
     # load: the one the last rebuild chose, while it is still an offer. Else (a
     # product not rebuilt since the column came, or that offer archived since)
-    # the same rule over the offers there are, never a second ranking, among
-    # the offers carrying the product's title first: the rule is a min() with
-    # no tie-break and these come in another order than the rebuild's, so on a
-    # tied score it could name a listing whose title is not the product's.
+    # the same ranking over the offers there are (grouping.representative_key,
+    # never a second copy), and only among the offers sharing its top score
+    # does the one carrying the product's title win. The ranking has no
+    # tie-break and these come in another order than the rebuild's, so a tie
+    # could otherwise name a listing whose title is not the product's; the
+    # title never outranks the key (an in-stock offer beats the product-title
+    # one out of stock).
     rep_id = product.representative_listing_id
     if rep_id not in {o.id for o in offers}:
-        titled = [
-            o for o in offers if (o.title_en, o.title_ar) == (product.title_en, product.title_ar)
-        ]
-        rep_id = representative(titled or offers).id if offers else None
+        rep_id = None
+        if offers:
+            best = min(map(representative_key, offers))
+            top = [o for o in offers if representative_key(o) == best]
+            titled = [
+                o for o in top if (o.title_en, o.title_ar) == (product.title_en, product.title_ar)
+            ]
+            rep_id = representative(titled or top).id
 
     # Which offers AI matching merged here: "rules" for all of them until AI
     # matching exists (makhzan_schemas.matching says so, and is the one place
