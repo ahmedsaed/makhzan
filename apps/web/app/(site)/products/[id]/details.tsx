@@ -1,9 +1,12 @@
+import { AiPill } from "@/components/ai-badge";
 import type { DetailSource } from "@/lib/product";
+import { isAiMatched } from "@/lib/shop-view";
 import { cn } from "@/lib/utils";
 
 import { EdgeFade } from "./carousel";
 import { Description } from "./description";
 import { ShopDetails } from "./shop-details";
+import { PickerRadio } from "./shop-view";
 
 /*
  * Tailwind only generates classes it can read in the source, so each tab's
@@ -42,6 +45,9 @@ const TAB = [
  * (one tab stop, arrow keys move between shops) and CSS shows the panel whose
  * radio is checked, so every shop's text is in the server's HTML and the
  * switch works without JavaScript. With one shop there is no strip.
+ *
+ * With several offers the checked tab is the shop view's (shop-view.tsx): the
+ * picked shop's, rendered checked on the server, and choosing one picks it.
  */
 export function Details({ sources }: { sources: DetailSource[] }) {
   if (sources.length === 0) return null;
@@ -88,15 +94,21 @@ export function Details({ sources }: { sources: DetailSource[] }) {
   );
 }
 
+/**
+ * A shop's tab. Its radio is the shop view's (shop-view.tsx): the picked
+ * shop's tab is the one checked, and choosing a tab picks its shop. A shop
+ * matched by AI carries the AI pill, and says so in its name.
+ */
 function Tab({ source, index }: { source: DetailSource; index: number }) {
   const id = `details-source-${index}`;
+  const ai = isAiMatched(source.offer);
   return (
     <>
-      <input
-        type="radio"
-        name="details-source"
-        id={id}
-        defaultChecked={index === 0}
+      <PickerRadio
+        index={index}
+        offer={source.offer.id}
+        // Named outright: the pill is hidden from screen readers.
+        label={ai ? `${source.label}, matched by AI` : undefined}
         className="peer sr-only"
       />
       <label
@@ -108,6 +120,7 @@ function Tab({ source, index }: { source: DetailSource; index: number }) {
         )}
       >
         {source.label}
+        {ai && <AiPill className="ms-1.5 h-[18px] px-1" />}
       </label>
     </>
   );

@@ -1,5 +1,6 @@
 import { ChevronDown, ExternalLink } from "lucide-react";
 
+import { AiBadge } from "@/components/ai-badge";
 import { Freshness } from "@/components/freshness";
 import { Link } from "@/components/link";
 import { PriceRange } from "@/components/price";
@@ -10,8 +11,10 @@ import { NO_PRICE, plural, PRICE_ON_REQUEST } from "@/lib/format";
 import { parseVerified } from "@/lib/freshness";
 import { isInStock, isOnRequest, needsEach, rowSpan, unitPrice } from "@/lib/offers";
 import { routes } from "@/lib/routes";
+import { isAiMatched } from "@/lib/shop-view";
 import { cn } from "@/lib/utils";
 
+import { OfferRowShell, ViewListing } from "./shop-view";
 import { RowTerms } from "./terms";
 
 /**
@@ -23,20 +26,27 @@ import { RowTerms } from "./terms";
  * sit in the page's narrow column, under the photo, and the wide one is left
  * to what the shops wrote. One layout also means nothing can say one thing on
  * a phone and another on a laptop.
+ *
+ * The shop view (shop-view.tsx) rings the picked offer's row, and each other
+ * row offers "View listing" to pick it. `picked` is the offer the server
+ * picked: its fold, if it is folded, is rendered open.
  */
 export function Offers({
   listed,
   outOfStock,
   stale,
   productTitle,
+  picked = null,
   now,
 }: {
   listed: Offer[];
   outOfStock: Offer[];
   stale: Offer[];
   productTitle: string;
+  picked?: string | null;
   now: Date;
 }) {
+  const holds = (offers: Offer[]) => offers.some((offer) => offer.id === picked);
   return (
     <section aria-labelledby="offers-heading" className="mt-6">
       <div className="flex items-baseline justify-between gap-3">
@@ -60,6 +70,7 @@ export function Offers({
           offers={outOfStock}
           kind="out of stock"
           data="out-of-stock"
+          open={holds(outOfStock)}
           productTitle={productTitle}
           now={now}
         />
@@ -67,6 +78,7 @@ export function Offers({
           offers={stale}
           kind="out of date"
           data="stale"
+          open={holds(stale)}
           productTitle={productTitle}
           now={now}
         />
@@ -80,19 +92,22 @@ function Fold({
   offers,
   kind,
   data,
+  open,
   productTitle,
   now,
 }: {
   offers: Offer[];
   kind: string;
   data: "out-of-stock" | "stale";
+  /** Holds the offer the page opened on, so it opens too. */
+  open: boolean;
   productTitle: string;
   now: Date;
 }) {
   if (offers.length === 0) return null;
   return (
     // data-out-of-stock / data-stale, for tests and styles alike.
-    <details {...{ [`data-${data}`]: "" }} className="group border-t border-line">
+    <details {...{ [`data-${data}`]: "" }} open={open} className="group border-t border-line">
       <summary className="flex h-12 cursor-pointer list-none items-center gap-1.5 px-4 text-sm font-medium text-link [&::-webkit-details-marker]:hidden">
         <span className="group-open:hidden">Show {plural(offers.length, `${kind} offer`)}</span>
         <span className="hidden group-open:inline">Hide {kind} offers</span>
@@ -146,9 +161,9 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
   // the row says which are in stock.
   const span = rowSpan(offer);
   return (
-    <li
-      data-offer={offer.id}
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'_'extra_extra_extra'] last:border-b-0"
+    <OfferRowShell
+      offer={offer.id}
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'_'extra_extra_extra'_'listing_listing_listing'] last:border-b-0"
     >
       <div className="[grid-area:title]">
         <span
@@ -173,6 +188,7 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
           )}
           {/* In stock is the norm in this list and goes unsaid; anything else
               is the row's business. */}
+          {isAiMatched(offer) && <AiBadge className="self-center" />}
           {!isInStock(offer.stock_signal) && <StockBadge signal={offer.stock_signal} />}
         </span>
       </div>
@@ -223,6 +239,11 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
         )}
       </div>
       <RowTerms offer={offer} now={now} />
-    </li>
+      {supplier && (
+        <div className="-my-1 [grid-area:listing]">
+          <ViewListing offer={offer.id} slug={supplier.slug} shop={supplier.name} />
+        </div>
+      )}
+    </OfferRowShell>
   );
 }
