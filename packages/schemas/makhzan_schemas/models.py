@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -722,6 +723,80 @@ class Report(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: HMAC-SHA256 of the sender's address under a server secret, hex.
     ip_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class GroupingOverride(Base):
+    """A person's ruling on whether two listings are one product.
+
+    Read by the regroup (`grouping.rebuild_products`, the only writer of which
+    listings form a product) and, later, by AI matching
+    (`makhzan_schemas.overrides.load_overrides`):
+
+    - `never_merge`: no product may hold both listings. It acts as a veto
+      between those two, wherever the grouping checks vetoes.
+    - `must_merge`: evidence that the two are one product, admitting them to
+      one group without title agreement or a shared identifier. Every veto
+      still applies between them unless `forced`; the same shop never merges,
+      forced or not.
+
+    Keyed by listing ids, because they are permanent and a product's
+    membership is what the ruling is about (a product id would follow its
+    offers wherever a regroup took them). The pair is unordered, stored with
+    `listing_a < listing_b`, so a pair has one ruling: a new one about the same
+    pair must replace it, deliberately.
+
+    `source` says who ruled: `report` (an accepted "Report a problem",
+    `report_id`; `./makhzan reports accept`) or `manual` (`./makhzan overrides
+    add`, which requires a `note`). Every product a ruling changes cites it,
+    by id, in its `product_events` row's detail.
+    """
+
+    __tablename__ = "grouping_overrides"
+    __table_args__ = (
+        UniqueConstraint("listing_a", "listing_b", name="uq_grouping_override_pair"),
+        CheckConstraint("listing_a < listing_b", name="ck_grouping_override_ordered"),
+        CheckConstraint("kind IN ('never_merge', 'must_merge')", name="ck_grouping_override_kind"),
+        CheckConstraint(
+            "NOT forced OR kind = 'must_merge'", name="ck_grouping_override_forced_must"
+        ),
+        CheckConstraint("source IN ('report', 'manual')", name="ck_grouping_override_source"),
+        CheckConstraint(
+            "(source = 'report') = (report_id IS NOT NULL)",
+            name="ck_grouping_override_report",
+        ),
+        CheckConstraint(
+            "source <> 'manual' OR length(trim(note)) > 0",
+            name="ck_grouping_override_manual_note",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    listing_a: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    listing_b: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("listings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    #: `never_merge` or `must_merge` (`makhzan_schemas.overrides.KINDS`).
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: A must_merge that overrides the value, form and price vetoes too.
+    forced: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    #: `report` or `manual`.
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    report_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    #: Who made it, as they gave it: free text.
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
