@@ -14,6 +14,13 @@ Who reads it: the regroup (`grouping.rebuild_products`, through
 the same rulings as fact rather than ask a model again. Who writes it:
 `accept_report` (`./makhzan reports accept`) and `add` (`./makhzan overrides
 add`, a note required). A ruling takes effect at the next regroup.
+
+Removing a ruling (`remove`, `withdraw_report`) keeps its row with
+`removed_at` and `removed_by`: everything here that reads rulings ignores a
+removed one, the regroup that undoes its effect cites it, and ruling on the
+pair again makes a new row. A new row rather than un-removing the old: each
+ruling keeps its own who, why and when, and the history of a pair ruled,
+withdrawn and ruled again stays readable.
 """
 
 from __future__ import annotations
@@ -21,9 +28,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from makhzan_schemas.enums import ListingStatus
@@ -89,10 +96,19 @@ class Overrides:
         return cls(frozenset(never), frozenset(must), frozenset(forced), ids)
 
 
+def standing() -> Select:
+    """Rulings not removed, oldest first."""
+    return (
+        select(GroupingOverride)
+        .where(GroupingOverride.removed_at.is_(None))
+        .order_by(GroupingOverride.id)
+    )
+
+
 async def load_overrides(session: AsyncSession) -> Overrides:
-    """Every ruling in the table, for grouping now and AI decisions later."""
-    rows = await session.scalars(select(GroupingOverride).order_by(GroupingOverride.id))
-    return Overrides.of(rows)
+    """Every standing ruling (removed ones left out), for grouping now and AI
+    decisions later."""
+    return Overrides.of(await session.scalars(standing()))
 
 
 @dataclass
@@ -135,7 +151,9 @@ async def add(
     first, second = pair(a, b)
     existing = await session.scalar(
         select(GroupingOverride).where(
-            GroupingOverride.listing_a == first, GroupingOverride.listing_b == second
+            GroupingOverride.listing_a == first,
+            GroupingOverride.listing_b == second,
+            GroupingOverride.removed_at.is_(None),
         )
     )
     if existing is not None:
@@ -158,11 +176,15 @@ async def add(
     return Added("created", row)
 
 
-async def remove(session: AsyncSession, override_id: int) -> GroupingOverride | None:
-    """Delete one ruling (flushed, not committed); None if there is no such row."""
+async def remove(
+    session: AsyncSession, override_id: int, *, removed_by: str, now: datetime | None = None
+) -> GroupingOverride | None:
+    """Withdraw one ruling, keeping its row (flushed, not committed); None if
+    there is no such row. Removing a removed ruling changes nothing."""
     row = await session.get(GroupingOverride, override_id)
-    if row is not None:
-        await session.delete(row)
+    if row is not None and row.removed_at is None:
+        row.removed_at = now or datetime.now(UTC)
+        row.removed_by = removed_by.strip()[:100] or "cli"
         await session.flush()
     return row
 
@@ -296,11 +318,13 @@ async def accept_report(
     return results
 
 
-async def withdraw_report(session: AsyncSession, report_id: int) -> int:
-    """Delete the rulings a report made (flushed, not committed): how a report
-    accepted by mistake, then rejected, stops acting. Returns how many."""
-    result = await session.execute(
-        delete(GroupingOverride).where(GroupingOverride.report_id == report_id)
-    )
-    await session.flush()
-    return result.rowcount or 0
+async def withdraw_report(
+    session: AsyncSession, report_id: int, *, removed_by: str, now: datetime | None = None
+) -> int:
+    """Withdraw the standing rulings a report made, keeping their rows (flushed,
+    not committed): how a report accepted by mistake, then rejected, stops
+    acting. Returns how many."""
+    rows = list(await session.scalars(standing().where(GroupingOverride.report_id == report_id)))
+    for row in rows:
+        await remove(session, row.id, removed_by=removed_by, now=now)
+    return len(rows)

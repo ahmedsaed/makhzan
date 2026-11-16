@@ -54,8 +54,14 @@ from functools import lru_cache
 from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
 from makhzan_schemas.identifiers import Identifier, fold_identifier, identifier_pattern
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
-from makhzan_schemas.models import Listing, Product, ProductEvent, ProductRedirect
-from makhzan_schemas.overrides import Overrides, load_overrides
+from makhzan_schemas.models import (
+    GroupingOverride,
+    Listing,
+    Product,
+    ProductEvent,
+    ProductRedirect,
+)
+from makhzan_schemas.overrides import Overrides, pair
 from makhzan_schemas.pricing import summarize_prices
 from makhzan_schemas.values import value_tokens, values_conflict, without_values
 from sqlalchemy import select, text, update
@@ -1141,7 +1147,9 @@ async def rebuild_products(
     `merged_into` it, and one whose offers are all gone is marked `delisted_at`.
     Each merge, split, emptying and revival is recorded in `product_events`;
     one a person's ruling bears on (`grouping_overrides`) cites the ruling's id
-    under `overrides` in its detail (`_cite_overrides`).
+    under `overrides` in its detail, and one that undoes a removed ruling's
+    effect cites it under `removed_overrides` (`_cite_overrides`). Each
+    ruling's `status` is then written (`override_status`).
 
     `reidentify` first re-reads every active listing's identifier with the
     current rules and the family guard (`assign_identifiers`): what makes a rule
@@ -1172,7 +1180,21 @@ async def rebuild_products(
     delisted = {p.id for p in products.values() if p.merged_into is None and p.delisted_at}
     current = {listing.id: _resolve(listing.product_id, merged_into) for listing in listings}
     # Grouping reads the products listings belong to now (incumbency).
-    overrides = await load_overrides(session)
+    # Standing rulings, and removed ones whose removal no regroup has yet
+    # carried out (cited on the change that undoes them, then marked removed).
+    ruling_rows = list(
+        await session.scalars(
+            select(GroupingOverride)
+            .where(
+                GroupingOverride.removed_at.is_(None)
+                | GroupingOverride.status.is_distinct_from("removed")
+            )
+            .order_by(GroupingOverride.id)
+        )
+    )
+    standing = [row for row in ruling_rows if row.removed_at is None]
+    removed = [row for row in ruling_rows if row.removed_at is not None]
+    overrides = Overrides.of(standing)
     groups = _group_listings(listings, current, overrides)
     dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] = defaultdict(list)
     for p in products.values():
@@ -1180,7 +1202,25 @@ async def rebuild_products(
             dormant[p.group_key].append((p.id, p.merged_into, p.created_at))
 
     plan = plan_identity(groups, current, matchable, delisted, dormant)
-    cited = _cite_overrides(overrides, groups, current, plan) if overrides else _Cited()
+    cited = _Cited()
+    _cite_overrides(
+        cited,
+        "overrides",
+        _by_kind(standing, "never_merge"),
+        _by_kind(standing, "must_merge"),
+        groups,
+        current,
+        plan,
+    )
+    _cite_overrides(
+        cited,
+        "removed_overrides",
+        _by_kind(removed, "must_merge"),
+        _by_kind(removed, "never_merge"),
+        groups,
+        current,
+        plan,
+    )
 
     now = datetime.now(UTC)
     changed = created = 0
@@ -1325,6 +1365,7 @@ async def rebuild_products(
         )
 
     session.add_all(events)
+    _record_statuses(ruling_rows, listings, groups, overrides, now)
     await session.flush()
     stats = {
         "products": len(groups),
@@ -1350,38 +1391,48 @@ async def rebuild_products(
 
 @dataclass
 class _Cited:
-    """Override ids per event, keyed ("split", product, group key),
-    ("merge", absorbed product) or ("unmerged", product)."""
+    """Override ids per event and per detail key ("overrides" for standing
+    rulings, "removed_overrides" for withdrawn ones whose effect is undone).
+    Events are keyed ("split", product, group key), ("merge", absorbed
+    product) or ("unmerged", product)."""
 
-    by_event: dict[tuple, set[int]] = field(default_factory=lambda: defaultdict(set))
+    by_event: dict[tuple, dict[str, set[int]]] = field(
+        default_factory=lambda: defaultdict(lambda: defaultdict(set))
+    )
 
     def on(self, event: tuple, detail: dict) -> dict:
         """The event's detail, with the rulings behind it, if any."""
-        ids = self.by_event.get(event)
-        return {**detail, "overrides": sorted(ids)} if ids else detail
+        cited = self.by_event.get(event)
+        if not cited:
+            return detail
+        return {**detail, **{label: sorted(ids) for label, ids in sorted(cited.items())}}
 
 
 def _cite_overrides(
-    overrides: Overrides,
+    cited: _Cited,
+    label: str,
+    apart: dict[tuple[uuid.UUID, uuid.UUID], int],
+    together: dict[tuple[uuid.UUID, uuid.UUID], int],
     groups: dict[str, list[Listing]],
     current: dict[uuid.UUID, uuid.UUID | None],
     plan: IdentityPlan,
-) -> _Cited:
-    """Which rulings each membership change carries out.
+) -> None:
+    """Which rulings each membership change carries out, under `label`.
 
-    - A never_merge pair whose two listings shared a product and now sit in
-      different groups: cited on the split (or un-merge) that took one away.
-    - A must_merge pair whose two listings came from different products (or
-      one from none) and now share a group: cited on the merge that joined the
-      products, or on the split that took a listing from its old product.
+    - A pair to keep `apart` whose two listings shared a product and now sit
+      in different groups: cited on the split (or un-merge) that took one
+      away. That is a standing never_merge, or a removed must_merge undone.
+    - A pair to put `together` whose two listings came from different products
+      (or one from none) and now share a group: cited on the merge that joined
+      the products, or on the split that took a listing from its old product.
+      That is a standing must_merge, or a removed never_merge undone.
 
-    This says the change carries the ruling out, not that nothing else would
-    have made it: a split the vetoes would have made anyway cites a never_merge
-    pair it separates too. A ruling that changes nothing about an existing
-    product (two newcomers kept apart) is cited nowhere, since no event is
-    written.
+    This says the change carries the ruling (or its removal) out, not that
+    nothing else would have made it: a split the vetoes would have made anyway
+    cites a never_merge pair it separates too. A ruling that changes nothing
+    about an existing product (two newcomers kept apart) is cited nowhere,
+    since no event is written.
     """
-    cited = _Cited()
     group_of = {listing.id: key for key, items in groups.items() for listing in items}
     splits = set(plan.splits)
     unmerged_key = {
@@ -1389,31 +1440,139 @@ def _cite_overrides(
         for key, product_id in plan.assigned.items()
         if product_id is not None and product_id in plan.unmerged
     }
-    for (a, b), override_id in sorted(overrides.ids.items(), key=lambda kv: kv[1]):
+    for (a, b), override_id in sorted(apart.items(), key=lambda kv: kv[1]):
         ka, kb = group_of.get(a), group_of.get(b)
-        if ka is None or kb is None:
-            continue  # a listing not active: the ruling acts on nothing
         pa, pb = current.get(a), current.get(b)
-        if (a, b) in overrides.never:
-            if pa is None or pa != pb or ka == kb:
+        if ka is None or kb is None or pa is None or pa != pb or ka == kb:
+            continue  # a listing not active, or nothing separated
+        for key in (ka, kb):
+            if (pa, key) in splits:
+                cited.by_event[("split", pa, key)][label].add(override_id)
+            if key in unmerged_key and plan.unmerged[unmerged_key[key]] == pa:
+                cited.by_event[("unmerged", unmerged_key[key])][label].add(override_id)
+    for (a, b), override_id in sorted(together.items(), key=lambda kv: kv[1]):
+        ka, kb = group_of.get(a), group_of.get(b)
+        pa, pb = current.get(a), current.get(b)
+        if ka is None or ka != kb or pa == pb:
+            continue  # a listing not active, or nothing joined
+        survivor = plan.assigned.get(ka)
+        for product_id in (pa, pb):
+            if product_id is None:
                 continue
-            for key in (ka, kb):
-                if (pa, key) in splits:
-                    cited.by_event[("split", pa, key)].add(override_id)
-                if key in unmerged_key and plan.unmerged[unmerged_key[key]] == pa:
-                    cited.by_event[("unmerged", unmerged_key[key])].add(override_id)
+            if (product_id, ka) in splits:
+                cited.by_event[("split", product_id, ka)][label].add(override_id)
+            if plan.merges.get(product_id) == survivor and survivor is not None:
+                cited.by_event[("merge", product_id)][label].add(override_id)
+
+
+def _by_kind(rows: list[GroupingOverride], kind: str) -> dict[tuple[uuid.UUID, uuid.UUID], int]:
+    return {(row.listing_a, row.listing_b): row.id for row in rows if row.kind == kind}
+
+
+def _listing_name(listing: Listing) -> str:
+    title = (listing.title_en or listing.title_ar or "(untitled)")[:60]
+    return f"{listing.id} ({listing.source}: {title})"
+
+
+def _pair_veto(a: Listing, b: Listing) -> str | None:
+    """Which veto keeps two listings apart, in words, or None (same shop
+    aside): value, form or price, read as the regroup reads them."""
+    domain = a.domain or b.domain
+    profile = get_profile(domain)
+    ta, tb = a.title_en or a.title_ar, b.title_en or b.title_ar
+    if values_conflict(
+        value_tokens(_without_identifier(ta, a.part_number)),
+        value_tokens(_without_identifier(tb, b.part_number)),
+    ):
+        return "value veto (their titles state different values)"
+    fa, fb = _form(ta, a.part_number, domain), _form(tb, b.part_number, domain)
+    if _forms_conflict(fa, fb, profile.accessory_forms):
+        return f"form veto ({fa or 'unstated'} vs {fb or 'unstated'})"
+    if _prices_apart(a.price, b.price, profile.merge_price_ratio):
+        return f"price veto ({a.price} vs {b.price})"
+    return None
+
+
+def override_status(
+    row: GroupingOverride,
+    listings: dict[uuid.UUID, Listing],
+    group_of: dict[uuid.UUID, str],
+    groups: dict[str, list[Listing]],
+    overrides: Overrides,
+) -> tuple[str, uuid.UUID | None, str | None]:
+    """Whether a standing ruling holds after a regroup: (status, blocked_by,
+    reason). Diagnostic only: nothing here changes a group.
+
+    - `inactive`: a listing is not active, so the ruling acts on nothing.
+    - `in_effect`: never_merge listings in different products, must_merge in one.
+    - `blocked`: a must_merge whose listings ended apart, with the first
+      reason found: the same shop; a veto between the two (unless forced);
+      else, between a member of one's product and a member of the other's
+      (pairs involving the two first), the same shop, a never_merge, or a
+      value, form or price veto. `blocked_by` is the listing on the far side
+      of that veto. An existing product wins over a forced ruling it
+      contradicts (the owner's decision), and this is how that shows.
+    """
+    a, b = row.listing_a, row.listing_b
+    for listing_id in (a, b):
+        if listing_id not in group_of:
+            return "inactive", None, f"listing {listing_id} is not active (archived or gone)"
+    together = group_of[a] == group_of[b]
+    if row.kind == "never_merge":
+        if together:
+            return "blocked", None, "both listings are in one product despite the ruling"
+        return "in_effect", None, None
+    if together:
+        return "in_effect", None, None
+    la, lb = listings[a], listings[b]
+    if la.supplier_id == lb.supplier_id:
+        return "blocked", None, "same shop: one shop's two listings never merge"
+    if not row.forced and (veto := _pair_veto(la, lb)):
+        return "blocked", b, f"{veto} between the two listings"
+    pairs = [(x, y) for x in groups[group_of[a]] for y in groups[group_of[b]]]
+    pairs.sort(key=lambda p: (p[0].id not in (a, b)) + (p[1].id not in (a, b)))
+    for x, y in pairs:
+        if {x.id, y.id} == {a, b}:
+            continue
+        far = y if x.id in (a, b) else x
+        if x.supplier_id == y.supplier_id:
+            return (
+                "blocked",
+                far.id,
+                f"same shop: {_listing_name(x)} and {_listing_name(y)} are in the two products",
+            )
+        if overrides.kind(x.id, y.id) == "never_merge":
+            ruling = overrides.ids.get(pair(x.id, y.id))
+            return (
+                "blocked",
+                far.id,
+                f"never_merge #{ruling} between {_listing_name(x)} and {_listing_name(y)}",
+            )
+        if overrides.is_forced(x.id, y.id):
+            continue
+        if veto := _pair_veto(x, y):
+            return "blocked", far.id, f"{veto} with {_listing_name(far)}"
+    return "blocked", None, "not joined, and no veto found between the two products"
+
+
+def _record_statuses(
+    rows: list[GroupingOverride],
+    listings: list[Listing],
+    groups: dict[str, list[Listing]],
+    overrides: Overrides,
+    now: datetime,
+) -> None:
+    """Write each ruling's status (`override_status`); a removed one, whose
+    undoing this regroup has just cited, is marked `removed`."""
+    by_id = {listing.id: listing for listing in listings}
+    group_of = {listing.id: key for key, items in groups.items() for listing in items}
+    for row in rows:
+        if row.removed_at is not None:
+            status, blocked_by, reason = "removed", None, None
         else:
-            if ka != kb or pa == pb:
-                continue
-            survivor = plan.assigned.get(ka)
-            for product_id in (pa, pb):
-                if product_id is None:
-                    continue
-                if (product_id, ka) in splits:
-                    cited.by_event[("split", product_id, ka)].add(override_id)
-                if plan.merges.get(product_id) == survivor and survivor is not None:
-                    cited.by_event[("merge", product_id)].add(override_id)
-    return cited
+            status, blocked_by, reason = override_status(row, by_id, group_of, groups, overrides)
+        row.status, row.blocked_by, row.blocked_reason = status, blocked_by, reason
+        row.checked_at = now
 
 
 def describe(stats: dict) -> str:

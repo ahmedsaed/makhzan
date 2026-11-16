@@ -19,7 +19,7 @@ from decimal import Decimal
 import pytest
 from makhzan_schemas import overrides as rulings
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.enums import ProductEventKind, SourceType
+from makhzan_schemas.enums import ListingStatus, ProductEventKind, SourceType
 from makhzan_schemas.grouping import _group_listings, rebuild_products
 from makhzan_schemas.models import GroupingOverride, Listing, ProductEvent, Report, Supplier
 from makhzan_schemas.overrides import Overrides, load_overrides, pair
@@ -297,11 +297,21 @@ async def test_the_atmega_pair_splits_under_a_ruling_and_rejoins_without_it():
     assert split.detail["overrides"] == [ruling.id]
 
     async with SessionLocal() as session:
-        await rulings.remove(session, ruling.id)
+        await rulings.remove(session, ruling.id, removed_by="owner")
         await session.commit()
     stats = await _rebuild()
     assert await _product_of(a) == await _product_of(b) == merged
     assert stats["merged"] == 1
+    # The merge that undoes the ruling cites it, removed; the row is kept.
+    (merge,) = [e for e in await _events() if e.kind == ProductEventKind.MERGE]
+    assert merge.detail["removed_overrides"] == [ruling.id]
+    assert "overrides" not in merge.detail
+    (row,) = await _all_overrides()
+    assert (row.status, row.removed_by) == ("removed", "owner")
+    # Cited once: the next regroup changes nothing and cites nothing more.
+    before = len(await _events())
+    await _rebuild()
+    assert len(await _events()) == before
 
 
 async def test_a_ruling_survives_every_later_rebuild():
@@ -399,9 +409,14 @@ async def _report(reason: str, product: list, other: list | None = None) -> int:
         return report.id
 
 
-async def _overrides() -> list[GroupingOverride]:
+async def _all_overrides() -> list[GroupingOverride]:
     async with SessionLocal() as session:
         return list(await session.scalars(select(GroupingOverride).order_by(GroupingOverride.id)))
+
+
+async def _overrides() -> list[GroupingOverride]:
+    """The standing ones."""
+    return [row for row in await _all_overrides() if row.removed_at is None]
 
 
 async def test_accepting_offers_not_same_keeps_each_ticked_offer_from_each_unticked(capsys):
@@ -421,8 +436,15 @@ async def test_accepting_offers_not_same_keeps_each_ticked_offer_from_each_untic
     # Accepting again adds nothing; rejecting withdraws what it made.
     assert await reports_cli.run(["accept", str(report_id)]) == 0
     assert len(await _overrides()) == 4
-    assert await reports_cli.run(["reject", str(report_id)]) == 0
+    assert await reports_cli.run(["reject", str(report_id), "--by", "owner"]) == 0
     assert await _overrides() == []
+    removed = await _all_overrides()
+    assert len(removed) == 4
+    assert {r.removed_by for r in removed} == {"owner (report rejected)"}
+
+    # Accepted again: new rows beside the removed ones.
+    assert await reports_cli.run(["accept", str(report_id)]) == 0
+    assert len(await _overrides()) == 4 and len(await _all_overrides()) == 8
 
 
 async def test_accepting_same_as_other_joins_one_listing_of_each(capsys):
@@ -519,9 +541,21 @@ async def test_overrides_by_hand(capsys):
     async with SessionLocal() as session:
         assert (await load_overrides(session)).kind(a, b) == rulings.NEVER
 
-    assert await overrides_cli.run(["remove", str(row.id)]) == 0
+    assert await overrides_cli.run(["remove", str(row.id), "--by", "owner"]) == 0
     assert await _overrides() == []
     assert await overrides_cli.run(["remove", "999"]) == 1
+    async with SessionLocal() as session:
+        assert (await load_overrides(session)).kind(a, b) is None
+
+    # Removed rows are listed only with --all; the pair can be ruled again.
+    capsys.readouterr()
+    assert await overrides_cli.run(["list"]) == 0
+    assert "No grouping overrides." in capsys.readouterr().out
+    assert await overrides_cli.run(["list", "--all"]) == 0
+    assert "removed" in capsys.readouterr().out
+    assert await overrides_cli.run([*args, "--by", "owner"]) == 0
+    (again,) = await _overrides()
+    assert again.id != row.id and len(await _all_overrides()) == 2
 
 
 @pytest.mark.parametrize(
@@ -535,3 +569,80 @@ async def test_overrides_by_hand(capsys):
 async def test_a_manual_override_needs_a_note_and_sense(argv):
     with pytest.raises(SystemExit):
         await overrides_cli.run(argv)
+
+
+# --- status: whether each ruling holds ---------------------------------------
+
+
+async def test_a_forced_ruling_an_existing_product_blocks_is_flagged(capsys):
+    """The owner's decision: the existing product {A, X} wins over a forced
+    A-B whose price contradicts X, and the ruling says so."""
+    shop_a, shop_b, shop_c = [await _supplier(s) for s in ("shop-a", "shop-b", "shop-c")]
+    b = await _listing(shop_a, _BUCK, "LM2596", price=2000)
+    x = await _listing(shop_b, _BUCK, "LM2596", price=110)
+    a = await _listing(shop_c, _BUCK, "LM2596", price=100)
+    await _rebuild()
+    assert await _product_of(a) == await _product_of(x) != await _product_of(b)
+
+    ruling = await _add(a, b, rulings.MUST, forced=True)
+    await _rebuild()
+    assert await _product_of(a) == await _product_of(x) != await _product_of(b)
+    (row,) = await _overrides()
+    assert row.status == "blocked" and row.blocked_by == x
+    assert "price veto" in row.blocked_reason and str(x) in row.blocked_reason
+    assert row.checked_at is not None
+
+    capsys.readouterr()
+    assert await overrides_cli.run(["list"]) == 0
+    out = capsys.readouterr().out
+    assert f"#{ruling.id} must_merge forced" in out and "BLOCKED" in out and "price veto" in out
+
+
+async def test_status_in_effect_same_shop_and_inactive():
+    shop_a, shop_b = await _supplier("shop-a"), await _supplier("shop-b")
+    a = await _listing(shop_a, ATMEGA_PU, "ATMEGA328")
+    b = await _listing(shop_b, ATMEGA_P, "ATMEGA328")
+    c = await _listing(shop_a, "Arduino brain chip, DIP", None)
+    d = await _listing(shop_b, "Something else entirely", None)
+    never = await _add(a, b, rulings.NEVER)
+    joined = await _add(c, d, rulings.MUST)
+    async with SessionLocal() as session:
+        # A same-shop must_merge, written past the CLI's refusal.
+        session.add(
+            GroupingOverride(
+                listing_a=min(a, c),
+                listing_b=max(a, c),
+                kind=rulings.MUST,
+                source="manual",
+                note="test",
+                created_by="test",
+            )
+        )
+        await session.commit()
+    await _rebuild()
+    status = {r.id: r for r in await _overrides()}
+    assert status[never.id].status == "in_effect"
+    assert status[joined.id].status == "in_effect"
+    (same_shop,) = [r for r in status.values() if r.id not in (never.id, joined.id)]
+    assert same_shop.status == "blocked" and "same shop" in same_shop.blocked_reason
+
+    async with SessionLocal() as session:
+        listing = await session.get(Listing, d)
+        listing.status = ListingStatus.ARCHIVED
+        await session.commit()
+    await _rebuild()
+    row = {r.id: r for r in await _overrides()}[joined.id]
+    assert row.status == "inactive" and str(d) in row.blocked_reason
+
+
+async def test_reports_show_lists_the_overrides_it_made(capsys):
+    shops = [await _supplier(f"shop-{c}") for c in "ab"]
+    a, b = [await _listing(s, "SG90 Micro Servo 9g", "SG90") for s in shops]
+    report_id = await _report("offers_not_same", [[a, b], {a}])
+    assert await reports_cli.run(["accept", str(report_id)]) == 0
+    await _rebuild()
+    capsys.readouterr()
+    assert await reports_cli.run(["show", str(report_id)]) == 0
+    out = capsys.readouterr().out
+    assert "Grouping overrides it made:" in out
+    assert "never_merge" in out and "in effect" in out
