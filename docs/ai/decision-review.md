@@ -293,5 +293,5 @@ Owner decisions:
 - **Report-driven overrides** (never-merge / must-merge pairs keyed by listing
   id, honoured by the regroup) are the safety net for regressions such as
   ATmega328/328P.
-- Home-server benchmark of the chosen setup: prepared on the desktop while the
+- CPU-worker benchmark of the chosen setup: prepared on the desktop while the
   server is down for maintenance; run when it is back.
