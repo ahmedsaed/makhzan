@@ -2,9 +2,10 @@
  * The shop view of a product page with several offers (docs/DESIGN.md, the
  * approved mockup of November 2026): one shop's offer is "picked", and the
  * page's title, photo, highlighted row, "What the shops say" tab, primary
- * button and bottom bar follow it. On load the cheapest offer is picked (the
- * one the primary button already opens); `?shop=<slug>` picks that shop's
- * instead, so a shop view can be linked. Canonical URL, <title>, meta, JSON-LD
+ * button and bottom bar follow it. On a plain load the product's
+ * representative offer is picked, the listing its title comes from, so the h1
+ * and <title> name the same listing (owner decision, November 2026);
+ * `?shop=<slug>` picks that shop's instead, so a shop view can be linked. Canonical URL, <title>, meta, JSON-LD
  * and breadcrumbs stay the product's: the shop's view is a UI feature only.
  *
  * And "Matched by AI": an offer AI matching put into the product, rather than
@@ -58,16 +59,23 @@ export function shopLead(offers: Offer[], slug: string, now: Date = new Date()):
 
 /**
  * The offer picked when the page loads: `?shop=`'s lead offer when that shop
- * sells it here, else the cheapest (the primary offer). `explicit` is whether
+ * sells it here, else the product's representative (`representative`, the
+ * API's `representative_offer_id`: the listing the product's title comes
+ * from, so the h1 and <title> agree). Ranked once, by the regroup, never
+ * here; only an API that does not name one (or names an offer not among
+ * these) falls back to the cheapest, the primary offer. `explicit` is whether
  * the URL chose it. Null only for a product with no offers.
  */
 export function initialPick(
   offers: Offer[],
   slug: string | null,
   now: Date = new Date(),
+  representative: string | null = null,
 ): { offer: Offer; explicit: boolean } | null {
   const chosen = slug ? shopLead(offers, slug, now) : null;
   if (chosen) return { offer: chosen, explicit: true };
+  const named = representative ? offers.find((offer) => offer.id === representative) : undefined;
+  if (named) return { offer: named, explicit: false };
   const cheapest = primaryOffer(offers, now) ?? orderOffers(offers, now)[0] ?? null;
   return cheapest ? { offer: cheapest, explicit: false } : null;
 }

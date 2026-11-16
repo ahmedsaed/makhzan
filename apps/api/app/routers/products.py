@@ -10,6 +10,7 @@ from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
 from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.grouping import representative
 from makhzan_schemas.matching import matched_by
 from makhzan_schemas.models import Listing, Product, ProductRedirect
 from makhzan_schemas.pricing import unit_price
@@ -76,6 +77,15 @@ async def get_product(
     # Which offers AI matching merged here: "rules" for all of them until AI
     # matching exists (makhzan_schemas.matching says so, and is the one place
     # to change).
+    # The offer the product's title came from, which the page picks on a plain
+    # load: the one the last rebuild chose, while it is still an offer; else
+    # (a product not rebuilt since the column came, or that offer archived
+    # since) the same rule over the offers there are, never a second ranking.
+    ids = {o.id for o in offers}
+    rep_id = product.representative_listing_id
+    if rep_id not in ids:
+        rep_id = representative(offers).id if offers else None
+
     # One call for every offer, so reading the AI decisions table later is one
     # query, not one per offer.
     how = matched_by(offers)
@@ -109,6 +119,7 @@ async def get_product(
         delisted_at=product.delisted_at,
         offers=reads,
         ai_matched_count=sum(read.matched_by == "ai" for read in reads),
+        representative_offer_id=rep_id,
     )
 
 

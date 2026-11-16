@@ -342,6 +342,11 @@ class Product(TimestampMixin, Base):
     # between the two tables would make every join between them ambiguous. It
     # is as current as the last rebuild, like the rest of the aggregates.
     min_price_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # The listing the product's title, brand, category and domain were copied
+    # from (grouping._representative): the product page's shop view picks it on
+    # a plain load, so the h1 and <title> name the same listing. Not a foreign
+    # key, for the reason above; as current as the last rebuild, like the title.
+    representative_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     min_price_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL")
     )

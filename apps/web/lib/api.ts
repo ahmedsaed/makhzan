@@ -262,6 +262,11 @@ export type Product = ProductSummary & {
   offers: Offer[];
   /** How many of `offers` AI matching put here (`matched_by: "ai"`). */
   ai_matched_count?: number;
+  /** The offer whose listing the product's title, brand and category come
+   *  from (the representative the regroup chose): the shop view's pick on a
+   *  plain load, so the h1 and <title> name the same listing. Optional: an
+   *  API older than it falls back to the cheapest. */
+  representative_offer_id?: string | null;
   status?: "listed" | "delisted";
   /** When its last offer went. */
   delisted_at?: string | null;

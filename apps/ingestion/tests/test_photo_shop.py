@@ -117,3 +117,20 @@ async def test_no_photo_no_credit():
 
     assert product.image is None
     assert product.image_supplier_id is None
+
+
+async def test_the_representative_listing_is_recorded_with_the_title_it_gave():
+    """The product page picks the representative on a plain load, so its h1
+    and <title> are one listing's (owner decision, November 2026). The cheapest
+    in-stock offer has no photo, so the representative is the dearer one."""
+    cheap, pictured = _shop("shop-a"), _shop("shop-b")
+    other = _listing(cheap, 60, [])
+    other.title_en = "SG90 Servo, A"
+    rep = _listing(pictured, 90, ["https://shop-b.test/sg90.jpg"])
+    rep.title_en = "SG90 Servo, B"
+    await _seed(cheap, pictured, other, rep)
+
+    product = await _rebuild()
+
+    assert product.representative_listing_id == rep.id
+    assert product.title_en == "SG90 Servo, B"

@@ -45,6 +45,7 @@ import hashlib
 import re
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -727,8 +728,14 @@ def _natural_order(listing: Listing) -> tuple[str, str]:
     return (listing.source, listing.external_id or str(listing.id))
 
 
-def _representative(items: list[Listing]) -> Listing:
-    """Pick the best listing to represent the product: has image + title, in stock, cheapest."""
+def representative(items: Sequence[Listing]) -> Listing:
+    """Pick the best listing to represent the product: has image + title, in stock, cheapest.
+
+    The product's title, brand, category and domain are copied from it, and the
+    product page's shop view picks it on a plain load (`representative_listing_id`,
+    and the API's fallback for a product not rebuilt since that column came).
+    The one place this ranking lives: nothing else re-implements it.
+    """
 
     def score(listing: Listing):
         return (
@@ -1245,7 +1252,8 @@ async def rebuild_products(
             product.merged_at = None
         group_product[key] = product
 
-        rep = _representative(items)
+        rep = representative(items)
+        product.representative_listing_id = rep.id
         product.group_key = key
         product.part_number = items[0].part_number if key.startswith("mpn:") else None
         product.domain = rep.domain

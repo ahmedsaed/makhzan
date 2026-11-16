@@ -434,6 +434,35 @@ test.describe("a linked shop view", () => {
   });
 });
 
+test.describe("the representative listing", () => {
+  test.use({ viewport: DESKTOP });
+
+  // Owner decision (November 2026): a plain load picks the listing the
+  // product's title comes from, so the h1 and <title> are one listing's.
+  // On p-rep the cheapest in stock (Delta Bench) has no photo, so that
+  // listing is Volt Corner's.
+  const REP_URL = "/products/p-rep";
+
+  test("a plain load picks it, not the cheapest", async ({ page }) => {
+    await page.goto(REP_URL);
+    await expect(page.locator("h1")).toHaveText(VOLT_TITLE);
+    await expect(page).toHaveTitle(`${VOLT_TITLE} · makhzan`);
+    await expect(row(page, "o-rep-volt")).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[aria-current]")).toHaveCount(1);
+    await expect(primary(page)).toHaveText("EGP 410 at Volt Corner");
+    // The summary is still the product's: the range starts at the cheapest.
+    await expect(page.locator("[data-summary] [data-price]").first()).toHaveText("EGP 380 – 410");
+    expect(page.url()).not.toContain("shop=");
+  });
+
+  test("?shop= still picks that shop", async ({ page }) => {
+    await page.goto(`${REP_URL}?shop=delta-bench`);
+    await expect(page.locator("h1")).toHaveText("TB6600 Stepper Motor Driver Controller");
+    await expect(row(page, "o-rep-delta")).toHaveAttribute("aria-current", "true");
+    await expect(page).toHaveTitle(`${VOLT_TITLE} · makhzan`);
+  });
+});
+
 test.describe("back and forward", () => {
   test.use({ viewport: DESKTOP });
 

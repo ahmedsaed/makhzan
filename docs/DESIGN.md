@@ -226,12 +226,16 @@ the page container on desktop; each section is left out when its fetch fails.
   P3). Out-of-stock offers fold
   under "Show N out of stock offers", out-of-date ones (any stock) under "Show N out of
   date offers". The summary counts the recently checked offers, and the bottom bar
-  points to the picked shop's offer: on load the cheapest of them (the shop view). When every offer is out of date nothing folds for
+  points to the picked shop's offer: on a plain load the representative's (the shop view). When every offer is out of date nothing folds for
   age: the page lists them all, and the summary carries the "Price may be out of
   date" note.
 - **The shop view** (several offers; the approved mockup of November 2026, version 2;
   `lib/shop-view.ts`, `app/(site)/products/[id]/shop-view.tsx`). One shop's offer is
-  *picked*; on load the cheapest (the offer the primary button already opened). Picking
+  *picked*; on a plain load the product's **representative** listing, the one its title
+  comes from (the regroup's choice: has a photo, then an English title, then in stock,
+  then cheapest; the API's `representative_offer_id`), so the h1 and `<title>` name the
+  same listing (owner decision, November 2026). The web never ranks it itself; an API
+  that does not name one falls back to the cheapest. Picking
   another, by its "What the shops say" tab or by **View listing** on its row, swaps the
   h1 to that shop's own listing title (no chip, no subtitle), moves the gallery to that
   shop's first photo (the phone's thumbnail too; a shop with none keeps the photo
@@ -247,8 +251,10 @@ the page container on desktop; each section is left out when its fetch fails.
   largest paint).
   - *Linkable*: `?shop=<shop slug>` (the slug of `/shops/{slug}`) server-renders that
     shop's view (h1, ring, tab, button, bar, thumbnail, an open fold; the gallery moves
-    once the page runs); an unknown or absent slug gives the cheapest. A pick rewrites
-    `?shop=` with `replaceState`, adding no history. Canonical URL, `<title>`, meta
+    once the page runs); an unknown or absent slug gives the representative. A pick
+    rewrites `?shop=` with `replaceState`, adding no history, and an offer with no shop
+    removes it. The shown shop always follows the URL: after Back onto a rewritten
+    `?shop=`, the page reads it from the router and shows that shop. Canonical URL, `<title>`, meta
     description, Open Graph and Twitter cards, JSON-LD and breadcrumbs stay the
     product's: the shop view is a UI feature only. A slug redirect keeps `?shop=`.
   - *Without JavaScript* the server's view is complete, the tabs still switch the text
