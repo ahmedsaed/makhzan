@@ -212,9 +212,10 @@ export default async function ProductPage({
   // The shop view (lib/shop-view.ts), with several offers: `?shop=`'s offer,
   // or the product's representative (whose title the product's is). One
   // offer has nothing to pick between.
-  const pick = several
-    ? initialPick(product.offers, shopSlug, now, product.representative_offer_id ?? null)
-    : null;
+  const representative = product.representative_offer_id ?? null;
+  const pick = several ? initialPick(product.offers, shopSlug, now, representative) : null;
+  // What a plain load picks, for a URL that loses `?shop=` (Back, a link).
+  const plainPick = several ? initialPick(product.offers, null, now, representative) : null;
   const aiCount = several ? aiMatchedCount(product) : 0;
   const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
@@ -476,6 +477,7 @@ export default async function ProductPage({
     <ShopViewProvider
       initial={pick.offer.id}
       explicit={pick.explicit}
+      fallback={plainPick?.offer.id ?? pick.offer.id}
       primary={primary?.id ?? null}
       meta={pickMeta}
       leads={leads}

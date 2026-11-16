@@ -63,6 +63,7 @@ function Page({ initial = "o-nile", explicit = false }: { initial?: string; expl
     <ShopViewProvider
       initial={initial}
       explicit={explicit}
+      fallback="o-nile"
       primary="o-nile"
       meta={META}
       leads={LEADS}
@@ -195,23 +196,42 @@ describe("the shop view", () => {
     nav.shop = "volt-corner";
     rerender(<Page />);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Volt's title");
-    // A shop the page does not have changes nothing.
+    // A shop the page does not have: the plain load's pick, as the server
+    // renders that URL.
     nav.shop = "no-such-shop";
     rerender(<Page />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Nile's title");
+  });
+
+  it("a URL that loses `?shop=` shows the plain load's pick again", () => {
+    // A cached render of ?shop=volt-corner, restored under the plain URL.
+    render(<Page initial="o-volt" explicit />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Nile's title");
+    expect(row("Nile Parts")).toHaveAttribute("aria-current", "true");
+  });
+
+  it("a navigation from `?shop=` to the plain page, mounted, shows the plain pick", () => {
+    nav.shop = "volt-corner";
+    const { rerender } = render(<Page initial="o-volt" explicit />);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Volt's title");
+    nav.shop = null;
+    rerender(<Page initial="o-volt" explicit />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Nile's title");
   });
 
   it("an offer with no shop takes `?shop=` out of the URL", () => {
+    nav.shop = "nile-parts";
     window.history.replaceState(null, "", "/products/p-ai?shop=nile-parts&x=1");
     replace.mockClear();
     const meta: Record<string, PickMeta> = {
       ...META,
       "o-loose": { ...META["o-delta"], slug: null, shop: "Unknown shop", title: "Loose title" },
     };
-    render(
+    const tree = (
       <ShopViewProvider
         initial="o-nile"
         explicit={false}
+        fallback="o-nile"
         primary="o-nile"
         meta={meta}
         leads={LEADS}
@@ -227,11 +247,16 @@ describe("the shop view", () => {
             Unknown shop
           </label>
         </div>
-      </ShopViewProvider>,
+      </ShopViewProvider>
     );
+    const { rerender } = render(tree);
     fireEvent.click(screen.getByRole("radio", { name: "Unknown shop" }));
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Loose title");
     expect(replace).toHaveBeenCalledWith(null, "", "/products/p-ai?x=1");
+    // The router then reports the URL the pick wrote: the pick stays.
+    nav.shop = null;
+    rerender(tree);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Loose title");
   });
 });
 

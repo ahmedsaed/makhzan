@@ -74,20 +74,24 @@ async def get_product(
     # the range itself stays, as on a withdrawn product.
     names_an_offer = product.min_price_listing_id in {o.id for o in offers}
 
+    # The offer the product's title came from, which the page picks on a plain
+    # load: the one the last rebuild chose, while it is still an offer. Else (a
+    # product not rebuilt since the column came, or that offer archived since)
+    # the same rule over the offers there are, never a second ranking, among
+    # the offers carrying the product's title first: the rule is a min() with
+    # no tie-break and these come in another order than the rebuild's, so on a
+    # tied score it could name a listing whose title is not the product's.
+    rep_id = product.representative_listing_id
+    if rep_id not in {o.id for o in offers}:
+        titled = [
+            o for o in offers if (o.title_en, o.title_ar) == (product.title_en, product.title_ar)
+        ]
+        rep_id = representative(titled or offers).id if offers else None
+
     # Which offers AI matching merged here: "rules" for all of them until AI
     # matching exists (makhzan_schemas.matching says so, and is the one place
-    # to change).
-    # The offer the product's title came from, which the page picks on a plain
-    # load: the one the last rebuild chose, while it is still an offer; else
-    # (a product not rebuilt since the column came, or that offer archived
-    # since) the same rule over the offers there are, never a second ranking.
-    ids = {o.id for o in offers}
-    rep_id = product.representative_listing_id
-    if rep_id not in ids:
-        rep_id = representative(offers).id if offers else None
-
-    # One call for every offer, so reading the AI decisions table later is one
-    # query, not one per offer.
+    # to change). One call for every offer, so reading the AI decisions table
+    # later is one query, not one per offer.
     how = matched_by(offers)
     reads = [
         OfferRead.model_validate(o).model_copy(update={"matched_by": how[o.id]}) for o in offers

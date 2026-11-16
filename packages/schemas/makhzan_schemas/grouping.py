@@ -1606,6 +1606,7 @@ def _withdraw(product: Product) -> None:
     product.supplier_count = 0
     product.in_stock = False
     product.min_price_listing_id = None
+    product.representative_listing_id = None
     product.min_price_supplier_id = None
     product.min_price_option = None
     product.min_price_quantity = None
