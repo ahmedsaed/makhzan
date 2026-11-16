@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import Product, ProductRedirect
 from sqlalchemy import select
 
@@ -149,6 +149,27 @@ async def test_without_a_recorded_one_the_representative_is_found_by_the_same_ru
     body = (await client.get(f"/products/{product.id}")).json()
 
     assert body["representative_offer_id"] == str(pictured.id)
+
+
+async def test_the_fallback_puts_an_in_stock_offer_ahead_of_an_out_of_stock_photo(client, db):
+    # Owner decision (November 2026): stock first, then photo, in the one rule
+    # (grouping.representative) the rebuild and this fallback share.
+    product = await make_product(db, title_en="Not any offer's title")
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(
+        db,
+        supplier=shop_a,
+        product=product,
+        price="9.50",
+        images=["a.jpg"],
+        stock_signal=StockSignal.OUT_OF_STOCK,
+    )
+    stocked = await make_listing(db, supplier=shop_b, product=product, price="14.00")
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(stocked.id)
 
 
 @pytest.mark.parametrize("titled", [0, 1])

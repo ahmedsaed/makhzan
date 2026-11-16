@@ -134,3 +134,24 @@ async def test_the_representative_listing_is_recorded_with_the_title_it_gave():
 
     assert product.representative_listing_id == rep.id
     assert product.title_en == "SG90 Servo, B"
+
+
+async def test_an_in_stock_listing_outranks_an_out_of_stock_one_with_the_only_photo():
+    """Owner decision (November 2026): stock first, then photo. The only listing
+    with a photo is out of stock, so the in-stock one gives the product its
+    title (and is the plain load's pick); the photo still comes from the
+    listing that has one."""
+    gone_shop, stocked_shop = _shop("shop-a"), _shop("shop-b")
+    gone = _listing(gone_shop, 80, ["https://shop-a.test/sg90.jpg"])
+    gone.title_en = "SG90 Servo, A"
+    gone.stock_signal = StockSignal.OUT_OF_STOCK
+    stocked = _listing(stocked_shop, 95, [])
+    stocked.title_en = "SG90 Servo, B"
+    await _seed(gone_shop, stocked_shop, gone, stocked)
+
+    product = await _rebuild()
+
+    assert product.representative_listing_id == stocked.id
+    assert product.title_en == "SG90 Servo, B"
+    assert product.image == "https://shop-a.test/sg90.jpg"
+    assert product.image_supplier_id == gone_shop.id
