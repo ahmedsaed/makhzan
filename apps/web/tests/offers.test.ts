@@ -26,6 +26,7 @@ import {
   partNumbers,
   priceBreakRows,
   quantityLabel,
+  quotedLead,
   rowSpan,
   unitPrice,
   unitPriceText,
@@ -374,6 +375,32 @@ describe("several shops · some offers on request", () => {
       "o2-sp-nile",
       "o2-sp-sphinx",
     ]);
+  });
+});
+
+describe("several shops · what the button and the bottom bar quote (quotedLead)", () => {
+  const offers = CASES["p2-somepor"].offers;
+  const c = compareOffers(offers, now);
+  const [giza, nile, sphinx] = ["o2-sp-giza", "o2-sp-nile", "o2-sp-sphinx"].map((id) =>
+    offerOf("p2-somepor", id),
+  );
+
+  it("the lowest price for the offer that has it, its own price of one for another", () => {
+    expect(quotedLead(giza, c, now)).toBe(c.best);
+    expect(quotedLead(nile, c, now)).toEqual({ offer: nile, ...unitPrice(nile, now)! });
+  });
+
+  it("no price for an offer on request", () => {
+    expect(quotedLead(sphinx, c, now)).toBeNull();
+  });
+
+  it("no price for an offer known to be out of stock, though it has one", () => {
+    const gone: Offer = { ...nile, stock_signal: "out_of_stock" };
+    expect(gone.price).not.toBeNull();
+    expect(quotedLead(gone, compareOffers([giza, gone], now), now)).toBeNull();
+    // Nor when every shop is out: the comparison's lowest is not a lead then.
+    const allGone = [giza, nile].map((o): Offer => ({ ...o, stock_signal: "out_of_stock" }));
+    expect(quotedLead(allGone[0], compareOffers(allGone, now), now)).toBeNull();
   });
 });
 

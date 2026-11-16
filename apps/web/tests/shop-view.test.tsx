@@ -23,6 +23,12 @@ import { ReportProblem } from "@/components/report-problem";
 import type { ReportContext } from "@/lib/report";
 import { AI_EXPLAINED, AI_LABEL } from "@/lib/shop-view";
 
+// `?shop=` as Next's router reports it (useSearchParams), set per test.
+const nav = vi.hoisted(() => ({ shop: null as string | null }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(nav.shop ? { shop: nav.shop } : {}),
+}));
+
 const META: Record<string, PickMeta> = {
   "o-nile": {
     slug: "nile-parts",
@@ -50,9 +56,17 @@ const META: Record<string, PickMeta> = {
   },
 };
 
+const LEADS = { "nile-parts": "o-nile", "volt-corner": "o-volt", "delta-bench": "o-delta" };
+
 function Page({ initial = "o-nile", explicit = false }: { initial?: string; explicit?: boolean }) {
   return (
-    <ShopViewProvider initial={initial} explicit={explicit} primary="o-nile" meta={META}>
+    <ShopViewProvider
+      initial={initial}
+      explicit={explicit}
+      primary="o-nile"
+      meta={META}
+      leads={LEADS}
+    >
       <ShopTitle fallback="TB6600 Stepper Motor Driver" />
       <ul>
         {Object.entries(META).map(([id, meta]) => (
@@ -82,6 +96,7 @@ function Page({ initial = "o-nile", explicit = false }: { initial?: string; expl
 
 let replace: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
+  nav.shop = null;
   window.history.pushState(null, "", "/products/p-ai");
   replace = vi.spyOn(window.history, "replaceState");
 });
@@ -146,9 +161,77 @@ describe("the shop view", () => {
   });
 
   it("renders a linked shop's view as it is", () => {
+    nav.shop = "volt-corner";
     render(<Page initial="o-volt" explicit />);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Volt's title");
     expect(screen.getByRole("radio", { name: "Volt Corner" })).toBeChecked();
+  });
+
+  it("a tab click picks once, closed or open", () => {
+    render(<Page />);
+    fireEvent.click(screen.getByRole("radio", { name: "Volt Corner" }));
+    expect(replace).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("radio", { name: "Volt Corner" }));
+    expect(replace).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the URL's shop when it is not the one the server rendered (Back)", () => {
+    // Next restores the first render (Nile's) under a URL a pick rewrote.
+    nav.shop = "volt-corner";
+    window.history.replaceState(null, "", "/products/p-ai?shop=volt-corner");
+    replace.mockClear();
+    render(<Page />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Volt's title");
+    expect(row("Volt Corner")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("radio", { name: "Volt Corner" })).toBeChecked();
+    expect(screen.getByRole("link", { name: "View at Volt Corner" })).toBeInTheDocument();
+    // Restored, not picked: nothing announced, the URL left as it is.
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("follows `?shop=` when it changes under a mounted page", () => {
+    const { rerender } = render(<Page />);
+    nav.shop = "volt-corner";
+    rerender(<Page />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Volt's title");
+    // A shop the page does not have changes nothing.
+    nav.shop = "no-such-shop";
+    rerender(<Page />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Volt's title");
+  });
+
+  it("an offer with no shop takes `?shop=` out of the URL", () => {
+    window.history.replaceState(null, "", "/products/p-ai?shop=nile-parts&x=1");
+    replace.mockClear();
+    const meta: Record<string, PickMeta> = {
+      ...META,
+      "o-loose": { ...META["o-delta"], slug: null, shop: "Unknown shop", title: "Loose title" },
+    };
+    render(
+      <ShopViewProvider
+        initial="o-nile"
+        explicit={false}
+        primary="o-nile"
+        meta={meta}
+        leads={LEADS}
+      >
+        <ShopTitle fallback="TB6600" />
+        <div role="radiogroup" aria-label="What the shops say">
+          <label>
+            <PickerRadio index={0} offer="o-nile" />
+            Nile Parts
+          </label>
+          <label>
+            <PickerRadio index={1} offer="o-loose" />
+            Unknown shop
+          </label>
+        </div>
+      </ShopViewProvider>,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Unknown shop" }));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Loose title");
+    expect(replace).toHaveBeenCalledWith(null, "", "/products/p-ai?x=1");
   });
 });
 
