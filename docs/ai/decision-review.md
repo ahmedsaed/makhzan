@@ -195,3 +195,46 @@ than a decision model.
    figure and the 2,336 merges, the CPU-window sizing (longer prompts are slower).
 
 Nothing runs until these are decided.
+
+## 4. Owner decisions (2026-11-16)
+
+Prompt and context (section 3):
+
+- **Rules text:** the draft in 3a, as written for now; optimise later.
+- **Fields:** product information only. **Price excluded.** Description included,
+  with the instruction to ignore marketing text.
+- **Missing fields:** written as "not stated".
+- **Placement for Kev and pplx:** test both K1 (rules in the state) and K2
+  (rules in the instructions). Both models' docs favour K1.
+- **Answer definitions:** use the models' `criteria` feature (what "true" and
+  "false" mean), as a variant.
+- **Description length:** test both full and capped (~150 words). Kev was
+  trained mostly on states of at most 384 tokens.
+- **Models:** re-test Kev, pplx and Qwen3.5-4B.
+- **Protocol:** the 900 labelled pairs, both reading orders, the fixed rule
+  first, then thresholds re-derived on a held-out split. Final comparisons run
+  one request per call (pplx is bit-stable only that way); record the noise.
+
+Register:
+
+- D3 kept (variant = not same); variant experiments later.
+- D5 kept; Opus re-labelled the 740 non-owner pairs under the rulings with
+  descriptions and specs (39 labels, 5%, changed), and a Sonnet second pass
+  under the same rules checks it; disagreements are re-judged.
+- D6, D10, D18, D19 kept.
+- D11 kept, verified against the docs: both models say to set thresholds on
+  your own data. pplx's served temperature is 1.3303 (v1.3); Kev runs raw
+  (`KEV_TEMPERATURE=1.0`), calibrated default 2.41.
+- D16 kept; cross-department candidates (e.g. bearings) later.
+
+New labelling rules (also in `ml/out/labels/README.md`):
+
+4. Sizes within about 5% are the same (rounding or typos).
+5. A bare standard part number implies its standard package (1N4007 vs the SMD
+   "M7"; 1N5819 vs SS14 are different).
+6. Bundles ("with" another component: an I2C adapter, a cable, a case) are
+   different; a gray zone, so a wrong merge here is a soft error.
+7. Confirmed: 7476 = 74LS76 (no family named), BZX55 = BZX79 (drop-in).
+
+Buyers verify on the shop's own page before buying, which is why rare
+gray-zone merges are tolerable under option B.
