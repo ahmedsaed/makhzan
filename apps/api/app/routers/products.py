@@ -95,10 +95,9 @@ async def get_product(
             ]
             rep_id = representative(titled or top).id
 
-    # Which offers AI matching merged here: "rules" for all of them until AI
-    # matching exists (makhzan_schemas.matching says so, and is the one place
-    # to change). One call for every offer, so reading the AI decisions table
-    # later is one query, not one per offer.
+    # Which offers AI matching merged here (makhzan_schemas.matching, the one
+    # place that answers): read from each listing's `matched_via`, which only
+    # the regroup writes, so no query. "rules" until AI matching goes live.
     how = matched_by(offers)
     reads = [
         OfferRead.model_validate(o).model_copy(update={"matched_by": how[o.id]}) for o in offers

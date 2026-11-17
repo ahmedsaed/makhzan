@@ -113,8 +113,8 @@ probe:  ## Ask each supplier what it thinks of each crawler identity (ARGS="--so
 reindex:  ## Rebuild products and the search index from the database
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup
 
-regroup-dry-run:  ## What a regroup would do to product ids (kept/merged/split/emptied); changes nothing
-	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup --dry-run
+regroup-dry-run:  ## What a regroup would do to product ids; changes nothing (ARGS=--ai previews AI decisions)
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.regroup --dry-run $(ARGS)
 
 retire-redirects:  ## Drop product redirects unused for a year: make retire-redirects [ARGS=--dry-run]
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.retire_redirects $(ARGS)
