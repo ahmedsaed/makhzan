@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                         "dtype": s["dtype"] if s else None,
                     }
                 )
-        session_end = [s["ended"] for s in broker.sessions.values()]
+        session_end = [s["end_reason"] for s in broker.sessions.values()]
     summary = compare(rows_out, args.tolerance)
     report = {
         "model": args.model,

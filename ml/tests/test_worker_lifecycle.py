@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from makhzan_ml.worker import judges, run
-from makhzan_ml.worker.broker import Broker
+from makhzan_ml.worker.broker import Broker, BrokerError
 from makhzan_ml.worker.config import parse
 from makhzan_ml.worker.fake_broker import FakeBroker
 from makhzan_ml.worker.pins import PINS
@@ -132,7 +132,7 @@ def make_worker(broker, sleeps, *, clock=None, fake=None, retry_max_s=30.0, **se
 # --- the whole session ---------------------------------------------------------------------
 
 
-def test_a_session_scores_every_job_in_order_and_ends_with_a_release(broker, sleeps):
+def test_a_session_scores_every_job_in_order_and_ends_on_an_empty_lease(broker, sleeps):
     jobs = [broker.add_job("kev", pair(n)) for n in range(3)]
     worker, fake, _ = make_worker(broker, sleeps)
     assert worker.run() == run.EXIT_OK
@@ -159,11 +159,10 @@ def test_a_session_scores_every_job_in_order_and_ends_with_a_release(broker, sle
     assert leases[0]["model_version"] == PINS["kev"].model_version
     assert leases[1]["seconds_per_request"] == 10  # measured by now
     assert len(broker.bodies("/results")) == 3  # one POST per job
-    assert broker.paths()[-1] == "/release"
-    assert broker.bodies("/release")[-1] == {"session": hello and broker.bodies("/release")[-1]
-                                             ["session"], "lease_id": None, "job_ids": [],
-                                             "reason": "graceful"}  # fmt: skip
-    assert [s["ended"] for s in broker.sessions.values()] == ["graceful"]
+    # The empty lease ended the session at the broker (P16); no release was due.
+    assert broker.paths()[-1] == "/lease" and "/release" not in broker.paths()
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["empty"]
+    assert worker.session_closed
     assert sleeps == []
 
 
@@ -180,7 +179,7 @@ def test_an_empty_queue_loads_nothing_and_exits(broker, sleeps):
     worker, fake, _ = make_worker(broker, sleeps)
     assert worker.run() == run.EXIT_OK
     assert fake.loads == []
-    assert broker.paths() == ["/hello", "/lease", "/release"]
+    assert broker.paths() == ["/hello", "/lease"]
 
 
 def test_on_empty_wait_polls_until_the_window_ends(broker, sleeps):
@@ -247,8 +246,9 @@ def test_the_window_closing_across_midnight_releases_the_rest_gracefully(broker,
     assert len(released) == 1 and released[0]["reason"] == "graceful"
     assert released[0]["job_ids"] == [jobs[2].job_id, jobs[3].job_id]
     assert all(j.status == "queued" and j.attempts == 0 for j in jobs[2:])
-    # The graceful release with jobs already told the broker the session ended.
+    # The graceful release told the broker the session ended.
     assert broker.paths()[-1] == "/release"
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
 
 
 def test_a_half_scored_job_submits_its_finished_order_then_releases(broker, sleeps):
@@ -302,10 +302,10 @@ def test_network_failures_are_retried_with_backoff_and_nothing_is_lost(broker, s
 
 def test_retry_after_is_honoured(broker, sleeps):
     broker.add_job("kev", pair(1))
-    broker.fail("/hello", times=1, status=429)
+    broker.fail("/hello", times=1, status=429, headers={"Retry-After": "5"})
     worker, _, _ = make_worker(broker, sleeps)
     assert worker.run() == run.EXIT_OK
-    assert sleeps == [1.0]
+    assert sleeps == [5.0]  # the broker's 5 s, not the 1 s first backoff
 
 
 def test_a_broker_that_stays_down_ends_the_session_and_logs_every_score(broker, sleeps, caplog):
@@ -336,13 +336,23 @@ def test_a_refused_result_is_reported_not_swallowed(broker, sleeps, caplog):
 def test_heartbeats_extend_the_lease_during_a_long_job(broker, sleeps):
     job = broker.add_job("kev", pair(1))
     fake = FakeJudges()
-    fake.on_score = lambda i: time.sleep(0.35)  # real time: the heartbeat thread runs on it
+
+    def slow(i):
+        # Real time, longer than the 1 s lease; then another worker's lease runs the reaper.
+        time.sleep(0.7)
+        with broker.lock:
+            broker._reap()
+
+    fake.on_score = slow
     worker, fake, _ = make_worker(broker, sleeps, fake=fake,
-                                  leases={"heartbeat_s": 0.05, "lease_s": 900})  # fmt: skip
+                                  leases={"heartbeat_s": 0.1, "lease_s": 1})  # fmt: skip
     assert worker.run() == run.EXIT_OK
+    # Without the heartbeats the lease would have expired mid-job and been reaped.
+    assert job.status == "done" and job.attempts == 0
     beats = broker.bodies("/heartbeat")
-    assert len(beats) >= 3
+    assert len(beats) >= 5
     assert all(b["lease_ids"] and b["session"] for b in beats)
+    assert all(b["job_ids"] == [job.job_id] for b in beats)
     assert any(b.get("progress", {}).get("job_id") == job.job_id for b in beats)
     assert all(isinstance(b["rss_bytes"], int) for b in beats)
 
@@ -365,10 +375,14 @@ def test_a_lease_lost_at_heartbeat_drops_that_job_and_goes_on(broker, sleeps):
 
     fake.on_score = first
     assert worker.run() == run.EXIT_OK
-    assert lost.job_id in worker.held.lost
-    assert lost.scores == {}  # its finished order was dropped, not posted
-    assert len(fake.scored) == 3  # the lost job's second order was never scored
+    first_lease = broker.bodies("/lease") and worker.held.lost
+    assert any(j == lost.job_id for _, j in first_lease)
+    # Its finished order was dropped, not posted, and its second order never scored under
+    # the lost lease. The broker re-queued it, so this worker leased it again later in the
+    # session (a new lease) and scored it then: being lost once does not taint the job.
+    assert len(fake.scored) == 1 + 2 + 2
     assert set(kept.scores) == {"ab", "ba"}
+    assert lost.status == "done" and lost.attempts == 1
 
 
 def test_a_result_refused_as_lease_lost_is_logged(broker, sleeps, caplog):
@@ -378,7 +392,8 @@ def test_a_result_refused_as_lease_lost_is_logged(broker, sleeps, caplog):
     with caplog.at_level(logging.WARNING):
         assert worker.run() == run.EXIT_OK
     assert any("lease lost" in r.getMessage() for r in caplog.records)
-    assert job.scores == {}
+    # Re-queued by the broker, leased again and scored in full.
+    assert job.status == "done" and job.attempts == 1
 
 
 # --- versions, integrity, failures ---------------------------------------------------------
@@ -465,6 +480,9 @@ def test_a_model_that_keeps_failing_stops_the_session(broker, sleeps):
     assert worker.run() == run.EXIT_ERROR
     failed = [j for j in broker.jobs.values() if j.attempts]
     assert len(failed) == run.MAX_CONSECUTIVE_ERRORS and all(j.attempts == 1 for j in failed)
+    # The two jobs never started went back with the lease, gracefully: no attempt, not held.
+    rest = [j for j in broker.jobs.values() if not j.attempts]
+    assert len(rest) == 2 and all(j.status == "queued" for j in rest)
 
 
 def test_a_model_that_will_not_load_hands_its_lease_back(broker, sleeps):
@@ -473,8 +491,8 @@ def test_a_model_that_will_not_load_hands_its_lease_back(broker, sleeps):
     fake.fail_load = judges.LoadError("kev: loaded snapshot 'abc', pinned '6cfc...'")
     worker, _, _ = make_worker(broker, sleeps, fake=fake)
     assert worker.run() == run.EXIT_CONFIG
-    assert job.status == "queued" and job.attempts == 1
-    assert "LoadError" in job.last_error
+    # The worker's fault, not the job's: handed back with no attempt counted.
+    assert job.status == "queued" and job.attempts == 0
 
 
 def test_a_wrong_token_exits(broker, sleeps):
@@ -506,3 +524,123 @@ def test_two_models_are_drained_one_after_the_other(broker, sleeps):
     assert fake.loads == ["kev", "pplx"]
     assert fake.unloads == ["kev", "pplx"]  # kev freed before pplx was loaded
     assert k.status == "done" and p.status == "done"
+
+
+# --- review regressions ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("timezone", [None, "UTC", "Etc/UTC", "Africa/Cairo"])
+def test_a_windowed_schedule_runs_in_any_zone(broker, sleeps, timezone):
+    # A fixed-offset zone (UTC, or the machine's when none is set) once crashed the first
+    # window check: an aware time compared with the naive window bounds.
+    broker.add_job("kev", pair(1))
+    schedule = {"windows": ["00:00-23:59"]}
+    if timezone:
+        schedule["timezone"] = timezone
+    cfg = parse(config(broker.url, schedule=schedule))
+    tz = cfg.schedule.timezone
+    start = datetime(2026, 11, 17, 12, 0, tzinfo=tz) if tz else datetime(2026, 11, 17, 12, 0)
+    clock = FakeClock(start if tz else start.astimezone())
+    worker, fake, _ = make_worker(broker, sleeps, clock=clock, schedule=schedule)
+    assert worker.run() == run.EXIT_OK
+    assert len(fake.scored) == 2
+
+
+def test_seconds_left_count_real_time_across_a_dst_change(broker, sleeps):
+    # Berlin's clocks went back an hour at 03:00 on 2026-10-25: 01:30 to 05:00 that night
+    # is four and a half real hours, not three and a half.
+    tz = ZoneInfo("Europe/Berlin")
+    clock = FakeClock(datetime(2026, 10, 25, 1, 30, tzinfo=tz))
+    worker, _, _ = make_worker(broker, sleeps, clock=clock,
+                               schedule={"windows": ["01:00-05:00"], "timezone": "Europe/Berlin"})  # fmt: skip
+    assert worker._seconds_left() == 4.5 * 3600
+
+
+def test_undelivered_scores_are_logged_when_a_fatal_ends_the_session(broker, sleeps, caplog):
+    for n in range(4):
+        broker.add_job("kev", pair(n))
+    broker.fail("/results", times=1, status=422, body={"error": "invalid", "detail": "x"})
+    worker, fake, _ = make_worker(broker, sleeps, leases={"max_jobs": 4})
+
+    def boom(i):
+        if i >= 2:  # the first job scores (and is refused), then the model breaks
+            raise RuntimeError("broken")
+
+    fake.on_score = boom
+    with caplog.at_level(logging.ERROR):
+        assert worker.run() == run.EXIT_ERROR
+    assert sum("UNDELIVERED" in r.getMessage() for r in caplog.records) == 2
+
+
+def test_a_stop_cuts_the_brokers_retries_short(broker, sleeps):
+    job = broker.add_job("kev", pair(1))
+    broker.fail("/results", times=1000, status=503)
+    worker, fake, _ = make_worker(broker, sleeps, retry_max_s=900)
+    fake.on_score = lambda i: i == 1 and worker.request_stop("SIGTERM")
+    assert worker.run() == run.EXIT_UNREACHABLE
+    assert sum(sleeps) <= 30  # not the 900 s budget: a docker stop would kill it first
+    assert job.scores == {}
+
+
+def test_heartbeat_names_its_jobs_and_drops_a_lost_lease(broker, sleeps):
+    a, b = broker.add_job("kev", pair(1)), broker.add_job("kev", pair(2))
+    worker, fake, _ = make_worker(broker, sleeps)
+    seen = {}
+
+    def first(i):
+        if i == 0:
+            lease_id = a.lease_id
+            broker.lose_lease(a.job_id)
+            broker.lose_lease(b.job_id)  # the whole lease is gone
+            worker.heartbeat_once()
+            seen["lost"] = set(worker.held.lost)
+            seen["lease"] = lease_id
+
+    fake.on_score = first
+    assert worker.run() == run.EXIT_OK
+    assert seen["lost"] == {(seen["lease"], a.job_id), (seen["lease"], b.job_id)}
+    beat = broker.bodies("/heartbeat")[0]
+    assert beat["job_ids"] == [a.job_id, b.job_id]
+    assert a.status == "done" and b.status == "done"  # leased again later and scored
+
+
+def test_the_brokers_lease_length_bounds_the_heartbeat(broker, sleeps):
+    worker, _, _ = make_worker(broker, sleeps, leases={"lease_s": 90, "heartbeat_s": 45})
+    worker._hello()
+    assert worker.heartbeat_s == 30  # the broker answers min(60, lease_s / 3)
+
+
+def test_a_job_with_no_requests_is_handed_back(broker, sleeps):
+    job = broker.add_job("kev", {})
+    worker, fake, _ = make_worker(broker, sleeps)
+    worker.session = "s"
+    worker.judge = fake("kev", judges.Runtime("cpu", "fp32", None, False, None))
+    assert worker._process_job(worker.judge, "kev", "lease", {"job_id": job.job_id, "requests": []})
+    body = broker.bodies("/release")[0]
+    assert body["job_ids"] == [job.job_id] and body["reason"] == "error"
+
+
+def test_a_redirect_is_refused_not_followed(sleeps):
+    import http.server
+
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(307)
+            self.send_header("Location", "http://127.0.0.1:9/elsewhere")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
+                     daemon=True).start()  # fmt: skip
+    try:
+        client = Broker(f"http://127.0.0.1:{server.server_port}/ai/v1", TOKEN, sleep=sleeps.append)
+        with pytest.raises(BrokerError) as e:
+            client.hello({})
+        assert e.value.status == 307
+    finally:
+        server.shutdown()
+        server.server_close()

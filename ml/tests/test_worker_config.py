@@ -309,3 +309,29 @@ def test_every_documented_example_parses(name, body):
         assert cfg.device == "gpu"
     if name.startswith("home-"):
         assert (cfg.device, cfg.threads, cfg.mmap) == ("cpu", 6, False)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        base(worker={"ca_file": ""}),
+        base(compute={"weights_cache": " "}),
+        base(schedule={"timezone": ""}),
+    ],
+)
+def test_an_empty_string_is_refused_not_dropped(data):
+    refused(data, "is empty")
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Etc/UTC", "Africa/Cairo"])
+def test_windows_work_in_fixed_offset_zones(zone):
+    tz = ZoneInfo(zone)
+    s = Schedule((Window.parse("22:00-02:00"),), tz)
+    now = datetime(2026, 11, 17, 23, 0, tzinfo=tz)
+    assert s.is_open(now) and s.closes_at(now) == datetime(2026, 11, 18, 2, 0, tzinfo=tz)
+
+
+def test_windows_work_without_a_zone():
+    s = Schedule((Window.parse("00:00-23:59"),))
+    now = s.now()  # the machine's local time, a fixed offset
+    assert s.is_open(now) == (now.time() < time(23, 59))

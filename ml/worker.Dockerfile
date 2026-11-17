@@ -21,9 +21,12 @@
 ARG BASE=makhzan-ml/kev-cpu-lean:1.0
 FROM ${BASE}
 
-# The Kev serving code the base image was built from (kev/Dockerfile*: KEV_COMMIT); the worker
-# refuses to score if this disagrees with its pin. Not read by the pplx images.
-ARG KEV_COMMIT=6b719c3c3f367295f6ef336f4f751cf5ff970abc
+# The Kev serving code the base image was built from. The worker refuses to score if it
+# disagrees with its pin. No default on purpose: the base images keep KEV_COMMIT as a build ARG
+# only, so a default here would only repeat the pin and could never fail. Pass it only from a
+# base that records its own commit (an ENV or LABEL in ml/kev/Dockerfile*, not there yet);
+# unset, the worker logs the commit as unrecorded. Not read by the pplx images.
+ARG KEV_COMMIT=
 ENV MAKHZAN_KEV_COMMIT=${KEV_COMMIT} \
     PYTHONPATH=/opt/makhzan${PYTHONPATH:+:${PYTHONPATH}} \
     PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \

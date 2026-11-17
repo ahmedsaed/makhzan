@@ -1,16 +1,28 @@
 """A small in-process broker that follows docs/ai/broker-api.md, for tests and the parity check.
 
-It keeps jobs in memory and implements what a worker can observe: bearer auth (401),
-model keys per worker (403), version checks at hello and lease (`ok: false`, 409
-version), leases with lazy expiry and attempts, heartbeats that extend a lease or
-answer 409 lease_lost, idempotent results keyed on the request hash (422 on a hash it
-did not render for the job, or a score outside [0, 1]), and releases that count an
-attempt only for reason "error". It is not the broker: no database, no pipelines, no
-transitions; a job is done when each of its requests has a score.
+It keeps jobs in memory and implements what a worker can observe, as the phase 2 broker
+answers it (`app.broker.main` in apps/api):
 
-Faults for tests: `fail(path, times, status=None, body=None)` drops the connection
-(status None) or answers that status and body the next `times` calls to `path`; `lose_lease(job_id)` makes the
-next heartbeat or result for that job a 409 lease_lost.
+- bearer auth (401), model keys per worker (403), version checks at hello (`ok: false`)
+  and at lease (409 version);
+- hello answers `lease_s` from the worker's `config.lease_s` (default 900) and
+  `heartbeat_s = min(60, lease_s / 3)`;
+- leases sized by `seconds_left` minus a 60 s margin, with lazy expiry and attempts;
+- heartbeats that extend every live lease named and answer 409 lease_lost (with the lost
+  `job_ids` and `lease_ids`) when a named lease or job is no longer held;
+- results that are idempotent on the request hash (a retry after the job is done is a
+  200 counted duplicate), `job` "leased" until both orders are scored, then "done" with
+  `next`; 422 request_mismatch for the leaseholder only, 422 invalid for a bad body;
+- releases that need the lease and at least one job, counting an attempt only for
+  reason "error";
+- sessions that end "released" (a graceful release) or "empty" (an empty lease).
+
+It is not the broker: no database, no pipelines, no transitions (`next` is always
+`{"action": "record"}`).
+
+Faults for tests: `fail(path, times, status=None, body=None, headers=None)` drops the
+connection (status None) or answers that status, body and headers the next `times` calls
+to `path`; `lose_lease(job_id)` makes the job no longer held by its worker.
 
 Binds 127.0.0.1 only, plain HTTP: the worker accepts http:// for a loopback address
 and nothing else.
@@ -28,6 +40,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from makhzan_ml.worker.pins import PINS
+
+BODY_LIMIT = 256 * 1024
 
 
 def canonical_sha256(payload: object) -> str:
@@ -54,20 +68,22 @@ class FakeJob:
         return [r for r in self.requests if r["order"] not in self.scores]
 
 
+def _invalid(detail: str) -> tuple[int, dict]:
+    return 422, {"error": "invalid", "detail": detail}
+
+
 class FakeBroker:
     def __init__(
         self,
         tokens: dict[str, tuple[str, list[str]]],
         *,
         versions: dict[str, str] | None = None,
-        lease_s: int = 900,
-        heartbeat_s: int = 60,
         max_attempts: int = 3,
         clock=time.monotonic,
     ):
         self.tokens = tokens  # token -> (worker name, model keys)
         self.versions = versions or {k: p.model_version for k, p in PINS.items()}
-        self.lease_s, self.heartbeat_s, self.max_attempts = lease_s, heartbeat_s, max_attempts
+        self.max_attempts = max_attempts
         self.clock = clock
         self.jobs: dict[int, FakeJob] = {}
         self.calls: list[tuple[str, dict]] = []
@@ -75,7 +91,6 @@ class FakeBroker:
         self.lock = threading.RLock()
         self._ids = itertools.count(1)
         self._faults: dict[str, list] = {}
-        self._lost: set[int] = set()
         self._server: ThreadingHTTPServer | None = None
 
     # -- set-up ----------------------------------------------------------------------------
@@ -92,16 +107,23 @@ class FakeBroker:
             return job
 
     def fail(
-        self, path: str, times: int = 1, status: int | None = None, body: dict | None = None
+        self,
+        path: str,
+        times: int = 1,
+        status: int | None = None,
+        body: dict | None = None,
+        headers: dict | None = None,
     ) -> None:
         """The next `times` calls to `path` get no response (status None) or `status`."""
         with self.lock:
-            fault = None if status is None else (status, body or {"error": "injected"})
+            fault = None if status is None else (status, body or {"error": "injected"}, headers)
             self._faults.setdefault(path, []).extend([fault] * times)
 
     def lose_lease(self, job_id: int) -> None:
+        """The job's lease expired and moved on: re-queued, no longer the worker's."""
         with self.lock:
-            self._lost.add(job_id)
+            j = self.jobs[job_id]
+            self._requeue(j, count=True, error="lease expired")
 
     def paths(self) -> list[str]:
         return [p for p, _ in self.calls]
@@ -120,11 +142,13 @@ class FakeBroker:
             def log_message(self, *a):
                 pass
 
-            def _send(self, code: int, body: dict) -> None:
+            def _send(self, code: int, body: dict, headers: dict | None = None) -> None:
                 data = json.dumps(body).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -142,17 +166,16 @@ class FakeBroker:
                 if fault != "none":
                     return self._send(*fault)
                 auth = self.headers.get("Authorization", "")
-                who = (
-                    broker.tokens.get(auth.removeprefix("Bearer "))
-                    if auth.startswith("Bearer ")
-                    else None
-                )
+                token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else None
+                who = broker.tokens.get(token) if token else None
                 if who is None:
                     return self._send(401, {"error": "unauthorized"})
+                if length > BODY_LIMIT:
+                    return self._send(*_invalid("body too large"))
                 try:
                     body = json.loads(raw)
                 except ValueError:
-                    return self._send(422, {"error": "invalid", "detail": "not JSON"})
+                    return self._send(*_invalid("not JSON"))
                 with broker.lock:
                     broker.calls.append((path, body))
                     handler = {
@@ -162,9 +185,10 @@ class FakeBroker:
                         "/results": broker._results,
                         "/release": broker._release,
                     }.get(path)
-                    code, out = (
-                        (404, {"error": "not found"}) if handler is None else handler(who, body)
-                    )
+                    if handler is None:
+                        code, out = 404, {"error": "not found"}
+                    else:
+                        code, out = handler(who, body)
                 self._send(code, out)
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -192,12 +216,19 @@ class FakeBroker:
         return sum(len(j.unscored()) for j in self.jobs.values()
                    if j.model == model and j.status == "queued")  # fmt: skip
 
+    def _session(self, name: str, body: dict) -> dict | None:
+        s = self.sessions.get(body.get("session"))
+        return s if s is not None and s["worker"] == name else None
+
     def _hello(self, who, body):
         name, allowed = who
-        models = body.get("models") or {}
+        models = body.get("models")
+        if not isinstance(models, dict) or not models:
+            return _invalid("models")
         for key in models:
             if key not in allowed:
                 return 403, {"error": "model_not_allowed", "model": key}
+        lease_s = int((body.get("config") or {}).get("lease_s") or 900)
         session = uuid.uuid4().hex
         answer = {}
         for key, m in models.items():
@@ -207,9 +238,10 @@ class FakeBroker:
             )
             answer[key] = {"model_version": current, "ok": ok,
                            "queued_requests": self._queued_requests(key)}  # fmt: skip
-        self.sessions[session] = {"worker": name, "models": models, "ended": None}
-        return 200, {"session": session, "models": answer, "lease_s": self.lease_s,
-                     "heartbeat_s": self.heartbeat_s}  # fmt: skip
+        self.sessions[session] = {"worker": name, "models": models, "lease_s": lease_s,
+                                  "end_reason": None}  # fmt: skip
+        return 200, {"session": session, "models": answer, "lease_s": lease_s,
+                     "heartbeat_s": min(60, lease_s / 3)}  # fmt: skip
 
     def _reap(self) -> None:
         now = self.clock()
@@ -230,7 +262,7 @@ class FakeBroker:
         model = body.get("model")
         if model not in allowed:
             return 403, {"error": "model_not_allowed", "model": model}
-        session = self.sessions.get(body.get("session"))
+        session = self._session(name, body)
         if (
             body.get("model_version") != self.versions.get(model)
             or session is None
@@ -239,8 +271,7 @@ class FakeBroker:
             return 409, {"error": "version", "model": model, "current": self.versions.get(model)}
         self._reap()
         n = int(body.get("max_jobs") or 1)
-        spr = float(body.get("seconds_per_request") or 1)
-        left = float(body.get("seconds_left") or 0)
+        spr, left = body.get("seconds_per_request"), body.get("seconds_left")
         lease_id = uuid.uuid4().hex
         picked, budget = [], 0.0
         for j in sorted(self.jobs.values(), key=lambda j: (-j.priority, j.job_id)):
@@ -252,52 +283,71 @@ class FakeBroker:
             if not todo:  # a job never carries zero orders
                 j.status = "done"
                 continue
-            if picked and budget + len(todo) * spr > left:
-                break
-            budget += len(todo) * spr
+            cost = len(todo) * float(spr) if spr and left is not None else 0.0
+            if cost and budget + cost > float(left) - 60:
+                continue  # does not fit: stays queued
+            budget += cost
             j.status, j.lease_id, j.leased_by = "leased", lease_id, name
-            j.expires = self.clock() + self.lease_s
+            j.expires = self.clock() + session["lease_s"]
             picked.append(j)
         if not picked:
+            session["end_reason"] = "empty"
             return 200, {"lease_id": None, "jobs": []}
+        session["end_reason"] = None  # a lease with jobs reopens the session
         jobs = [{"job_id": j.job_id, "prompt_version": j.prompt_version,
                  "requests": [dict(r) for r in j.unscored()]} for j in picked]  # fmt: skip
         return 200, {"lease_id": lease_id, "expires_at": "fake", "jobs": jobs}
 
-    def _held(self, name, lease_id, job_id) -> FakeJob | None:
-        j = self.jobs.get(job_id)
-        if j is None or j.lease_id != lease_id or j.leased_by != name or job_id in self._lost:
-            return None
-        return j
+    def _holds(self, name: str, lease_id, job: FakeJob | None) -> bool:
+        return job is not None and job.lease_id == lease_id and job.leased_by == name
 
     def _heartbeat(self, who, body):
         name, _ = who
-        lease_ids = set(body.get("lease_ids") or [])
-        lost = []
-        for j in self.jobs.values():
-            if j.job_id in self._lost and j.lease_id in lease_ids:
-                lost.append(j.job_id)
-            elif j.lease_id in lease_ids and j.leased_by == name and j.status == "leased":
-                j.expires = self.clock() + self.lease_s
-        if lost:
-            return 409, {"error": "lease_lost", "job_ids": sorted(lost)}
-        return 200, {"expires_at": "fake"}
+        session = self._session(name, body)
+        if session is None:
+            return _invalid("session")
+        lease_ids = list(body.get("lease_ids") or [])
+        job_ids = list(body.get("job_ids") or [])
+        now = self.clock()
+        live = [j for j in self.jobs.values()
+                if j.lease_id in lease_ids and j.leased_by == name and j.status == "leased"]  # fmt: skip
+        for j in live:
+            j.expires = now + session["lease_s"]
+        lost_leases = sorted(lid for lid in lease_ids if not any(j.lease_id == lid for j in live))
+        lost_jobs = sorted(i for i in job_ids if not any(j.job_id == i for j in live))
+        expires = "fake" if live else None
+        if lost_leases or lost_jobs:
+            return 409, {"error": "lease_lost", "job_ids": lost_jobs, "lease_ids": lost_leases,
+                         "expires_at": expires}  # fmt: skip
+        return 200, {"expires_at": expires}
 
     def _results(self, who, body):
         name, allowed = who
-        j = self._held(name, body.get("lease_id"), body.get("job_id"))
-        if j is None:
-            return 409, {"error": "lease_lost", "job_ids": [body.get("job_id")]}
-        if j.model not in allowed:
-            return 403, {"error": "model_not_allowed", "model": j.model}
-        rendered = {r["order"]: r["request_sha256"] for r in j.requests}
-        scores = body.get("scores") or []
+        scores = body.get("scores")
+        if not isinstance(scores, list) or not 1 <= len(scores) <= 2:
+            return _invalid("scores")
         for s in scores:
-            if rendered.get(s.get("order")) != s.get("request_sha256"):
-                return 422, {"error": "request_mismatch"}
             p = s.get("p")
-            if not isinstance(p, (int, float)) or not 0 <= p <= 1:
-                return 422, {"error": "invalid", "detail": "p outside [0, 1]"}
+            if s.get("order") not in ("ab", "ba") or not isinstance(p, (int, float)):
+                return _invalid("score")
+            if not 0 <= p <= 1:
+                return _invalid("p outside [0, 1]")
+        j = self.jobs.get(body.get("job_id"))
+        if j is not None and j.model not in allowed:
+            return 403, {"error": "model_not_allowed", "model": j.model}
+        rendered = {r["order"]: r["request_sha256"] for r in j.requests} if j else {}
+        posted = {s["order"]: s.get("request_sha256") for s in scores}
+        if not self._holds(name, body.get("lease_id"), j):
+            # A retry after the job is done is a duplicate, not a lost lease.
+            if (
+                j is not None
+                and j.status == "done"
+                and all(rendered.get(o) == h and o in j.scores for o, h in posted.items())
+            ):
+                return 200, {"accepted": 0, "duplicate": len(scores), "job": "done", "next": None}
+            return 409, {"error": "lease_lost", "job_ids": [body.get("job_id")]}
+        if any(rendered.get(o) != h for o, h in posted.items()):
+            return 422, {"error": "request_mismatch"}
         accepted = duplicate = 0
         for s in scores:
             if s["order"] in j.scores:
@@ -306,24 +356,30 @@ class FakeBroker:
                 j.scores[s["order"]] = {**s, "device": body.get("device"),
                                         "dtype": body.get("dtype"), "threads": body.get("threads")}  # fmt: skip
                 accepted += 1
-        if not j.unscored():
-            j.status = "done"
-            j.lease_id = j.leased_by = None
-        return 200, {"accepted": accepted, "duplicate": duplicate, "job": j.status}
+        if j.unscored():
+            return 200, {"accepted": accepted, "duplicate": duplicate, "job": "leased",
+                         "next": None}  # fmt: skip
+        j.status = "done"
+        j.lease_id = j.leased_by = None
+        return 200, {"accepted": accepted, "duplicate": duplicate, "job": "done",
+                     "next": {"action": "record"}}  # fmt: skip
 
     def _release(self, who, body):
         name, _ = who
-        session = self.sessions.get(body.get("session"))
-        if session is not None and body.get("reason") == "graceful" and not body.get("job_ids"):
-            session["ended"] = "graceful"
-            return 200, {"released": 0}
-        released = 0
-        for job_id in body.get("job_ids") or []:
-            j = self._held(name, body.get("lease_id"), job_id)
-            if j is None:
+        session = self._session(name, body)
+        job_ids = body.get("job_ids")
+        if session is None or not body.get("lease_id") or not isinstance(job_ids, list):
+            return _invalid("session, lease_id and job_ids are required")
+        if not job_ids:
+            return _invalid("job_ids: at least one")
+        if body.get("reason", "graceful") not in ("graceful", "error"):
+            return _invalid("reason")
+        for job_id in job_ids:
+            if not self._holds(name, body["lease_id"], self.jobs.get(job_id)):
                 return 409, {"error": "lease_lost", "job_ids": [job_id]}
-            self._requeue(j, count=body.get("reason") == "error", error=body.get("error"))
-            released += 1
-        if session is not None and body.get("reason") == "graceful":
-            session["ended"] = "graceful"
-        return 200, {"released": released}
+        for job_id in job_ids:
+            reason = body.get("reason", "graceful")
+            self._requeue(self.jobs[job_id], count=reason == "error", error=body.get("error"))
+        if body.get("reason", "graceful") == "graceful":
+            session["end_reason"] = "released"
+        return 200, {"released": len(job_ids)}
