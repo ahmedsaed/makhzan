@@ -404,6 +404,26 @@ export function comparisonText(comparison: Comparison): string {
 }
 
 /**
+ * With several offers, the price the primary button and the phone's bottom
+ * bar quote for `offer` (the picked one, or the primary): the comparison's
+ * lowest price when it is this offer's, else the offer's own price of one.
+ * None for an offer known to be out of stock — the button then reads "View at
+ * {shop}" — nor for one on request or unpriced. The one rule for both, so a
+ * phone never shows a price the desktop button withholds.
+ */
+export function quotedLead(
+  offer: Offer,
+  comparison: Comparison,
+  now: Date = new Date(),
+): PricedOffer | null {
+  if (isOutOfStock(offer)) return null;
+  const best = comparison.state !== "out_of_stock" ? comparison.best : null;
+  if (best?.offer.id === offer.id) return best;
+  const unit = unitPrice(offer, now);
+  return unit && { offer, ...unit };
+}
+
+/**
  * The notes that travel with a leading price wherever it appears (the button,
  * the bottom bar): its minimum with the total, the option it is, and whether
  * it ships from abroad. "min. 10 (EGP 1.50) · “Without headers” option".

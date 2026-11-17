@@ -10,6 +10,8 @@ from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
 from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.grouping import representative, representative_key
+from makhzan_schemas.matching import matched_by
 from makhzan_schemas.models import Listing, Product, ProductRedirect
 from makhzan_schemas.pricing import unit_price
 from sqlalchemy import func, or_, select, update
@@ -72,6 +74,36 @@ async def get_product(
     # the range itself stays, as on a withdrawn product.
     names_an_offer = product.min_price_listing_id in {o.id for o in offers}
 
+    # The offer the product's title came from, which the page picks on a plain
+    # load: the one the last rebuild chose, while it is still an offer. Else (a
+    # product not rebuilt since the column came, or that offer archived since)
+    # the same ranking over the offers there are (grouping.representative_key,
+    # never a second copy), and only among the offers sharing its top score
+    # does the one carrying the product's title win. The ranking has no
+    # tie-break and these come in another order than the rebuild's, so a tie
+    # could otherwise name a listing whose title is not the product's; the
+    # title never outranks the key (an in-stock offer beats the product-title
+    # one out of stock).
+    rep_id = product.representative_listing_id
+    if rep_id not in {o.id for o in offers}:
+        rep_id = None
+        if offers:
+            best = min(map(representative_key, offers))
+            top = [o for o in offers if representative_key(o) == best]
+            titled = [
+                o for o in top if (o.title_en, o.title_ar) == (product.title_en, product.title_ar)
+            ]
+            rep_id = representative(titled or top).id
+
+    # Which offers AI matching merged here: "rules" for all of them until AI
+    # matching exists (makhzan_schemas.matching says so, and is the one place
+    # to change). One call for every offer, so reading the AI decisions table
+    # later is one query, not one per offer.
+    how = matched_by(offers)
+    reads = [
+        OfferRead.model_validate(o).model_copy(update={"matched_by": how[o.id]}) for o in offers
+    ]
+
     return ProductRead(
         id=product.id,
         part_number=product.part_number,
@@ -96,7 +128,9 @@ async def get_product(
         category=product.category,
         status="delisted" if product.delisted_at is not None else "listed",
         delisted_at=product.delisted_at,
-        offers=[OfferRead.model_validate(o) for o in offers],
+        offers=reads,
+        ai_matched_count=sum(read.matched_by == "ai" for read in reads),
+        representative_offer_id=rep_id,
     )
 
 

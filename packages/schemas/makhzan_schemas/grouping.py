@@ -45,6 +45,7 @@ import hashlib
 import re
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -727,26 +728,59 @@ def _natural_order(listing: Listing) -> tuple[str, str]:
     return (listing.source, listing.external_id or str(listing.id))
 
 
-def _representative(items: list[Listing]) -> Listing:
-    """Pick the best listing to represent the product: has image + title, in stock, cheapest."""
+def representative_key(listing: Listing) -> tuple:
+    """How `representative` ranks a listing, lowest first: in stock, then has an
+    English title, then has a photo, then cheapest.
 
-    def score(listing: Listing):
-        return (
-            0 if listing.images else 1,
-            0 if listing.title_en else 1,
-            0 if listing.stock_signal == StockSignal.IN_STOCK else 1,
-            listing.price if listing.price is not None else Decimal("Infinity"),
-        )
+    Exposed so that anything which must agree with the ranking (the API's
+    fallback breaking a tie) reads this key rather than a second copy of it.
+    """
+    return (
+        0 if listing.stock_signal == StockSignal.IN_STOCK else 1,
+        0 if listing.title_en else 1,
+        0 if listing.images else 1,
+        listing.price if listing.price is not None else Decimal("Infinity"),
+    )
 
-    return min(items, key=score)
+
+def representative(items: Sequence[Listing]) -> Listing:
+    """Pick the best listing to represent the product (`representative_key`):
+    in stock, then has an English title, then has a photo, then cheapest.
+
+    The product's title, brand, category and domain are all copied from it, and
+    the product page's shop view picks it on a plain load
+    (`representative_listing_id`, and the API's fallback for a product not
+    rebuilt since that column came). The one place this ranking lives: nothing
+    else re-implements it. The product's photo is chosen by the same key among
+    the listings that have one (`_pictured`): the pick's own when it has one.
+
+    Owner decisions (November 2026). Stock first: with the photo first, an
+    out-of-stock listing that was the only one with a photo became the plain
+    load's pick, so the page's default buttons opened a shop that had none
+    while another had it in stock. Then the English title, ahead of the photo,
+    so a pictured listing titled only in Arabic does not name the product while
+    an English one is in stock. Stock still outranks the title: when the only
+    in-stock listing is titled only in Arabic, it names the product.
+
+    A min() with no tie-break: on a tied key the first in `items` wins, so the
+    result depends on their order.
+    """
+    return min(items, key=representative_key)
 
 
-def _pictured(rep: Listing, items: list[Listing]) -> Listing | None:
-    """The listing whose first photo is the product's: the representative's
-    when it has one, else the first listing in the group that does."""
-    if rep.images:
-        return rep
-    return next((i for i in items if i.images), None)
+def _pictured(items: list[Listing]) -> Listing | None:
+    """The listing whose first photo is the product's: of the listings that
+    have a photo, the best by the representative's ranking
+    (`representative_key`), so an in-stock shop's photo wins over an
+    out-of-stock one's. The representative's own when it has one (it ranks
+    first); null when no listing has a photo.
+
+    Owner decision (November 2026). With the English title ranked ahead of the
+    photo, the representative can be an in-stock English listing with no
+    photo; this used to fall back to the first pictured listing in group
+    order, even one out of stock.
+    """
+    return min((i for i in items if i.images), key=representative_key, default=None)
 
 
 def _group_listings(
@@ -1245,7 +1279,8 @@ async def rebuild_products(
             product.merged_at = None
         group_product[key] = product
 
-        rep = _representative(items)
+        rep = representative(items)
+        product.representative_listing_id = rep.id
         product.group_key = key
         product.part_number = items[0].part_number if key.startswith("mpn:") else None
         product.domain = rep.domain
@@ -1254,7 +1289,7 @@ async def rebuild_products(
         product.brand = rep.brand
         product.category_id = rep.category_id
         product.supplier_name = rep.supplier.name if rep.supplier else None
-        pictured = _pictured(rep, items)
+        pictured = _pictured(items)
         product.image = pictured.images[0] if pictured else None
         # The photo's own shop, read off the listing it was taken from: the
         # badge on it names whose photo it is, which is not always the shop
@@ -1598,6 +1633,7 @@ def _withdraw(product: Product) -> None:
     product.supplier_count = 0
     product.in_stock = False
     product.min_price_listing_id = None
+    product.representative_listing_id = None
     product.min_price_supplier_id = None
     product.min_price_option = None
     product.min_price_quantity = None

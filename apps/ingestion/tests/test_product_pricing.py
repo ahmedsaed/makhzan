@@ -388,6 +388,7 @@ async def test_a_withdrawn_product_keeps_its_range_but_names_no_offer():
     await _listing("giza", None, attributes=ON_REQUEST)
     before = await _rebuilt()
     assert before.min_price_listing_id is not None and before.on_request_count == 1
+    assert before.representative_listing_id is not None
 
     async with SessionLocal() as session:
         await session.execute(update(Listing).values(status=ListingStatus.ARCHIVED))
@@ -397,6 +398,8 @@ async def test_a_withdrawn_product_keeps_its_range_but_names_no_offer():
     assert product.delisted_at is not None
     assert product.min_price == 360  # the last range seen
     assert product.min_price_listing_id is None
+    # No offer is left to pick on a plain load; the title it gave stays.
+    assert product.representative_listing_id is None
     assert product.min_price_supplier_id is None
     assert product.min_price_option is None
     assert product.min_price_quantity is None
