@@ -314,9 +314,15 @@ def _rulings(
     if ai:
         inside = sorted(
             (p for p in ai.pairs if p[0] in ids and p[1] in ids),
-            # Strongest decision first; the pair's own listing ids break a
-            # tie, never the decision id, which a re-score renews.
-            key=lambda p: (tuple(-x for x in ai.rank.get(p, ())), str(p[0]), str(p[1])),
+            # Strongest decision first, a pair with no known strength last;
+            # the pair's own listing ids break a tie, never the decision id,
+            # which a re-score renews.
+            key=lambda p: (
+                p not in ai.rank,
+                tuple(-x for x in ai.rank.get(p, ())),
+                str(p[0]),
+                str(p[1]),
+            ),
         )
         if inside:
             no = frozenset(p for p in ai.no if p[0] in ids and p[1] in ids)

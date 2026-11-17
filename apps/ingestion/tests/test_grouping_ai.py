@@ -522,3 +522,13 @@ async def test_a_live_regroup_is_a_fixed_point_with_ai_members_on_both_sides():
     ra, re_, rl = await _rows(a, early, late)
     assert ra.product_id == re_.product_id == rl.product_id
     assert (re_.matched_via, rl.matched_via) == ("ai", "ai")
+
+
+def test_a_pair_with_no_known_strength_sorts_last():
+    x = _mem("Electrolytic capacitor", "shop-x")
+    m = _mem("Cap 10uF radial", "shop-m")
+    n = _mem("Cap 22uF radial", "shop-n")
+    xm, xn = pair(x.id, m.id), pair(x.id, n.id)
+    # x-m has no rank: it must not outrank x-n, however weak x-n is.
+    ai = AiSame(frozenset({xm, xn}), {xm: 1, xn: 2}, frozenset(), {xn: (0.01,)})
+    assert _together(_group_listings([x, m, n], None, None, ai), x, n)

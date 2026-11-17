@@ -78,7 +78,8 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     - no person has ruled on the pair (any standing override);
     - it is each listing's best "same" match in the other's shop (P14): for a
       listing and a shop, only the strongest decision counts (its stages'
-      lower scores, last stage first, then the newest id; `pipelines.rank`),
+      lower scores, last stage first, `pipelines.rank`; an exact tie goes to
+      the pair whose listing ids sort first, never to the decision id),
       and the pair must be the best on **both** sides (owner decision under
       P14, 2026-11-17: option (a), mutual best). A decision of a pipeline no
       longer in the registry is skipped, and logged.
@@ -122,28 +123,37 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
         if pipeline_name not in PIPELINES:
             unknown.add(pipeline_name)
             continue
-        strength = (*rank(stage_mins(scores), pipeline_name), decision_id)
-        rows.append((decision_id, a, b, strength, shop_a, shop_b))
+        rows.append((decision_id, a, b, rank(stage_mins(scores), pipeline_name), shop_a, shop_b))
 
     if unknown:
         log.warning("AI decisions of unregistered pipelines skipped: %s", sorted(unknown))
 
     # P14: each listing's best match per other shop; a pair counts only when it
-    # is the best on both sides.
+    # is the best on both sides. Strongest first; an exact tie goes to the
+    # pair whose listing ids sort first (as in the regroup's AI phase), never
+    # to the decision id, which a re-score renews.
+    def order(strength: tuple, a: uuid.UUID, b: uuid.UUID) -> tuple:
+        return (tuple(-x for x in strength), str(a), str(b))
+
     best: dict[tuple[uuid.UUID, uuid.UUID], tuple] = {}
     for _, a, b, strength, shop_a, shop_b in rows:
         for key in ((a, shop_b), (b, shop_a)):
-            if key not in best or strength > best[key]:
-                best[key] = strength
+            mine = order(strength, a, b)
+            if key not in best or mine < best[key]:
+                best[key] = mine
     pairs: set[Pair] = set()
     ids: dict[Pair, int] = {}
     ranks: dict[Pair, tuple[float, ...]] = {}
     for decision_id, a, b, strength, shop_a, shop_b in rows:
-        if best[(a, shop_b)] == strength and best[(b, shop_a)] == strength:
+        mine = order(strength, a, b)
+        if best[(a, shop_b)] == mine and best[(b, shop_a)] == mine:
             key = pair(a, b)
+            # One pair decided by two pipelines: the stronger decision stands.
+            if key in ranks and order(ranks[key], a, b) <= mine:
+                continue
             pairs.add(key)
             ids[key] = decision_id
-            ranks[key] = strength[:-1]
+            ranks[key] = strength
 
     # Constants from code, never input: the jsonpath is written out in full.
     below = literal_column(

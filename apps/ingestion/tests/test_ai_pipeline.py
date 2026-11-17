@@ -283,3 +283,17 @@ async def test_a_decision_of_an_unregistered_pipeline_is_skipped_not_a_crash(cap
     got = await _load()
     assert got.pairs == {pair(c, d)}
     assert "retired-pipeline" in caplog.text
+
+
+@pytest.mark.parametrize("newer_first", [False, True])
+async def test_an_exact_tie_goes_to_the_pair_whose_ids_sort_first(newer_first):
+    shop_a, shop_b = await _supplier("shop-a"), await _supplier("shop-b")
+    x = await _listing(shop_a, "x")
+    b1, b2 = await _listing(shop_b, "b1"), await _listing(shop_b, "b2")
+    first, second = sorted([pair(x, b1), pair(x, b2)], key=lambda p: (str(p[0]), str(p[1])))
+    # The same scores on both: whichever decision is newer, the pair whose
+    # listing ids sort first wins, never the newest decision id.
+    for p in [second, first] if newer_first else [first, second]:
+        await _decision(*p)
+    got = await _load()
+    assert got.pairs == {first}
