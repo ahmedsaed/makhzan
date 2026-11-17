@@ -148,18 +148,25 @@ the worker exits within:
 
 | Part | At most |
 |---|---|
-| the request in flight | 86 to 104 s on the home server's CPU, under 1 s on the GPU |
-| retries, all calls together (`STOP_GRACE_S`) | 60 s |
-| one last attempt each for the results, the lease release and the session release (`STOP_TIMEOUT_S`) | 3 × 10 s |
+| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU |
+| or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU |
+| or, on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
+| retries (`STOP_GRACE_S`) | only within 60 s of the stop, so they overlap what is in flight |
+| one last attempt each for the calls still due: results, the lease release, the session release (`STOP_TIMEOUT_S`) | 10 s each, at most 3 × 10 s |
 | joining the heartbeat thread | 10 s |
-| or, instead of a request: a model load in flight at the stop (it cannot be interrupted) | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU |
-| on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
 
-That is the request plus about 100 s: 204 s for the slowest measured CPU request. A load in
-flight is followed by one call only (the lease's release, no results to post): about 150 s,
-plus at most 60 s of retries and two 10 s steps, 230 s. Anything still undelivered is logged
-before the process exits. Set `--stop-timeout` above the bound: 240 s on the home server's
-CPU, 120 s on the GPU.
+The 60 s for retries starts at the stop, not after what is in flight. So the bound is the
+longer of the two (in flight, or 60 s), plus one 10 s attempt per call still due, plus 10 s
+for the heartbeat join:
+
+- the slowest measured CPU request: 104 s, then results, the lease release and the session
+  release, 3 × 10 s, then the join: about 144 s;
+- a CPU model load: about 150 s, then only the lease's release (no results to post; that
+  release ends the session, so no session release follows), then the join: about 170 s;
+- the GPU: the 60 s of retries outlast any request, then 3 × 10 s and the join: about 100 s.
+
+Anything still undelivered is logged before the process exits. Set `--stop-timeout` above
+the bound: 240 s on the home server's CPU, 120 s on the GPU.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its job,
 order, request hash and score (never the payload), the moment it is known not to have
@@ -427,8 +434,10 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   "$IMAGE"
 ```
 
-- `--stop-timeout 240` covers the bound under "A stop sets one deadline": one CPU request
-  (86 to 104 s) plus about 100 s for delivering, releasing and ending the session.
+- `--stop-timeout 240` covers the bound under "A stop sets one deadline": about 144 s for
+  the slowest CPU request in flight, about 170 s for a model load in flight (the 60 s of
+  retries runs out during the load, leaving one 10 s attempt for the lease's release, plus
+  the 10 s heartbeat join).
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
 
@@ -485,7 +494,8 @@ drains the queue. Only one 4B model fits on the 12 GB card, so run Kev first, th
 
    `<ml cache>` is the main checkout's `ml/.cache`. The Triton cache must be writable;
    without it, the first request spends about 60 s compiling Kev's fused kernels.
-   `--stop-timeout 120` covers the stop bound: a GPU request (under 1 s) plus about 100 s.
+   `--stop-timeout 120` covers the stop bound on the GPU, about 100 s: the 60 s of retries
+   outlasts any GPU request, then 3 × 10 s of last attempts and the 10 s heartbeat join.
 3. When it has exited, start `desk-pplx` the same way. Each Kev pass queues its pplx stage
    at the broker, so pplx work appears as Kev drains.
 4. `docker stop makhzan-ai-desk-kev` stops it gracefully at any time. Its leased jobs go back
@@ -636,7 +646,10 @@ no model. CI runs it with the ingestion suite.
 - **One model per worker.** Each image holds one model's code, so a worker names one key;
   the start-up check refuses any other. The code still unloads one model before loading
   another, for an image that someday holds both. Freeing Kev's memory on unload is coded (the
-  atexit hook that held it is removed) but has not been measured with real models.
+  atexit hook that held it is removed) but has not been measured with real models. In a
+  multi-key session the broker records only the last key's answer as the session's end
+  ("none_fit" or "empty"), so its `end_reason` would depend on the order of the keys. That
+  does not matter today, with one key per image.
 - **No systemd units or network rules are shipped**: only the examples above. Setting them up
   on the home server is a separate, supervised step.
 - **No registry or image digests.** The images are local builds.
