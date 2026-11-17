@@ -13,7 +13,7 @@
 #   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
 #   ./makhzan reports [list|show ID|accept ID..|reject ID..]  # review "Report a problem"
 #   ./makhzan overrides [list|add A B --kind never|must --note ..|remove ID..]  # grouping rulings
-#   ./makhzan ai [status|worker add|list|revoke|admin-token|mode|redecide|revoke|backlog|jobs]
+#   ./makhzan ai [status|worker add|list|revoke|admin-token|mode|redecide|revoke|backlog|jobs|flags]
 #                            # AI matching (worker/ai.py, docs/ai/broker-api.md)
 #
 # Run it on the server, or from a laptop: without a .env.prod here it re-runs

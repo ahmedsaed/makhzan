@@ -12,6 +12,8 @@
     python -m worker.ai candidates [--mutual]      # the daily producers, now
     python -m worker.ai jobs list [--dead] [--limit N]
     python -m worker.ai jobs retry ID [ID ...]
+    python -m worker.ai flags list [--all]
+    python -m worker.ai flags dismiss ID [ID ...] --note "why" [--by NAME]
 
 `./makhzan ai ...` runs this in the production worker (for `admin-token` it
 also writes the hash into .env.prod and recreates the broker), and `make ai
@@ -26,6 +28,9 @@ before going back to `off`, which undoes every AI merge at the next regroup.
 policy (P7) and changes nothing: only `--dry-run` exists. `revoke` withdraws
 one decision; the next regroup undoes what it joined, and the triggers do not
 offer that pair again (to rule on it for good, use `./makhzan overrides`).
+`flags dismiss` closes a flag with a note and always sets `resolved_at`,
+which a `nothing_fits` flag's count starts from; a flag closed by hand in
+SQL must set it too, or old sessions reopen it at once.
 """
 
 from __future__ import annotations
@@ -45,7 +50,7 @@ from makhzan_schemas.ai.pipelines import DECIDE, PIPELINES, decide
 from makhzan_schemas.ai.policy import ACTIVE, MODELS, POLICIES
 from makhzan_schemas.ai.status import collect, format_text
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.models import AiDecision, AiJob, AiWorker
+from makhzan_schemas.models import AiDecision, AiFlag, AiJob, AiWorker
 from sqlalchemy import func, select
 
 from worker.reports import printable, who
@@ -243,6 +248,44 @@ async def _jobs_retry(ids: Sequence[int]) -> int:
     return 1 if failed else 0
 
 
+async def _flags_list(everything: bool) -> int:
+    async with SessionLocal() as session:
+        query = select(AiFlag).order_by(AiFlag.id.desc()).limit(200)
+        if not everything:
+            query = query.where(AiFlag.status == "open")
+        rows = list(await session.scalars(query))
+    if not rows:
+        print("No flags.")
+    for f in rows:
+        about = f.subject or (f"{f.listing_a} / {f.listing_b}" if f.listing_a else "")
+        line = f"#{f.id} {f.kind} {f.status} {about} {json.dumps(f.detail, default=str)}"
+        if f.note:
+            line += f"\n    note: {f.note}"
+        print(printable(line))
+    return 0
+
+
+async def _flags_dismiss(ids: Sequence[int], note: str, by: str) -> int:
+    missing = 0
+    async with SessionLocal() as session:
+        now = await session.scalar(select(func.now()))
+        for flag_id in ids:
+            flag = await session.get(AiFlag, flag_id, with_for_update=True)
+            if flag is None or flag.status != "open":
+                print(f"#{flag_id}: no open flag.", file=sys.stderr)
+                missing += 1
+                continue
+            flag.status, flag.resolved_at, flag.resolved_by, flag.note = (
+                "dismissed",
+                now,
+                by,
+                note,
+            )
+            print(f"#{flag_id}: dismissed by {by}.")
+        await session.commit()
+    return 1 if missing else 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ai", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -270,6 +313,14 @@ def _parser() -> argparse.ArgumentParser:
     backlog.add_argument("--mutual", action="store_true", help="both directions (always so here)")
     cands = sub.add_parser("candidates", help="run the daily producers now")
     cands.add_argument("--mutual", action="store_true", help="also listings whose top K changed")
+    flags = sub.add_parser("flags", help="flags for a person: list, dismiss")
+    fsub = flags.add_subparsers(dest="action", required=True)
+    flist = fsub.add_parser("list")
+    flist.add_argument("--all", action="store_true", help="closed flags too")
+    dismiss = fsub.add_parser("dismiss", help="close flags with a note")
+    dismiss.add_argument("ids", type=lambda v: int(v.strip().removeprefix("#")), nargs="+")
+    dismiss.add_argument("--note", required=True, help="why: kept with the flag")
+    dismiss.add_argument("--by", help="who is dismissing (default: login)")
     jobs = sub.add_parser("jobs", help="the job queue")
     jsub = jobs.add_subparsers(dest="action", required=True)
     jlist = jsub.add_parser("list")
@@ -309,6 +360,12 @@ async def run(argv: Sequence[str] | None = None) -> int:
             return await _backlog(True)
         case "candidates":
             return await _candidates(args.mutual)
+        case "flags" if args.action == "list":
+            return await _flags_list(args.all)
+        case "flags":
+            if not args.note.strip():
+                parser.error("--note must say why")
+            return await _flags_dismiss(args.ids, args.note, who(args.by))
         case "jobs" if args.action == "list":
             return await _jobs_list(args.dead, args.limit)
         case "jobs":

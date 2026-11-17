@@ -59,7 +59,9 @@ HEARTBEAT_S = 60
 #: `end_reason`: nothing queued for the model, or work queued but the first
 #: job does not fit the time the worker said it has.
 EMPTY, NONE_FIT = "empty", "none_fit"
-#: Sessions ending "none_fit" in a week before a `nothing_fits` flag opens.
+#: Sessions of one worker and model that never got a lease and ended
+#: "none_fit", in a week and since that subject's last dismissed or actioned
+#: flag, before a `nothing_fits` flag opens.
 NONE_FIT_FLAG_AFTER = 3
 #: Kept free at the end of a worker's `seconds_left` when sizing a lease.
 LEASE_MARGIN_S = 60
@@ -240,6 +242,10 @@ async def hello(session: AsyncSession, worker: AiWorker, body: dict, now: dateti
     """Start a session (§3.1): which of the worker's models are at the
     registry's version, and whether there is work for them."""
     reported = body.get("models") or {}
+    if len(reported) != 1:
+        # One model per session: "never leased" and `end_model` are then per
+        # model by construction. A worker serving two keys opens two sessions.
+        raise BrokerError(422, {"error": "invalid", "detail": "a hello names exactly one model"})
     allowed = set(worker.models)
     for key in reported:
         if key not in allowed or key not in MODELS:
@@ -502,14 +508,14 @@ def _lease_answer(lease_id: uuid.UUID, expires: datetime, taken: list[_Ready]) -
 
 
 async def _replay(
-    session: AsyncSession, worker: AiWorker, row: AiSession, model: str, now: datetime
+    session: AsyncSession, worker: AiWorker, row: AiSession, now: datetime
 ) -> dict | None:
     """A retried /lease (same `lease_request_id`, the session row locked):
     the jobs of the lease it got, still held, re-rendered, their expiry
     renewed. A job found to owe nothing now (scored meanwhile, by request
     hash) is finished, not renewed and left out. None when no job is still
-    held, and a fresh lease is made instead. An id reused for another model
-    is refused."""
+    held, and a fresh lease is made instead. (A session serves one model, so
+    the replayed lease is always of the model asked.)"""
     jobs = list(
         await session.scalars(
             select(AiJob)
@@ -526,11 +532,6 @@ async def _replay(
             .with_for_update()
         )
     )
-    for job in jobs:
-        if await _judge_model(session, job) != model:
-            raise BrokerError(
-                422, {"error": "invalid", "detail": "lease_request_id reused for another model"}
-            )
     expires = now + timedelta(seconds=row.lease_s)
     taken = []
     for job in jobs:
@@ -619,7 +620,7 @@ async def lease(
     row.last_seen_at = now
     request_id = body.get("lease_request_id")
     if request_id and request_id == row.last_lease_request and row.last_lease_id:
-        replay = await _replay(session, worker, row, model, now)
+        replay = await _replay(session, worker, row, now)
         if replay is not None:
             return replay
 
@@ -896,7 +897,10 @@ async def release(
         await _fail(session, jobs, str(body.get("error") or "released with an error")[:2000])
     await session.flush()
     if graceful:
-        row.ended_at, row.end_reason = now, "released"
+        # A session already ended by the broker (empty, none_fit) keeps that
+        # end: it is what `nothing_fits` counts. P16 still applies.
+        if row.end_reason not in (EMPTY, NONE_FIT):
+            row.ended_at, row.end_reason = now, "released"
         await session.flush()
         await maybe_rebuild(session, on_session_end)
     return {"released": len(jobs)}
@@ -906,7 +910,8 @@ async def release(
 
 
 async def maybe_rebuild(session: AsyncSession, queue: Callable[[], Awaitable[None]] | None) -> bool:
-    """When a worker's session ends (a graceful release, an empty lease) and
+    """When a worker's session ends (a graceful release, an empty lease, a
+    none_fit after a lease) and
     standing "same" decisions were written since the last rebuild this
     queued, queue `rebuild_and_reindex` through the window job id
     (`makhzan_schemas.rebuild`). Only when the mode is live: off, the regroup

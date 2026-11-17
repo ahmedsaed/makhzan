@@ -310,26 +310,50 @@ async def test_a_retry_that_overlaps_the_original_waits_and_replays_it(broker, d
     assert len({j.lease_id for j in jobs if j.lease_id}) == 1
 
 
-async def test_a_lease_request_id_reused_for_another_model_is_refused(broker, db):
-    await _queue_many(await _grid(db, 1))
-    x, y = (await _grid(db, 1))[0]
-    async with SessionLocal() as session:
-        await enqueue(session, [PairRequest(x, y, "match", 60, "x")], stage="pplx")
-        await session.commit()
+async def test_a_hello_names_exactly_one_model(broker):
+    """One model per session: a worker serving two keys opens two sessions."""
     token = await _worker("both", ["kev", "pplx"])
-    hello = await _hello(broker, token, "kev", "pplx")
-    await _lease(broker, token, hello["session"], "kev", lease_request_id="r1")
+    r = await broker.post(
+        "/ai/v1/hello", json={"models": _report("kev", "pplx")}, headers=_auth(token)
+    )
+    assert r.status_code == 422
+    assert r.json()["error"] == "invalid"
+    kev, pplx = await _hello(broker, token, "kev"), await _hello(broker, token, "pplx")
+    assert kev["session"] != pplx["session"]
+    # A session leases only its own model.
     r = await broker.post(
         "/ai/v1/lease",
         json={
-            "session": hello["session"],
+            "session": kev["session"],
             "model": "pplx",
             "model_version": MODELS["pplx"].model_version,
-            "lease_request_id": "r1",
         },
         headers=_auth(token),
     )
-    assert r.status_code == 422
+    assert r.status_code == 409
+
+
+async def test_a_release_after_none_fit_keeps_the_recorded_end(broker, db):
+    """The worker sends nothing after none_fit, but a release that comes
+    anyway must not turn the session into "released": none_fit is what the
+    nothing_fits flag counts."""
+    await _queue_many(await _grid(db, 1))
+    token = await _worker("cpu-kev", ["kev"])
+    for _ in range(core.NONE_FIT_FLAG_AFTER):
+        hello = await _hello(broker, token, "kev")
+        answer = await _lease(
+            broker, token, hello["session"], "kev", seconds_left=100, seconds_per_request=100
+        )
+        assert answer["reason"] == "none_fit"
+        r = await broker.post(
+            "/ai/v1/release", json={"session": hello["session"]}, headers=_auth(token)
+        )
+        assert r.status_code == 200
+        async with SessionLocal() as session:
+            row = await session.get(AiSession, uuid.UUID(hello["session"]))
+        assert row.end_reason == "none_fit"
+    [flag] = await _flag_rows()
+    assert (flag.kind, flag.subject) == ("nothing_fits", "cpu-kev/kev")
 
 
 async def _store_scores(job: dict, orders=("ab", "ba"), p: float = 0.1) -> None:
