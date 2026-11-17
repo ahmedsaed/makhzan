@@ -16,7 +16,8 @@ scope — see `docs/PLAN.md`.
 ```
 apps/web         Next.js consumer frontend (pnpm, shadcn/Base UI, English only, dark mode)
 apps/api         FastAPI read-only API over Postgres + Meilisearch
-apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue
+apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue;
+                  admin/ is the internal dashboard (Tailscale only, docs/admin.md)
 packages/schemas  SQLAlchemy models, Alembic migrations, taxonomy, grouping, search contract
 scripts/          Operational scripts (deploy, backup, probes)
 config/           sources.example.toml only; the real configuration is ../makhzan-config (private)
@@ -41,6 +42,9 @@ make reindex                    # rebuild products + search index
 make status                     # crawler progress, recent runs, catalog health
 make freshness                  # requests, staleness, changes found, false archivals (read-only)
 ./makhzan status                # the same report, plus containers/health/crawl flag, from production
+./makhzan crawl off|on          # the crawl-wide pause (database flag, no recreate)
+./makhzan shop pause|resume ID  # one shop's pause, over sources.toml's `enabled`
+make admin                      # the admin dashboard on :8200 (docs/admin.md)
 make ai ARGS="status"           # AI matching: workers, mode, backlog, decisions (./makhzan ai ...)
 make broker                     # the AI broker on :8100
 ```
@@ -59,6 +63,27 @@ their errors, uncategorized/unpriced counts per supplier, the review
 queue, and whether the search index has drifted from the database.
 Before investigating a line that looks wrong, read `docs/status-known-normals.md`
 in the private configuration: what status shows that is normal, and when it is not.
+
+**The status report is one module, `worker/status.py`**, so the admin
+dashboard renders exactly what the terminal prints: each section is a
+`collect_<section>()` returning data and a printer of the same name.
+`scripts/status.py` only runs it. Add a section as both, never as SQL in the
+dashboard.
+
+**The admin dashboard** (`apps/ingestion/admin`, `docs/admin.md`) is its own
+compose service from the ingestion image, bound to `ADMIN_BIND` on the
+server's Tailscale address like the broker, one password (`./makhzan admin
+password`). Every action calls the CLI's own function (`worker.reports`,
+`worker.overrides`, `worker.ai`, `worker.pause`) and is audited in
+`admin_actions`; jobs that take time or talk to shops (a `limit=` run, the
+probe, a regroup dry run) are queued to the worker (`worker/admin_jobs.py`),
+never run in the page's process. It deploys and restarts nothing.
+
+**Pausing lives in the database** (`worker/pause.py`): the crawl-wide
+`worker_state["crawl_pause"]` over `CRAWL_ENABLED`, and `sources.paused_at`
+over sources.toml's `enabled` (the sync never writes it). `refresh_all` and
+`crawl_source` skip a paused shop, and a full run checks before every page and
+stops there, cursors kept; `limit=` runs and the probe still work.
 
 ## How ingestion works
 

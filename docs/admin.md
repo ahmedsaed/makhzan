@@ -1,0 +1,210 @@
+# The admin dashboard
+
+An internal page for running makhzan: what needs attention, the crawl, the
+catalogue, visitors' reports, grouping rulings and AI matching. One person, one
+password, **reached only over Tailscale**. It is not part of the public site and
+has no public hostname.
+
+It reuses the code behind `make status` and `./makhzan`, so the page and the
+terminal agree: every number on the crawl and catalogue views comes from
+`worker/status.py`'s `collect_*` functions, the AI view from
+`makhzan_schemas.ai.status.collect`, and every action calls the same function
+as its CLI command. It deploys, restarts and reconfigures nothing: containers,
+deploys, backups and `.env.prod` stay with `./makhzan` on the server.
+
+## Where it runs
+
+- **A compose service, `admin`**, from the **ingestion image** (which holds the
+  status report, the CLI modules and the adapters), running
+  `uvicorn admin.app:app` on port 8200. Code: `apps/ingestion/admin/`
+  (FastAPI + Jinja, server-rendered; one small script, `static/admin.js`, for
+  copy buttons, two-click revoke and polling a queued job; no build step).
+- It mounts the private configuration read-only (the report loads the adapters
+  and crosswalks), and gets only the variables it uses: the database, Redis,
+  Meilisearch (for the index check), `SITE_URL`, `CRAWL_ENABLED` (shown as
+  this service's copy) and its own `ADMIN_*`. It holds **no crawler signing
+  key**: the probe and runs happen in the worker.
+- **Long or outbound work is queued to the worker** (`worker/admin_jobs.py`):
+  "Run now", "Probe" and "Regroup dry run" write an `admin_actions` row and
+  queue `admin_job` for it; the page polls the row and shows the result. The
+  worker is the process that owns the per-source locks, the pace gate and the
+  key, so nothing the page asks for can overlap a run of the same shop or
+  bypass the crawler's politeness.
+
+## Exposing it over Tailscale
+
+Exactly as the AI broker (`docs/ai/broker-deploy.md`):
+
+```sh
+# .env.prod
+ADMIN_BIND=<server tailscale ip>:8200
+```
+
+then `./makhzan deploy`. Open `http://<server tailscale ip>:8200/` from a
+machine on the tailnet.
+
+- `ADMIN_BIND` defaults to `127.0.0.1:8200`: nothing off the host reaches it
+  until it is set. **Always include the address**; a bare port publishes on
+  every interface, the public one included.
+- The Tailscale interface must be up before the container starts, or Docker
+  cannot bind the address; `net.ipv4.ip_nonlocal_bind=1` (see the broker doc)
+  fixes boot order for both services.
+- Plain HTTP is acceptable on the tailnet (WireGuard encrypts the link). The
+  session cookie is therefore not `Secure` by default; if you front the page
+  with TLS (for example `tailscale serve`), set `ADMIN_COOKIE_SECURE=true`.
+- Tailscale ACLs can narrow it to your own devices.
+- `./makhzan status` reports whether `http://$ADMIN_BIND/login` answers.
+
+## The password
+
+```sh
+./makhzan admin password
+```
+
+asks for the password twice, hashes it inside the container (scrypt, from the
+standard library; the password is never written anywhere), writes
+`ADMIN_PASSWORD_HASH` into `.env.prod` with, the first time, a random
+`ADMIN_SECRET` (the key sessions are signed with), and recreates the `admin`
+service. Changing the password ends every session; so does changing the
+secret. With either unset nobody can sign in. At least 12 characters.
+
+| Variable | What |
+|---|---|
+| `ADMIN_BIND` | Where the port is published: the server's Tailscale IP and port. |
+| `ADMIN_PASSWORD_HASH` | `scrypt:N:r:p:salt:hash`, written by `./makhzan admin password`. |
+| `ADMIN_SECRET` | HMAC key for the session cookie, written once by the same command. |
+| `ADMIN_NAME` | Who actions are recorded as (default `admin`): overrides' `created_by`, the audit log. |
+| `ADMIN_COOKIE_SECURE` | `true` only when served over TLS. |
+| `ADMIN_SESSION_HOURS` | Optional; default 12. |
+
+**Login security.** The session is an HttpOnly, SameSite=Strict cookie signed
+with `ADMIN_SECRET`. Every POST carries a CSRF token from the session (the login
+form a token of its own) and is refused from another origin. Failed logins are
+limited to 5 per address and 20 in total per 15 minutes. Pages send a strict
+Content-Security-Policy (scripts from the page's own origin only),
+`X-Frame-Options: DENY` and `Cache-Control: no-store`.
+
+**Audit.** Every action, failed logins included, writes a row to
+`admin_actions`: who (`ADMIN_NAME`), from which address, what, the target, the
+details, when, and for jobs their status and result. `/activity` lists them.
+Rulings, decisions and flags also keep their own `created_by`, `removed_by`,
+`revoked_by` and `resolved_by`.
+
+## The views
+
+**Overview.** "Needs attention" first, most serious first, each linking to the
+view that handles it: shops paused or disabled (critical once their listings
+were last checked 45 days ago), stalled sweeps, sources that do not load,
+partial or failed runs in the last 48 hours, robots.txt unavailable or served
+from an old copy, product-detail backlogs ten runs deep, crosswalk drift,
+search-index drift, blocked overrides, open AI flags, uncategorised listings
+and open reports. Then tiles (crawl, index, worker queue, review queue,
+reports, price observations, AI, products) and the API and broker health
+checks. There is no container list: reading Docker would need its socket, which
+is root on the host.
+
+**Crawl.**
+- The **crawl-wide pause** (see below), with an optional note.
+- **Sweep progress** per shop, from the cursors, with the resume points. Each
+  shop has **Run now (limit N)**: an ephemeral `limit=` run (1-200 items),
+  cursors untouched, nothing archived, no price history, refused while a run
+  of the shop is going. **Probe** queues `worker.probe` for that one shop,
+  paused or disabled included, with the crawler's own client: robots.txt first
+  and obeyed, then browser, makhzanbot and signed, 15 s apart; the cells show
+  under the shop. **Pause / Resume** the shop. Run now and Probe work on a
+  paused shop: they are how a blocked shop is looked at.
+- Recent runs (errors expandable), cycle history with the most frequent
+  errors, cycle targets, T1 short-page shadow tallies, T4/T12 confirmation,
+  crawler identity, robots.txt, product-details coverage and queue, and the
+  dashboard's own jobs.
+- **Crosswalk drift.** "Add to ignore" and "Copy for crosswalk" only copy a
+  TOML snippet (the file name is shown) to paste into the private
+  configuration. Nothing is written to any repository from the page. Over plain
+  HTTP the browser has no clipboard API, so the snippet opens in a prompt to
+  copy by hand.
+
+**Catalog.** The status report's CATALOG table, filterable and sortable; the
+uncategorised browser (active listings with no category, searchable by title or
+the shop's category where the adapter stores one, first 100 shown); the
+product lookup (a product id, a listing id, a makhzan URL holding either, or a
+shop URL; merged ids are followed), with offers, how each was matched and the
+product's identity events. **Regroup dry run** is queued to the worker and
+shows the counts `make regroup-dry-run` prints. There is no real regroup
+button: the dry run rolls its transaction back and keeps no per-product list,
+and the real regroup stays in the CLI.
+
+**Reports.** Open reports, oldest first, as the page showed them (the
+snapshot), with what Accept will do. Accept and Reject call
+`worker.reports.review_reports`, the code behind `./makhzan reports
+accept|reject`: accepting "these offers aren't the same" records never_merge
+rulings, "same as another" one must_merge, a report no ruling could act on is
+refused; rejecting withdraws a report's rulings. Recently closed reports can
+be reviewed again. Accepting a wrong price or stock report **only closes it**
+for now: see the open question below.
+
+**Overrides.** Every ruling, removed ones too, with what the last regroup found
+(in effect, BLOCKED and why, inactive, not yet checked). **Add** requires a
+note (`worker.overrides.add_override`: both listings must exist; a must_merge
+between one shop's listings is refused, since the same shop never merges).
+**Remove** is soft and requires a note, kept as `remove_note`
+(`./makhzan overrides remove ID --note ...` takes one too).
+
+**AI matching.**
+- The **mode** switch opens an in-page confirm saying what the change does.
+- Throughput (24 hours per model, scores per day over 7 days), decisions,
+  pipelines, the audit counts, the queue with nights to drain, and open
+  **flags**, each dismissed with a required note.
+- **Workers**: issue a token (shown once, on the response page only, never in
+  a URL or the audit log; only its sha256 is stored), and revoke one with a
+  second click.
+- **Review AI merges**: standing "same" decisions, those merged now first
+  (`listings.matched_via = 'ai'`; with the mode off none are, and the list is
+  what going live would merge). **Revoke decision** needs no confirm and takes
+  an optional note (default: "revoked in the admin dashboard's review of AI
+  merges"). **Redecide (dry run)** re-applies the active policy to stored
+  scores and writes nothing.
+
+## Pausing the crawl
+
+Two pauses, both in the database, so neither needs `.env.prod` edited or a
+container recreated, and both survive deploys (`worker/pause.py`):
+
+- **The crawl-wide pause**: `worker_state["crawl_pause"]`, set by the
+  dashboard and by `./makhzan crawl off`, cleared by "Resume crawl" and
+  `./makhzan crawl on`.
+- **One shop's pause**: `sources.paused_at` / `paused_by` / `pause_note`, set
+  by the dashboard and `./makhzan shop pause ID [--note ...]`. It sits over
+  `enabled`, which is sources.toml's and rewritten by every sync; the sync
+  never writes the pause columns.
+
+Paused, `refresh_all` queues nothing for it, a daily job already queued skips
+it, and a full run already going stops before its next page, cursors kept,
+with `stats.stopped` saying who paused it. `limit=` runs and the probe still
+work. `make status`, `./makhzan status` and /how-we-crawl show both.
+
+`CRAWL_ENABLED` in `.env.prod` remains as the older, harder switch, read when
+the worker's container is created; the crawl runs only when it is on *and*
+nothing is paused. The page cannot change it, and says so; `./makhzan crawl
+on` clears it as well as the pause.
+
+## Running it locally
+
+```sh
+cd apps/ingestion && poetry run python -m admin.password --secret   # prints the two lines
+export ADMIN_PASSWORD_HASH=... ADMIN_SECRET=...
+make admin            # http://localhost:8200, against the dev database
+make worker           # in another terminal, for Run now, Probe and the dry run
+```
+
+Run now and Probe send real requests to the shop: use them deliberately.
+
+## Open questions
+
+- **"Accept marks the listing for an early re-check" has no mechanism behind
+  it yet.** The crawler re-reads a listing only when its partition comes round
+  in the cycle (or its product page, for the details stage); there is no
+  per-listing re-check queue for price and stock. Options: a `recheck_at`
+  that the details stage or the archive confirmer (WooCommerce's
+  re-read-by-id) picks up first, per adapter; or a small re-read job per
+  listing through the adapter's own client. Until decided, Accept on a wrong
+  price or stock report closes it and says that nothing was queued.
