@@ -58,11 +58,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import case, delete, func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from makhzan_schemas import grouping as g
 from makhzan_schemas.ai import flow, triggers
+from makhzan_schemas.ai.broker import sweep_judges
 from makhzan_schemas.ai.decisions import REVOKED, STANDING
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME
 from makhzan_schemas.ai.render import Shown, shown
@@ -79,6 +81,14 @@ K = 10
 #: P15: electronics only (the approved prompt says "electronics shops").
 DOMAINS = ("electronics",)
 MATCH, AUDIT = "match", "audit"
+
+# Owner decisions pending (2026-11-17): today's behaviour, one line each.
+#: The daily run's first pass records a baseline and queues nothing (the
+#: existing catalogue is the backlog's, scored locally, P4).
+BASELINE_FIRST_RUN = True
+#: Decisions that keep a pair from being offered as a candidate: a standing
+#: one is the re-score's; a revoked one was withdrawn by a person and stays out.
+SKIP_DECISION_STATES = (STANDING, REVOKED)
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -185,7 +195,7 @@ async def _decided_pairs(session: AsyncSession, pipeline_name: str) -> set[tuple
     """Pairs with a standing or revoked decision in `pipeline_name`."""
     rows = await session.execute(
         select(AiDecision.listing_a, AiDecision.listing_b).where(
-            AiDecision.pipeline == pipeline_name, AiDecision.state.in_((STANDING, REVOKED))
+            AiDecision.pipeline == pipeline_name, AiDecision.state.in_(SKIP_DECISION_STATES)
         )
     )
     return {(a, b) for a, b in rows}
@@ -273,32 +283,54 @@ def filter_pairs(
 
 async def record_hashes(session: AsyncSession, catalogue: Catalogue, now: datetime) -> dict:
     """Store every listing's current content hash in `ai_listing_state`;
-    returns the state rows by listing id, as they now are."""
+    returns the state rows by listing id, as they now are.
+
+    Upserts (`ON CONFLICT`), so a concurrent writer cannot make it fail; the
+    change time moves only when the hash does. A listing that left the scope
+    (archived, or moved out of electronics) loses its row: the re-score
+    trigger joins on it and so stops looking at that listing's decisions,
+    and if it comes back it is new again."""
     # The same scope as `load_catalogue`, as a subquery: tens of thousands of
     # ids would not fit in one statement's parameters.
     scope = select(Listing.id).where(
         Listing.status == ListingStatus.ACTIVE, Listing.domain.in_(list(DOMAINS))
     )
+    await session.execute(delete(AiListingState).where(AiListingState.listing_id.not_in(scope)))
+    rows = [
+        {
+            "listing_id": x.id,
+            "content_sha256": catalogue.shown[x.id].content_sha256,
+            "content_changed_at": now,
+        }
+        for x in catalogue.listings
+    ]
+    for start in range(0, len(rows), 5000):
+        stmt = insert(AiListingState).values(rows[start : start + 5000])
+        await session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[AiListingState.listing_id],
+                set_={
+                    "content_sha256": stmt.excluded.content_sha256,
+                    "content_changed_at": case(
+                        (
+                            AiListingState.content_sha256 != stmt.excluded.content_sha256,
+                            stmt.excluded.content_changed_at,
+                        ),
+                        else_=AiListingState.content_changed_at,
+                    ),
+                },
+            )
+        )
     wanted = {x.id for x in catalogue.listings}
     states = {
         row.listing_id: row
         for row in await session.scalars(
-            select(AiListingState).where(AiListingState.listing_id.in_(scope))
+            select(AiListingState)
+            .where(AiListingState.listing_id.in_(scope))
+            .execution_options(populate_existing=True)
         )
         if row.listing_id in wanted
     }
-    for listing in catalogue.listings:
-        digest = catalogue.shown[listing.id].content_sha256
-        state = states.get(listing.id)
-        if state is None:
-            state = AiListingState(
-                listing_id=listing.id, content_sha256=digest, content_changed_at=now
-            )
-            session.add(state)
-            states[listing.id] = state
-        elif state.content_sha256 != digest:
-            state.content_sha256, state.content_changed_at = digest, now
-    await session.flush()
     return states
 
 
@@ -350,7 +382,7 @@ class CandidatesTrigger(_MatchTrigger):
                 if states[x.id].candidates_sha256 != states[x.id].content_sha256
             ]
         self.counts = Counter(listings=len(catalogue.listings), queries=len(queries))
-        if first_run and not self.everything:
+        if first_run and BASELINE_FIRST_RUN and not self.everything:
             log.info("AI candidates: first run, baseline recorded, nothing offered")
             self.counts["baseline"] = len(queries)
             requests = []
@@ -520,10 +552,26 @@ async def run(session: AsyncSession, trigger) -> dict:
     return {"trigger": trigger.name, **dict(getattr(trigger, "counts", {})), **outcome}
 
 
+async def _exclusive(session: AsyncSession) -> bool:
+    """One producer run at a time (the daily job, a backlog, one by hand):
+    a transaction-scoped advisory lock, released at commit or rollback."""
+    return bool(
+        await session.scalar(select(func.pg_try_advisory_xact_lock(func.hashtext("ai_producers"))))
+    )
+
+
+BUSY = {"skipped": "another AI producer run is in progress"}
+
+
 async def daily(session: AsyncSession, *, mutual: bool = False) -> list[dict]:
-    """What runs after each rebuild: candidates, then re-scores (which need
-    the hashes candidates just recorded), then the audit."""
+    """What runs after each rebuild: move jobs queued at an old judge, then
+    candidates, re-scores (which need the hashes candidates just recorded)
+    and the audit. Skipped when another producer run holds the lock."""
+    if not await _exclusive(session):
+        return [BUSY]
+    moved = await sweep_judges(session)
     return [
+        {"trigger": "judge sweep", "moved": moved},
         await run(session, CandidatesTrigger(mutual=mutual)),
         await run(session, RescoreTrigger()),
         await run(session, AuditTrigger()),
@@ -532,4 +580,6 @@ async def daily(session: AsyncSession, *, mutual: bool = False) -> list[dict]:
 
 async def backlog(session: AsyncSession, *, mutual: bool = True) -> dict:
     """The whole catalogue's candidates, at the backlog's priority."""
+    if not await _exclusive(session):
+        return BUSY
     return await run(session, BacklogTrigger(mutual=mutual))
