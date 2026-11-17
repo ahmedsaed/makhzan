@@ -13,11 +13,13 @@ What the broker's reviews asked of the schema, expand-only:
   work queued but no job fitting its time.
 - `ai_sessions.last_lease_request` / `last_lease_id`: a retried /lease with
   the same `lease_request_id` gets the same jobs back.
+- `ai_sessions.end_model`: the model whose lease ended the session, so a
+  `nothing_fits` flag counts per worker and model.
 
-The downgrade first closes all but the oldest open flag per (kind,
-listing_a, listing_b), and every `nothing_fits` flag, since the old unique
-index and kind check cannot hold them (two workers' drift flags differ only
-by subject).
+The downgrade first deletes every `nothing_fits` flag (the old kind check
+refuses the kind), then dismisses all but the oldest open flag per (kind,
+listing_a, listing_b), which the old unique index cannot hold (two workers'
+drift flags differ only by subject).
 
 Revision ID: a9a0252aacef
 Revises: 895dafa67c0d
@@ -66,10 +68,12 @@ def upgrade() -> None:
         "ai_sessions", sa.Column("last_lease_request", sa.String(length=64), nullable=True)
     )
     op.add_column("ai_sessions", sa.Column("last_lease_id", sa.UUID(), nullable=True))
+    op.add_column("ai_sessions", sa.Column("end_model", sa.String(length=32), nullable=True))
 
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_column("ai_sessions", "end_model")
     op.drop_column("ai_sessions", "last_lease_id")
     op.drop_column("ai_sessions", "last_lease_request")
     op.drop_column("ai_jobs", "in_hand_at")
