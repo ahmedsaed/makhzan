@@ -166,7 +166,11 @@ writes decisions, so the backlog can be scored while the mode is off.
   It must be an integer from 60 to 7200, else `422 {"error": "invalid"}`.
 - Hello also moves any job queued at an old judge to its stage's current
   judge (the judge sweep, §3.2), before counting, so the worker's own leases
-  see that work.
+  see that work. **Hello therefore carries the sweep's latency**: nothing on
+  most days, and after a model or prompt version change one set-based UPDATE
+  over the queued jobs (seconds for tens of thousands). A worker should give
+  `/hello` a generous timeout; the daily producers usually run the sweep
+  first.
 - The broker stores a session row (`ai_sessions`: worker, session id, the
   model versions it reported and whether each was `ok`, the rest of the
   hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, and the
@@ -211,13 +215,20 @@ writes decisions, so the backlog can be scored while the mode is off.
   many rows as it still wants (`LIMIT max_jobs - taken`, a job already
   looked at in this lease excluded by id), so a concurrent lease never finds
   the queue empty because this one holds a wide scan.
+- **A session's leases take turns**: /lease locks the session row for its
+  transaction. So a retry that arrives while the original is still being
+  served waits for it, then replays it (below), instead of making a second
+  lease whose first would expire and be charged.
 - **Retrying a lease**: `lease_request_id` (optional, the worker's own id
   for this request, at most 64 characters). A /lease whose id equals the
   session's last one gets that lease back: the same `lease_id`, the jobs of
-  it still held, re-rendered (only orders still owed), their expiry renewed.
-  So a lease whose answer was lost on the way is not orphaned until it
-  expires. If none of them is still held, a fresh lease is made. A new id,
-  or none, is always a fresh lease.
+  it still held and not expired, re-rendered (only orders still owed), their
+  expiry renewed. A job of it that now owes nothing (scored meanwhile, by
+  request hash) is finished there and then, not renewed and left out. So a
+  lease whose answer was lost on the way is not orphaned until it expires.
+  If none of it is still held (released, completed, or expired: reaped or
+  not yet), a fresh lease is made, which reaps first. The same id for another
+  model is `422`. A new id, or none, is always a fresh lease.
 - **Batch size, and a job that does not fit.** Jobs are added in priority
   order while `owed requests × seconds_per_request` fits in `seconds_left`
   minus a 60 s margin; at most `max_jobs`. The first job that does not fit
@@ -227,6 +238,13 @@ writes decisions, so the backlog can be scored while the mode is off.
   "does not fit" beyond sending honest `seconds_left` and
   `seconds_per_request`; a job it cannot start after all it releases
   gracefully. Without both fields, only `max_jobs` limits the lease.
+- **"Nothing fits" is not "empty".** When work is queued but the first job
+  does not fit, the answer is `200 {"lease_id": null, "jobs": [], "reason":
+  "none_fit"}`, the session ends with `end_reason = "none_fit"`, and the P16
+  rebuild is **not** considered (no window closed with the queue drained).
+  After 3 such sessions of one worker in a week (`broker.NONE_FIT_FLAG_AFTER`)
+  a `nothing_fits` flag opens, subject "<worker>/<model>": its window is too
+  short for one job, or its `seconds_per_request` is wrong.
 - **Rendering at lease time**, from the current database rows: the stage's
   prompt variant (`pipelines.PIPELINES[p].stage(s).prompt`) through
   `prompt.requests(variant, record(a), record(b))`, where `record` is
@@ -266,7 +284,7 @@ writes decisions, so the backlog can be scored while the mode is off.
   down with it. A lease with no job reported in hand (the worker died before
   any heartbeat said) charges every job. At `max_attempts` a job becomes
   `dead` and a `poison_job` flag is opened. No cron is needed.
-- Empty queue: `200 {"lease_id": null, "jobs": []}`. A worker with
+- Empty queue: `200 {"lease_id": null, "jobs": [], "reason": "empty"}`. A worker with
   `on_empty = "exit"` exits; with `"wait"` it polls until its window ends.
   An empty lease marks the session ended (`end_reason = "empty"`) and is one
   of the two moments the P16 rebuild is considered (§3.4).
@@ -407,10 +425,13 @@ with the worker). Only in mode `live`; in `off` nothing is queued, since the
 regroup would read nothing. "Since the last rebuild the broker queued" is
 `worker_state['ai_rebuild']`: `{"through_id": N}`, the highest decision id a
 rebuild was queued for. The id, not `created_at`: that is the writing
-transaction's start, which can lag well behind a long lease's commit. (An
-id is allocated at the insert, so a transaction that inserts and commits
-much later than a higher id's could in principle still be passed over; the
-next daily rebuild applies it.) A same-outcome re-score updates its row in
+transaction's start, which can lag well behind a long lease's commit. The
+id is allocated at the insert, not the commit, so one case is passed over
+for certain: the daily producers write decisions (pairs settled from stored
+scores) inside a transaction that can run for minutes; a worker's session
+that ends meanwhile records a higher id from a /results, and the producers'
+lower ids, committed after, are never newer than the watermark. They take
+effect at the next rebuild, the next day's at the latest. A same-outcome re-score updates its row in
 place and so queues nothing; a "same" turned "not same" does not queue one
 either (the next daily rebuild applies it). That is `broker.REBUILD_ON_UNMERGE
 = False`, an owner decision pending; True queues one for any new standing
