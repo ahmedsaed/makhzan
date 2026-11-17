@@ -131,7 +131,7 @@ is the decision that should have come back to the owner.
 | D4 | Labels | Rulings: brand alone doesn't matter; silence compatible; drop-in revisions same; stated contradiction different; families differ | Owner | all labels | settled |
 | D5 | Labels | Final label: owner's answer, except 9 part-number cases deferred to ruling 3; else Opus+Sonnet consensus; else Sonnet | Session | all phase E metrics | **confirm** |
 | D6 | Labels | Opus+Sonnet consensus trusted where they agree (matched the owner ~94% on general-spec pairs) | Session, owner agreed in practice | 103 review pairs | confirm |
-| D7 | Prompt | Judge question = I2, one sentence, no rules | Session (bake-off rule, then carried) | model choice, thresholds, context verdict, gain | **confounded, reopen** |
+| D7 | Prompt | Judge question = I2, one sentence, no rules (one exception, the kev-rules run: see the correction in section 1) | Session (bake-off rule, then carried) | model choice, thresholds, context verdict, gain | **confounded, reopen** |
 | D8 | Prompt | Listing injection: `Listing A: …\nListing B: …`, unlabelled, missing fields omitted | Session | all judge results | **reopen** |
 | D9 | Context | Full context = title + category/brand/part number/price + specs + description, price included, boilerplate kept | Session | context verdict ("titles only") | **confounded, reopen** |
 | D10 | Scoring | Each pair scored A→B and B→A; the lower score counts | Session | thresholds | confirm |

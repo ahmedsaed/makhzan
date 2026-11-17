@@ -414,14 +414,23 @@ def cmd_report(args) -> None:
     for cfg in configs():
         f = args.out / "noise" / f"{cfg}.json"
         if f.exists():
-            d = json.loads(f.read_text())
-            d = {k: [x for x in v if x is not None] for k, v in d.items()}  # failed repeats
+            raw_noise = json.loads(f.read_text())
+            # a pair whose original score failed has no baseline: skipped and counted, never
+            # measured against one of its own repeats; a failed repeat is dropped and counted
+            d = {k: [v[0]] + [x for x in v[1:] if x is not None]
+                 for k, v in raw_noise.items() if v[0] is not None}  # fmt: skip
             diffs = [abs(x - v[0]) for v in d.values() for x in v[1:]]
             t = FIXED[cfg.split("-")[0]]
             flips = sum(len({x >= t for x in v}) > 1 for v in d.values())
             res["noise"][cfg] = {"pairs": len(d), "max_abs_diff": max(diffs, default=None),
                                  "identical": sum(x == 0 for x in diffs), "of": len(diffs),
                                  "flips_at_fixed_threshold": flips}  # fmt: skip
+            skipped = len(raw_noise) - len(d)
+            failed_repeats = sum(x is None for k, v in raw_noise.items()
+                                 if v[0] is not None for x in v[1:])  # fmt: skip
+            if skipped or failed_repeats:
+                res["noise"][cfg] |= {"skipped_original_failed": skipped,
+                                      "failed_repeats": failed_repeats}  # fmt: skip
 
     # cost
     title_tok = tokens["kev-title-only"]["mean_tokens"]

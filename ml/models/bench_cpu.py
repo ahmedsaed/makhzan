@@ -423,7 +423,19 @@ def cmd_parity(args) -> None:
            "agree_requests": f"{len(ok) - len(flips_req)}/{len(ok)}",
            "agree_pairs_min": f"{len(pmin) - len(flips_pair)}/{len(pmin)}",
            "flips_requests": flips_req, "flips_pairs_min": flips_pair,
-           "within_tolerance": bool(d) and max(d) <= args.tolerance and not flips_pair,
+           # every request must have been compared: a failed CPU score or a missing GPU score
+           # is a request the verdict cannot vouch for
+           "not_compared": len(rows) - len(ok),
+           "within_tolerance": bool(d) and max(d) <= args.tolerance and not flips_pair
+           and len(ok) == len(rows),
+           "within_tolerance_why_not": [
+               why for why, bad in (
+                   ("nothing compared", not d),
+                   (f"max |CPU - GPU| over {args.tolerance}", bool(d) and max(d) > args.tolerance),
+                   ("a pair flips at the threshold", bool(flips_pair)),
+                   (f"{len(rows) - len(ok)} request(s) not compared (failed CPU score or "
+                    "missing GPU score)", len(ok) < len(rows)),
+               ) if bad],
            "tolerance": args.tolerance,
            "seconds_mean": res.get("summary", {}).get("seconds_mean"),
            "load_seconds": res.get("load_seconds"),

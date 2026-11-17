@@ -52,7 +52,12 @@ def mins(d: dict) -> dict[str, float]:
     return {k: pair_min(v) for k, v in d.items()}
 
 
-def load(args) -> tuple[list[dict], dict[str, dict[str, float]], dict[str, str]]:
+def unscored(d: dict) -> int:
+    """Pairs with no score in either order (mins() scores them 0.0, never accepted)."""
+    return sum(all(x is None for x in v) for v in d.values())
+
+
+def load(args) -> tuple[list[dict], dict[str, dict[str, float]], dict[str, str], dict[str, int]]:
     cells = {}
     for line in (args.improve / "pairs.jsonl").open():
         r = json.loads(line)
@@ -66,12 +71,16 @@ def load(args) -> tuple[list[dict], dict[str, dict[str, float]], dict[str, str]]
         p["kt"] = pair_min((p["kev_ab"], p["kev_ba"]))
         pairs.append(p)
     s = {"kev-title": {p["pair_id"]: p["kt"] for p in pairs}}
-    s["pplx-title"] = mins(json.loads((args.models / "pplx.json").read_text()))
+    missing = {"kev-title": sum(p["kev_ab"] is None and p["kev_ba"] is None for p in pairs)}
+    raw = {"pplx-title": json.loads((args.models / "pplx.json").read_text())}
     for f in sorted((args.grid / "scores").glob("*.json")):
-        s[f.stem] = mins(json.loads(f.read_text()))
+        raw[f.stem] = json.loads(f.read_text())
+    for name, d in raw.items():
+        s[name] = mins(d)
+        missing[name] = unscored(d)
     listings = json.loads((args.grid / "listings.json").read_text())
     title = {k: v["title"] for k, v in listings.items()}
-    return pairs, s, title
+    return pairs, s, title, {k: n for k, n in missing.items() if n}
 
 
 class Rules:
@@ -225,9 +234,12 @@ def main() -> None:
     for a in ("grid", "improve", "key", "models", "population", "out"):
         ap.add_argument(f"--{a}", type=Path, required=True)
     args = ap.parse_args()
-    pairs, s, title = load(args)
+    pairs, s, title, missing = load(args)
     R = Rules(pairs, s, title)
     res: dict = {"total_matches_est": round(R.tot_same), "modes": {}}
+    if missing:  # pairs scored 0.0 because neither order has a score
+        res["unscored_pairs"] = missing
+        print(f"warning: pairs with no score, counted as not accepted: {missing}", file=sys.stderr)
     fold = folds(pairs)
     for mode, veto in (("behind_vetoes", True), ("no_vetoes", False)):
         rows = []
