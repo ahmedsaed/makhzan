@@ -45,27 +45,27 @@ def _orders(ab, ba):
 
 
 def test_kev_below_its_threshold_decides_not_same_by_kev():
-    step = decide({"kev": _orders(0.95, 0.79)})
+    step = decide("match", {"kev": _orders(0.95, 0.79)})
     assert (step.action, step.outcome, step.decided_by) == (DECIDE, NOT_SAME, "kev")
     assert step.mins == (("kev", 0.79),)
 
 
 def test_kev_passing_hands_the_pair_to_pplx():
-    step = decide({"kev": _orders(0.80, 0.91)})
+    step = decide("match", {"kev": _orders(0.80, 0.91)})
     assert (step.action, step.stage) == (SCORE, "pplx")
 
 
 def test_pplx_at_its_threshold_decides_same_and_below_not_same():
-    same = decide({"kev": _orders(0.9, 0.85), "pplx": _orders(0.95, 0.99)})
+    same = decide("match", {"kev": _orders(0.9, 0.85), "pplx": _orders(0.95, 0.99)})
     assert (same.action, same.outcome, same.decided_by) == (DECIDE, SAME, "pplx")
     assert dict(same.mins) == {"kev": 0.85, "pplx": 0.95}
-    no = decide({"kev": _orders(0.9, 0.85), "pplx": _orders(0.97, 0.949)})
+    no = decide("match", {"kev": _orders(0.9, 0.85), "pplx": _orders(0.97, 0.949)})
     assert (no.outcome, no.decided_by) == (NOT_SAME, "pplx")
 
 
 def test_one_reading_order_settles_nothing_not_even_a_no():
-    assert decide({"kev": _orders(0.01, None)}).stage == "kev"
-    assert decide({"kev": _orders(0.9, 0.9), "pplx": _orders(None, 0.99)}).stage == "pplx"
+    assert decide("match", {"kev": _orders(0.01, None)}).stage == "kev"
+    assert decide("match", {"kev": _orders(0.9, 0.9), "pplx": _orders(None, 0.99)}).stage == "pplx"
 
 
 def test_the_audit_records_kev_and_decides_nothing():
@@ -79,7 +79,7 @@ def test_an_unknown_pipeline_or_policy_is_refused():
     with pytest.raises(ValueError):
         transition("nope", {})
     with pytest.raises(ValueError):
-        decide({"kev": _orders(0.9, 0.9)}, policy="p0")
+        decide("match", {"kev": _orders(0.9, 0.9)}, policy="p0")
 
 
 def test_a_new_pipeline_is_data(monkeypatch):
@@ -148,13 +148,15 @@ async def _listing(supplier: Supplier, title: str, status=ListingStatus.ACTIVE) 
     return listing.id
 
 
-async def _decision(x, y, outcome="same", *, kev=0.9, pplx=0.97, shadow=False, state="standing"):
+async def _decision(
+    x, y, outcome="same", *, kev=0.9, pplx=0.97, state="standing", pipeline="match"
+):
     a, b = pair(x, y)
     scores = {"kev": {"model": "kev", "ab": kev, "ba": kev, "min": kev}}
     if pplx is not None:
         scores["pplx"] = {"model": "pplx", "ab": pplx, "ba": pplx, "min": pplx}
     row = AiDecision(
-        pipeline="match",
+        pipeline=pipeline,
         listing_a=a,
         listing_b=b,
         outcome=outcome,
@@ -163,7 +165,6 @@ async def _decision(x, y, outcome="same", *, kev=0.9, pplx=0.97, shadow=False, s
         policy_version="p1",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,
-        shadow=shadow,
         state=state,
         revoked_at=T0 if state == "revoked" else None,
     )
@@ -178,9 +179,9 @@ async def _load(**kw):
         return await load_ai_same(session, await load_overrides(session), **kw)
 
 
-async def test_the_mode_is_shadow_until_set_and_refuses_an_unknown_one():
+async def test_the_mode_is_off_until_set_and_refuses_an_unknown_one():
     async with SessionLocal() as session:
-        assert await ai_mode(session) == "shadow"
+        assert await ai_mode(session) == "off"
         await set_ai_mode(session, "live")
         await session.commit()
         assert await ai_mode(session) == "live"
@@ -188,13 +189,13 @@ async def test_the_mode_is_shadow_until_set_and_refuses_an_unknown_one():
             await set_ai_mode(session, "on")
 
 
-async def test_only_standing_non_shadow_same_decisions_between_active_listings_count():
+async def test_only_standing_same_decisions_between_active_listings_count():
     shops = [await _supplier(f"shop-{c}") for c in "abcdefgh"]
     a = await _listing(shops[0], "Example part one")
     b = await _listing(shops[1], "Example part two")
     kept = await _decision(a, b)
     c, d = await _listing(shops[2], "c"), await _listing(shops[3], "d")
-    await _decision(c, d, shadow=True)
+    await _decision(c, d, state="revoked")
     e, f = await _listing(shops[4], "e"), await _listing(shops[5], "f")
     await _decision(e, f, outcome="not_same", pplx=0.5)
     g = await _listing(shops[6], "g", status=ListingStatus.ARCHIVED)
@@ -204,8 +205,6 @@ async def test_only_standing_non_shadow_same_decisions_between_active_listings_c
 
     got = await _load()
     assert got.pairs == {pair(a, b)} and got.ids == {pair(a, b): kept}
-    preview = await _load(include_shadow=True)
-    assert preview.pairs == {pair(a, b), pair(c, d)}
 
 
 async def test_a_ruled_pair_is_never_read_and_one_shops_pair_cannot_act():
@@ -232,10 +231,10 @@ async def test_only_the_best_match_per_other_shop_counts_on_both_sides():
     assert got.pairs == {pair(x, b1), pair(x, c1)}
 
 
-async def test_the_group_check_reads_every_standing_kev_no_shadow_or_not():
+async def test_the_group_check_reads_every_standing_kev_no():
     shops = [await _supplier(f"shop-{c}") for c in "abc"]
     a, b, c = [await _listing(s, s.slug) for s in shops]
-    await _decision(a, b, outcome="not_same", kev=0.04, pplx=None, shadow=True)
+    await _decision(a, b, outcome="not_same", kev=0.04, pplx=None)
     await _decision(a, c, outcome="not_same", kev=0.05, pplx=None)
     got = await _load()
     assert got.no == {pair(a, b)}  # 0.05 is not below 0.05
@@ -272,3 +271,13 @@ async def test_enqueue_refuses_an_unknown_pipeline():
     async with SessionLocal() as session:
         with pytest.raises(ValueError):
             await enqueue(session, [PairRequest(uuid.uuid4(), uuid.uuid4(), "nope", 1, "x")])
+
+
+async def test_a_decision_of_an_unregistered_pipeline_is_skipped_not_a_crash(caplog):
+    shops = [await _supplier(f"shop-{c}") for c in "abcd"]
+    a, b, c, d = [await _listing(s, s.slug) for s in shops]
+    await _decision(a, b, pipeline="retired-pipeline")
+    await _decision(c, d)
+    got = await _load()
+    assert got.pairs == {pair(c, d)}
+    assert "retired-pipeline" in caplog.text

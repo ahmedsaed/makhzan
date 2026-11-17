@@ -980,7 +980,8 @@ class AiJob(Base):
     Leased by a worker until `lease_expires_at`; an expired lease is queued
     again and counts an attempt; after `max_attempts` the job is `dead`.
     Enqueueing is idempotent: one open job per (pipeline, stage, judge, pair).
-    `request_sha256` holds {"ab": hex, "ba": hex} as rendered at lease time
+    `request_sha256` holds {"ab": hex, "ba": hex} as rendered at lease time,
+    and `content_sha256_a` and `_b` the listings' content hashes then
     (docs/ai/broker-api.md).
     """
 
@@ -1004,7 +1005,20 @@ class AiJob(Base):
             unique=True,
             postgresql_where=text("status IN ('queued', 'leased')"),
         ),
-        Index("ix_ai_job_lease", "model_version_id", "status", text("priority DESC"), "created_at"),
+        # What `/lease` scans: queued jobs of a judge, best first.
+        Index(
+            "ix_ai_job_lease",
+            "model_version_id",
+            text("priority DESC"),
+            "created_at",
+            postgresql_where=text("status = 'queued'"),
+        ),
+        # What the expiry reaper scans: leases past their time.
+        Index(
+            "ix_ai_job_lease_expiry",
+            "lease_expires_at",
+            postgresql_where=text("status = 'leased'"),
+        ),
         Index("ix_ai_job_pair", "listing_a", "listing_b"),
     )
 
@@ -1035,6 +1049,10 @@ class AiJob(Base):
     leased_by: Mapped[int | None] = mapped_column(SmallInteger, ForeignKey("ai_workers.id"))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     request_sha256: Mapped[dict | None] = mapped_column(JSONB)
+    #: The two listings' content hashes (`hashing.listing_hash`) when the
+    #: requests were rendered, at lease time: the text the scores are about.
+    content_sha256_a: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    content_sha256_b: Mapped[bytes | None] = mapped_column(LargeBinary(32))
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -1114,8 +1132,8 @@ class AiDecision(Base):
     - `revoked`: withdrawn by a person (`revoked_at`, `revoked_by`,
       `revoke_note`).
 
-    `shadow` is true for a decision written while the mode was not `live`
-    (`ai.mode`); the regroup reads only non-shadow ones. `effect`,
+    The regroup reads standing "same" decisions only when the mode is `live`
+    (`ai.mode`), or in a dry run's preview. `effect`,
     `blocked_reason` and `checked_at` are for what a regroup found
     (`in_effect`, `blocked`, `inactive`, `overridden`); nothing writes them yet.
     """
@@ -1140,6 +1158,7 @@ class AiDecision(Base):
             unique=True,
             postgresql_where=text("state = 'standing'"),
         ),
+        Index("ix_ai_decision_listing_a", "listing_a"),
         Index("ix_ai_decision_listing_b", "listing_b"),
     )
 
@@ -1160,7 +1179,6 @@ class AiDecision(Base):
     #: The two listings' content hashes the scores were about.
     content_sha256_a: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     content_sha256_b: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
-    shadow: Mapped[bool] = mapped_column(Boolean, nullable=False)
     state: Mapped[str] = mapped_column(
         String(16), default="standing", server_default="standing", nullable=False
     )
@@ -1206,6 +1224,9 @@ class AiFlag(Base):
             "listing_b",
             unique=True,
             postgresql_where=text("status = 'open'"),
+            # A flag with no pair (a version drift) is still one open flag
+            # per kind: NULLs compare equal here (Postgres 15+).
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

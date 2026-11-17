@@ -6,13 +6,14 @@ import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
-from makhzan_schemas.ai.hashing import content_fields, listing_hash
+from makhzan_schemas.ai.hashing import listing_hash
 from makhzan_schemas.ai.policy import ACTIVE, KEV_REVISION, MODELS, POLICIES, thresholds
+from makhzan_schemas.ai.prompt import listing_row, pplx_payload, record
 
 
 def _listing(**changes):
     base = dict(
-        id=uuid.uuid4(),
+        id=uuid.UUID("00000000-0000-4000-8000-000000000001"),
         title_en="Example Relay Module 5V",
         title_ar="وحدة مرحل",
         brand="Examplebrand",
@@ -25,6 +26,12 @@ def _listing(**changes):
     )
     base.update(changes)
     return SimpleNamespace(**base)
+
+
+def _shown(listing, category="Relays") -> str:
+    """What pplx (the full description) is shown of the listing as LISTING A."""
+    rec = record(listing_row(listing, category))
+    return pplx_payload({"listing_a": rec, "listing_b": rec})["state"].split("[LISTING B]")[0]
 
 
 def test_price_stock_photos_and_other_attributes_leave_the_hash_alone():
@@ -43,12 +50,12 @@ def test_price_stock_photos_and_other_attributes_leave_the_hash_alone():
 
 def test_every_field_that_reaches_a_prompt_moves_it():
     before = listing_hash(_listing(), "Relays")
+    specs = {"Voltage": "5V", "Channels": "1"}
     changed = [
         _listing(title_en="Example Relay Module 12V"),
         _listing(title_ar="وحدة مرحل أخرى"),
         _listing(brand="Otherbrand"),
-        _listing(part_number="ER-2"),
-        _listing(attributes={"specs": {"Voltage": "5V", "Channels": "1"}, "mfr_part_number": "X"}),
+        _listing(attributes={"specs": specs, "mfr_part_number": "MFR-2"}),
         _listing(
             attributes={"specs": {"Voltage": "12V", "Channels": "1"}, "mfr_part_number": "MFR-1"}
         ),
@@ -57,27 +64,35 @@ def test_every_field_that_reaches_a_prompt_moves_it():
     for listing in changed:
         assert listing_hash(listing, "Relays") != before
     assert listing_hash(_listing(), "Modules") != before
-
-
-def test_it_is_deterministic_over_key_order_and_whitespace():
-    a = _listing(
-        title_en="Example  Relay\tModule 5V ",
-        attributes={"mfr_part_number": "MFR-1", "specs": {"Channels": "1", "Voltage": " 5V"}},
-        description_en="A synthetic\n\nrelay   module.",
+    # The rules' identifier reaches the prompt only when the shop states none.
+    no_code = {"specs": specs}
+    assert listing_hash(_listing(attributes=no_code, part_number="ER-2"), "Relays") != (
+        listing_hash(_listing(attributes=no_code), "Relays")
     )
-    assert listing_hash(a, " Relays ") == listing_hash(_listing(), "Relays")
 
 
-def test_empty_counts_as_absent():
-    a = content_fields(
-        title_en="T", title_ar="", brand="  ", part_number=None, mfr_part_number=None,
-        category=None, specs={}, description="",
-    )  # fmt: skip
-    b = content_fields(
-        title_en="T", title_ar=None, brand=None, part_number=None, mfr_part_number=None,
-        category=None, specs="not a table", description=None,
-    )  # fmt: skip
-    assert a == b
+def test_it_moves_exactly_when_what_the_judge_is_shown_moves():
+    base = _listing()
+    same_text = [
+        # Markup and whitespace in the description: the prompt collapses them.
+        _listing(description_en="<p>A synthetic</p>\n\n relay   module."),
+        # The rules' identifier behind the shop's stated code: never shown.
+        _listing(part_number="ER-2"),
+    ]
+    for listing in same_text:
+        assert _shown(listing) == _shown(base)
+        assert listing_hash(listing, "Relays") == listing_hash(base, "Relays")
+    shown_differently = [
+        # The title is shown as written, so is its spacing.
+        _listing(title_en="Example  Relay Module 5V"),
+        # Specs are shown in the shop's order.
+        _listing(
+            attributes={"specs": {"Channels": "1", "Voltage": "5V"}, "mfr_part_number": "MFR-1"}
+        ),
+    ]
+    for listing in shown_differently:
+        assert _shown(listing) != _shown(base)
+        assert listing_hash(listing, "Relays") != listing_hash(base, "Relays")
 
 
 def test_policy_p1_is_the_owners_safest_operating_point():

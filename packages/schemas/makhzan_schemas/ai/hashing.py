@@ -1,104 +1,61 @@
 """A listing's content hash: what decides that its text changed (decision P5, 2026-11-17).
 
-Taken over every field that can reach a judge's prompt (`makhzan_schemas.ai.prompt`):
+Taken over exactly what a judge could be shown of the listing: the renderer's own
+block for it (`prompt.block`) at full length, built from `prompt.record`, so
+every field that can reach a prompt is in it, normalised exactly as the prompt
+normalises it:
 
-- the title in both languages (the prompt shows the English one, else the Arabic);
-- the brand;
-- the part number: the identifier the rules assigned and the shop's stated
-  manufacturer part number (`attributes.mfr_part_number`), which the prompt
-  prefers;
-- the category, by its English name, which is what the prompt shows;
-- the specs (`attributes.specs`);
-- the description (the English one: the prompt shows no other).
+- the title (the English one, else the Arabic), as written;
+- category (its English name), brand, part number (the shop's stated code,
+  else the identifier the rules assigned), pack size;
+- the specs, as the prompt writes them;
+- the description, markup stripped and whitespace collapsed.
+
+Plus the Arabic title as written, so a listing whose Arabic title changes
+under an English one is due again too (P5 names both languages).
 
 **Never price**, nor stock, photos, the shop or anything else the prompt does
-not show: a price change must not make a decision look out of date.
+not show: a price change must not make a decision look out of date. Kev's
+capped block is a prefix of the full one, so any change Kev could see moves
+this hash; an edit past Kev's 150th description word moves it too (pplx reads
+the whole description).
 
-A changed hash, or a new model or prompt version, is what makes a pair due to be
-scored again; the hash is stored with each score and decision, so a score says
-which text it was about. It is deterministic: strings have their whitespace
-collapsed and an empty one counts as absent, and the canonical JSON sorts its
-keys, so the same content gives the same hash whatever order a shop or a query
-gave it in. Changing what goes in is a new `HASH_VERSION`, and makes every
-listing due again.
+A changed hash, or a new model or prompt version, is what makes a pair due to
+be scored again (the re-score trigger); with each score it records which text
+the score was about. Whether a score already exists for what would be sent is
+answered by the request hash (`prompt.request_sha256`), never by this one.
+Changing what goes in is a new `HASH_VERSION`, and makes every listing due
+again.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any
 
-#: Bumped when the fields or their normalisation change.
-HASH_VERSION = 1
+from makhzan_schemas.ai.prompt import block, listing_row, record
 
-_WS = re.compile(r"\s+")
-
-
-def _norm(value: Any) -> Any:
-    """Strings with whitespace collapsed (empty is None); tables and lists
-    normalised all the way down. Key order is left to the canonical JSON."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return _WS.sub(" ", value).strip() or None
-    if isinstance(value, dict):
-        return {str(_norm(str(k)) or ""): _norm(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_norm(v) for v in value]
-    if isinstance(value, bool | int | float):
-        return value
-    return _norm(str(value))
+#: Bumped when what goes in changes.
+HASH_VERSION = 2
 
 
-def content_fields(
-    *,
-    title_en: str | None,
-    title_ar: str | None,
-    brand: str | None,
-    part_number: str | None,
-    mfr_part_number: Any,
-    category: str | None,
-    specs: Any,
-    description: str | None,
-) -> dict:
-    """The hashed fields, normalised. Specs that are not a table count as none,
-    as the prompt reads them."""
-    return {
-        "v": HASH_VERSION,
-        "title_en": _norm(title_en),
-        "title_ar": _norm(title_ar),
-        "brand": _norm(brand),
-        "part_number": _norm(part_number),
-        "mfr_part_number": _norm(mfr_part_number),
-        "category": _norm(category),
-        "specs": _norm(specs) if isinstance(specs, dict) and specs else None,
-        "description": _norm(description),
-    }
-
-
-def listing_fields(listing: Any, category: str | None) -> dict:
-    """`content_fields` of a `models.Listing`, given its category's English name."""
-    attributes = listing.attributes if isinstance(listing.attributes, dict) else {}
-    return content_fields(
-        title_en=listing.title_en,
-        title_ar=listing.title_ar,
-        brand=listing.brand,
-        part_number=listing.part_number,
-        mfr_part_number=attributes.get("mfr_part_number"),
-        category=category,
-        specs=attributes.get("specs"),
-        description=listing.description_en,
+def content_text(rec: dict, title_ar: str | None) -> str:
+    """The canonical text hashed: the renderer's full block and the Arabic title."""
+    shown = block("LISTING", rec, None)
+    return json.dumps(
+        {"v": HASH_VERSION, "shown": shown, "title_ar": title_ar or None},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 
-def content_hash(fields: dict) -> bytes:
-    """sha256 of the fields' canonical JSON (sorted keys, no spaces)."""
-    text = json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode("utf-8")).digest()
+def content_hash(rec: dict, title_ar: str | None = None) -> bytes:
+    """sha256 of `content_text`."""
+    return hashlib.sha256(content_text(rec, title_ar).encode("utf-8")).digest()
 
 
 def listing_hash(listing: Any, category: str | None) -> bytes:
-    """The content hash of one stored listing."""
-    return content_hash(listing_fields(listing, category))
+    """The content hash of one stored listing, given its category's English name."""
+    return content_hash(record(listing_row(listing, category)), listing.title_ar)

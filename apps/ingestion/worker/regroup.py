@@ -16,9 +16,10 @@ Not to be confused with `worker.backfill`, which re-infers every category from
 titles first and so erases the categories crosswalks set.
 
 AI decisions are read only when the AI matching mode is `live`
-(`makhzan_schemas.ai.mode`). `--dry-run --ai` previews what going live would
-do: it reads standing "same" decisions, shadow ones included, whatever the
-mode (`make regroup-dry-run ARGS=--ai`).
+(`makhzan_schemas.ai.mode`, `off` by default). `--dry-run --ai` previews what
+going live would do: it reads standing "same" decisions whatever the mode
+(`make regroup-dry-run ARGS=--ai`). That is how the backlog's groupings are
+reviewed on a local copy before they are pushed to production.
 
 Run (inside the ingestion container):  python -m worker.regroup [--dry-run [--ai]]
 """
@@ -36,7 +37,7 @@ from worker.indexer import get_client, reindex_all
 
 async def main(dry_run: bool = False, ai_preview: bool = False) -> None:
     if ai_preview and not dry_run:
-        raise SystemExit("--ai previews shadow decisions: use it with --dry-run")
+        raise SystemExit("--ai reads decisions whatever the mode: use it with --dry-run")
     async with SessionLocal() as session:
         grouped = await rebuild_products(
             session, dry_run=dry_run, reidentify=True, ai_preview=ai_preview

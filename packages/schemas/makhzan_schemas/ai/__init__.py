@@ -6,7 +6,7 @@
 - `pipelines` : pipelines as data (stages = model + prompt + threshold) and the
                 one transition rule every result goes through
 - `triggers`  : the producer interface that queues pairs into a pipeline
-- `mode`      : off / shadow / live, from `worker_state`
+- `mode`      : off / live, from `worker_state`
 - `decisions` : `load_ai_same()`, what the regroup reads
 
 The tables are in `makhzan_schemas.models` (`Ai*`); the broker's contract is
