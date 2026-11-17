@@ -386,3 +386,29 @@ joining them in a final phase after the rules so the P14 group check does not
 depend on placement order, with every one of today's vetoes and the P17
 columns; and the mode, `off` by default (P4). The broker, worker, triggers,
 CLI and status come in later phases.
+
+### Defaults chosen by the phase 2 session, awaiting owner review
+
+The broker and triggers (phase 2, `docs/ai/broker-api.md`) needed choices
+the owner has not made. Each was chosen by the building session and is
+recorded here as a default, **not** an owner decision; each is one place in
+the code to change.
+
+| Choice | Default in force | Where |
+|---|---|---|
+| Blame on a crash | An expired lease charges an attempt only to the job the worker's last heartbeat named in hand (`progress.job_id`); its other jobs go back free. With none reported, every job of the lease is charged. | `broker.reap` |
+| A job that does not fit the worker's time | Jobs go in priority order while they fit `seconds_left` less 60 s; the first that does not fit stops the lease (no skipping ahead to a smaller job). Nothing fitting answers `reason: "none_fit"`, not `"empty"`; 3 such sessions in a week open a `nothing_fits` flag. | `broker.lease`, `NONE_FIT_FLAG_AFTER` |
+| Retrying a lease | `lease_request_id`: the same id gets the same lease back (still-held, unexpired jobs, re-rendered); a session's leases take turns on its row lock. | `broker._replay` |
+
+Owner decisions pending, with the value in force until answered:
+
+| Switch | Value now | Meaning |
+|---|---|---|
+| `broker.REBUILD_ON_UNMERGE` | `False` | P16 queues a rebuild only for new "same" decisions; a "same" turned "not same" waits for the next daily rebuild. |
+| `candidates.BASELINE_FIRST_RUN` | `True` | The daily trigger's first run records hashes and queues nothing; the existing catalogue is the backlog, scored locally (P4). |
+| `candidates.SKIP_DECISION_STATES` | `(standing, revoked)` | A pair with a revoked decision is never offered again as a candidate, even after its text changes. |
+| `triggers.RESCORE_SAME` / `RESCORE_CHANGED` / `RESCORE_VERSION` / `AUDIT` | 100 / 60 / 30 / 10 | Re-score of a standing "same"; of a "not same" whose text changed; of one whose judge alone changed; the rules-merged audit (lowest). |
+
+Also open for the owner: a listing that leaves electronics keeps its standing
+decision (the re-score trigger stops looking at it; the regroup still reads
+it while both listings are active).
