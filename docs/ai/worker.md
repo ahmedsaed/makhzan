@@ -65,13 +65,19 @@ The parity check below confirms it on stored GPU scores.
 4. **Lease, load, score, submit.** The worker drains each model key in the configured order:
    - `POST /lease` carries a fresh `lease_request_id` per lease. The client's retries of
      that call send the same id, so a lease whose answer was lost on the way comes back as
-     the same lease instead of being orphaned until it expires.
+     the same lease instead of being orphaned until it expires. The body is rebuilt for
+     each retry, so after a backoff it says how much time is left now; the broker replays
+     by id, so a fresh time value is harmless.
    - It also carries honest time: the seconds left in the window, less an estimate of a
      model load still to come (`LOAD_ESTIMATE_S`: 150 s on CPU, 30 s on GPU), and the
      measured seconds per request (the configured estimate until the first is measured).
      The broker returns only jobs that fit, keeping a 60 s margin, and stops at the first
      that does not. A job the worker cannot start after all goes back gracefully. A worker
      that runs "always" sends no time, and only `max_jobs` limits its leases.
+   - An empty lease that says `"reason": "none_fit"` means jobs are queued but none fits
+     the time left. The worker logs "no job fits the time left" and stops for this window,
+     whatever `on_empty` says: polling would only find the same. (The broker's side of this
+     field is landing separately; without it, an empty lease is an empty queue, as before.)
    - Each job's `prompt_version` is compared with the ones hello announced. A mismatch is
      logged, not refused: the broker renders, so it means the registry moved since hello.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
@@ -113,10 +119,16 @@ The parity check below confirms it on stored GPU scores.
    ends, using its measured seconds per request.
 6. **Empty queue.** With `on_empty = "exit"`, the worker exits. With `"wait"`, it polls every
    `poll_s` until the window ends.
-7. **Session end.** Every session that said hello ends with `POST /release {"session"}`, a
-   graceful release naming no jobs (broker-api.md §3.5), however it stopped: the window's
-   end, a signal, an empty queue, or an error. So the broker records the end and can consider
-   the P16 rebuild. It is not sent to a broker that is unreachable or refused the token.
+7. **Session end, exactly once.** The broker records a session's end (P16) at an empty lease
+   ("empty") or at a graceful release, with jobs or without ("released"). The worker ends
+   every session it opened exactly once:
+   - when an empty lease or a graceful release of held jobs already ended it, nothing more
+     is sent (a session release would overwrite "empty" with "released");
+   - otherwise (stopped between leases with nothing held: the window's end, a signal,
+     `none_fit`, an error, a 403 for a model key) it sends `POST /release {"session"}`, a
+     graceful release naming no jobs (broker-api.md §3.5);
+   - nothing is sent to a broker that is unreachable or refused the token (401);
+   - a stop that comes before hello opens no session at all.
 
 **Retries.** A network failure, a 5xx or a 429 is retried with exponential backoff: 1 s, 2 s,
 4 s and so on, capped at 60 s, and never shorter than a `Retry-After`. Retries continue for
@@ -128,9 +140,17 @@ Proxy settings in the environment are ignored: the only peer is the broker.
 **A stop sets one deadline for the rest of the session.** No retry starts more than 60 s
 after the stop (`STOP_GRACE_S`), each attempt then times out after 10 s (`STOP_TIMEOUT_S`),
 and a call in backoff wakes at once. Every call still makes one attempt. So after SIGTERM
-the worker needs at most the request in flight, plus 60 s, plus a 10 s attempt for each of
-its last two calls (results, release). Anything still undelivered is logged before the
-process exits.
+the worker exits within:
+
+| Part | At most |
+|---|---|
+| the request in flight | 86 to 104 s on the home server's CPU, under 1 s on the GPU |
+| retries, all calls together (`STOP_GRACE_S`) | 60 s |
+| one last attempt each for the results, the lease release and the session release (`STOP_TIMEOUT_S`) | 3 × 10 s |
+| joining the heartbeat thread | 10 s |
+
+That is the request plus about 100 s. Anything still undelivered is logged before the process
+exits. Set `--stop-timeout` above it: 240 s on the home server's CPU, 120 s on the GPU.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its job,
 order, request hash and score (never the payload), the moment it is known not to have
@@ -397,9 +417,8 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   "$IMAGE"
 ```
 
-- `--stop-timeout 240` lets the request in flight finish on `docker stop` (one CPU request
-  takes 86 to 104 s), then up to 60 s plus two 10 s attempts for submitting and releasing.
-  Keep it above one request plus 80 s.
+- `--stop-timeout 240` covers the bound under "A stop sets one deadline": one CPU request
+  (86 to 104 s) plus about 100 s for delivering, releasing and ending the session.
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
 
@@ -444,7 +463,7 @@ drains the queue. Only one 4B model fits on the 12 GB card, so run Kev first, th
 
    ```bash
    NAME=desk-kev IMAGE=makhzan-ml/kev-worker-gpu:1.0   # then desk-pplx, makhzan-ml/pplx-worker-gpu:1.0
-   docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 60 --gpus all \
+   docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 120 --gpus all \
      --user "$(id -u):$(id -g)" --tmpfs /tmp -e HOME=/tmp \
      -e MAKHZAN_IMAGE="$(docker image inspect -f '{{.Id}}' "$IMAGE")" \
      -v "<ml cache>/huggingface:/models:ro" \
@@ -456,6 +475,7 @@ drains the queue. Only one 4B model fits on the 12 GB card, so run Kev first, th
 
    `<ml cache>` is the main checkout's `ml/.cache`. The Triton cache must be writable;
    without it, the first request spends about 60 s compiling Kev's fused kernels.
+   `--stop-timeout 120` covers the stop bound: a GPU request (under 1 s) plus about 100 s.
 3. When it has exited, start `desk-pplx` the same way. Each Kev pass queues its pplx stage
    at the broker, so pplx work appears as Kev drains.
 4. `docker stop makhzan-ai-desk-kev` stops it gracefully at any time. Its leased jobs go back
@@ -534,8 +554,8 @@ sessions:
   Kev. The broker queued their pplx stage, the worker unloaded Kev, loaded pplx and drained
   it. The result was two standing "same" decisions and 8 score rows carrying the device,
   dtype and threads. Hello announced the stages (`match/kev`, `audit/kev`, `match/pplx`),
-  the broker recorded the lease request id, and the session ended with its release
-  ("released").
+  the broker recorded the lease request id, and the empty lease ended the session
+  ("empty"), with no session release after it.
 - **A graceful stop.** A heartbeat with `job_ids` was sent mid-job. SIGTERM on the third
   request kept the finished order, and the two jobs not finished went back with no attempt
   counted. The session ended "released".
@@ -579,9 +599,11 @@ no model. CI runs it with the ingestion suite.
   - a tampered payload, a failing request, a model that keeps failing, and a model that
     will not load;
   - a wrong token, a key not granted, a memory limit too small, and two models in turn;
-  - every session ending with its session release (window end, SIGTERM, empty queue, a
-    fatal error) and none sent to a broker that is down; a lost lease answer retried into
-    the same lease; leases carrying honest time and holding only jobs that fit; a heartbeat
+  - every session ending exactly once (window end, SIGTERM, empty queue, a fatal error,
+    SIGTERM mid-lease, a 403 at lease), none sent to a broker that is down or refused the
+    token, and none opened by a stop before hello; a lost lease answer retried into the
+    same lease, and a lease retry carrying the time left now under the same id; `none_fit`
+    ending the window whatever `on_empty`; no lost warning for a job being settled; leases carrying honest time and holding only jobs that fit; a heartbeat
     naming each job as it starts, before its results; a crash charged to the job in hand
     alone; an unannounced prompt version logged.
 - **Pins**: `pins.PINS` equals `policy.MODELS`, the worker's request hash equals
