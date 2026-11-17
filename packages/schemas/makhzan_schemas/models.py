@@ -1176,7 +1176,8 @@ class AiDecision(Base):
     scores: Mapped[dict] = mapped_column(JSONB, nullable=False)
     #: The thresholds in force (`ai.policy.POLICIES`).
     policy_version: Mapped[str] = mapped_column(String(16), nullable=False)
-    #: The two listings' content hashes the scores were about.
+    #: The two listings' current content hashes, computed when the decision was
+    #: written (not copied from the scores, which may reuse an older label).
     content_sha256_a: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     content_sha256_b: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     state: Mapped[str] = mapped_column(

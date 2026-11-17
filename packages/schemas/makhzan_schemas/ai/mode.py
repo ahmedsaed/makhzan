@@ -1,11 +1,16 @@
 """Whether the regroup acts on AI decisions: the `ai_matching` key in `worker_state`.
 
-- `off` (the default): decisions may be scored and recorded, but the regroup
-  does not read them. `make regroup-dry-run ARGS=--ai` shows what reading them
-  would do, which is how the backlog's groupings are reviewed on a local copy
-  before they reach production (owner decision P4, 2026-11-17).
+The mode governs one thing only: whether the regroup reads decisions. Scoring
+goes on in either mode (the broker leases jobs and accepts results, and
+decisions are written), so the backlog can be scored while off and previewed.
+
+- `off` (the default): the regroup does not read decisions.
+  `make regroup-dry-run ARGS=--ai` shows what reading them would do, which is
+  how the backlog's groupings are reviewed on a local copy before they reach
+  production (owner decision P4, 2026-11-17).
 - `live`: the regroup reads standing "same" decisions
-  (`decisions.load_ai_same`).
+  (`decisions.load_ai_same`), and the broker's rebuild-after-a-window (P16)
+  is armed.
 
 Stored as `{"mode": "<mode>"}`. A missing row, or one that names no known mode,
 reads as `off`: nothing merges on an AI decision until someone says `live`.

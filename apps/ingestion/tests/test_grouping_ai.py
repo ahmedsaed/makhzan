@@ -422,3 +422,103 @@ async def test_the_largest_ai_product_counts_only_products_ai_joined():
     await _same(a, b)
     stats = await _rebuild(dry_run=True, ai_preview=True)
     assert stats["ai_largest"] == 2
+
+
+# --- convergence and competing pairs (second review) -------------------------
+
+
+def _store(listings, groups, ai):
+    """What a regroup writes: each listing's product (one id per group key,
+    stable across regroups) and how it got there."""
+    rules = _group_listings(listings, {m.id: m.product_id for m in listings})
+    via = grouping._attribute(groups, rules, ai)
+    for key, members in groups.items():
+        product = uuid.uuid5(uuid.NAMESPACE_URL, key)
+        for member in members:
+            member.product_id = product
+            member.matched_via = via[member.id][0]
+
+
+def _churn_case(m_shop):
+    a = _mem("HCSR04 Ultrasonic Sensor Module", "shop-a", "HCSR04")
+    b = _mem("HCSR04 Ultrasonic Sensor Module 3.3V", "shop-b", "HCSR04")
+    r = _mem("HCSR04 Ultrasonic Sensor Module 5V", "shop-r", "HCSR04")
+    r2 = _mem("HCSR04 Ultrasonic Sensor Module 5V", "shop-s", "HCSR04")
+    m = _mem("Distance ranging board", m_shop)  # AI-joined to a
+    return [a, b, r, m, r2], _ai((a, m))
+
+
+@pytest.mark.parametrize("m_shop", ["shop-0", "shop-z"])
+def test_regrouping_with_ai_members_converges_after_one_rebuild(m_shop):
+    # An AI-joined listing contradicts nobody, so in pass 1 it would seed its
+    # product and evict the rules core; it is kept out of incumbency, and the
+    # regroup is a fixed point whichever side of the natural order it sorts.
+    listings, ai = _churn_case(m_shop)
+    rules = _shape(_group_listings(listings))
+    first = _group_listings(listings, None, None, ai)
+    _store(listings, first, ai)
+    seen = [_shape(first)]
+    for _ in range(4):
+        again = _group_listings(listings, None, None, ai)
+        _store(listings, again, ai)
+        seen.append(_shape(again))
+    assert all(shape == seen[0] for shape in seen), seen
+    # And no rules merge was split: every rules group sits inside one group.
+    final = list(seen[0].values())
+    for members in rules.values():
+        assert any(set(members) <= set(group) for group in final)
+    a, m = listings[0], listings[3]
+    assert _together(first, a, m)
+
+
+def test_competing_pairs_go_by_strength_not_by_decision_id():
+    x = _mem("Electrolytic capacitor", "shop-x")
+    m = _mem("Cap 10uF radial", "shop-m")
+    n = _mem("Cap 22uF radial", "shop-n")  # m and n conflict: x can join one
+    xm, xn = pair(x.id, m.id), pair(x.id, n.id)
+
+    def decisions(ids):
+        return AiSame(
+            frozenset({xm, xn}), {xm: ids[0], xn: ids[1]}, frozenset(),
+            {xm: (0.99, 0.9), xn: (0.97, 0.95)},
+        )  # fmt: skip
+
+    first = _group_listings([x, m, n], None, None, decisions((1, 2)))
+    assert _together(first, x, m)  # x-m is the stronger decision
+    _store([x, m, n], first, decisions((1, 2)))
+    # x-m re-scored: a new standing row, a new id, the same strength.
+    again = _group_listings([x, m, n], None, None, decisions((3, 2)))
+    assert _shape(again) == _shape(first)
+
+
+def test_the_stronger_pair_wins_whichever_decision_is_older():
+    x = _mem("Electrolytic capacitor", "shop-x")
+    m = _mem("Cap 10uF radial", "shop-m")
+    n = _mem("Cap 22uF radial", "shop-n")
+    xm, xn = pair(x.id, m.id), pair(x.id, n.id)
+    for ids in ((1, 2), (2, 1)):
+        ai = AiSame(
+            frozenset({xm, xn}), {xm: ids[0], xn: ids[1]}, frozenset(),
+            {xm: (0.96, 0.9), xn: (0.99, 0.81)},
+        )  # fmt: skip
+        assert _together(_group_listings([x, m, n], None, None, ai), x, n)
+
+
+async def test_a_live_regroup_is_a_fixed_point_with_ai_members_on_both_sides():
+    shops = {s: await _supplier(s) for s in ("shop-0", "shop-a", "shop-b", "shop-r", "shop-z")}
+    a = await _listing(shops["shop-a"], "HCSR04 Ultrasonic Sensor Module", "HCSR04")
+    await _listing(shops["shop-b"], "HCSR04 Ultrasonic Sensor Module 3.3V", "HCSR04")
+    await _listing(shops["shop-r"], "HCSR04 Ultrasonic Sensor Module 5V", "HCSR04")
+    early = await _listing(shops["shop-0"], "Distance ranging board")
+    late = await _listing(shops["shop-z"], "Sonar module board")
+    await _rebuild()
+    await _same(a, early)
+    await _same(early, late)
+    await _mode("live")
+    await _rebuild()
+    for _ in range(3):
+        stats = await _rebuild()
+        assert (stats["created"], stats["merged"], stats["split"]) == (0, 0, 0)
+    ra, re_, rl = await _rows(a, early, late)
+    assert ra.product_id == re_.product_id == rl.product_id
+    assert (re_.matched_via, rl.matched_via) == ("ai", "ai")

@@ -2,12 +2,15 @@
 
 Synthetic catalogues (seeded, so the same every run) cover identifier families,
 variants, values, forms, prices, stated-only identifiers, two departments,
-existing products (incumbency) and a person's rulings (never_merge, must_merge,
-forced). `fixtures/grouping_golden.json` holds, per catalogue, the sha256 of
+existing products (incumbency, both as random stored product ids and, in a
+half of the catalogues, as the realistic `current` a first pass stored before
+some listings were reworded and new ones arrived) and a person's rulings
+(never_merge, must_merge, forced). `fixtures/grouping_golden.json` holds, per catalogue, the sha256 of
 the groups the grouping code produced **before** AI matching existed (origin's
 main at the merge of #56), keyed and membered by each listing's natural key.
 This test regroups each catalogue with today's code, with no AI argument, with
 an empty `AiSame` and with Kev "no" pairs alone, and requires the same hash.
+AI cases are tested in `test_grouping_ai.py`, never here.
 
 To regenerate (only after a deliberate change to the rules, never to make
 this pass), run this file as a script against the grouping code to freeze:
@@ -40,6 +43,18 @@ _WORDS = (
 ).split()
 _CODES = [None, None, None, "ESP32", "HCSR04", "SG90", "LM7805", "NE555", "DT-830", "TMC2208"]
 _TOOL_CODES = [None, "ASR-6014", "DT-830"]
+_VALUES = [
+    "5V",
+    "12V",
+    "10uF",
+    "22uF",
+    "30 pin",
+    "38 pin",
+    "180 degree",
+    "360 degree",
+    "40C",
+    "90C",
+]
 
 
 def catalogue(seed: int):
@@ -95,6 +110,55 @@ def catalogue(seed: int):
     return listings, overrides
 
 
+def regroup(seed: int, ai=None):
+    """The catalogue's groups as the regroup would make them: from its stored
+    product ids or, in half of the catalogues, from the `current` a first
+    pass stored, after some listings changed and new ones arrived."""
+    listings, overrides = catalogue(seed)
+    extra = () if ai is None else (ai,)
+    if seed % 2:
+        return _group_listings(listings, None, overrides, *extra)
+    rng = random.Random(seed * 7919)
+    first = _group_listings(listings, None, overrides)
+    current = {
+        member.id: uuid.uuid5(uuid.NAMESPACE_URL, f"{seed}:{key}")
+        for key, members in first.items()
+        for member in members
+    }
+    for listing in listings:
+        roll = rng.random()
+        if roll < 0.1:  # reworded: another listing's title
+            listing.title_en = rng.choice(listings).title_en
+        elif roll < 0.25:  # a value now stated
+            listing.title_en = f"{listing.title_en} {rng.choice(_VALUES)}"
+    # Newcomers since the first pass: other shops' copies of a settled
+    # product's wording, some stating a value that contradicts it, sorting
+    # ahead of it (the case incumbency exists for).
+    settled = [members for members in first.values() if len(members) > 1]
+    for i in range(rng.randint(2, 6)):
+        model = rng.choice(rng.choice(settled) if settled else listings)
+        title = model.title_en
+        if rng.random() < 0.9:
+            title = f"{title} {rng.choice(_VALUES)}"
+        listings.append(
+            Listing(
+                id=uuid.UUID(int=rng.getrandbits(128)),
+                supplier_id=uuid.UUID(int=rng.getrandbits(128)),
+                source=f"new-{i}",
+                source_type=SourceType.SCRAPED,
+                external_id=f"0-{seed}-{i}",
+                domain=model.domain,
+                title_en=title,
+                part_number=model.part_number,
+                price=model.price,
+                images=[],
+                attributes={},
+                product_id=None,
+            )
+        )
+    return _group_listings(listings, current, overrides, *extra)
+
+
 def shape_hash(groups) -> str:
     """The groups by natural key, canonical, hashed."""
     shape = {
@@ -111,20 +175,16 @@ def test_with_no_ai_decision_grouping_matches_the_frozen_output_of_before():
     golden = json.loads(GOLDEN.read_text())
     assert len(golden) == SEEDS
     for seed in range(SEEDS):
-        listings, overrides = catalogue(seed)
         want = golden[str(seed)]
-        assert shape_hash(_group_listings(listings, None, overrides)) == want, seed
-        assert shape_hash(_group_listings(listings, None, overrides, AiSame())) == want, seed
+        assert shape_hash(regroup(seed)) == want, seed
+        assert shape_hash(regroup(seed, AiSame())) == want, seed
         # Kev "no" pairs with no "same" pair can block nothing.
+        listings, _ = catalogue(seed)
         no = frozenset(pair(a.id, b.id) for a, b in zip(listings, listings[1:]))
-        ai = AiSame(no=no)
-        assert shape_hash(_group_listings(listings, None, overrides, ai)) == want, seed
+        assert shape_hash(regroup(seed, AiSame(no=no))) == want, seed
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--write"]:
-    out = {}
-    for seed in range(SEEDS):
-        listings, overrides = catalogue(seed)
-        out[str(seed)] = shape_hash(_group_listings(listings, None, overrides))
+    out = {str(seed): shape_hash(regroup(seed)) for seed in range(SEEDS)}
     Path(sys.argv[2]).write_text(json.dumps(out, indent=0, sort_keys=True) + "\n")
     print(f"wrote {len(out)} catalogue hashes")
