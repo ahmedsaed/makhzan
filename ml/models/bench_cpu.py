@@ -50,7 +50,10 @@ SEED = 20261116
 N_PAIRS = 60  # session default, awaiting owner review (decision-review.md, D23)
 # (model, prompt_grid variant, cap) -> threshold of the chosen setup
 SETUP = {"kev-K2-150": ("kev", "K2", "150", 0.8), "pplx-K1-full": ("pplx", "K1", "full", 0.95)}
-KEV_RUN = "jaredpalmer/kev-4b"
+# Pinned to the cached snapshot's commit (kev.checkpoint.resolve_run takes `repo@revision`); its
+# head.pt pins the base itself (Qwen/Qwen3.5-4B-Base@1001bb4d826a52d1f399e183466143f4da7b741b).
+KEV_REVISION = "6cfce5c2fa4b4bd64026336ab649c5ca78857d52"
+KEV_RUN = f"jaredpalmer/kev-4b@{KEV_REVISION}"
 KEV_MODEL_NAME = "kev-latest"  # what makhzan_ml.client sends as `model` (Service "kev-4b")
 PPLX_REPO = "perplexity-ai/pplx-decider-flash-v1.3"
 PPLX_REVISION = "d06fb3f2d97e0a52325a0d463c450cf0338f44fe"
