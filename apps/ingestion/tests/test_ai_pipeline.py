@@ -229,6 +229,8 @@ async def test_only_the_best_match_per_other_shop_counts_on_both_sides():
     await _decision(x, c1, pplx=0.96)  # the only match in shop c
     got = await _load()
     assert got.pairs == {pair(x, b1), pair(x, c1)}
+    # Strength, last stage first: what orders competing pairs in the regroup.
+    assert got.rank == {pair(x, b1): (0.99, 0.9), pair(x, c1): (0.96, 0.9)}
 
 
 async def test_the_group_check_reads_every_standing_kev_no():

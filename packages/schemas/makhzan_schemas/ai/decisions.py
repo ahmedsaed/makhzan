@@ -37,19 +37,23 @@ log = logging.getLogger(__name__)
 class AiSame:
     """What the regroup reads of AI decisions.
 
-    - `pairs`: "same" pairs that may admit their two listings to one product,
-      like a non-forced must_merge, at a rank below a person's ruling
-      (`grouping._AI`); every one of today's vetoes still applies.
+    - `pairs`: "same" pairs that may join their two listings' clusters in
+      the regroup's final AI phase (`grouping._ai_phase`), after the rules and
+      a person's rulings; every one of today's vetoes still applies.
     - `ids`: each pair's decision id, cited on the product events it causes
       and written to `listings.matched_ai_decision_id`.
     - `no`: pairs `policy.GROUP_CHECK_MODEL` scored below `policy.KEV_BLOCK`
-      (P14). A join that rests on an AI decision is blocked when the newcomer
-      has one of these with any member; a join the rules make alone never is.
+      (P14). An AI join is blocked when any member of one side has one of
+      these with any member of the other; a join the rules make alone never is.
+    - `rank`: each pair's strength (`pipelines.rank`: its stages' lower
+      scores, last stage first), which orders competing pairs in the AI
+      phase. Not the decision id: a re-score renews that.
     """
 
     pairs: frozenset[Pair] = frozenset()
     ids: dict[Pair, int] = field(default_factory=dict)
     no: frozenset[Pair] = frozenset()
+    rank: dict[Pair, tuple[float, ...]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.pairs)
@@ -133,11 +137,13 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
                 best[key] = strength
     pairs: set[Pair] = set()
     ids: dict[Pair, int] = {}
+    ranks: dict[Pair, tuple[float, ...]] = {}
     for decision_id, a, b, strength, shop_a, shop_b in rows:
         if best[(a, shop_b)] == strength and best[(b, shop_a)] == strength:
             key = pair(a, b)
             pairs.add(key)
             ids[key] = decision_id
+            ranks[key] = strength[:-1]
 
     # Constants from code, never input: the jsonpath is written out in full.
     below = literal_column(
@@ -149,4 +155,4 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
         )
     )
     no = frozenset(pair(a, b) for a, b in no_rows.all())
-    return AiSame(frozenset(pairs), ids, no)
+    return AiSame(frozenset(pairs), ids, no, ranks)

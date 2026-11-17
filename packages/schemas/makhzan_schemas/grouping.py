@@ -245,8 +245,8 @@ class _Rulings:
       pair joined several groups into one (empty otherwise). Title agreement
       admits only within one key: the ruling joins its own two listings, not
       two codes' worth of similar titles.
-    - `ai`: AI "same" pairs (`ai.decisions.AiSame`) inside the group, in
-      decision-id order. They take no part in passes 1 to 5: they act only in
+    - `ai`: AI "same" pairs (`ai.decisions.AiSame`) inside the group,
+      strongest decision first (`AiSame.rank`), then by the pair's listing ids. They take no part in passes 1 to 5: they act only in
       the final AI phase (`_ai_phase`), once the rules and the rulings have
       formed every cluster they would form anyway.
     - `ai_no`: pairs the group-check model scored a confident no (P14),
@@ -314,7 +314,9 @@ def _rulings(
     if ai:
         inside = sorted(
             (p for p in ai.pairs if p[0] in ids and p[1] in ids),
-            key=lambda p: (ai.ids.get(p, 0), str(p[0]), str(p[1])),
+            # Strongest decision first; the pair's own listing ids break a
+            # tie, never the decision id, which a re-score renews.
+            key=lambda p: (tuple(-x for x in ai.rank.get(p, ())), str(p[0]), str(p[1])),
         )
         if inside:
             no = frozenset(p for p in ai.no if p[0] in ids and p[1] in ids)
@@ -599,8 +601,16 @@ def _subcluster(
         product_id = current.get(listing.id) if current is not None else listing.product_id
         # A stated-only listing gets no incumbency: it always waits for pass 5,
         # or a product it joined early would keep it against titles that
-        # name the part outright.
-        if product_id is not None and not _stated_only(listing):
+        # name the part outright. Nor does a listing an AI pair put in its
+        # product (`matched_via == "ai"`, as the last regroup wrote it): the
+        # rules rebuild the product without it and only the AI phase places
+        # it again. Otherwise it could seed the incumbent (it contradicts
+        # nobody), evict the rules core, and flip the product every regroup.
+        if (
+            product_id is not None
+            and not _stated_only(listing)
+            and getattr(listing, "matched_via", None) != "ai"
+        ):
             by_product[product_id].append(listing)
     incumbents = sorted(
         (members for members in by_product.values() if len(members) > 1),
@@ -709,7 +719,9 @@ def _ai_phase(
 ) -> list[_Cluster]:
     """Join clusters on AI "same" pairs, after the rules have done all they would.
 
-    Each pair, in decision-id order, joins its two listings' clusters when
+    Each pair, strongest decision first (then by its listing ids, so a
+    re-score that renews a decision's id changes nothing), joins its two
+    listings' clusters when
     every one of today's vetoes allows it between **every** member of one and
     every member of the other (the same shop, a never_merge, values, form,
     price; a forced must_merge lifts the last three for its own pair), and when
@@ -719,7 +731,9 @@ def _ai_phase(
     order listings were placed in, nor on whether the product existed before:
     a Kev no blocks the join whichever side sorts first, and arriving after an
     AI merge it undoes that merge at the next regroup. The rules' own clusters
-    are never split here: the phase only joins.
+    are never split here: the phase only joins. When two pairs compete for one
+    listing (X same as M, and as N, M and N apart), the stronger wins; a late
+    Kev no that blocks the winner can let the losing pair merge instead.
     """
     of: dict[uuid.UUID, int] = {}
     live: dict[int, _Cluster] = {}
