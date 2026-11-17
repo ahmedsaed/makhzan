@@ -22,7 +22,14 @@ and the pair score is the lower one. No two-stage. Requests are rendered by prom
 compose's kev-4b-cpu; pplx through serve.py's build() and the same logits -> answer computation
 as POST /v1/decide, fp32 (the card's CPU choice), BATCH_TOKENS=8192. The only change is how the
 weights are read: every safetensors file is read with pread(2) rather than memory-mapped
-(no_mmap), and the result records any weight file mapped after loading. Its top level is standard library only, so it runs in either image.
+(no_mmap), and the result records any weight file mapped after loading (mapped_weights: the real
+paths of the Hub cache's weight files, which are symlinks to suffix-less blobs, and anything under
+the cache; `selfcheck` proves it sees a file mapped through such a symlink, and `run` runs that
+check first). Its top level is standard library only, so it runs in either image.
+
+Session-chosen measurement parameters, not owner decisions (docs/ai/decision-review.md, D23):
+N_PAIRS = 60 pairs drawn for the benchmark and parity's --tolerance 0.05. They decide how much is
+measured and what counts as CPU/GPU agreement, not what merges.
 """
 
 from __future__ import annotations
@@ -40,14 +47,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SEED = 20261116
-N_PAIRS = 60
+N_PAIRS = 60  # session default, awaiting owner review (decision-review.md, D23)
 # (model, prompt_grid variant, cap) -> threshold of the chosen setup
 SETUP = {"kev-K2-150": ("kev", "K2", "150", 0.8), "pplx-K1-full": ("pplx", "K1", "full", 0.95)}
 KEV_RUN = "jaredpalmer/kev-4b"
 KEV_MODEL_NAME = "kev-latest"  # what makhzan_ml.client sends as `model` (Service "kev-4b")
 PPLX_REPO = "perplexity-ai/pplx-decider-flash-v1.3"
 PPLX_REVISION = "d06fb3f2d97e0a52325a0d463c450cf0338f44fe"
-WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth")
+WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".gguf")
 
 SQL = """
 SELECT json_build_object(
@@ -109,7 +116,7 @@ def cmd_render(args) -> None:
                     pl = pg.payload(listings, a, b, variant, pg.CAPS[cap])
                     fh.write(json.dumps({"pair_id": p["pair_id"], "order": order, "config": cfg,
                                          "threshold": threshold, "request": pl,
-                                         "gpu_score": gpu[(p["pair_id"], order)]},
+                                         "gpu_score": gpu.get((p["pair_id"], order))},
                                         ensure_ascii=False) + "\n")  # fmt: skip
         files[path.name] = {"requests": 2 * len(sample), "sha256": sha256(path)}
     strata: dict[str, int] = {}
@@ -148,14 +155,85 @@ def cgroup(name: str) -> str | None:
     return p.read_text().strip() if p.exists() else None
 
 
-def mapped_weights() -> list[str]:
-    """Weight files still memory-mapped by this process."""
+def hub_cache_dirs() -> list[Path]:
+    """The Hub cache this process loads from, resolved as huggingface_hub does."""
+    env = os.environ
+    hub = env.get("HF_HUB_CACHE") or env.get("HUGGINGFACE_HUB_CACHE")
+    if not hub:
+        home = env.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+        hub = os.path.join(home, "hub")
+    return [Path(hub)]
+
+
+def weight_files(cache_dirs: list[Path]) -> set[str]:
+    """Real paths of every weight file in the caches' snapshots. In a standard Hub cache each
+    snapshots/<rev>/<name> is a symlink to a suffix-less blobs/<sha> file (or further, into a
+    shared store), and /proc/self/maps lists that target, never the snapshot name."""
     out = set()
-    for line in Path("/proc/self/maps").read_text().splitlines():
+    for d in cache_dirs:
+        for f in Path(d).glob("models--*/snapshots/*/**/*"):
+            if f.name.endswith(WEIGHT_SUFFIXES) and f.is_file():
+                out.add(os.path.realpath(f))
+    return out
+
+
+def mapped_weights(maps: str | None = None, cache_dirs: list[Path] | None = None) -> list[str]:
+    """Weight files memory-mapped by this process: a mapping that is the real path of a snapshot's
+    weight file, lies anywhere under a Hub cache directory, or carries a weight suffix.
+
+    The suffix alone (the first version) can never fire on a standard cache, where the mapped
+    path is the blob; it only worked on copies with symlinks resolved (rsync -L)."""
+    cache_dirs = hub_cache_dirs() if cache_dirs is None else cache_dirs
+    real = weight_files(cache_dirs)
+    roots = tuple(os.path.realpath(d) + os.sep for d in cache_dirs)
+    text = Path("/proc/self/maps").read_text() if maps is None else maps
+    out = set()
+    for line in text.splitlines():
         parts = line.split(maxsplit=5)
-        if len(parts) == 6 and parts[5].endswith(WEIGHT_SUFFIXES):
-            out.add(parts[5])
+        if len(parts) < 6:
+            continue
+        path = parts[5].removesuffix(" (deleted)")
+        if path in real or path.startswith(roots) or path.endswith(WEIGHT_SUFFIXES):
+            out.add(path)
     return sorted(out)
+
+
+def selfcheck() -> None:
+    """Map weight files through Hub-style symlinks and confirm mapped_weights reports them.
+
+    Two layouts: the standard one (snapshot symlink -> suffix-less blob in the same cache) and a
+    snapshot whose symlink leads out of the cache (a shared store), which only the real-path
+    match catches. Raises AssertionError on a miss; stdlib only, needs a writable temp dir."""
+    import mmap
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        hub = Path(tmp) / "hub"
+        repo = hub / "models--org--name"
+        snap = repo / "snapshots" / ("1" * 40)
+        blob = repo / "blobs" / ("0" * 64)
+        outside = Path(tmp) / "store" / ("2" * 64)
+        for d in (snap, blob.parent, outside.parent):
+            d.mkdir(parents=True)
+        blob.write_bytes(b"\0" * mmap.PAGESIZE)
+        outside.write_bytes(b"\0" * mmap.PAGESIZE)
+        std = snap / "model-00001-of-00002.safetensors"
+        std.symlink_to(os.path.relpath(blob, snap))
+        far = snap / "model-00002-of-00002.safetensors"
+        far.symlink_to(outside)
+        assert not os.path.realpath(std).endswith(WEIGHT_SUFFIXES)  # what the suffix check missed
+        assert mapped_weights(cache_dirs=[hub]) == [], "nothing mapped yet"
+        with std.open("rb") as f1, far.open("rb") as f2:
+            m1 = mmap.mmap(f1.fileno(), 0, access=mmap.ACCESS_READ)
+            m2 = mmap.mmap(f2.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                seen = mapped_weights(cache_dirs=[hub])
+            finally:
+                m1.close()
+                m2.close()
+        want = sorted({os.path.realpath(blob), os.path.realpath(outside)})
+        assert seen == want, f"mapped_weights missed a symlinked mapping: {seen} != {want}"
+        assert mapped_weights(cache_dirs=[hub]) == [], "unmapped files still reported"
 
 
 def no_mmap() -> None:
@@ -235,6 +313,7 @@ def load_pplx():
 
 def cmd_run(args) -> None:
     t_start = time.perf_counter()
+    selfcheck()  # a check that cannot fire would report "no weights mapped" whatever happened
     reqs = [json.loads(line) for line in args.requests.open()]
     if args.limit:
         reqs = reqs[: args.limit]
@@ -242,7 +321,8 @@ def cmd_run(args) -> None:
                 "MKL_ENABLE_INSTRUCTIONS", "HF_HUB_OFFLINE", "KEV_DTYPE", "DTYPE", "BATCH_TOKENS")  # fmt: skip
     res: dict = {"model": args.model, "requests_file": args.requests.name,
                  "requests_sha256": sha256(args.requests), "n": len(reqs),
-                 "no_mmap": not args.mmap, "env": {k: os.environ.get(k) for k in env_keys},
+                 "no_mmap": not args.mmap, "mapped_check": "selfcheck passed",
+                 "hub_cache": [str(d) for d in hub_cache_dirs()], "env": {k: os.environ.get(k) for k in env_keys},
                  "affinity_cpus": len(os.sched_getaffinity(0)), "cpu_count": os.cpu_count(),
                  "cgroup_cpu_max": cgroup("cpu.max"), "cgroup_memory_max": cgroup("memory.max"),
                  "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}  # fmt: skip
@@ -312,23 +392,29 @@ def write(path: Path, res: dict) -> None:
 def cmd_parity(args) -> None:
     res = json.loads(args.result.read_text())
     reqs = {(r["pair_id"], r["order"]): r for r in map(json.loads, args.requests.open())}
-    t = args.threshold or next(iter(reqs.values()))["threshold"]
-    rows = [(x, reqs[(x["pair_id"], x["order"])]["gpu_score"]) for x in res["results"]]
-    ok = [(x["score"], g) for x, g in rows if x["score"] is not None]
+    t = args.threshold if args.threshold is not None else next(iter(reqs.values()))["threshold"]
+    # a GPU score can be missing (a failed GPU request, or a request not in this file): such a
+    # request is counted, never compared
+    rows = [(x, reqs.get((x["pair_id"], x["order"]), {}).get("gpu_score")) for x in res["results"]]
+    no_gpu = [(x["pair_id"], x["order"]) for x, g in rows if g is None]
+    ok = [(x["score"], g) for x, g in rows if x["score"] is not None and g is not None]
     d = [abs(c - g) for c, g in ok]
     by_pair: dict[str, dict] = {}
     for x, g in rows:
         by_pair.setdefault(x["pair_id"], {})[x["order"]] = (x["score"], g)
     pairs = {k: v for k, v in by_pair.items()
-             if len(v) == 2 and all(c is not None for c, _ in v.values())}  # fmt: skip
+             if len(v) == 2 and all(c is not None and g is not None for c, g in v.values())}  # fmt: skip
     pmin = {k: (min(c for c, _ in v.values()), min(g for _, g in v.values()))
             for k, v in pairs.items()}  # fmt: skip
     flips_req = [(x["pair_id"], x["order"], round(g, 4), round(x["score"], 4)) for x, g in rows
-                 if x["score"] is not None and (x["score"] >= t) != (g >= t)]  # fmt: skip
+                 if x["score"] is not None and g is not None
+                 and (x["score"] >= t) != (g >= t)]  # fmt: skip
     flips_pair = [
         (k, round(g, 4), round(c, 4)) for k, (c, g) in pmin.items() if (c >= t) != (g >= t)
     ]
-    out = {"result": args.result.name, "threshold": t, "requests": len(rows), "scored": len(ok),
+    out = {"result": args.result.name, "threshold": t, "requests": len(rows),
+           "scored": sum(x["score"] is not None for x, _ in rows), "compared": len(ok),
+           "missing_gpu_score": no_gpu,
            "max_abs_diff": round(max(d), 4) if d else None,
            "mean_abs_diff": round(sum(d) / len(d), 4) if d else None,
            "agree_requests": f"{len(ok) - len(flips_req)}/{len(ok)}",
@@ -352,7 +438,12 @@ def main() -> None:
         "--grid", type=Path, required=True, help="prompt_grid --out (listings.json, raw/)"
     )
     r.add_argument("--out", type=Path, required=True)
-    r.add_argument("--n", type=int, default=N_PAIRS)
+    r.add_argument(
+        "--n",
+        type=int,
+        default=N_PAIRS,
+        help="pairs to draw (default 60: a session choice awaiting owner review)",
+    )
     r.add_argument("--seed", type=int, default=SEED)
     r.add_argument("--container", default="makhzan-db-1")
     r.add_argument("--db-user", default="makhzan")
@@ -368,8 +459,19 @@ def main() -> None:
     p.add_argument("--result", type=Path, required=True)
     p.add_argument("--requests", type=Path, required=True)
     p.add_argument("--threshold", type=float, help="default: the setup's, from the requests file")
-    p.add_argument("--tolerance", type=float, default=0.05, help="max |CPU - GPU| per request")
+    p.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.05,
+        help="max |CPU - GPU| per request (default 0.05: a session choice awaiting "
+        "owner review; a measurement parameter, not a merge rule)",
+    )
+    sub.add_parser("selfcheck", help="prove the mapped-weights check sees a symlinked blob")
     args = ap.parse_args()
+    if args.cmd == "selfcheck":
+        selfcheck()
+        print("selfcheck: mapped_weights sees files mapped through Hub symlinks")
+        return
     {"render": cmd_render, "run": cmd_run, "parity": cmd_parity}[args.cmd](args)
 
 
