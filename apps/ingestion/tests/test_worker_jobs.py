@@ -244,3 +244,23 @@ def test_the_worker_runs_every_source_at_once_and_still_has_room_to_rebuild():
         getattr(f, "name", getattr(f, "__name__", None)) for f in main.WorkerSettings.functions
     }
     assert {"crawl_source", "rebuild_and_reindex", "run_source", "run_partition"} <= names
+
+
+async def test_a_rebuild_queues_the_ai_producers_once_per_window(monkeypatch):
+    """After each rebuild the AI candidates job is queued, with a window job id,
+    so rebuilds close together share one run of it."""
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(main, "rebuild_products", nothing)
+    monkeypatch.setattr(main, "reindex_all", nothing)
+    monkeypatch.setattr(main, "retire_redirects_daily", nothing)
+    monkeypatch.setattr(main, "get_client", lambda: None)
+    monkeypatch.setattr(main, "_REBUILD_LOCK", asyncio.Lock())
+    redis = FakeRedis()
+    await main.rebuild_and_reindex({"redis": redis})
+    await main.rebuild_and_reindex({"redis": redis})
+    assert len(redis.named("ai_candidates")) == 1
+    names = {getattr(f, "name", None) for f in main.WorkerSettings.functions}
+    assert "ai_candidates" in names
