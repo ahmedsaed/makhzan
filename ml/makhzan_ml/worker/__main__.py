@@ -30,18 +30,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         from makhzan_ml.worker.judges import importable
 
-        missing = [k for k in cfg.models if not importable(k)]
-        if missing:
+        if not importable(cfg.model):
             logging.error(
-                "configuration: this image cannot load %s (each model image holds one "
+                "configuration: this image cannot load %r (each model image holds one "
                 "model's code)",
-                missing,
+                cfg.model,
             )
             return run.EXIT_CONFIG
         logging.info(
             "configuration ok: %s serves %s on %s %s, window %s, on_empty %s",
             cfg.name,
-            ",".join(cfg.models),
+            cfg.model,
             cfg.device,
             cfg.dtype,
             cfg.schedule.describe(),

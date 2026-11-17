@@ -3,8 +3,8 @@
 It keeps jobs in memory and implements what a worker can observe, as the phase 2 broker
 answers it (`app.broker.main` in apps/api):
 
-- bearer auth (401), model keys per worker (403), version checks at hello (`ok: false`)
-  and at lease (409 version);
+- bearer auth (401), model keys per worker (403), exactly one model per session (a hello
+  naming more is 422), version checks at hello (`ok: false`) and at lease (409 version);
 - hello answers `lease_s` from the worker's `config.lease_s` (an integer from 60 to 7200,
   default 900), `heartbeat_s = min(60, lease_s / 3)`, and per model the `stages` (pipeline,
   stage, prompt version) its leases will carry;
@@ -254,8 +254,8 @@ class FakeBroker:
     def _hello(self, who, body):
         name, allowed = who
         models = body.get("models")
-        if not isinstance(models, dict) or not models:
-            return _invalid("models")
+        if not isinstance(models, dict) or len(models) != 1:
+            return _invalid("models: exactly one model per session")
         for key in models:
             if key not in allowed:
                 return 403, {"error": "model_not_allowed", "model": key}

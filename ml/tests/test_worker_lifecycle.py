@@ -99,7 +99,7 @@ def pair(n: int) -> dict:
 
 def config(url: str, **sections) -> dict:
     data = {
-        "worker": {"name": "home-kev", "broker_url": url, "token": TOKEN, "models": ["kev"]},
+        "worker": {"name": "home-kev", "broker_url": url, "token": TOKEN, "model": "kev"},
         "compute": {"threads": 6, "nice": 0},
         "schedule": {"windows": "always", "timezone": "Africa/Cairo", "on_empty": "exit"},
         "leases": {"max_jobs": 2, "lease_s": 900, "heartbeat_s": 60, "seconds_per_request": 10},
@@ -432,16 +432,6 @@ def test_version_drift_at_hello_leases_nothing(broker, sleeps):
     assert "/lease" not in broker.paths() and fake.loads == []
 
 
-def test_version_drift_on_one_key_serves_the_others(broker, sleeps):
-    broker.versions["kev"] = "kev-4b@ffffffffffff+kev-0000000+T1.0"
-    job = broker.add_job("pplx", pair(1))
-    worker, fake, _ = make_worker(broker, sleeps, worker={"models": ["kev", "pplx"]})
-    assert worker.run() == run.EXIT_OK
-    assert [b["model"] for b in broker.bodies("/lease")] == ["pplx", "pplx"]
-    assert fake.loads == ["pplx"] and job.status == "done"
-    assert job.scores["ab"]["extra"] == {"margin": 1.5}
-
-
 def test_version_drift_at_lease_exits(broker, sleeps):
     broker.add_job("kev", pair(1))
     broker.fail("/lease", status=409,
@@ -530,7 +520,7 @@ def test_a_wrong_token_exits(broker, sleeps):
 
 def test_a_model_key_the_broker_does_not_grant_exits():
     with FakeBroker({TOKEN: ("home-kev", ["kev"])}) as b:
-        cfg = parse(config(b.url, worker={"models": ["pplx"]}))
+        cfg = parse(config(b.url, worker={"model": "pplx"}))
         worker = run.Worker(cfg, Broker(cfg.broker_url, TOKEN), load_judge=FakeJudges(),
                             importable=lambda k: True)  # fmt: skip
         assert worker.run() == run.EXIT_AUTH
@@ -543,14 +533,19 @@ def test_too_small_a_memory_limit_stops_before_hello(broker, sleeps, monkeypatch
     assert broker.calls == []
 
 
-def test_two_models_are_drained_one_after_the_other(broker, sleeps):
+def test_two_models_are_two_workers(broker, sleeps):
+    # One model per session (the broker refuses a hello naming two): a Kev worker, then a
+    # pplx worker, each its own session.
     k = broker.add_job("kev", pair(1))
     p = broker.add_job("pplx", pair(2))
-    worker, fake, _ = make_worker(broker, sleeps, worker={"models": ["kev", "pplx"]})
-    assert worker.run() == run.EXIT_OK
-    assert fake.loads == ["kev", "pplx"]
-    assert fake.unloads == ["kev", "pplx"]  # kev freed before pplx was loaded
+    kev, kev_judges, _ = make_worker(broker, sleeps)
+    pplx, pplx_judges, _ = make_worker(broker, sleeps, worker={"model": "pplx"})
+    assert kev.run() == run.EXIT_OK and pplx.run() == run.EXIT_OK
+    assert kev_judges.loads == ["kev"] and pplx_judges.loads == ["pplx"]
+    assert [list(b["models"]) for b in broker.bodies("/hello")] == [["kev"], ["pplx"]]
+    assert {b["model"] for b in broker.bodies("/lease")} == {"kev", "pplx"}
     assert k.status == "done" and p.status == "done"
+    assert len(broker.sessions) == 2
 
 
 # --- review regressions ---------------------------------------------------------------------
@@ -780,7 +775,7 @@ def test_heartbeats_never_name_a_finished_job(broker, sleeps, caplog):
 
 
 def test_a_model_this_image_cannot_load_stops_before_hello(broker, sleeps):
-    cfg = parse(config(broker.url, worker={"models": ["kev", "pplx"]}))
+    cfg = parse(config(broker.url, worker={"model": "pplx"}))  # in a Kev image
     worker = run.Worker(cfg, Broker(cfg.broker_url, TOKEN), load_judge=FakeJudges(),
                         importable=lambda k: k == "kev")  # fmt: skip
     assert worker.run() == run.EXIT_CONFIG
@@ -930,7 +925,7 @@ def test_a_prompt_version_hello_did_not_announce_is_logged(broker, sleeps, caplo
     worker, fake, _ = make_worker(broker, sleeps)
     with caplog.at_level(logging.INFO):
         assert worker.run() == run.EXIT_OK
-    assert worker.stages["kev"] == {"match/kev": "K2-150@test", "audit/kev": "K2-150@test"}
+    assert worker.stages == {"match/kev": "K2-150@test", "audit/kev": "K2-150@test"}
     msgs = [r.getMessage() for r in caplog.records]
     assert any("K2-150@elsewhere is not one hello announced" in m for m in msgs)
     assert any("stages: audit/kev prompt K2-150@test" in m for m in msgs)
@@ -1062,46 +1057,6 @@ def test_final_results_retrying_is_kept_alive_by_heartbeats(broker, sleeps, capl
     assert all(b[0]["job_ids"] == [job.job_id] for b in beats)  # still named while settling
     assert job.status == "done" and job.attempts == 0
     assert not any("heartbeat: lost" in r.getMessage() for r in caplog.records)
-
-
-def test_none_fit_on_one_model_still_asks_the_next(broker, sleeps):
-    # The reviewer's regression: Kev's job does not fit the time left, pplx's does; the
-    # window is not over for pplx.
-    kev = broker.add_job("kev", pair(1))  # two 200 s orders: 400 s
-    pplx = broker.add_job("pplx", pair(2))
-    pplx.scores["ba"] = {"p": 0.5}  # one order still owed: 200 s
-    clock = FakeClock(datetime(2026, 11, 17, 4, 20, tzinfo=CAIRO))  # 10 minutes left
-    worker, fake, _ = make_worker(
-        broker, sleeps, clock=clock,
-        worker={"models": ["kev", "pplx"]},
-        schedule={"windows": ["00:30-04:30"], "on_empty": "wait", "poll_s": 60},
-        leases={"seconds_per_request": 200},
-    )  # fmt: skip
-    assert worker.run() == run.EXIT_OK
-    # 600 s less a 150 s load less the 60 s margin: 390 s. Kev's 400 s job does not fit; it
-    # is not asked again this window. pplx's 200 s fits and is scored.
-    models = [b["model"] for b in broker.bodies("/lease")]
-    assert models.count("kev") == 1
-    assert kev.status == "queued" and kev.attempts == 0
-    assert pplx.status == "done" and fake.loads == ["pplx"]
-
-
-def test_every_key_none_fit_ends_the_window(broker, sleeps, caplog):
-    broker.add_job("kev", pair(1))
-    broker.add_job("pplx", pair(2))
-    clock = FakeClock(datetime(2026, 11, 17, 4, 24, tzinfo=CAIRO))  # 6 minutes left
-    worker, fake, clock = make_worker(
-        broker, sleeps, clock=clock,
-        worker={"models": ["kev", "pplx"]},
-        schedule={"windows": ["00:30-04:30"], "on_empty": "wait", "poll_s": 60},
-        leases={"seconds_per_request": 200},
-    )  # fmt: skip
-    with caplog.at_level(logging.INFO):
-        assert worker.run() == run.EXIT_OK
-    assert [b["model"] for b in broker.bodies("/lease")] == ["kev", "pplx"]  # once each
-    assert clock.waits == [] and fake.loads == []
-    assert worker.stop_reason == "no job fits the time left"
-    assert session_releases(broker) == []  # the broker ended the session at none_fit
 
 
 def test_a_release_never_names_a_job_found_lost(broker, sleeps):

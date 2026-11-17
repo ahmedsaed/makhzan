@@ -1,12 +1,14 @@
 """One worker session, from hello to the last release (docs/ai/worker.md, "Lifecycle").
 
 1. Outside every window: exit 0, nothing sent.
-2. Pre-flight: every model key must be loadable in this image; the container's memory
+A worker serves exactly one model key (`cfg.model`): the broker takes one model per
+session, so two models are two workers.
+
+2. Pre-flight: the model key must be loadable in this image; the container's memory
    limit against `memory_gib`; then lower the process priority (`nice`).
-3. `POST /hello` with the name, model keys and versions, device, dtype and threads. A
-   key the broker answers `ok: false` for (version drift) is never leased; no `ok` key
-   at all exits 3.
-4. Per model key, in the configured order, until its queue is empty:
+3. `POST /hello` with the name, the model key and its versions, device, dtype and
+   threads. If the broker answers `ok: false` (version drift), nothing is leased: exit 3.
+4. Until the queue is empty:
    `POST /lease` (seconds left in the window, the measured seconds per request); the
    model is loaded on the first lease that brings jobs, never on an empty night, and
    checked against its pins (`judges.load`); each job's requests are scored **in the
@@ -34,11 +36,10 @@
    by `POST /release {"session"}`, a
    graceful release naming no jobs (broker-api.md §3.5), however it stopped. A session
    release is not sent after the broker already recorded the end (it would overwrite
-   "empty" with "released"), nor to a broker that is unreachable or refused the token. A
-   stop that comes before hello opens no session at all. A lease that answers "none_fit"
-   (jobs are queued, none fits the time left) means that model key is done for the window:
-   the other keys are still asked, and the window's work ends, whatever `on_empty`, once
-   every key has answered "none_fit".
+   "empty" or "none_fit" with "released"), nor to a broker that is unreachable or refused
+   the token. A stop that comes before hello opens no session at all. A lease that
+   answers "none_fit" (jobs are queued, none fits the time left) ends the window's work,
+   whatever `on_empty`: polling would only find the same.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its
 job, order, request hash and score (never the payload), the moment it is known not to
@@ -175,13 +176,14 @@ class Worker:
         self.threads = cfg.threads or (judges.default_threads() if cfg.device == "cpu" else None)
         self.judge: judges.Judge | None = None
         self.held = _Held()
-        self.spr = {k: cfg.seconds_per_request for k in cfg.models}  # measured, per model
-        self._measured: set[str] = set()
+        self.key = cfg.model  # the one model this worker serves
+        self.spr = cfg.seconds_per_request  # seconds per request: measured once scoring
+        self._measured = False
         self.judge_info: dict[str, dict] = {}  # what each load reported, kept after unloading
         self.undelivered: list[dict] = []
         self.session_closed = False  # the broker has recorded the session's end (P16)
         self.token_refused = False  # a 401: the broker will hear nothing more from us
-        self.stages: dict[str, dict[str, str]] = {}  # model -> {"pipeline/stage": prompt}
+        self.stages: dict[str, str] = {}  # "pipeline/stage" -> prompt version, from hello
         self.failed_jobs: set[int] = set()  # distinct jobs failed since the last success
         self.scored = 0
         self._hb_thread: threading.Thread | None = None
@@ -289,10 +291,10 @@ class Worker:
             if self.stop.is_set():  # stopped before hello: open no session at all
                 log.info("stopped before hello (%s); no session opened", self.stop_reason)
                 return EXIT_OK
-            ok = self._hello()
+            self._hello()
             self._start_heartbeat()
             try:
-                self._serve(ok)
+                self._serve()
             finally:
                 self._stop_heartbeat()
                 self._unload()
@@ -319,11 +321,10 @@ class Worker:
 
     def _preflight(self) -> None:
         cfg = self.cfg
-        missing = [k for k in cfg.models if not self.importable(k)]
-        if missing:
+        if not self.importable(self.key):
             raise _Fatal(
                 EXIT_CONFIG,
-                f"this image cannot load {missing}: each model image holds one model's code "
+                f"this image cannot load {self.key!r}: each model image holds one model's code "
                 "(use the image built on that model's base)",
             )
         limit = judges.cgroup_memory_max()
@@ -351,16 +352,15 @@ class Worker:
             if os.access(cfg.weights_cache, os.W_OK):
                 log.warning("weights_cache %s is writable; mount it read-only", cfg.weights_cache)
 
-    def _hello(self) -> list[str]:
-        cfg = self.cfg
+    def _hello(self) -> None:
+        cfg, key = self.cfg, self.key
         body = {
             "worker": cfg.name,
-            "models": {
-                k: {
-                    "model_version": PINS[k].model_version,
-                    "weights_revision": PINS[k].weights_revision,
+            "models": {  # exactly one: the broker takes one model per session
+                key: {
+                    "model_version": PINS[key].model_version,
+                    "weights_revision": PINS[key].weights_revision,
                 }
-                for k in cfg.models
             },
             "image": self.image,
             "device": cfg.device,
@@ -376,67 +376,51 @@ class Worker:
             self.heartbeat_s = min(self.heartbeat_s, float(resp["heartbeat_s"]))
         if resp.get("lease_s"):  # the broker's lease length is the one that applies
             self.heartbeat_s = min(self.heartbeat_s, float(resp["lease_s"]) / 2)
-        ok = []
-        for key in cfg.models:
-            answer = (resp.get("models") or {}).get(key) or {}
-            stages = {
-                f"{st.get('pipeline')}/{st.get('stage')}": st.get("prompt_version")
-                for st in answer.get("stages") or []
-                if isinstance(st, dict)
-            }
-            self.stages[key] = stages
-            if stages:
-                log.info(
-                    "hello: %s stages: %s",
-                    key,
-                    ", ".join(f"{k} prompt {v}" for k, v in sorted(stages.items())),
-                )
-            if answer.get("ok"):
-                ok.append(key)
-                log.info(
-                    "hello: %s %s ok, %s requests queued",
-                    key,
-                    PINS[key].model_version,
-                    answer.get("queued_requests"),
-                )
-            else:
-                log.error(
-                    "hello: %s is not ok: this worker serves %s, the broker's registry %s; "
-                    "it will not be leased",
-                    key,
-                    PINS[key].model_version,
-                    answer.get("model_version"),
-                )
+        answer = (resp.get("models") or {}).get(key) or {}
+        self.stages = {
+            f"{st.get('pipeline')}/{st.get('stage')}": st.get("prompt_version")
+            for st in answer.get("stages") or []
+            if isinstance(st, dict)
+        }
+        if self.stages:
+            log.info(
+                "hello: %s stages: %s",
+                key,
+                ", ".join(f"{k} prompt {v}" for k, v in sorted(self.stages.items())),
+            )
         log.info(
             "session %s: worker %s, %s on %s %s, threads %s, window %s",
             self.session,
             cfg.name,
-            ",".join(cfg.models),
+            key,
             cfg.device,
             cfg.dtype,
             self.threads,
             cfg.schedule.describe(),
         )
-        if not ok:
-            raise _Fatal(EXIT_VERSION, "no model key this worker serves is the broker's version")
-        return ok
+        if not answer.get("ok"):
+            raise _Fatal(
+                EXIT_VERSION,
+                f"hello: {key} is not ok: this worker serves {PINS[key].model_version}, the "
+                f"broker's registry {answer.get('model_version')}; nothing will be leased",
+            )
+        log.info(
+            "hello: %s %s ok, %s requests queued",
+            key,
+            PINS[key].model_version,
+            answer.get("queued_requests"),
+        )
 
-    def _serve(self, ok: list[str]) -> None:
-        none_fit: set[str] = set()  # keys with work that does not fit: done for the window
+    def _serve(self) -> None:
         while self._may_continue():
-            for key in [k for k in ok if k not in none_fit]:
-                if not self._may_continue():
-                    return
-                if self._drain(key) == "none_fit":
-                    none_fit.add(key)
-            if not self._may_continue():
-                return  # stopped, or the window ended
-            if none_fit == set(ok):
-                # Every key has work, none of it fits: polling would only find the same.
-                log.info("no job fits the time left in the window for any model; stopping")
+            outcome = self._drain(self.key)
+            if outcome == "none_fit":
+                # Jobs are queued, none fits the time left: polling would only find the same.
                 self.request_stop("no job fits the time left")
                 return
-            # Every key still asked came back empty.
+            if outcome == "stop" or not self._may_continue():
+                return  # stopped, or the window ended
+            # The queue is empty.
             if self.cfg.schedule.on_empty == "exit":
                 self.stop_reason = "the queue is empty"
                 log.info("the queue is empty; exiting (on_empty = exit)")
@@ -464,7 +448,7 @@ class Worker:
             # the window, less a model load still to come; the measured pace.
             loading = 0.0 if self._loaded(key) else LOAD_ESTIMATE_S[self.cfg.device]
             body["seconds_left"] = max(0, int(self._seconds_left() - loading))
-            body["seconds_per_request"] = max(0.01, round(self.spr[key], 2))
+            body["seconds_per_request"] = max(0.01, round(self.spr, 2))
         return body
 
     def _drain(self, key: str) -> str:
@@ -472,7 +456,7 @@ class Worker:
         must stop ("stop")."""
         while self._may_continue():
             left = self._seconds_left()
-            if left < self.spr[key]:
+            if left < self.spr:
                 self.request_stop("too little of the window is left for one request")
                 return "stop"
             request_id = uuid.uuid4().hex  # one per lease attempt, the same on its retries
@@ -487,11 +471,10 @@ class Worker:
             jobs = lease.get("jobs") or []
             if not lease.get("lease_id") or not jobs:
                 if lease.get("reason") == "none_fit":
-                    # Jobs are queued but none fits the time left: this key is done for the
-                    # window (the caller asks the others). The broker ends the session on
-                    # this answer (end_reason "none_fit"), as on an empty lease: no session
-                    # release follows unless a later lease reopens it.
-                    log.info("no %s job fits the time left in the window", key)
+                    # Jobs are queued but none fits the time left: the window's work is
+                    # done. The broker ends the session on this answer (end_reason
+                    # "none_fit"), as on an empty lease: no session release follows it.
+                    log.info("no job fits the time left in the window; stopping for it")
                     self.session_closed = True
                     return "none_fit"
                 self.session_closed = True  # an empty lease ends the session at the broker
@@ -504,12 +487,12 @@ class Worker:
     # -- one lease -------------------------------------------------------------------------
 
     def _loaded(self, key: str) -> bool:
-        return self.judge is not None and self.judge.key == key
+        return self.judge is not None
 
     def _check_prompts(self, key: str, jobs: list[dict]) -> None:
         """Each job's prompt version should be one hello announced for this model. The
         broker renders, so a mismatch is only logged: the registry moved since hello."""
-        known = set(self.stages.get(key, {}).values())
+        known = set(self.stages.values())
         if not known:
             return
         for job in jobs:
@@ -581,9 +564,9 @@ class Worker:
                 self.held.progress = None
 
     def _ensure_loaded(self, key: str, lease_id: str) -> judges.Judge:
-        if self.judge is not None and self.judge.key == key:
+        """The session's model, loaded once, on the first lease that brings jobs."""
+        if self.judge is not None:
             return self.judge
-        self._unload()
         cfg = self.cfg
         rt = judges.Runtime(cfg.device, cfg.dtype, self.threads, cfg.mmap, cfg.weights_cache)
         log.info("loading %s (%s, %s) for lease %s", key, cfg.device, cfg.dtype, lease_id)
@@ -635,7 +618,7 @@ class Worker:
             if self._lost(lease_id, job_id):
                 break
             if not self._may_continue() or (
-                self._closes_at() is not None and self._seconds_left() < self.spr[key]
+                self._closes_at() is not None and self._seconds_left() < self.spr
             ):
                 if self._may_continue():
                     self.request_stop("the next request would not finish inside the window")
@@ -666,11 +649,11 @@ class Worker:
             self.failed_jobs.clear()
             self.scored += 1
             # Seconds per request, for lease sizing and the window check: a moving average.
-            if key in self._measured:
-                self.spr[key] = 0.7 * self.spr[key] + 0.3 * seconds
+            if self._measured:
+                self.spr = 0.7 * self.spr + 0.3 * seconds
             else:
-                self.spr[key] = seconds
-                self._measured.add(key)
+                self.spr = seconds
+                self._measured = True
             scores.append(
                 {
                     "order": req.get("order"),

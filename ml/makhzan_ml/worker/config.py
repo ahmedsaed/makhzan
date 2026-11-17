@@ -1,6 +1,7 @@
 """A worker's configuration: one TOML file says everything the broker does not.
 
-Which model keys it serves, where the broker is and how it authenticates, the device,
+Which model key it serves (one: the broker takes one model per session, so two models
+are two workers), where the broker is and how it authenticates, the device,
 dtype, threads and memory it may use, when it may run (one or more local-time windows,
 or always), how many jobs a lease takes, and what it does on an empty queue. The broker
 treats every worker the same; two workers on one machine overlap only if their windows
@@ -117,7 +118,7 @@ class Config:
     name: str
     broker_url: str
     token: str = field(repr=False)
-    models: tuple[str, ...]
+    model: str
     expect_versions: dict[str, str]
     device: str
     dtype: str
@@ -148,7 +149,7 @@ class Config:
 
 
 _SCHEMA: dict[str, set[str]] = {
-    "worker": {"name", "broker_url", "token", "token_file", "ca_file", "models"},
+    "worker": {"name", "broker_url", "token", "token_file", "ca_file", "model", "models"},
     "compute": {"device", "dtype", "threads", "nice", "memory_gib", "mmap", "weights_cache"},
     "schedule": {"windows", "timezone", "on_empty", "poll_s"},
     "leases": {"max_jobs", "lease_s", "heartbeat_s", "seconds_per_request", "retry_max_s"},
@@ -250,22 +251,30 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         if not ca_file.is_file():
             raise ConfigError(f"[worker] ca_file {str(ca_file)!r} does not exist")
 
-    models = worker.get("models")
-    if isinstance(models, str):
-        models = [models]
-    if not isinstance(models, list) or not models or not all(isinstance(m, str) for m in models):
-        raise ConfigError('[worker] models: a non-empty list of model keys, e.g. ["kev"]')
-    if len(set(models)) != len(models):
-        raise ConfigError(f"[worker] models {models}: a key is listed twice")
-    for m in models:
-        if m not in PINS:
-            raise ConfigError(f"[worker] models: unknown model key {m!r} (known: {sorted(PINS)})")
+    # One model per worker: the broker takes exactly one per session (a hello naming more
+    # is refused), so two models are two workers. `models = ["kev"]` is still read, for
+    # configurations written before, as long as it names exactly one key.
+    if ("model" in worker) == ("models" in worker):
+        raise ConfigError('[worker]: set model = "kev" (one key; run two workers for two models)')
+    if "model" in worker:
+        model = _typed("worker", "model", worker["model"], str)
+    else:
+        models = worker["models"]
+        models = [models] if isinstance(models, str) else models
+        if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], str):
+            raise ConfigError(
+                f"[worker] models {models!r}: exactly one model key per worker (the broker "
+                'takes one per session); write model = "kev", and run two workers for two'
+            )
+        model = models[0]
+    if model not in PINS:
+        raise ConfigError(f"[worker] model: unknown model key {model!r} (known: {sorted(PINS)})")
 
     if not isinstance(model_tables, dict):
         raise ConfigError("[model.<key>] must be tables")
     expect: dict[str, str] = {}
     for key, table in model_tables.items():
-        if key not in models:
+        if key != model:
             raise ConfigError(f"[model.{key}] configures a model this worker does not serve")
         if not isinstance(table, dict):
             raise ConfigError(f"[model.{key}] must be a table")
@@ -352,7 +361,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         token=token,
         token_file=token_file,
         ca_file=ca_file,
-        models=tuple(models),
+        model=model,
         expect_versions=expect,
         device=device,
         dtype=dtype,

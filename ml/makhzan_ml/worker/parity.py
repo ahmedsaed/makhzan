@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = config_mod.parse(
             {
                 "worker": {"name": f"parity-{args.model}", "broker_url": broker.url,
-                           "token": TOKEN, "models": [args.model]},
+                           "token": TOKEN, "model": args.model},
                 "compute": {"device": args.device,
                             **({"threads": args.threads} if args.threads else {})},
                 "schedule": {"windows": "always", "on_empty": "exit"},
