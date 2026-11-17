@@ -1,0 +1,7 @@
+# Build context ml/ is used only by worker.Dockerfile (the model images build from ml/kev and
+# ml/pplx). Allow-list: never send the weights cache (.cache/, tens of GB) or out/ (catalogue
+# text, labels) to the Docker daemon.
+*
+!makhzan_ml/__init__.py
+!makhzan_ml/worker/
+**/__pycache__

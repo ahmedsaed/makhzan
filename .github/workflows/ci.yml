@@ -51,6 +51,10 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://makhzan:makhzan@localhost:5432/makhzan_test
         run: poetry run pytest
+      - name: Pytest (AI worker)
+        working-directory: apps/ingestion
+        # ml/tests: no database and no model; the ingestion env has makhzan_schemas.
+        run: poetry run pytest -c pyproject.toml ../../ml/tests
 
   api-tests:
     name: API tests
