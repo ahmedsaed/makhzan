@@ -555,6 +555,15 @@ class Source(TimestampMixin, Base):
     #: week of daily runs fetches it once rather than seven times. Runtime state,
     #: not configuration: syncing sources.toml never touches it.
     cycle_data: Mapped[dict | None] = mapped_column(JSONB)
+    #: A person paused this source (the admin dashboard or `./makhzan shop
+    #: pause`): the daily run skips it and a full run stops before its next
+    #: page, as if `enabled` were false, but the flag is layered over the file:
+    #: `enabled` is sources.toml's, rewritten by every sync, and these three
+    #: are not written by the sync at all, so a pause survives a deploy.
+    #: NULL `paused_at` means not paused; by and note say who and why.
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_by: Mapped[str | None] = mapped_column(String(100))
+    pause_note: Mapped[str | None] = mapped_column(Text)
 
 
 class IngestionRun(Base):
@@ -672,9 +681,11 @@ class WorkerState(Base):
     The worker reads some settings from its environment when its container is
     created, and the API runs in a container of its own. Asking the API's
     environment what the worker is doing goes stale the moment one is recreated
-    without the other (`./makhzan crawl off` recreates only the worker), so the
-    worker states it here at startup instead. Keyed by name: `crawl` holds
-    `{"enabled": bool}` (see `makhzan_schemas.crawl`).
+    without the other, so the worker states it here at startup instead. Keyed
+    by name: `crawl` holds `{"enabled": bool}` (see `makhzan_schemas.crawl`).
+    `crawl_pause` is written by a person, not the worker (the admin dashboard,
+    `./makhzan crawl off|on`): `{"paused", "at", "by", "note"}`, read by the
+    worker before every daily job and every page of a full run.
     """
 
     __tablename__ = "worker_state"
@@ -861,6 +872,8 @@ class GroupingOverride(Base):
     #: When and by whom it was withdrawn; the row stays.
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     removed_by: Mapped[str | None] = mapped_column(String(100))
+    #: Why it was withdrawn, when the person said (the admin dashboard requires it).
+    remove_note: Mapped[str | None] = mapped_column(Text)
     #: What the last regroup found (`grouping.override_status`); NULL until one has run.
     status: Mapped[str | None] = mapped_column(String(16))
     #: For `blocked`: the listing whose veto kept the pair apart (one of the two
@@ -1302,3 +1315,50 @@ class AiSession(Base):
     #: /lease with the same id gets the same jobs back instead of orphaning them.
     last_lease_request: Mapped[str | None] = mapped_column(String(64))
     last_lease_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+
+
+class AdminAction(Base):
+    """One thing a person did on the admin dashboard (`apps/ingestion/admin`), for audit.
+
+    Every action the dashboard takes writes a row here, whatever else it
+    writes: who (the configured admin name and the address the request came
+    from), what (`action`, `target`), when, and the details (`detail`: the
+    note, the limit, the ids an accept created). Rulings, decisions and flags
+    keep their own `created_by`/`removed_by`/`revoked_by`/`resolved_by` as
+    well; this table is the one place to read everything in order.
+
+    Some actions are jobs the worker runs (an ephemeral `limit=` run, the
+    probe, a regroup dry run): `status` goes `queued` -> `running` ->
+    `done` or `failed`, and `result` holds what the worker found. A plain
+    action's `status` is NULL. Nothing deletes rows.
+    """
+
+    __tablename__ = "admin_actions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IS NULL OR status IN ('queued', 'running', 'done', 'failed')",
+            name="ck_admin_action_status",
+        ),
+        Index("ix_admin_action_created", "created_at"),
+        Index("ix_admin_action_kind_created", "action", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    #: Who acted, as configured (`ADMIN_NAME`): there is one password, no accounts.
+    actor: Mapped[str] = mapped_column(String(100), nullable=False)
+    #: The address the request came from (a tailnet address).
+    client: Mapped[str | None] = mapped_column(String(64))
+    #: What was done: `crawl.pause`, `shop.resume`, `report.accept`, `job.probe`, ...
+    action: Mapped[str] = mapped_column(String(48), nullable=False)
+    #: What it was done to: a source id, a report or override id, a worker name.
+    target: Mapped[str | None] = mapped_column(String(200))
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    #: For a job only: queued, running, done or failed.
+    status: Mapped[str | None] = mapped_column(String(16))
+    result: Mapped[dict | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
