@@ -45,6 +45,35 @@ used this request. Nothing else was sent: no instructions, no rules, no examples
 }
 ```
 
+**Correction (2026-11-17).** "Nothing else was sent" is wrong for one run. On
+2026-11-14 the Phase E bake-off (`ml/models/judge.py --judge kev-rules`) scored
+Kev-4B on the 900 Phase E pairs (answer key v1), titles only, both orders (1,800
+requests), with I2 plus a list of rules a session wrote from the error classes
+it had found in those same labelled pairs (`RULES_QUESTION`):
+
+```text
+... They are different products if they differ in package or package suffix (e.g.
+TO-220 vs TO-247, SMD vs through-hole, IRF vs IRFP), NC vs NO, standard vs
+long/short versions, module/board vs bare IC, a model-number digit or suffix that
+denotes a different chip (MPU-6050 vs MPU-6500), or a stated range/rating; the same
+part number written differently (74HC164 vs 74164 only if the family matches;
+TEC1-12706 vs TEC-12706) is the same product.
+```
+
+Those rules were never put to the owner. They carry none of the silence, brand
+or drop-in rulings, and "74HC164 vs 74164 only if the family matches" contradicts
+ruling 7 (7476 = 74LS76). Results (`ml/out/models/results.json`): alone at 0.9,
+218 accepted with 6 errors (Kev with I2: 215 and 3); at its best in-sample
+threshold, 0.975, 92 accepted with 0 errors (I2: 90 and 0); held out, 115 with 1
+error (I2: 112 and 1). As a second judge beside I2 Kev it did no better than
+pplx (in-sample 165 accepted with 0 errors, held out 192 with 2; pplx: 176 with
+0, held out 192 with 2). It lowered the KSD301 NC/NO and MPU-6500/6050 scores
+(0.91 to 0.29, 0.85 to 0.16), but those are among the pairs its rules were
+written from, so that is in-sample. It was not carried forward: pplx became the
+second judge (D13), and the context test went back to I2 alone. Nothing below
+rested on it, and no decision changes. The rest of this section stands: every
+other judge result in it used I2 with no rules.
+
 With "full context" the same two lines carried each listing's text as one blob:
 
 ```text
@@ -102,7 +131,7 @@ is the decision that should have come back to the owner.
 | D4 | Labels | Rulings: brand alone doesn't matter; silence compatible; drop-in revisions same; stated contradiction different; families differ | Owner | all labels | settled |
 | D5 | Labels | Final label: owner's answer, except 9 part-number cases deferred to ruling 3; else Opus+Sonnet consensus; else Sonnet | Session | all phase E metrics | **confirm** |
 | D6 | Labels | Opus+Sonnet consensus trusted where they agree (matched the owner ~94% on general-spec pairs) | Session, owner agreed in practice | 103 review pairs | confirm |
-| D7 | Prompt | Judge question = I2, one sentence, no rules | Session (bake-off rule, then carried) | model choice, thresholds, context verdict, gain | **confounded, reopen** |
+| D7 | Prompt | Judge question = I2, one sentence, no rules (one exception, the kev-rules run: see the correction in section 1) | Session (bake-off rule, then carried) | model choice, thresholds, context verdict, gain | **confounded, reopen** |
 | D8 | Prompt | Listing injection: `Listing A: …\nListing B: …`, unlabelled, missing fields omitted | Session | all judge results | **reopen** |
 | D9 | Context | Full context = title + category/brand/part number/price + specs + description, price included, boilerplate kept | Session | context verdict ("titles only") | **confounded, reopen** |
 | D10 | Scoring | Each pair scored A→B and B→A; the lower score counts | Session | thresholds | confirm |
@@ -118,6 +147,7 @@ is the decision that should have come back to the owner.
 | D20 | Quantisation | Rejected unless proven harmless | Owner | serving | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/` | Owner rule, after loss | — | settled |
+| D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
 
 ### What still holds, whatever the prompt
 

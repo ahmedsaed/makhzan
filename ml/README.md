@@ -54,11 +54,18 @@ has its own profile. There are also four group profiles:
 | `rr-qwen3-0.6b` | Qwen/Qwen3-Reranker-0.6B | vLLM `v0.32.0`, bf16 | 8104 |
 | `rr-qwen3-4b` | Qwen/Qwen3-Reranker-4B | vLLM `v0.32.0`, bf16 | 8105 |
 | `kev-4b` | jaredpalmer/kev-4b | `kev.serve`, built here (`kev/Dockerfile`), bf16 | 8106 |
+| `pplx-decider` | perplexity-ai/pplx-decider-flash-v1.3 @ `d06fb3f` | `pplx_decider`, built here (`pplx/Dockerfile`), bf16 | 8108 |
+| `gen-qwen3.5-4b` | Qwen/Qwen3.5-4B @ `851bf6e` (text only) | vLLM `v0.32.0`, bf16 | 8109 |
+| `gen-qwen3-4b` | Qwen/Qwen3-4B-Instruct-2507 (generative, attribute extraction) | vLLM `v0.32.0`, bf16 | 8107 |
+| `kev-4b-cpu` / `pplx-decider-cpu` | the two merge judges on CPU (`*/Dockerfile.cpu`), fp32; `JUDGE_CPU_DTYPE=bf16` where AVX-512 has it ("CPU serving") | 8116 / 8118 |
 | `*-cpu` | the four small models | vLLM CPU `vllm-openai-cpu:v0.32.0-x86_64`, bf16 | 8111–8114 |
 | `compare` | the engine that lost for each model | TEI or vLLM | 8121–8133 |
 
 The licences are all permissive: Apache-2.0 (Qwen3 ×3, bge, Kev, and Qwen3.5-4B-Base under
-Kev) and MIT (Harrier). No model needs a Hugging Face token.
+Kev, Qwen3.5-4B, and pplx-decider-flash-v1.3, read on its card 2026-11-14) and MIT (Harrier).
+No model needs a Hugging Face token. pplx-decider's card still says "The repository is private:
+authenticate with a Hugging Face token", but the Hub reports it public and ungated and it
+downloaded without one (its release-manifest.json also says `"private": true`, from release).
 
 ### Files
 
@@ -312,6 +319,117 @@ Verdicts for the other models:
   This is the one place quantisation might pay, because CPU throughput is 6–29 pairs/s. It was
   not measured, so CPU serving stays bf16 until it is.
 
+## CPU serving of the merge judges (2026-11-14)
+
+**The merge rule** is the owner's decision of 2026-11-16 (`docs/ai/decision-review.md`,
+section 5): merge when Kev-4B, layout K2 (rules in the instructions), description capped at 150
+words, scores ≥ 0.8, **and** pplx-decider-flash-v1.3, layout K1 (rules in the state), full
+description, scores ≥ 0.95. Each pair is scored in both reading orders, and each judge's pair
+score is the min of the two. It runs behind today's vetoes, with no two-stage screening.
+Payloads come from `models/grid_payloads.py`, the approved renderer. The earlier title-only
+rule (Kev ≥ 0.9 and pplx ≥ 0.5 on the one-sentence I2 question) is superseded. The measurements
+in the table below are of that earlier setup. For the chosen setup's CPU numbers, see "Lean CPU
+images" below.
+
+The rule is to run on a CPU-only worker, an i7-3770: Ivy Bridge, 4 cores / 8 threads, AVX only (no AVX2, no AVX-512, no bf16),
+about 22 GB of free RAM. Services `kev-4b-cpu` and `pplx-decider-cpu` (profile `judges-cpu`) are
+the GPU images minus flash-linear-attention. With fla importable, transformers' Qwen3.5 layers
+use its Triton kernels even on CPU, and Triton has no CPU driver, so every request fails. Without
+it they use transformers' own PyTorch reference layers. pplx's `serve.py` takes `--device cpu`.
+Its card's code then runs fp32. `DTYPE=bf16` loads bf16 instead. Compose serves both in fp32
+unless `JUDGE_CPU_DTYPE=bf16`.
+
+**How it was measured.** On this desktop, emulating the worker: cpuset 0-3,6-9 (4 cores, 8
+threads), `OMP_NUM_THREADS=8`, `ATEN_CPU_CAPABILITY=default`, `ONEDNN_MAX_CPU_ISA=AVX`,
+`MKL_ENABLE_INSTRUCTIONS=AVX`, `--memory 22g`, no GPU. The data was 100 Phase E pairs, both
+orders, compared with the saved GPU bf16 scores. 60 of the pairs were picked for being the
+closest to Kev 0.9, so flips at 0.9 are over-represented on purpose. Throughput is requests/s;
+one pair is two requests, or about 1.3 with the two-pass rule in `models/judge.py`.
+
+| Judge, precision | Profile | req/s | RSS | Spearman | max \|Δp\| | agree@0.5 | agree@0.9 |
+|---|---|---|---|---|---|---|---|
+| Kev fp32 | emulated i7-3770 | 0.26 | 17.0 GB | 0.9978 | 0.029 | 100% | 97% (3 flips) |
+| Kev bf16 | emulated i7-3770 | 0.04 | 7.7 GB | - | - | - | - |
+| Kev bf16 | 8 threads, full Zen 4 ISA | 0.75 | 7.8 GB | 0.9955 | 0.036 | 100% | 93% (7) |
+| Kev bf16 | 4 threads, full Zen 4 ISA | 0.52 | 8.0 GB | - | - | - | - |
+| pplx fp32 | emulated i7-3770 | 0.35 | 18.1 GB | 0.9998 | 0.033 | 99% (1 flip) | - |
+| pplx bf16 | 8 threads, full Zen 4 ISA | 0.51 | 8.0 GB | 0.9998 | 0.023 | 100% | - |
+
+- **Precision.** fp32 on the worker. Without AVX-512 bf16 has no fast path, and it ran 6.5×
+  slower than fp32.
+- **Flips.** Every flip was a pair within 0.01 of the line on the GPU. Kev at 0.9: E0012, E0082
+  and E0121 go from 0.894–0.8995 to 0.902–0.906, and the labels say "unsure", "same" and "same".
+  pplx at 0.5: E0121 goes from 0.500 to 0.492. Its Kev score of 0.8995 kept it out of the merge
+  rule anyway. Over all 900 Phase E pairs, 37 have a GPU Kev min in [0.89, 0.91). The decision
+  is therefore stable except for pairs sitting on the line, where GPU fp32 and bf16 also differ.
+- **Memory.** Neither model fits beside the other in 22 GB, so they run one after the other:
+  Kev for the night's pairs, then pplx for the few that passed. With the weights in the page
+  cache a load takes 13–19 s. Read cold, it is however long the disk takes to read about 9 GB
+  per model.
+- **The emulation is approximate.** fp32 sgemm under the emulation measured 360–380 GFLOPS.
+  The i7-3770's peak is 4 cores × ~3.7 GHz × 16 FLOP/cycle (AVX, no FMA), about 237 GFLOPS,
+  so it does roughly 200 in practice, 1.8× less. Its memory bandwidth (DDR3-1600, about 20 GB/s
+  in practice, against 68 GB/s measured here) is about 3.4× less. The non-matmul work (the
+  reference gated-delta loop, scalar ATen) scales with clock and IPC, at about 2×. **Divide
+  the emulated rates by about 2.5, with a range of 2 to 3.5.** That gives Kev ≈ 0.10 req/s and
+  pplx ≈ 0.14 req/s on the worker. Confirm this with one run on the worker itself.
+- **Disk is the blocker on that worker.** These images carry CUDA torch. The Kev image is
+  26 GB and the pplx image 19.6 GB, and the weights add 20 GB (Qwen3.5-4B-Base 11 GB, pplx
+  9 GB), against 24 GB free. A lean image (python-slim with the CPU wheel of the same torch
+  version, about 2–3 GB) is the fix. Its parity then needs re-checking. Even so, the weights
+  alone nearly fill the disk.
+- **Daily load.** Over 14 days the local copy gained about 24 new electronics listings a day,
+  with peak days of 118 and 145. Take 10 candidates each, of which 39% are not vetoed. About 6%
+  of the open pairs reach Kev ≥ 0.9 (`kev_open.json`). A typical day is then about 120 Kev
+  requests (two-pass) and about 12 pplx requests: 20–35 minutes on the worker. A 150-listing
+  day takes 2–4.5 hours. Onboarding a shop of 5,000 listings is 25–39k Kev requests: 12–18
+  nights on the worker, or about an hour on the GPU.
+- **int8 was not measured.** fp32 fits that load, so it was not needed.
+
+### Lean CPU images and the benchmark of the chosen setup
+
+`kev/Dockerfile.cpu-lean` (`makhzan-ml/kev-cpu-lean:1.0`, about 2.6 GB) and
+`pplx/Dockerfile.cpu-lean` (`makhzan-ml/pplx-decider-cpu-lean:1.3`, about 1.8 GB) replace the
+26 GB and 19.6 GB GPU-derived CPU images on a worker with little disk. Each is python-slim plus
+the CPU-only torch wheel. The other packages are the GPU image's `uv pip freeze`
+(`requirements-cpu.txt`) minus nvidia-*, triton and flash-linear-attention. Build either
+directly, for example `docker build -f ml/kev/Dockerfile.cpu-lean -t makhzan-ml/kev-cpu-lean:1.0 ml/kev`.
+
+- **Pinned:** both base images by digest, the Kev source by commit and tarball checksum, the
+  pplx_decider source files by sha256, the pplx checkpoint by revision (`d06fb3f…`), and the Kev
+  checkpoint by revision (`jaredpalmer/kev-4b@6cfce5c…`). Kev's `head.pt` pins its base,
+  Qwen/Qwen3.5-4B-Base@1001bb4…. Change the Kev revision in both the Dockerfile's CMD and
+  `models/bench_cpu.py`'s `KEV_REVISION`.
+- **Offline:** `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` and `HF_HUB_DISABLE_TELEMETRY=1` are
+  set in the images, so the weights must already be in the mounted cache. Run with
+  `--network none` as well.
+- **Not done: hash-pinned wheels.** Packages are pinned by version (`==`), not by hash. A wheel
+  re-uploaded under the same version would be taken. The full fix is
+  `uv pip install --require-hashes` with a hashed requirements file, torch's CPU wheel included.
+
+`models/bench_cpu.py` benchmarks the chosen setup on a CPU worker, in three steps:
+
+1. `render` (desktop, stdlib): draws pairs from the answer key and renders each judge's requests
+   with `prompt_grid.py`'s `record()`/`payload()`. Each line carries its desktop GPU score.
+2. `run` (inside a lean image, `--network none`): loads the model in-process through each
+   service's own scoring path and settings. The weights are read with pread(2), not
+   memory-mapped. Results are written after every request.
+3. `parity` (stdlib): reports |CPU − GPU|, agreement at the setup's threshold per request and
+   per pair (min of both orders), and the flips. A missing score on either side is counted,
+   never compared.
+
+`run` records the weight files still mapped after loading. It compares the mappings against
+the real paths of the cache's weight files, and against anything under the cache. In a Hub cache,
+each snapshot file is a symlink to a suffix-less blob, and `/proc/self/maps` shows the blob.
+The first version matched on file suffix, so it could not fire on a standard cache: runs that
+loaded from one and reported "no weights mapped" prove nothing. `bench_cpu.py selfcheck` maps
+files through Hub-style symlinks and confirms they are detected. `run` runs that check first.
+The self-check writes a few small files to a temporary directory, so a container run with
+`--read-only` needs a writable `/tmp`: add `--tmpfs /tmp`.
+Two defaults were chosen by a session and await owner review (decision-review D23): 60 pairs
+(`N_PAIRS`, `--n`) and a parity tolerance of 0.05 (`--tolerance`). These are measurement
+parameters, not merge rules.
+
 ## Scripts
 
 - `makhzan_ml/client.py`: the uniform client. `SERVICES` maps each name to its engine and port.
@@ -322,6 +440,23 @@ Verdicts for the other models:
   - `--cpu-set 0-3` pins the CPU services to fewer cores.
 - `quant.py`: compares two score files with the adoption rule.
 - `parity_qwen3_reranker.py`: compares the served reranker with the model card's own code.
+- `models/`, current (the owner-approved prompts; docstrings give the commands):
+  - `grid_payloads.py`: the approved judge payloads, verbatim from the file the owner approved.
+    Rules, question, criteria, labelled fields, and "not stated" for a missing field. Price is
+    left out. Do not edit it. This is the renderer production must use.
+  - `prompt_grid.py`: the prompt grid of decision-review section 4. Kev and pplx are run with
+    K1, K2 and K1 + criteria, and Qwen3.5-4B with chat messages. Each runs with the description
+    capped at 150 words and with the full description. All 900 pairs are scored in both orders,
+    one request per call. Subcommands: `rows`, `check` (the rendered payloads byte-identical to
+    the approved file's), `tokens`, `score`, `report`.
+  - `combos.py`: offline analysis of the grid's scores, with two-judge combinations, a two-stage
+    cascade, and held-out checks. It runs no model. Its analysis led to the chosen setup.
+  - `bench_cpu.py`: the CPU benchmark of the chosen setup ("Lean CPU images" above).
+- `models/`, superseded (an archive of what was run; each file's header names the ruling it
+  predates): `judge.py`, the Phase E bake-off (Kev with session-written rules, pplx at 32
+  requests per call, Qwen3.5-4B); `context.py`, the full-context test (price in the payload,
+  title unlabelled, category, brand, part number and price labelled, empty fields dropped
+  rather than "not stated"; "confounded, reopen"); `edges.py` and `score.py`, which serve them.
 - `bakeoff/`: the Phase D bake-off (candidate finding and pair judging, with the prompt study).
   Run in this order:
   1. `catalogue.py`: dump the local database copy.
@@ -334,3 +469,23 @@ Verdicts for the other models:
 
   Each script's docstring gives its exact command. Catalogue text goes to a private directory
   you name. `ml/out/bakeoff/` gets pair ids, scores and counts.
+
+## Improvement experiments (`improve/`)
+
+Scripts for the Phase E follow-up: four ways to raise the number of cross-shop matches that can
+merge automatically at a proven precision of 0.98, scored on the 900 labelled Phase E pairs.
+They read the private labelling run and write only to `ml/out/improve/` (git-ignored).
+
+- `build.py`: joins key.jsonl, the final labels and the catalogue rows of the labelled listings.
+- `metric.py`: the one metric (population estimate, per-cell Clopper-Pearson bound).
+- `vetoes2.py`: experiment 1, recalibrated price / quantity / form vetoes beside today's.
+- `extract.py`: experiment 2, attribute extraction with `gen-qwen3-4b` (`client.chat_json`,
+  structured outputs) and the code that turns a stated contradiction into a veto. Superseded:
+  it predates rulings 4 and 8 (it reads an unstated pack size as 1 and uses a 2% tolerance).
+- `enrich.py`: experiment 3, Kev on title + URL slug + shop category (+ spec table).
+- `population.py`: the whole shortlist with scores and both veto sets, for experiment 4's
+  mutual-best and complete-link checks.
+- `report.py`: scores every rule and the best combination, with a 2-fold held-out check.
+
+`gen-qwen3-4b` needs the weights in `ml/.cache` first (`HF_HUB_OFFLINE=0` once, as above).
+

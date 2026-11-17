@@ -39,7 +39,7 @@ Pair = tuple[str, str]
 
 @dataclass(frozen=True)
 class Service:
-    kind: str  # tei-embed | vllm-embed | tei-rerank | vllm-score | kev
+    kind: str  # tei-embed | vllm-embed | tei-rerank | vllm-score | kev | vllm-chat
     port: int
     model: str  # what the server is asked for (vLLM served name / Kev model) or the HF id
     hf_id: str
@@ -61,11 +61,22 @@ SERVICES: dict[str, Service] = {
     "rr-qwen3-0.6b": Service("vllm-score", 8104, "qwen3-reranker-0.6b", _Q3R6, True),
     "rr-qwen3-4b": Service("vllm-score", 8105, "qwen3-reranker-4b", _Q3R4, True),
     "kev-4b": Service("kev", 8106, "kev-latest", "jaredpalmer/kev-4b", True),
+    "gen-qwen3-4b": Service(
+        "vllm-chat", 8107, "qwen3-4b-instruct", "Qwen/Qwen3-4B-Instruct-2507", True
+    ),
+    "pplx-decider": Service(
+        "decider", 8108, "pplx-decider-flash-v1.3", "perplexity-ai/pplx-decider-flash-v1.3", True
+    ),
+    "gen-qwen3.5-4b": Service("vllm-chat", 8109, "qwen3.5-4b", "Qwen/Qwen3.5-4B", True),
     # CPU
     "emb-qwen3-cpu": Service("vllm-embed", 8111, "qwen3-embedding-0.6b", _Q3E, True),
     "emb-harrier-cpu": Service("vllm-embed", 8112, "harrier-oss-v1-270m", _HAR, True),
     "rr-bge-cpu": Service("vllm-score", 8113, "bge-reranker-v2-m3", _BGE, False),
     "rr-qwen3-0.6b-cpu": Service("vllm-score", 8114, "qwen3-reranker-0.6b", _Q3R6, True),
+    "kev-4b-cpu": Service("kev", 8116, "kev-latest", "jaredpalmer/kev-4b", True),
+    "pplx-decider-cpu": Service(
+        "decider", 8118, "pplx-decider-flash-v1.3", "perplexity-ai/pplx-decider-flash-v1.3", True
+    ),
     # engine comparison (the engine that lost for each model)
     "emb-qwen3-tei": Service("tei-embed", 8121, _Q3E, _Q3E, True),
     "emb-harrier-tei": Service("tei-embed", 8122, _HAR, _HAR, True),
@@ -191,6 +202,8 @@ class Client:
         return [d["score"] for d in data]
 
     def _kev_one(self, pair: Pair, question: str) -> float:
+        # Same caveat as decide_noul: the early unlabelled state, not the approved payload
+        # (ml/models/grid_payloads.py). prompt_grid.py posts the approved payloads itself.
         a, b = pair
         out = _post(
             f"{self.base}/v1/systemone",
@@ -203,7 +216,150 @@ class Client:
         )
         return out["answers"]["same"]["noul"]
 
+    def decide_noul(self, pairs: Sequence[Pair], question: str) -> list[tuple[float, float]]:
+        """pplx-decider: (P(true) at the checkpoint's saved temperature, raw logit margin
+        true - false) per pair, the state spelled as Kev's. `batch_size` pairs per call.
+
+        Not the approved payload; production must use the approved renderer
+        (ml/models/grid_payloads.py). The state here is the unlabelled "Listing A: ... /
+        Listing B: ..." of the early experiments, with no "not stated" for a missing field and
+        no rules (docs/ai/decision-review.md, D7/D8), and several requests per call where the
+        owner's protocol is one."""
+        if self.svc.kind != "decider":
+            raise ModelError(f"{self.name} is not a decider service")
+
+        def batch(b: list[Pair]) -> list[tuple[float, float]]:
+            reqs = [
+                {"state": f"Listing A: {a}\nListing B: {c}",
+                 "questions": {"same": {"type": "noul", "instructions": question}}}
+                for a, c in b
+            ]  # fmt: skip
+            out = _post(f"{self.base}/v1/decide", {"requests": reqs}, self.timeout)
+            res = []
+            for r, lg in zip(out["responses"], out["logits"], strict=True):
+                f, t = lg["same"]  # option order: false, true (pplx_decider.protocol.options)
+                res.append((r["answers"]["same"]["noul"], t - f))
+            return res
+
+        return self._map(batch, list(pairs))
+
+    def yes_no_margin(
+        self, prompts: Sequence[str | list[dict]], top: int = 20, usage: list | None = None
+    ) -> list[float]:
+        """Generative service: log P(yes) - log P(no) at the first answer token of a chat turn,
+        thinking off, greedy. Case and leading-space variants of each word are pooled
+        (logsumexp). A word missing from the top `top` gets a bound: the smallest listed
+        logprob minus log 2 (recorded as is; it only matters for saturated pairs). A prompt is
+        one user turn, or a full chat message list sent as given; `usage`, when passed,
+        collects each response's token usage in order (one request at a time)."""
+        if self.svc.kind != "vllm-chat":
+            raise ModelError(f"{self.name} is not a generative service")
+
+        def lse(xs: list[float]) -> float:
+            m = max(xs)
+            return m + math.log(sum(math.exp(x - m) for x in xs))
+
+        def one(prompt: str | list[dict]) -> float:
+            messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
+            out = _post(
+                f"{self.base}/v1/chat/completions",
+                {
+                    "model": self.svc.model,
+                    "messages": messages,
+                    "temperature": 0,
+                    "max_tokens": 1,
+                    "logprobs": True,
+                    "top_logprobs": top,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+                self.timeout,
+            )
+            if usage is not None:
+                usage.append(out.get("usage"))
+            tops = out["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+            floor = min(t["logprob"] for t in tops) - math.log(2)
+            yes = [t["logprob"] for t in tops if t["token"].strip().lower() == "yes"]
+            no = [t["logprob"] for t in tops if t["token"].strip().lower() == "no"]
+            return (lse(yes) if yes else floor) - (lse(no) if no else floor)
+
+        return self._map(lambda b: [one(p) for p in b], list(prompts), size=1)
+
+    def think_yes_no_margin(
+        self, prompts: Sequence[str], max_tokens: int = 2048, top: int = 20
+    ) -> list[tuple[float | None, int]]:
+        """As yes_no_margin, with thinking on: greedy generation, then the margin at the first
+        yes/no token after `</think>`. Returns (margin or None when the thinking did not finish
+        within max_tokens, completion tokens)."""
+        if self.svc.kind != "vllm-chat":
+            raise ModelError(f"{self.name} is not a generative service")
+
+        def lse(xs: list[float]) -> float:
+            m = max(xs)
+            return m + math.log(sum(math.exp(x - m) for x in xs))
+
+        def one(prompt: str) -> tuple[float | None, int]:
+            out = _post(
+                f"{self.base}/v1/chat/completions",
+                {
+                    "model": self.svc.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                    "logprobs": True,
+                    "top_logprobs": top,
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "skip_special_tokens": False,
+                },
+                self.timeout,
+            )
+            used = out["usage"]["completion_tokens"]
+            toks = out["choices"][0]["logprobs"]["content"]
+            after = False
+            for t in toks:
+                if "</think>" in t["token"]:
+                    after = True
+                    continue
+                if after and t["token"].strip().lower() in ("yes", "no"):
+                    tops = t["top_logprobs"]
+                    floor = min(x["logprob"] for x in tops) - math.log(2)
+                    yes = [x["logprob"] for x in tops if x["token"].strip().lower() == "yes"]
+                    no = [x["logprob"] for x in tops if x["token"].strip().lower() == "no"]
+                    return (lse(yes) if yes else floor) - (lse(no) if no else floor), used
+            return None, used
+
+        return self._map(lambda b: [one(p) for p in b], list(prompts), size=1)
+
     # -- plumbing ---------------------------------------------------------------------------
+    def chat_json(
+        self, prompts: Sequence[str], schema: dict, system: str = "", max_tokens: int = 400
+    ) -> list[dict]:
+        """One JSON object per prompt from a generative service, decoded against `schema`
+        (vLLM structured outputs), greedy. `batch_size` prompts are in flight at once."""
+        if self.svc.kind != "vllm-chat":
+            raise ModelError(f"{self.name} is not a generative service")
+
+        def one(prompt: str) -> dict:
+            messages = ([{"role": "system", "content": system}] if system else []) + [
+                {"role": "user", "content": prompt}
+            ]
+            out = _post(
+                f"{self.base}/v1/chat/completions",
+                {
+                    "model": self.svc.model,
+                    "messages": messages,
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {"name": "listing", "schema": schema},
+                    },
+                },
+                self.timeout,
+            )
+            return json.loads(out["choices"][0]["message"]["content"])
+
+        return self._map(lambda b: [one(p) for p in b], list(prompts), size=1)
+
     def _map(self, fn, items: list, size: int | None = None) -> list:
         batches = list(_chunks(items, size or self.batch_size))
         # One item per request (Kev): batch_size is then exactly the number in flight.
