@@ -63,6 +63,7 @@ jobs:
           # Bake the same-origin API path into the web bundle.
           build-args: |
             NEXT_PUBLIC_API_URL=/api
+            GIT_SHA=${{ github.sha }}
             NEXT_PUBLIC_UMAMI_WEBSITE_ID=${{ vars.NEXT_PUBLIC_UMAMI_WEBSITE_ID }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
