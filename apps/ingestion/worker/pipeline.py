@@ -905,9 +905,11 @@ class Confirmer:
     A hold is bounded three ways, and past any of them the unasked candidates
     archive as they always have: `CONFIRM_MAX_FAILED_RUNS` runs whose asking
     failed, `CONFIRM_MAX_HELD_RUNS` runs held for want of room to ask, and one
-    cycle of time from when the sweep finished (`target_cycle_days`, else as
-    long as the cycle took, at least `CONFIRM_MIN_WAIT`). Confirmation only
-    ever *prevents* an archive.
+    cycle of time (`target_cycle_days`, else as long as the cycle took, at
+    least `CONFIRM_MIN_WAIT`) from when the sweep finished, or from when a
+    person last resumed the shop or the crawl, if later. A run held because the
+    shop was paused counts against none of the three. Confirmation only ever
+    *prevents* an archive.
 
     Its requests count against the run's ceiling as if it were one more
     partition: at most `max_pages_per_run`, and within what the run's adaptive
@@ -1072,11 +1074,15 @@ class Confirmer:
         return absent + unasked + beyond, False
 
 
-async def _held_runs(session: AsyncSession, source_id: str, swept_at: datetime) -> tuple[int, int]:
-    """(failed, held for room): earlier runs that held this cycle since its sweep finished.
+async def _held_runs(
+    session: AsyncSession, source_id: str, swept_at: datetime
+) -> tuple[int, int, int]:
+    """(failed, held for room, held by a pause): earlier runs that held this cycle.
 
     Read off the runs' `stats.archive_confirm`. Every run finishing after the
     sweep did belongs to the hold, the one that finished the sweep included.
+    A run held because a person paused the shop is counted apart: it is never
+    an attempt, only evidence that the cycle was held.
     """
     rows = (
         await session.execute(
@@ -1088,17 +1094,26 @@ async def _held_runs(session: AsyncSession, source_id: str, swept_at: datetime) 
             )
         )
     ).scalars()
-    failed = held = 0
+    failed = held = paused = 0
     for report in rows:
         if not isinstance(report, dict) or not report.get("held"):
             continue
         if report.get("paused"):
-            continue  # held because a person paused the shop: no attempt
-        if report.get("failed"):
+            paused += 1  # held because a person paused the shop: no attempt
+        elif report.get("failed"):
             failed += 1
         else:
             held += 1
-    return failed, held
+    return failed, held, paused
+
+
+async def _resumed_at(session: AsyncSession, source_id: str) -> datetime | None:
+    """When the shop, or the whole crawl, was last resumed by a person, if ever."""
+    from makhzan_schemas import crawl
+
+    shop = await session.scalar(select(Source.resumed_at).where(Source.source_id == source_id))
+    stamps = [t for t in (shop, await crawl.crawl_resumed_at(session)) if t is not None]
+    return max(stamps) if stamps else None
 
 
 async def _finish_cycle_if_swept(
@@ -1134,7 +1149,9 @@ async def _finish_cycle_if_swept(
         return 0, {}
     # When the sweep finished: no cursor is touched while a cycle is held.
     swept_at = max(c.updated_at for c in cursors)
-    held_before = False
+    # A sweep that ended in an earlier run was held, whatever held it: a run
+    # stopped by a pause skips this step and leaves no report to say so.
+    held_before = pages_this_run == 0
 
     starts = [c.cycle_started_at for c in cursors if c.cycle_started_at is not None]
     cycle_started = min(starts) if starts else datetime.now(timezone.utc)
@@ -1163,9 +1180,15 @@ async def _finish_cycle_if_swept(
                 wait = timedelta(days=adapter.target_cycle_days)
             else:
                 wait = max(CONFIRM_MIN_WAIT, swept_at - cycle_started)
-            overdue = datetime.now(timezone.utc) - swept_at > wait
-            failed_runs, held_runs = await _held_runs(session, adapter.source_id, swept_at)
-            held_before = bool(failed_runs or held_runs)
+            # The window runs from the sweep's end, or from the last resume if
+            # later: time a person kept the shop paused is not time it was asked.
+            resumed = await _resumed_at(session, adapter.source_id)
+            since = max(swept_at, resumed) if resumed else swept_at
+            overdue = datetime.now(timezone.utc) - since > wait
+            failed_runs, held_runs, paused_runs = await _held_runs(
+                session, adapter.source_id, swept_at
+            )
+            held_before = held_before or bool(failed_runs or held_runs or paused_runs)
             ids, hold = await confirm(
                 list(candidates), overdue=overdue, failed_runs=failed_runs, held_runs=held_runs
             )

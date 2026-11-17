@@ -83,10 +83,17 @@ async def pause_source(
 
 
 async def resume_source(session: AsyncSession, source_id: str) -> Source | None:
-    """Clear one source's pause (flushed, not committed); None if there is no such source."""
+    """Clear one source's pause (flushed, not committed); None if there is no such source.
+
+    Resuming a paused source stamps `resumed_at`: the archive confirmation's
+    hold window runs from there, so a long pause does not make the first run
+    after it give up on its candidates as overdue.
+    """
     row = await session.scalar(select(Source).where(Source.source_id == source_id))
     if row is None:
         return None
+    if row.paused_at is not None:
+        row.resumed_at = await session.scalar(select(func.now()))
     row.paused_at = row.paused_by = row.pause_note = None
     await session.flush()
     return row

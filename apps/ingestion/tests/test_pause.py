@@ -376,6 +376,109 @@ async def test_a_pause_between_include_batches_keeps_answers_and_holds_the_rest(
     )
 
 
+async def _held_cycle_aged(woo, days: int = 3) -> None:  # noqa: F811
+    """A cycle held after one failed confirmation, its sweep `days` old."""
+    from datetime import UTC, datetime, timedelta
+
+    from makhzan_schemas.models import SourceCursor
+    from sqlalchemy import update
+
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    first = (await _run_until_confirm())[-1]
+    assert first.stats["archive_confirm"]["attempt"] == 1
+    async with SessionLocal() as session:
+        await session.execute(
+            update(SourceCursor).values(updated_at=datetime.now(UTC) - timedelta(days=days))
+        )
+        await session.commit()
+
+
+async def test_after_a_long_pause_the_first_run_is_not_overdue(woo):  # noqa: F811
+    await _add(_source("woo"))
+    await _held_cycle_aged(woo)
+    await _pause_shop("woo")
+    async with SessionLocal() as session:
+        await pause.resume_source(session, "woo")
+        await session.commit()
+        row = await session.scalar(select(Source).where(Source.source_id == "woo"))
+        assert row.resumed_at is not None
+    woo.include_status = 200
+    after = await run_source("woo", _woo_adapter())
+    report = after.stats["archive_confirm"]
+    assert "overdue" not in report  # the window runs from the resume
+    assert report["absent"] == 1 and after.stats.get("cycle")
+
+
+async def test_after_a_resume_failures_still_give_up_after_the_max(woo):  # noqa: F811
+    await _add(_source("woo"))
+    await _held_cycle_aged(woo)
+    await _pause_crawl(True)
+    await _pause_crawl(False)  # the crawl-wide resume stamps its own resumed_at
+    async with SessionLocal() as session:
+        assert await crawl.crawl_resumed_at(session) is not None
+    second = await run_source("woo", _woo_adapter())  # still answering 500
+    report = second.stats["archive_confirm"]
+    assert "overdue" not in report
+    assert report["attempt"] == CONFIRM_MAX_FAILED_RUNS and report["gave_up"] == 1
+    assert second.stats["archived"] == 1
+
+
+async def test_without_a_resume_an_old_hold_is_still_overdue(woo):  # noqa: F811
+    """The control: the stamp, not the pause, is what moves the window."""
+    await _add(_source("woo"))
+    await _held_cycle_aged(woo)
+    woo.include_status = 200
+    late = await run_source("woo", _woo_adapter())
+    assert late.stats["archive_confirm"]["overdue"] is True
+
+
+async def test_resuming_stamps_resumed_at_only_when_something_was_paused():
+    await _add(_source("shop-a"))
+    async with SessionLocal() as session:
+        await pause.resume_source(session, "shop-a")  # not paused: no stamp
+        await crawl.set_crawl_pause(session, False, by="tester")
+        await session.commit()
+        row = await session.scalar(select(Source).where(Source.source_id == "shop-a"))
+        assert row.resumed_at is None
+        assert await crawl.crawl_resumed_at(session) is None
+
+
+async def test_a_cycle_held_only_by_a_pause_reports_its_sweep_time():
+    """`cycle_seconds` is the sweep, not the days the shop stayed paused.
+
+    A run stopped by a pause skips the cycle's end and leaves no report, so
+    the cycle is found held by its sweep having ended in an earlier run: here
+    an hour-long sweep that finished five days ago, closed by a run that reads
+    no page.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from makhzan_schemas.models import SourceCursor
+
+    await _add(_source(SRC))
+    now = datetime.now(UTC)
+    async with SessionLocal() as session:
+        session.add(
+            SourceCursor(
+                source=SRC,
+                partition_key="",
+                next_page=1,
+                exhausted=True,
+                cycle_started_at=now - timedelta(days=5, hours=1),
+                updated_at=now - timedelta(days=5),
+            )
+        )
+        await session.commit()
+    adapter = StubAdapter()
+    closing = await run_source(SRC, adapter)
+    assert adapter.fetched == []  # nothing left to sweep
+    seconds = closing.stats["cycle"]["cycle_seconds"]
+    assert 3500 < seconds < 3700, "the hour of the sweep, not the five days held"
+
+
 async def _run_until_confirm():
     runs = []
     for _ in range(10):

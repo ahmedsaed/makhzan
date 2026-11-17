@@ -119,6 +119,20 @@ async def crawl_pause(session) -> dict | None:
     return state.value
 
 
+async def crawl_resumed_at(session):
+    """When the crawl-wide pause was last lifted, if ever (a datetime, or None)."""
+    from datetime import datetime
+
+    from makhzan_schemas.models import WorkerState
+
+    state = await session.get(WorkerState, PAUSE_STATE_KEY, populate_existing=True)
+    stamp = (state.value or {}).get("resumed_at") if state is not None else None
+    try:
+        return datetime.fromisoformat(stamp) if stamp else None
+    except (TypeError, ValueError):
+        return None
+
+
 async def set_crawl_pause(session, paused: bool, *, by: str, note: str | None = None) -> dict:
     """Pause or resume the whole crawl (flushed, not committed). Returns the stored value."""
     from datetime import datetime, timezone
@@ -128,11 +142,17 @@ async def set_crawl_pause(session, paused: bool, *, by: str, note: str | None = 
 
     from makhzan_schemas.models import WorkerState
 
+    now = datetime.now(timezone.utc).isoformat()
+    before = await session.get(WorkerState, PAUSE_STATE_KEY, populate_existing=True)
+    earlier = before.value if before is not None and isinstance(before.value, dict) else {}
     value = {
         "paused": bool(paused),
-        "at": datetime.now(timezone.utc).isoformat(),
+        "at": now,
         "by": by,
         "note": (note or "").strip() or None,
+        # When it was last lifted: the archive confirmation's hold window runs
+        # from here, so a long pause does not make the next run overdue.
+        "resumed_at": now if (not paused and earlier.get("paused")) else earlier.get("resumed_at"),
     }
     await session.execute(
         insert(WorkerState)

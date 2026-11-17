@@ -389,6 +389,7 @@ async def test_pausing_and_resuming_the_crawl(queued):
         assert (await client.post("/crawl/resume", data={"csrf": csrf})).status_code == 303
         async with SessionLocal() as session:
             assert await crawl.crawl_pause(session) is None
+            assert await crawl.crawl_resumed_at(session) is not None
     actions = await _actions()
     assert [(a.action, a.actor, a.client) for a in actions[1:]] == [
         ("crawl.pause", "owner", "127.0.0.1"),
@@ -410,6 +411,7 @@ async def test_pausing_and_resuming_a_shop(queued):
         async with SessionLocal() as session:
             row = await session.scalar(select(Source).where(Source.source_id == "shop-a"))
             assert row.paused_at is None
+            assert row.resumed_at is not None  # the archive check's window restarts here
         assert (await client.post("/shops/nope/pause", data={"csrf": csrf})).status_code == 404
     assert [(a.action, a.target) for a in await _actions()][1:] == [
         ("shop.pause", "shop-a"),

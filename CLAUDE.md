@@ -191,8 +191,10 @@ product page of each one the sitemap still lists (20 a run). Returned is kept,
 asked-and-absent, or returned but not upserted, is archived. A failed or
 unfinished check archives nothing more and holds the cycle open (cursors
 exhausted, untouched) for the next run: at most 2 failed runs, 3 runs held for
-room, or one cycle, then the rest archives as before. Hold time is not
-`cycle_seconds`. Sitemap presence is never a sighting. Requests count as
+room, or one cycle (counted from the sweep's end, or from the shop's or the
+crawl's last resume if later: `sources.resumed_at`, `crawl_pause.resumed_at`),
+then the rest archives as before. A pause holds the cycle without counting as
+any of these. Hold time is not `cycle_seconds`, pause-held time included. Sitemap presence is never a sighting. Requests count as
 `stats.requests.confirm`, against the run's page ceiling.
 
 **A short page can end a partition** (`worker/sources/short_page.py`, T1):

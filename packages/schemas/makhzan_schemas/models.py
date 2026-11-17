@@ -173,6 +173,12 @@ class Listing(TimestampMixin, Base):
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_listing_confidence"),
         Index("ix_listing_part_number", "part_number"),
         Index("ix_listing_category_status", "category_id", "status"),
+        # The few listings waiting for an early re-check, found per source.
+        Index(
+            "ix_listing_recheck_requested",
+            "source",
+            postgresql_where=text("recheck_requested_at IS NOT NULL"),
+        ),
         Index("ix_listing_last_verified", "last_verified_at"),
         CheckConstraint(
             "matched_via IS NULL OR matched_via IN ('rules', 'ai')", name="ck_listing_matched_via"
@@ -279,6 +285,11 @@ class Listing(TimestampMixin, Base):
     #: listings, and a second path between the tables would make their joins
     #: ambiguous. Decision rows are never deleted.
     matched_ai_decision_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: A person asked for this listing to be read again before its turn (an
+    #: accepted "wrong price or stock" report, admin dashboard). The next run
+    #: of its source reads it first, within its pace and page ceiling, in the
+    #: way its adapter can (worker/recheck.py); the read clears it. NULL: none.
+    recheck_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     supplier: Mapped[Supplier] = relationship(back_populates="listings")
     category: Mapped[Category | None] = relationship()
@@ -564,6 +575,10 @@ class Source(TimestampMixin, Base):
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paused_by: Mapped[str | None] = mapped_column(String(100))
     pause_note: Mapped[str | None] = mapped_column(Text)
+    #: When a person last resumed it. The archive confirmation's hold window
+    #: is measured from the later of this and when the sweep finished, so a
+    #: long pause does not make the first run after it overdue.
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class IngestionRun(Base):

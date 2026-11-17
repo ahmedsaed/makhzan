@@ -216,8 +216,20 @@ container recreated, and both survive deploys (`worker/pause.py`):
 
 Paused, `refresh_all` queues nothing for it, a daily job already queued skips
 it, and a full run already going stops before its next page, cursors kept,
-with `stats.stopped` saying who paused it. `limit=` runs and the probe still
-work. `make status`, `./makhzan status` and /how-we-crawl show both.
+with `stats.stopped` saying who paused it. A run that is past its sweep
+re-reads the pause before asking about the cycle's archive candidates, before
+each request it sends for them and before each product page, and stops there.
+`limit=` runs and the probe still work. `make status`, `./makhzan status` and
+/how-we-crawl show both.
+
+**A pause never archives anything.** A cycle waiting to confirm its archive
+candidates stays held while its shop is paused, and a run held by a pause
+counts as no attempt. Resuming stamps `resumed_at` (`sources.resumed_at`, or
+`resumed_at` in `crawl_pause`), and the hold's one-cycle window is measured
+from the later of that and the sweep's end, so the first run after a long
+pause is not "overdue" (owner, 2026-11-17). Failed attempts are still bounded
+by `CONFIRM_MAX_FAILED_RUNS`. A cycle held only by pauses reports its
+`cycle_seconds` up to the end of its sweep, not the time it waited.
 
 `CRAWL_ENABLED` in `.env.prod` remains as the older, harder switch, read when
 the worker's container is created; the crawl runs only when it is on *and*
