@@ -64,7 +64,12 @@ export function Offers({
       <p className="mt-1 mb-2.5 text-[13px] leading-snug text-ink-2">
         Each offer shows the shop&apos;s own title.
       </p>
-      <div className="-mx-4 overflow-hidden border-y border-line bg-surface md:mx-0 md:rounded-card md:border">
+      <div
+        className={cn(
+          "-mx-4 overflow-hidden border-y border-line bg-surface md:mx-0 md:rounded-card md:border",
+          ROUNDED_ENDS,
+        )}
+      >
         <OfferList offers={listed} productTitle={productTitle} now={now} />
         <Fold
           offers={outOfStock}
@@ -86,6 +91,20 @@ export function Offers({
     </section>
   );
 }
+
+/**
+ * The box is rounded from `md` up and clips its rows, so a picked row's inset
+ * ring, square at the corners, was cut off where the box curves. The box's
+ * first row takes its top radius and its last row (in an open fold, when a
+ * fold ends the box) its bottom one, less the 1px border so the ring runs
+ * parallel to it; every other row stays square. A row ending a list that a
+ * fold follows is not the box's last row. On a phone the box is square.
+ */
+const ROUNDED_ENDS = [
+  "md:[&>ul:first-child>li:first-child]:rounded-t-[calc(var(--radius-card)_-_1px)]",
+  "md:[&>ul:last-child>li:last-child]:rounded-b-[calc(var(--radius-card)_-_1px)]",
+  "md:[&>details:last-child>ul>li:last-child]:rounded-b-[calc(var(--radius-card)_-_1px)]",
+].join(" ");
 
 /** "Show 2 out of stock offers": the offers a default hides, one click away. */
 function Fold({

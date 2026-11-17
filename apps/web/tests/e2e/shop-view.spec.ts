@@ -276,6 +276,28 @@ test.describe("picking a shop", () => {
     await expect(primary(page)).toHaveText("View at Sinai Spares");
   });
 
+  test("the ring follows the box's rounded corners on its first and last rows", async ({
+    page,
+  }) => {
+    // The box clips its rows; a square ring on a corner row was cut off there.
+    const radii = (id: string) =>
+      row(page, id).evaluate((el) => {
+        const s = getComputedStyle(el);
+        return {
+          top: parseFloat(s.borderTopLeftRadius),
+          bottom: parseFloat(s.borderBottomLeftRadius),
+        };
+      });
+    await page.goto(`${URL}?shop=nile-parts`);
+    expect((await radii("o-ai-nile")).top).toBeGreaterThan(0);
+    expect(await radii("o-ai-delta")).toEqual({ top: 0, bottom: 0 });
+    // The last in-stock row is not the box's last: the fold follows it.
+    expect((await radii("o-ai-oasis")).bottom).toBe(0);
+    await page.goto(`${URL}?shop=sinai-spares`);
+    await expect(row(page, "o-ai-sinai")).toHaveAttribute("aria-current", "true");
+    expect((await radii("o-ai-sinai")).bottom).toBeGreaterThan(0);
+  });
+
   test("with reduced motion the gallery jumps rather than glides", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(URL);
@@ -289,6 +311,14 @@ test.describe("picking a shop", () => {
 
 test.describe("on a phone", () => {
   test.use({ viewport: PHONE, hasTouch: true });
+
+  test("the box is square edge to edge, and so is the ring", async ({ page }) => {
+    await page.goto(URL);
+    const radius = await row(page, "o-ai-nile").evaluate(
+      (el) => getComputedStyle(el).borderTopLeftRadius,
+    );
+    expect(radius).toBe("0px");
+  });
 
   test("the bottom bar and the thumbnail follow the picked shop", async ({ page }) => {
     await page.goto(URL);
