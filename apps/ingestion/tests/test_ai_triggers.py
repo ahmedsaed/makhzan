@@ -92,7 +92,10 @@ def _pairs(jobs) -> set[tuple]:
 
 
 async def _score_all(a, b, *, kev=0.9, pplx=0.97) -> None:
-    """Both stages' scores for the pair's current requests, as workers would post."""
+    """Both stages' scores for the pair's current requests, as workers would
+    post; a request already scored keeps its score (idempotent, as /results)."""
+    from sqlalchemy.dialects.postgresql import insert
+
     a, b = pair(a, b)
     async with SessionLocal() as session:
         shown = await load_shown(session, (a, b))
@@ -100,8 +103,9 @@ async def _score_all(a, b, *, kev=0.9, pplx=0.97) -> None:
         for name, p in (("kev", kev), ("pplx", pplx)):
             stage = PIPELINES["match"].stage(name)
             for order, digest in render(stage, shown[a], shown[b]).sha256.items():
-                session.add(
-                    AiScore(
+                await session.execute(
+                    insert(AiScore)
+                    .values(
                         model_version_id=judges[("match", name)],
                         listing_a=a,
                         listing_b=b,
@@ -111,6 +115,7 @@ async def _score_all(a, b, *, kev=0.9, pplx=0.97) -> None:
                         content_sha256_b=shown[b].content_sha256,
                         p=p,
                     )
+                    .on_conflict_do_nothing(constraint="uq_ai_score_request")
                 )
         await session.commit()
 
@@ -605,7 +610,7 @@ async def test_a_reoffered_pair_is_never_settled_from_scores_the_revocation_saw(
         await session.commit()
     _, candidates, *_ = await _daily()
     assert candidates["revoked_reoffered"] == 1
-    assert candidates["revoked_stale_scores"] == 1
+    assert candidates["revoked_blocked"] == 1
     assert await _jobs() == [] and await _standing() == []
 
 
@@ -623,3 +628,122 @@ async def test_a_kev_confident_no_blocks_whatever_the_department():
         await session.commit()
         ai = await load_ai_same(session, await load_overrides(session))
     assert ai.no == {pair(x, y)}
+
+
+# --- the revocation guard in write_decision -------------------------------------------------
+
+_A = "carbon film resistor 10k ohm quarter watt"
+_B = "carbon resistor 10k ohm 1/4w metal"
+
+
+async def _set(y, **values) -> None:
+    async with SessionLocal() as session:
+        await session.execute(update(Listing).where(Listing.id == y).values(**values))
+        await session.commit()
+
+
+async def _two() -> tuple:
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, _A)
+    await _daily()  # baseline
+    return x, y
+
+
+async def test_a_revert_to_text_scored_before_the_revocation_does_not_restore_it():
+    """Decided on A, re-decided on B, revoked on B, text back to A: A's
+    requests differ from B's, so the pair is offered, but A's scores all
+    predate the revocation: no decision is written."""
+    x, y = await _two()
+    await _score_all(x, y)
+    await _decide(x, y)
+    await _set(y, title_en=_B)
+    await _daily()
+    await _score_all(x, y)
+    revoked = await _decide(x, y)
+    async with SessionLocal() as session:
+        await session.execute(update(AiJob).values(status="cancelled"))
+        await session.commit()
+    await _revoke(revoked.id)
+    await _set(y, title_en=_A)
+    _, candidates, *_ = await _daily()
+    assert candidates["revoked_reoffered"] == 1
+    assert candidates["revoked_blocked"] == 1
+    assert await _standing() == []
+
+
+async def test_a_job_queued_before_a_revocation_decides_nothing_after_it():
+    """A re-score job queued on B; the person revokes; the text reverts to A
+    before a lease: the lease finds the job scored (A's old scores), marks it
+    done, and writes no decision."""
+    x, y = await _two()
+    await _score_all(x, y)
+    revoked = await _decide(x, y)
+    await _set(y, title_en=_B)
+    await _daily()
+    [job] = await _jobs(status="queued")
+    await _revoke(revoked.id)
+    await _set(y, title_en=_A)
+    async with SessionLocal() as session:
+        row = await session.get(AiJob, job.id)
+        judges = await flow.current_judges(session)
+        assert await core._prepare(session, row, judges, await core.db_now(session)) is None
+        await session.commit()
+    assert [j.status for j in await _jobs()] == ["done"]
+    assert await _standing() == []
+
+
+async def test_a_new_model_version_on_the_revoked_text_does_not_stand(monkeypatch):
+    """Fresh scores, after the revocation, by a new judge, of exactly the
+    requests the revocation saw: still not a reason to undo it."""
+    from dataclasses import replace
+
+    from makhzan_schemas.ai import policy
+
+    x, y = await _two()
+    await _score_all(x, y)
+    await _revoke((await _decide(x, y)).id)
+    monkeypatch.setitem(
+        policy.MODELS, "kev", replace(policy.MODELS["kev"], model_version="kev-4b@newer")
+    )
+    await _score_all(x, y)  # the new judge scores the same text, after the revocation
+    async with SessionLocal() as session:
+        outcome = await flow.offer(session, [PairRequest(x, y, "match", 60, "rescore")])
+        await session.commit()
+    assert outcome["revoked_blocked"] == 1
+    assert await _standing() == []
+
+
+async def test_a_pplx_only_change_after_a_kev_yes_is_offered_and_can_stand():
+    """An edit past Kev's cap: Kev's view is unchanged (its old yes stands),
+    pplx is asked again, and its fresh score on new text may decide."""
+    description = " ".join(f"word{i}" for i in range(200))
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, _A)
+    await _set(y, description_en=description)
+    await _daily()
+    await _score_all(x, y)
+    await _revoke((await _decide(x, y)).id)
+    await _set(y, description_en=description.replace("word180", "changed180"))
+    _, candidates, *_ = await _daily()
+    assert candidates["revoked_reoffered"] == 1
+    assert [(j.stage, j.status) for j in await _jobs()] == [("pplx", "queued")]
+    assert await _standing() == []
+    await _score_all(x, y)  # pplx scores the new text, after the revocation
+    decision = await _decide(x, y)
+    assert decision is not None and decision.state == "standing"
+
+
+async def test_revoking_cancels_the_pairs_queued_jobs(capsys):
+    from worker import ai
+
+    x, y = await _two()
+    await _score_all(x, y)
+    decision = await _decide(x, y)
+    await _set(y, title_en=_B)
+    await _daily()
+    assert [j.status for j in await _jobs()] == ["queued"]
+    assert await ai.run(["revoke", str(decision.id), "--note", "wrong", "--by", "t"]) == 0
+    assert "1 queued job(s) cancelled" in capsys.readouterr().out
+    assert [j.status for j in await _jobs()] == ["cancelled"]

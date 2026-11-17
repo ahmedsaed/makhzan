@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from makhzan_schemas.ai import triggers
-from makhzan_schemas.ai.decisions import STALE, STANDING
+from makhzan_schemas.ai.decisions import REVOKED, STALE, STANDING
 from makhzan_schemas.ai.pipelines import DECIDE, PIPELINES, SCORE, Step, pipeline, transition
 from makhzan_schemas.ai.policy import ACTIVE
 from makhzan_schemas.ai.render import Shown, load_shown, render
@@ -143,7 +143,14 @@ async def advance(
     `NEXT_STAGE`, so a re-score of a standing "same" stays first all the way
     through (P8). Returns counts by what happened.
     """
-    counts = {"queued": 0, "decided": 0, "recorded": 0, "already": 0, "missing": 0}
+    counts = {
+        "queued": 0,
+        "decided": 0,
+        "recorded": 0,
+        "already": 0,
+        "missing": 0,
+        "revoked_blocked": 0,
+    }
     if not requests:
         return counts
     judges = judges or await current_judges(session)
@@ -163,8 +170,10 @@ async def advance(
         if step.action == SCORE:
             by_stage.setdefault(step.stage, []).append(request)
         elif step.action == DECIDE:
-            await write_decision(session, request.pipeline, key[1], key[2], step, current[key])
-            counts["decided"] += 1
+            row = await write_decision(
+                session, request.pipeline, key[1], key[2], step, current[key]
+            )
+            counts["revoked_blocked" if row is BLOCKED else "decided"] += 1
         else:
             counts["recorded"] += 1
     for stage_name, batch in by_stage.items():
@@ -196,13 +205,71 @@ async def on_scores(session: AsyncSession, job: AiJob) -> Step:
     if step.action == SCORE:
         await triggers.enqueue(session, [request], stage=step.stage)
     elif step.action == DECIDE:
-        await write_decision(session, p.name, job.listing_a, job.listing_b, step, current[key])
+        row = await write_decision(
+            session, p.name, job.listing_a, job.listing_b, step, current[key]
+        )
+        if row is BLOCKED:
+            return Step(BLOCKED_ACTION)
     return step
 
 
 def _lock_key(pipeline_name: str, a: uuid.UUID, b: uuid.UUID):
     """A bigint for `pg_advisory_xact_lock`, from the pipeline and the pair."""
     return func.hashtextextended(f"ai_decision:{pipeline_name}:{a}:{b}", 0)
+
+
+#: What `write_decision` returns when a person's revocation stands in the way.
+BLOCKED = object()
+#: The step a job's result reports then (`/results` `next.action`).
+BLOCKED_ACTION = "blocked"
+
+
+async def _revocation_stands(
+    session: AsyncSession, pipeline_name: str, a: uuid.UUID, b: uuid.UUID, evidence: dict
+) -> bool:
+    """Whether a revoked decision for the pair keeps this one from standing.
+
+    It does, unless at least one score the new decision uses was scored
+    after the latest revocation **and** for a request no revoked decision
+    recorded: a model looked, at text the revocation did not see. Old
+    scores (a revert to text scored earlier, a job queued before the
+    revocation) and fresh scores of text the revocation saw (a new model
+    version) cannot undo a person's revocation. A revoked decision recorded
+    without request hashes counts as having seen everything."""
+    revoked = (
+        await session.execute(
+            select(AiDecision.revoked_at, AiDecision.scores).where(
+                AiDecision.pipeline == pipeline_name,
+                AiDecision.listing_a == a,
+                AiDecision.listing_b == b,
+                AiDecision.state == REVOKED,
+            )
+        )
+    ).all()
+    if not revoked:
+        return False
+    latest = max(r.revoked_at for r in revoked)
+    seen: set[tuple[str, str]] = set()
+    for _, scores in revoked:
+        for name, entry in (scores or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("requests"):
+                return True
+            seen.update((name, digest) for digest in entry["requests"].values())
+    for name, entry in evidence.items():
+        for order, digest in (entry.get("requests") or {}).items():
+            if order not in entry or (name, digest) in seen:
+                continue  # not a score this decision uses, or text already revoked
+            scored_at = await session.scalar(
+                select(AiScore.scored_at).where(
+                    AiScore.model_version_id == entry["model_version_id"],
+                    AiScore.request_sha256 == bytes.fromhex(digest),
+                )
+            )
+            if scored_at is not None and scored_at > latest:
+                return False
+    return True
 
 
 async def write_decision(
@@ -212,7 +279,7 @@ async def write_decision(
     b: uuid.UUID,
     step: Step,
     current: PairScores,
-) -> AiDecision | None:
+) -> AiDecision | None | object:
     """Write the pair's decision as `step` says (docs/ai/broker-api.md §3.4).
 
     - serialised per (pipeline, pair) by a transaction-scoped advisory lock,
@@ -224,9 +291,15 @@ async def write_decision(
     - a standing decision with the same outcome is kept, same id, and its
       scores, `decided_by`, policy and hashes updated in place; otherwise it
       is marked stale and a new standing row is inserted;
-    - the partial unique index is the backstop: on a violation it retries once.
+    - the partial unique index is the backstop: on a violation it retries once;
+    - **a person's revocation holds** (`_revocation_stands`): with a revoked
+      decision for the pair, nothing is written unless a model has looked,
+      after the revocation, at text the revocation did not see. Every path
+      that decides (a trigger's offer, a result, a lease finding a job
+      scored, a replay) comes through here, so this is the one guard.
 
-    Returns the standing row, or None when a listing no longer exists.
+    Returns the standing row; None when a listing no longer exists; `BLOCKED`
+    when a revocation keeps the decision from being written.
     """
     a, b = pair(a, b)
     await session.execute(select(func.pg_advisory_xact_lock(_lock_key(pipeline_name, a, b))))
@@ -236,6 +309,9 @@ async def write_decision(
     evidence = {}
     for name, low in step.mins:
         evidence[name] = {**current.evidence[name], "min": low}
+    if await _revocation_stands(session, pipeline_name, a, b, evidence):
+        log.info("decision for %s %s %s blocked by a revocation", pipeline_name, a, b)
+        return BLOCKED
     fields = {
         "outcome": step.outcome,
         "decided_by": step.decided_by,

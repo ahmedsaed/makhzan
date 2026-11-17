@@ -66,7 +66,7 @@ from makhzan_schemas import grouping as g
 from makhzan_schemas.ai import flow, policy, triggers
 from makhzan_schemas.ai.broker import sweep_judges
 from makhzan_schemas.ai.decisions import REVOKED, STANDING
-from makhzan_schemas.ai.pipelines import PIPELINES, SAME, SCORE, transition
+from makhzan_schemas.ai.pipelines import PIPELINES, SAME
 from makhzan_schemas.ai.render import Shown, render, shown
 from makhzan_schemas.domains import get_profile
 from makhzan_schemas.enums import ListingStatus
@@ -261,33 +261,6 @@ async def _decided_pairs(
     return Decided(skip, reoffered)
 
 
-async def _settled_by_revoked_scores(
-    session: AsyncSession, pipeline_name: str, catalogue: Catalogue, key: tuple, decisions
-) -> bool:
-    """Belt and braces for a re-offered revoked pair: True when the pair would
-    be decided now purely from scores for requests a revoked decision already
-    recorded (a stage whose view did not change can still settle it, e.g. a
-    description edit past Kev's cap that Kev never saw). Such a pair is not
-    offered: a revocation is never undone with no model looking."""
-    a, b = key
-    judges = await flow.current_judges(session)
-    current = await flow.scores_for(session, [(pipeline_name, a, b)], catalogue.shown, judges)
-    if (pipeline_name, a, b) not in current:
-        return True
-    step = transition(pipeline_name, current[(pipeline_name, a, b)].scores)
-    if step.action == SCORE:
-        return False
-    now = _requests_now(pipeline_name, catalogue.shown[a], catalogue.shown[b])
-    used = [name for name, _ in step.mins]
-    return any(
-        all(
-            isinstance(e.get(name), dict) and e[name].get("requests") == now.get(name)
-            for name in used
-        )
-        for e in decisions
-    )
-
-
 def find_pairs(
     catalogue: Catalogue, queries: Iterable[int], *, mutual: bool = False, k: int = K
 ) -> set[tuple[int, int]]:
@@ -478,18 +451,14 @@ class CandidatesTrigger(_MatchTrigger):
             decided = await _decided_pairs(session, MATCH, catalogue)
             filtered = filter_pairs(catalogue, found, await load_overrides(session), decided.skip)
             self.counts.update(filtered.counts)
-            kept = []
-            for key in filtered.kept:
-                if key in decided.reoffered:
-                    self.counts["revoked_reoffered"] += 1
-                    if await _settled_by_revoked_scores(
-                        session, MATCH, catalogue, key, decided.reoffered[key]
-                    ):
-                        self.counts["revoked_stale_scores"] += 1
-                        continue
-                kept.append(key)
+            # A revoked pair offered again can still not be decided from
+            # scores its revocation saw: `flow.write_decision` refuses that.
+            self.counts["revoked_reoffered"] = sum(
+                1 for key in filtered.kept if key in decided.reoffered
+            )
             requests = [
-                triggers.PairRequest(a, b, MATCH, self.priority, self.name) for a, b in kept
+                triggers.PairRequest(a, b, MATCH, self.priority, self.name)
+                for a, b in filtered.kept
             ]
         for i in queries:
             state = states[catalogue.listings[i].id]
