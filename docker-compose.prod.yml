@@ -9,9 +9,9 @@
 #
 # TLS / reverse proxy is handled externally (managed by you). Only the web app
 # is published (WEB_PORT) for your proxy to front; the API is internal and the
-# web service proxies /api to it (Next.js rewrites). The AI broker listens on
-# the host's loopback (BROKER_PORT) for your proxy to give its own hostname
-# (docs/ai/broker-deploy.md). db / search / redis are internal-only. Data lives in named volumes (docker volume ls).
+# web service proxies /api to it (Next.js rewrites). The AI broker is bound
+# to BROKER_BIND, the server's Tailscale address, and reached only over
+# Tailscale (docs/ai/broker-deploy.md). db / search / redis are internal-only. Data lives in named volumes (docker volume ls).
 #
 # The services read ${MAKHZAN_ENV_FILE:-.env.prod}: backup-db.sh and restore-db.sh set
 # MAKHZAN_ENV_FILE so a throwaway stack (its own COMPOSE_PROJECT_NAME and env file) can
@@ -124,9 +124,11 @@ services:
 
   # The AI broker (docs/ai/broker-api.md, docs/ai/broker-deploy.md): the only
   # thing AI workers talk to. The API image with its own app object and port,
-  # never behind the web's /api rewrite (P2). Bound to the host's loopback
-  # only: your reverse proxy gives it its own hostname, with TLS. It runs no
-  # model; it renders requests, leases jobs and stores scores.
+  # never behind the web's /api rewrite (P2). Reached only over Tailscale:
+  # BROKER_BIND is the server's Tailscale IP and port (default loopback, so
+  # nothing outside the host reaches it until set). The tailscale interface
+  # must be up before this container starts, or Docker cannot bind the
+  # address. It runs no model; it renders requests, leases jobs, stores scores.
   broker:
     image: ${IMAGE_PREFIX}/api:${IMAGE_TAG}
     build:
@@ -145,7 +147,7 @@ services:
       REBUILD_WINDOW_SECONDS: ${REBUILD_WINDOW_SECONDS:-600}
     command: ["uvicorn", "app.broker.main:app", "--host", "0.0.0.0", "--port", "8100"]
     ports:
-      - "127.0.0.1:${BROKER_PORT:-8100}:8100"
+      - "${BROKER_BIND:-127.0.0.1:8100}:8100"
     depends_on:
       db:
         condition: service_healthy
