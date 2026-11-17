@@ -173,11 +173,13 @@ writes decisions, so the backlog can be scored while the mode is off.
   first.
 - The broker stores a session row (`ai_sessions`: worker, session id, the
   model versions it reported and whether each was `ok`, the rest of the
-  hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, and the
+  hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, end_model, and the
   last lease's request id and lease id) and `ai_workers.last_hello` for
   status. `ended_at` / `end_reason` record how a session last stopped:
-  `released` (a graceful `/release`, with or without jobs) or `empty` (a
-  lease came back empty); a later lease that returns jobs reopens it.
+  `released` (a graceful `/release`, with or without jobs), `empty` (a
+  lease came back empty) or `none_fit` (work queued, none fitting the time
+  left); `end_model` is the model whose lease ended it. A later lease that
+  returns jobs reopens it.
 
 ### 3.2 `POST /lease`
 
@@ -228,7 +230,10 @@ writes decisions, so the backlog can be scored while the mode is off.
   lease whose answer was lost on the way is not orphaned until it expires.
   If none of it is still held (released, completed, or expired: reaped or
   not yet), a fresh lease is made, which reaps first. The same id for another
-  model is `422`. A new id, or none, is always a fresh lease.
+  model is `422`, but only while the original lease's jobs are still held
+  (that is where the broker reads the original model from); once none is, the
+  id no longer names anything and a fresh lease is made for the model asked.
+  A new id, or none, is always a fresh lease.
 - **Batch size, and a job that does not fit.** Jobs are added in priority
   order while `owed requests × seconds_per_request` fits in `seconds_left`
   minus a 60 s margin; at most `max_jobs`. The first job that does not fit
@@ -240,11 +245,18 @@ writes decisions, so the backlog can be scored while the mode is off.
   gracefully. Without both fields, only `max_jobs` limits the lease.
 - **"Nothing fits" is not "empty".** When work is queued but the first job
   does not fit, the answer is `200 {"lease_id": null, "jobs": [], "reason":
-  "none_fit"}`, the session ends with `end_reason = "none_fit"`, and the P16
-  rebuild is **not** considered (no window closed with the queue drained).
-  After 3 such sessions of one worker in a week (`broker.NONE_FIT_FLAG_AFTER`)
-  a `nothing_fits` flag opens, subject "<worker>/<model>": its window is too
-  short for one job, or its `seconds_per_request` is wrong.
+  "none_fit"}`. **The broker ends the session** (`end_reason = "none_fit"`,
+  `end_model` the model asked): the worker sends nothing more, no release,
+  and says hello again next window.
+  - A session that **had** leased before (a healthy night: it scored, then its
+    window ran low with a backlog left) ends like a graceful release, and the
+    P16 rebuild is considered for what it decided.
+  - A session that **never** got a lease skips P16 (it decided nothing), and
+    is what `nothing_fits` counts: after 3 such sessions in a week
+    (`broker.NONE_FIT_FLAG_AFTER`) for one worker **and model**, counted only
+    since that subject's latest dismissed or actioned flag, a `nothing_fits`
+    flag opens, subject "<worker>/<model>": its window is too short for one
+    job, or its `seconds_per_request` is wrong.
 - **Rendering at lease time**, from the current database rows: the stage's
   prompt variant (`pipelines.PIPELINES[p].stage(s).prompt`) through
   `prompt.requests(variant, record(a), record(b))`, where `record` is
@@ -592,6 +604,6 @@ heartbeat_s = 60
 - Writing `ai_decisions.effect` after each regroup (the columns exist; nothing
   writes them yet), and citing revoked decisions on the regroup that undoes
   them (`revoked_ai_decisions`).
-- Flags other than `poison_job` and `version_drift`: P12's rules-merged
+- Flags other than `poison_job`, `version_drift` and `nothing_fits`: P12's rules-merged
   audit is counted in status, not flagged, since no threshold is chosen; no
   `blocked_same` is written until `effect` is.
