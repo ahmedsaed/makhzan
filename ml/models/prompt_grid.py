@@ -10,9 +10,11 @@
     # 3. token counts per request and context-limit check, in an image with transformers:
     docker run --rm --user "$(id -u):$(id -g)" --entrypoint python3 -e HF_HUB_OFFLINE=1 \
       -v "$PWD/ml/.cache/huggingface:/hf:z" -v "$PWD/ml:/ml:ro" -v "$PWD/ml/out:/o:z" \
-      makhzan-ml/kev:1.0 /ml/models/prompt_grid.py tokens --out /o/prompt-grid --hub /hf/hub
+      makhzan-ml/kev:1.0 /ml/models/prompt_grid.py tokens --out /o/prompt-grid --hub /hf/hub \
+      --key /o/labels/answer-key-v2.jsonl --improve /o/improve
     # 4. score, one service alone on the GPU (ml/README.md), one request per call:
-    python3 ml/models/prompt_grid.py score --model kev --cap 150 --out ml/out/prompt-grid
+    python3 ml/models/prompt_grid.py score --model kev --cap 150 --out ml/out/prompt-grid \
+        --key ml/out/labels/answer-key-v2.jsonl
     # 5. compare (stdlib):
     python3 ml/models/prompt_grid.py report --out ml/out/prompt-grid --improve ml/out/improve \
         --key ml/out/labels/answer-key-v2.jsonl --models ml/out/models
@@ -273,15 +275,24 @@ def cmd_score(args) -> None:
         # noise: every 18th pair (stratum-mixed), (A, B) re-scored twice
         npairs = pairs[:: len(pairs) // NOISE][:NOISE]
         rep = {}
+
+        def again(pl):  # a failed repeat is recorded as None, as a failed request is
+            try:
+                return one(pl)[0]
+            except Exception:  # noqa: BLE001
+                return None
+
         for p in npairs:
             pl = payload(listings, p["listing_a"], p["listing_b"], variant, cap)
-            rep[p["pair_id"]] = [done[(p["pair_id"], "ab")]["score"], one(pl)[0], one(pl)[0]]
+            rep[p["pair_id"]] = [done[(p["pair_id"], "ab")]["score"], again(pl), again(pl)]
         (args.out / "noise" / f"{cfg}.json").write_text(json.dumps(rep))
         sec_req = [r["seconds"] for r in done.values() if r["score"] is not None]
         meta = {"config": cfg, "service": SERVICE[args.model], "requests": len(todo),
                 "failed": failed, "seconds": round(seconds, 1),
                 "req_per_s": round(len(todo) / seconds, 3) if todo else None,
-                "req_per_s_from_latency": round(len(sec_req) / sum(sec_req), 3),
+                # None when every request failed (nothing timed) rather than a ZeroDivisionError
+                "req_per_s_from_latency": round(len(sec_req) / sum(sec_req), 3)
+                if sec_req and sum(sec_req) > 0 else None,
                 "gpu_peak_mib_total": gpu.peak}  # fmt: skip
         (args.out / "meta" / f"{cfg}.json").write_text(json.dumps(meta, indent=1))
         print(json.dumps(meta), flush=True)
@@ -305,15 +316,19 @@ def cmd_report(args) -> None:
     title = {k: v["title"] for k, v in listings.items()}
     tokens = json.loads((args.out / "tokens.json").read_text())
 
+    def pair_min(v) -> float:
+        # a pair with no score in either order is never accepted (0.0); `missing` counts them
+        return min((x for x in v if x is not None), default=0.0)
+
     def mins(d: dict) -> dict:
-        return {k: min(x for x in v if x is not None) for k, v in d.items()}
+        return {k: pair_min(v) for k, v in d.items()}
 
     sig = lambda z: 1 / (1 + math.exp(-z)) if z >= 0 else math.exp(z) / (1 + math.exp(z))  # noqa: E731
     s: dict[str, dict[str, float]] = {
         # the key's `kev` is 0 where today's vetoes fire; the judge's own score is the min of
         # its orders ((B, A) was skipped where (A, B) < 0.05, the Phase E two-pass)
-        "baseline:kev-title": {p["pair_id"]: min(x for x in (p["kev_ab"], p["kev_ba"])
-                                                 if x is not None) for p in key.values()},
+        "baseline:kev-title": {p["pair_id"]: pair_min((p["kev_ab"], p["kev_ba"]))
+                               for p in key.values()},
         "baseline:pplx-title": mins(json.loads((args.models / "pplx.json").read_text())),
         "baseline:qwen-title": {k: sig(min(v)) for k, v in
                                 json.loads((args.models / "qwen35.json").read_text()).items()},
@@ -400,10 +415,11 @@ def cmd_report(args) -> None:
         f = args.out / "noise" / f"{cfg}.json"
         if f.exists():
             d = json.loads(f.read_text())
+            d = {k: [x for x in v if x is not None] for k, v in d.items()}  # failed repeats
             diffs = [abs(x - v[0]) for v in d.values() for x in v[1:]]
             t = FIXED[cfg.split("-")[0]]
             flips = sum(len({x >= t for x in v}) > 1 for v in d.values())
-            res["noise"][cfg] = {"pairs": len(d), "max_abs_diff": max(diffs),
+            res["noise"][cfg] = {"pairs": len(d), "max_abs_diff": max(diffs, default=None),
                                  "identical": sum(x == 0 for x in diffs), "of": len(diffs),
                                  "flips_at_fixed_threshold": flips}  # fmt: skip
 

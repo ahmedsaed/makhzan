@@ -43,8 +43,13 @@ LO = [0.01, 0.05, 0.1, 0.2]
 HI = [0.95, 0.99, 1.01]
 
 
+def pair_min(v) -> float:
+    """The lower of a pair's scores; a pair with no score in either order is never accepted."""
+    return min((x for x in v if x is not None), default=0.0)
+
+
 def mins(d: dict) -> dict[str, float]:
-    return {k: min(x for x in v if x is not None) for k, v in d.items()}
+    return {k: pair_min(v) for k, v in d.items()}
 
 
 def load(args) -> tuple[list[dict], dict[str, dict[str, float]], dict[str, str]]:
@@ -58,7 +63,7 @@ def load(args) -> tuple[list[dict], dict[str, dict[str, float]], dict[str, str]]
         p = json.loads(line)
         p["cell"] = cells[p["pair_id"]]
         p["y"] = y.get(p["label"])
-        p["kt"] = min(x for x in (p["kev_ab"], p["kev_ba"]) if x is not None)
+        p["kt"] = pair_min((p["kev_ab"], p["kev_ba"]))
         pairs.append(p)
     s = {"kev-title": {p["pair_id"]: p["kt"] for p in pairs}}
     s["pplx-title"] = mins(json.loads((args.models / "pplx.json").read_text()))
