@@ -359,7 +359,7 @@ Decisions:
 | # | Decision | Status |
 |---|---|---|
 | P1 | K = 10 candidates per listing, one-directional for the daily run, mutual for the backlog. Revisit after 4 weeks of measured survival and pass rates. | approved |
-| P2 | The broker is a separate service built from the API image, with its own app object and its own reverse-proxy hostname, never under the public `/api` rewrite. | approved |
+| P2 | The broker is a separate service built from the API image, with its own app object and its own reverse-proxy hostname, never under the public `/api` rewrite. **Changed by the owner the same day: no hostname; reached only over Tailscale by IP and port** (below). | owner |
 | P3 | One bearer token per worker, stored as sha256 in `ai_workers`, issued and revoked by `./makhzan ai worker`. An address allowlist at the proxy is optional. | approved |
 | P4 | ~~Shadow mode first.~~ **Changed by the owner the same day: no shadow mode.** The mode is `off` or `live` only, `off` by default; there is no per-decision shadow flag. The backlog run's decisions are reviewed locally: the owner reviews the resulting groupings on a local copy (`make regroup-dry-run ARGS=--ai`, which reads standing decisions while off), including the 20 fresh examples (none from the 900 labelled pairs; proposed mix, a parameter: 10 at random, 5 near a threshold, 5 sharing no identifier), and only then are they pushed to production and the mode set `live`. | owner |
 | P5 | A content hash per listing over every field that can reach a prompt: title (both languages), brand, part number, category, specs, description. Never price. A changed hash, or a new model or prompt version, triggers a re-score. The hash is stored with each score. | owner |
@@ -386,3 +386,29 @@ joining them in a final phase after the rules so the P14 group check does not
 depend on placement order, with every one of today's vetoes and the P17
 columns; and the mode, `off` by default (P4). The broker, worker, triggers,
 CLI and status come in later phases.
+
+### Defaults chosen by the phase 2 session, awaiting owner review
+
+The broker (phase 2, `docs/ai/broker-api.md`) needed protocol choices the
+owner has not made. Each was chosen by the building session and is recorded
+here as a default, **not** an owner decision; each is one place in the code
+to change.
+
+| Choice | Default in force | Where |
+|---|---|---|
+| Blame on a crash | An expired lease charges an attempt only to the job the worker's last heartbeat named in hand (`progress.job_id`); its other jobs go back free. With none reported, every job of the lease is charged. | `broker.reap` |
+| One model per session | `/hello` names exactly one model (422 otherwise); a lease for another model is `409 wrong_model`. A machine still serves two models by running two workers. A protocol rule chosen by the session. | `broker.hello`, `broker.lease` |
+| Retrying a lease | `lease_request_id`: the same id gets the same lease back (still-held, unexpired jobs, re-rendered); a session's leases take turns on its row lock. | `broker._replay` |
+
+### Owner decisions on phase 2 (2026-11-17)
+
+| Decision | In the code |
+|---|---|
+| The daily trigger's first run records content hashes and queues nothing; the existing catalogue is the backlog, scored locally (P4). Approved. | `candidates.BASELINE_FIRST_RUN = True` |
+| The rules-merged audit runs at the lowest priority, 10. Approved. | `triggers.AUDIT = 10` |
+| Re-score priorities: a standing "same" 100; a "not same" whose text changed 60; one whose judge alone changed 30. Approved. | `triggers.RESCORE_SAME` / `RESCORE_CHANGED` / `RESCORE_VERSION` |
+| **Revoked pairs: option (b)** (owner). A pair whose decision a person revoked is offered again when what the models see changes: its rendered requests differ from those the revoked decision recorded, so the models are asked again; a change they would not see (an Arabic title under an English one, a hash version) keeps it out. *Implemented by the session (not separate owner decisions):* one guard in `flow.write_decision` refuses a decision for a revoked pair unless a model scored, after the revocation, text the revocation did not see (old scores, a job queued before, or a new model on the requests the revoked decision recorded write nothing); revoking takes the pair's lock and cancels its queued jobs; a revoked decision with no request hashes keeps its pair out for good (none exist in production). **Consequence for the owner:** text reverted to a version scored before the revocation stays blocked until it changes to something new. | `candidates.REOFFER_REVOKED_ON_TEXT_CHANGE = True` |
+| **P16 also on an unmerge.** A session end queues the rebuild for any new standing decision, so a "same" turned "not same" is applied at the window's end, not the next daily rebuild. Approved. | `broker.REBUILD_ON_UNMERGE = True` |
+| **A listing that leaves electronics.** AI decisions act only while both listings are in electronics: the regroup ignores a decision when either listing is outside the served departments, so its merge comes apart at the next regroup. (Record this with the cross-department experiment's tracker note.) | `policy.DOMAINS`, `decisions.load_ai_same` |
+| **No time fit.** A lease returns up to `max_jobs` in priority order; the broker does not size it to the worker's remaining window. A worker that runs out of window releases its unfinished job gracefully (no attempt charged) and another worker or window picks it up. The `none_fit` answer and the `nothing_fits` flag are gone. | `broker.lease` |
+| **The broker is reached only over Tailscale**, by the server's Tailscale IP and a port (`BROKER_BIND`); no public reverse-proxy hostname. Plain HTTP on the tailnet (WireGuard encrypts it). This replaces P2's "own reverse-proxy hostname"; the rest of P2 (a separate service, never under `/api`) stands. | `docker-compose.prod.yml`, `docs/ai/broker-deploy.md` |

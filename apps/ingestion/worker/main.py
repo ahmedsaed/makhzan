@@ -23,6 +23,8 @@ from arq import cron
 from arq.connections import RedisSettings
 from arq.worker import func
 from makhzan_schemas import crawl
+from makhzan_schemas import rebuild as _rebuild
+from makhzan_schemas.ai import candidates as ai_producers
 from makhzan_schemas.reports import purge_personal_data
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import IngestionStatus
@@ -67,8 +69,9 @@ MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "8"))
 JOB_TIMEOUT = _pipeline.JOB_TIMEOUT
 
 #: Sources finishing within one window of this many seconds share one rebuild,
-#: run at the end of that window. Short next to a crawl, long next to a rebuild.
-REBUILD_WINDOW = int(os.getenv("REBUILD_WINDOW_SECONDS", "600"))
+#: run at the end of that window (`makhzan_schemas.rebuild`, which the AI broker
+#: shares).
+REBUILD_WINDOW = _rebuild.REBUILD_WINDOW
 
 #: How long the rebuild and reindex may take.
 REBUILD_TIMEOUT = int(os.getenv("REBUILD_TIMEOUT_SECONDS", str(3600)))
@@ -150,9 +153,7 @@ def crawl_job_id(source_id: str, day: date) -> str:
 
 def rebuild_job_id(now: datetime) -> tuple[str, datetime]:
     """The rebuild job for `now`'s window, and when it runs: the window's end."""
-    window = int(now.timestamp()) // REBUILD_WINDOW
-    runs_at = datetime.fromtimestamp((window + 1) * REBUILD_WINDOW, timezone.utc)
-    return f"rebuild:{window}", runs_at
+    return _rebuild.rebuild_job_id(now, REBUILD_WINDOW)
 
 
 async def request_rebuild(ctx: dict) -> None:
@@ -253,16 +254,56 @@ async def retire_redirects_daily(session, today: date) -> dict | None:
     return counts
 
 
+#: How long the AI producers may take: hashing and top-K over the electronics
+#: catalogue, then queueing what they find.
+AI_CANDIDATES_TIMEOUT = int(os.getenv("AI_CANDIDATES_TIMEOUT_SECONDS", str(1800)))
+
+
+async def request_ai_candidates(ctx: dict) -> None:
+    """Queue `ai_candidates` after a rebuild, one per rebuild window.
+
+    A job of its own rather than part of the rebuild, which holds
+    `_REBUILD_LOCK` under its own timeout; it writes only `ai_*` tables, so it
+    takes no lock. Never fails the rebuild.
+    """
+    redis = ctx.get("redis")
+    if redis is None:
+        return
+    job_id, _ = rebuild_job_id(datetime.now(timezone.utc))
+    try:
+        await redis.enqueue_job("ai_candidates", _job_id=f"ai-candidates:{job_id}")
+    except Exception:  # noqa: BLE001 — the next rebuild will queue it
+        log.exception("could not queue the AI candidates job")
+
+
+async def ai_candidates(ctx: dict) -> list[dict]:
+    """Arq task: the AI producers after a rebuild (makhzan_schemas.ai.candidates).
+
+    New or changed electronics listings' candidates into `match`, re-scores of
+    standing decisions whose text or judge changed, and the rules-merged audit.
+    Runs whatever the AI mode: scoring goes on while it is off (P4). Production
+    runs no model; this only queues pairs for the broker's workers.
+    """
+    async with SessionLocal() as session:
+        summary = await ai_producers.daily(session)
+        await session.commit()
+    for line in summary:
+        log.info("ai_candidates: %s", line)
+    return summary
+
+
 async def rebuild_and_reindex(ctx: dict) -> str:
     """Arq task: regroup products and rebuild the search index from the database,
     then, once a day, retire redirects nobody uses any more.
 
-    Without it the crawl updates the database but search goes stale.
+    Without it the crawl updates the database but search goes stale. Afterwards
+    it queues `ai_candidates`, which reads the groups this rebuild committed.
     """
     async with _REBUILD_LOCK:
         async with SessionLocal() as session:
             await rebuild_products(session, reidentify=True)
             await reindex_all(session, get_client())
+            await request_ai_candidates(ctx)
             try:
                 retired = await retire_redirects_daily(session, datetime.now(timezone.utc).date())
             except Exception:  # noqa: BLE001 — search is rebuilt; retirement retries tomorrow
@@ -331,6 +372,7 @@ class WorkerSettings:
         # cursor at the next daily run, rather than at once at an unplanned hour.
         func(crawl_source, timeout=JOB_TIMEOUT, max_tries=1),
         func(rebuild_and_reindex, timeout=REBUILD_TIMEOUT, max_tries=1),
+        func(ai_candidates, timeout=AI_CANDIDATES_TIMEOUT, max_tries=1),
         run_source,
         run_partition,
     ]
