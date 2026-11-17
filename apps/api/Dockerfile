@@ -60,6 +60,10 @@ RUN poetry install --no-interaction --no-ansi \
     && groupadd --system app && useradd --system --gid app --home /workspace app \
     && chown -R app:app /workspace
 USER app
+# The commit the image was built from: what the AI broker's /health reports.
+# After the install, so a new commit does not rebuild the layers above.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 
 ENV API_WORKERS=2
 EXPOSE 8000
