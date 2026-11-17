@@ -12,8 +12,6 @@ import uuid
 from datetime import timedelta
 
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
 from makhzan_schemas import overrides as rulings
 from makhzan_schemas.ai import broker as core
 from makhzan_schemas.ai import flow
@@ -32,21 +30,6 @@ from tests.factories import make_listing, make_supplier
 
 KEV = MODELS["kev"]
 PPLX = MODELS["pplx"]
-
-
-@pytest_asyncio.fixture
-async def broker():
-    from app.broker.main import app
-
-    calls: list[str] = []
-
-    async def fake_rebuild() -> None:
-        calls.append("rebuild")
-
-    app.state.queue_rebuild = fake_rebuild
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://broker") as http:
-        http.rebuilds = calls
-        yield http
 
 
 async def _worker(name: str, models: list[str]) -> str:
@@ -201,11 +184,13 @@ async def test_kev_then_pplx_then_a_same_decision(broker, db):
     pplx = await _worker("cpu-pplx", ["pplx"])
 
     hello = await _hello(broker, kev, "kev")
-    assert hello["models"]["kev"] == {
-        "model_version": KEV.model_version,
-        "ok": True,
-        "queued_requests": 2,
-    }
+    assert hello["models"]["kev"]["model_version"] == KEV.model_version
+    assert (hello["models"]["kev"]["ok"], hello["models"]["kev"]["queued_requests"]) == (True, 2)
+    assert {
+        "pipeline": "match",
+        "stage": "kev",
+        "prompt_version": PIPELINES["match"].stage("kev").prompt_version,
+    } in (hello["models"]["kev"]["stages"])
     lease = await _lease(broker, kev, hello["session"], "kev")
     [job] = lease["jobs"]
     assert [r["order"] for r in job["requests"]] == ["ab", "ba"]
@@ -216,7 +201,9 @@ async def test_kev_then_pplx_then_a_same_decision(broker, db):
     expected = render(PIPELINES["match"].stage("kev"), shown[a], shown[b])
     assert {r["order"]: r["request_sha256"] for r in job["requests"]} == expected.hex()
     assert job["requests"][0]["payload"] == expected.payloads["ab"]
-    assert "LISTING A]\nTitle: Example HC-SR04" in job["requests"][0]["payload"]["state"]
+    # "ab" shows the pair's listing_a (the smaller id) as LISTING A.
+    title_a = shown[a].record["title"]
+    assert f"[LISTING A]\nTitle: {title_a}\n" in job["requests"][0]["payload"]["state"]
 
     r = await _post(broker, kev, hello["session"], lease, job, _scores(job, 0.91, 0.87))
     assert r.json() == {
@@ -661,5 +648,5 @@ async def test_a_job_at_another_stages_judge_is_moved_not_leased_forever(broker,
     rows = [(j.stage, j.model_version_id, j.status, j.reason) for j in await _jobs()]
     assert rows == [
         ("kev", judges[("match", "pplx")], "cancelled", "candidates"),
-        ("kev", judges[("match", "kev")], "queued", "rescore"),
+        ("kev", judges[("match", "kev")], "queued", "candidates"),  # its reason kept
     ]

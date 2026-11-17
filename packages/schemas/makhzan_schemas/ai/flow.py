@@ -91,10 +91,13 @@ async def scores_for(
         wanted[key] = per_stage
     found: dict[tuple[int, bytes], float] = {}
     ordered = list(hashes)
+    # Led by the judge, so the lookup is `uq_ai_score_request`'s index.
+    current = sorted(set(judges.values()))
     for start in range(0, len(ordered), 5000):
         rows = await session.execute(
             select(AiScore.model_version_id, AiScore.request_sha256, AiScore.p).where(
-                AiScore.request_sha256.in_(ordered[start : start + 5000])
+                AiScore.model_version_id.in_(current),
+                AiScore.request_sha256.in_(ordered[start : start + 5000]),
             )
         )
         for judge, digest, p in rows:
