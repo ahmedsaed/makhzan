@@ -32,7 +32,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api test-worker lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides ai broker db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api test-worker lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides ai broker admin pause db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -138,6 +138,14 @@ ai:  ## AI matching: make ai ARGS="status" | "worker add NAME --models kev" | "b
 # at http://localhost:8100/ai/v1 locally; in production, over Tailscale.
 broker:  ## Run the AI broker on :8100
 	cd apps/api && DATABASE_URL="$(DB_URL)" poetry run uvicorn app.broker.main:app --reload --port 8100
+
+# The admin dashboard on :8200 (docs/admin.md). Needs ADMIN_PASSWORD_HASH and
+# ADMIN_SECRET in the environment: `cd apps/ingestion && poetry run python -m admin.password --secret`.
+admin:  ## Run the admin dashboard on :8200 (ADMIN_PASSWORD_HASH, ADMIN_SECRET from the env)
+	cd apps/ingestion && $(RUN_ENV) poetry run uvicorn admin.app:app --reload --port 8200
+
+pause:  ## Crawl or shop pause: make pause ARGS="crawl off --note why" | "shop pause ID"
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.pause $(ARGS)
 
 # Working against real data locally. db-pull is read-only against production;
 # db-load only ever touches localhost. Set DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH
