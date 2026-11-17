@@ -29,9 +29,13 @@
    before the window ends is not started.
 6. Empty queues: `on_empty = "exit"` exits; `"wait"` polls every `poll_s` until the
    window ends.
-7. Every session that said hello ends with `POST /release {"session"}`, a graceful release
-   naming no jobs (broker-api.md §3.5), however it stopped: the window's end, a signal, an
-   empty queue, an error. So the broker sees it end and can consider the P16 rebuild.
+7. Every session that said hello is ended at the broker exactly once (P16): by an empty
+   lease, by a graceful release of held jobs, or else by `POST /release {"session"}`, a
+   graceful release naming no jobs (broker-api.md §3.5), however it stopped. A session
+   release is not sent after the broker already recorded the end (it would overwrite
+   "empty" with "released"), nor to a broker that is unreachable or refused the token. A
+   stop that comes before hello opens no session at all. A lease that answers "none_fit"
+   (jobs are queued, none fits the time left) ends the window's work, whatever `on_empty`.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its
 job, order, request hash and score (never the payload), the moment it is known not to
@@ -131,6 +135,8 @@ class _Held:
     lock: threading.Lock = field(default_factory=threading.Lock)
     leases: dict[str, set[int]] = field(default_factory=dict)  # lease_id -> job ids
     lost: set[tuple[str, int]] = field(default_factory=set)  # (lease_id, job_id)
+    #: Being submitted in full or released right now: no longer named, never marked lost.
+    settling: set[tuple[str, int]] = field(default_factory=set)
     progress: dict | None = None
 
 
@@ -170,7 +176,8 @@ class Worker:
         self._measured: set[str] = set()
         self.judge_info: dict[str, dict] = {}  # what each load reported, kept after unloading
         self.undelivered: list[dict] = []
-        self.session_closed = False  # the broker saw the session end (P16)
+        self.session_closed = False  # the broker has recorded the session's end (P16)
+        self.token_refused = False  # a 401: the broker will hear nothing more from us
         self.stages: dict[str, dict[str, str]] = {}  # model -> {"pipeline/stage": prompt}
         self.failed_jobs: set[int] = set()  # distinct jobs failed since the last success
         self.scored = 0
@@ -254,8 +261,8 @@ class Worker:
         return code
 
     def _end_session(self) -> None:
-        """`POST /release {"session"}`: the broker records the session's end (P16)."""
-        if self.session is None:
+        """`POST /release {"session"}`: the broker records the session's end (P16), once."""
+        if self.session is None or self.session_closed:
             return
         try:
             self.broker.release({"session": self.session, "reason": "graceful"})
@@ -266,7 +273,9 @@ class Worker:
 
     def _session(self) -> int:
         code = self._session_body()
-        if code not in (EXIT_UNREACHABLE, EXIT_AUTH):  # a dead or refusing broker: no use
+        # Not to a broker that is down or refused the token; a 403 (a model key it will not
+        # grant) still ends the session the token opened.
+        if code != EXIT_UNREACHABLE and not self.token_refused:
             self._end_session()
         return code
 
@@ -274,6 +283,9 @@ class Worker:
         self._start_window_timer()
         try:
             self._preflight()
+            if self.stop.is_set():  # stopped before hello: open no session at all
+                log.info("stopped before hello (%s); no session opened", self.stop_reason)
+                return EXIT_OK
             ok = self._hello()
             self._start_heartbeat()
             try:
@@ -285,6 +297,7 @@ class Worker:
             log.error("%s", e)
             return e.code
         except Unauthorized as e:
+            self.token_refused = True
             log.error("the broker refused the token: %s", e)
             return EXIT_AUTH
         except Forbidden as e:
@@ -426,6 +439,25 @@ class Worker:
             if self.clock.wait(wait, self.stop):
                 return
 
+    def _lease_body(self, key: str, request_id: str) -> dict:
+        """A lease request, built afresh for each attempt: a retry after a backoff says how
+        much time is left now. The id stays the attempt's own, so a retry of a call whose
+        answer was lost still gets the same lease back."""
+        body = {
+            "session": self.session,
+            "model": key,
+            "model_version": PINS[key].model_version,
+            "max_jobs": self.cfg.max_jobs,
+            "lease_request_id": request_id,
+        }
+        if self._closes_at() is not None:
+            # Honest time, so every job the broker returns fits (it keeps a 60 s margin):
+            # the window, less a model load still to come; the measured pace.
+            loading = 0.0 if self._loaded(key) else LOAD_ESTIMATE_S[self.cfg.device]
+            body["seconds_left"] = max(0, int(self._seconds_left() - loading))
+            body["seconds_per_request"] = max(0.01, round(self.spr[key], 2))
+        return body
+
     def _drain(self, key: str) -> str:
         """Lease and score `key`'s jobs until its queue is empty ("empty") or the session
         must stop ("stop")."""
@@ -434,23 +466,9 @@ class Worker:
             if left < self.spr[key]:
                 self.request_stop("too little of the window is left for one request")
                 return "stop"
-            body = {
-                "session": self.session,
-                "model": key,
-                "model_version": PINS[key].model_version,
-                "max_jobs": self.cfg.max_jobs,
-                # One id per lease attempt, the same on the client's retries of it: a lease
-                # whose answer was lost comes back as the same lease, not orphaned.
-                "lease_request_id": uuid.uuid4().hex,
-            }
-            if self._closes_at() is not None:
-                # Honest time, so every job the broker returns fits (it keeps a 60 s margin):
-                # the window, less a model load still to come; the measured pace.
-                loading = 0.0 if self._loaded(key) else LOAD_ESTIMATE_S[self.cfg.device]
-                body["seconds_left"] = max(0, int(left - loading))
-                body["seconds_per_request"] = max(0.01, round(self.spr[key], 2))
+            request_id = uuid.uuid4().hex  # one per lease attempt, the same on its retries
             try:
-                lease = self.broker.lease(body)
+                lease = self.broker.lease(lambda: self._lease_body(key, request_id))
             except VersionDrift as e:
                 raise _Fatal(
                     EXIT_VERSION,
@@ -459,6 +477,12 @@ class Worker:
                 ) from None
             jobs = lease.get("jobs") or []
             if not lease.get("lease_id") or not jobs:
+                if lease.get("reason") == "none_fit":
+                    # Jobs are queued but none fits the time left: this window is done,
+                    # whatever on_empty says; polling would only find the same.
+                    log.info("no job fits the time left in the window; stopping for it")
+                    self.request_stop("no job fits the time left")
+                    return "stop"
                 self.session_closed = True  # an empty lease ends the session at the broker
                 return "empty"
             self.session_closed = False  # a lease with jobs reopens it
@@ -491,12 +515,19 @@ class Worker:
         with self.held.lock:
             return sorted(self.held.leases.get(lease_id, ()))
 
+    def _settling(self, lease_id: str, job_ids) -> None:
+        """These jobs are being submitted in full or released: heartbeats stop naming them
+        now, and a 409 that names them is not a loss worth reporting."""
+        with self.held.lock:
+            self.held.settling.update((lease_id, j) for j in job_ids)
+
     def _settle(self, lease_id: str, job_ids) -> None:
         """These jobs need nothing more from this worker: heartbeats stop naming them."""
         with self.held.lock:
             held = self.held.leases.get(lease_id)
             if held is not None:
                 held.difference_update(job_ids)
+            self.held.settling.difference_update((lease_id, j) for j in job_ids)
 
     def _process_lease(self, key: str, lease_id: str, jobs: list[dict]) -> None:
         with self.held.lock:
@@ -664,6 +695,8 @@ class Worker:
     def _submit(self, lease_id: str, job_id: int, scores: list[dict], *, final: bool) -> None:
         """Post a job's scores. `final`: the job is finished, so it is settled whatever the
         answer; otherwise it stays held for a release."""
+        if final:
+            self._settling(lease_id, [job_id])
         if scores:
             cfg = self.cfg
             body = {
@@ -709,6 +742,7 @@ class Worker:
         body = {"session": self.session, "lease_id": lease_id, "job_ids": job_ids, "reason": reason}
         if error:
             body["error"] = error
+        self._settling(lease_id, job_ids)
         try:
             resp = self.broker.release(body)
             log.info("released %s (%s): %s", job_ids, reason, resp)
@@ -744,8 +778,9 @@ class Worker:
 
     def heartbeat_once(self) -> None:
         with self.held.lock:
+            skip = self.held.lost | self.held.settling
             held = {
-                lid: {j for j in jobs if (lid, j) not in self.held.lost}
+                lid: {j for j in jobs if (lid, j) not in skip}
                 for lid, jobs in self.held.leases.items()
             }
             held = {lid: jobs for lid, jobs in held.items() if jobs}
@@ -774,9 +809,10 @@ class Worker:
                     (lid, j)
                     for lid in lease_ids
                     for j in self.held.leases.get(lid, ())
-                    if j in lost_jobs or lid in lost_leases
+                    if (j in lost_jobs or lid in lost_leases) and (lid, j) not in self.held.settling
                 }
                 self.held.lost.update(marked)
-            log.warning("heartbeat: lost %s; dropping them", sorted(j for _, j in marked))
+            if marked:  # a job finished or released meanwhile is no loss
+                log.warning("heartbeat: lost %s; dropping them", sorted(j for _, j in marked))
         except (BrokerError, Unreachable) as e:
             log.warning("heartbeat failed: %s", e)
