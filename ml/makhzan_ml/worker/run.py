@@ -30,7 +30,8 @@
 6. Empty queues: `on_empty = "exit"` exits; `"wait"` polls every `poll_s` until the
    window ends.
 7. Every session that said hello is ended at the broker exactly once (P16): by an empty
-   lease, by a graceful release of held jobs, or else by `POST /release {"session"}`, a
+   lease (including one answering "none_fit"), by a graceful release of held jobs, or else
+   by `POST /release {"session"}`, a
    graceful release naming no jobs (broker-api.md §3.5), however it stopped. A session
    release is not sent after the broker already recorded the end (it would overwrite
    "empty" with "released"), nor to a broker that is unreachable or refused the token. A
@@ -481,6 +482,9 @@ class Worker:
                     # Jobs are queued but none fits the time left: this window is done,
                     # whatever on_empty says; polling would only find the same.
                     log.info("no job fits the time left in the window; stopping for it")
+                    # The broker ends the session on this answer (end_reason "none_fit"),
+                    # as on an empty lease: no session release follows it.
+                    self.session_closed = True
                     self.request_stop("no job fits the time left")
                     return "stop"
                 self.session_closed = True  # an empty lease ends the session at the broker

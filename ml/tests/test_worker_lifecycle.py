@@ -824,11 +824,12 @@ def job_releases(broker, reason="graceful"):
 )
 def test_every_session_ends_exactly_once(broker, sleeps, how, end, n_session, n_jobs):
     jobs = [broker.add_job("kev", pair(n)) for n in range(2)]
-    schedule, clock = {}, None
-    if how == "window":  # the window ends right after the first job
-        clock = FakeClock(datetime(2026, 11, 17, 4, 29, 40, tzinfo=CAIRO))
+    schedule, clock, fake = {}, None, None
+    if how == "window":  # the first job (two 150 s requests) ends just as the window does
+        clock = FakeClock(datetime(2026, 11, 17, 4, 25, tzinfo=CAIRO))
         schedule = {"windows": ["00:30-04:30"]}
-    worker, fake, _ = make_worker(broker, sleeps, clock=clock, schedule=schedule,
+        fake = FakeJudges(clock, seconds=150)
+    worker, fake, _ = make_worker(broker, sleeps, clock=clock, schedule=schedule, fake=fake,
                                   leases={"max_jobs": 1, "seconds_per_request": 1})  # fmt: skip
     if how == "sigterm":
         fake.on_score = lambda i: i == 1 and worker.request_stop("SIGTERM")
@@ -884,7 +885,9 @@ def test_leases_carry_honest_time_and_hold_only_jobs_that_fit(broker, sleeps):
     # 20 minutes later, model loaded: 600 s left, no load to take off; nothing fits.
     assert leases[1]["seconds_left"] == 600
     assert all(j.attempts == 0 for j in jobs)
-    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
+    # The second lease answered none_fit, which ended the session: no release after it.
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["none_fit"]
+    assert session_releases(broker) == []
 
 
 def test_a_heartbeat_names_each_job_as_it_starts(broker, sleeps):
@@ -893,6 +896,9 @@ def test_a_heartbeat_names_each_job_as_it_starts(broker, sleeps):
     assert worker.run() == run.EXIT_OK
     order = [(p, b.get("progress", {}).get("job_id") if p == "/heartbeat" else b.get("job_id"))
              for p, b in broker.calls if p in ("/heartbeat", "/results")]  # fmt: skip
+    # progress.job_id is the broker's integer job id, as sent in the lease
+    beats = [b for b in broker.bodies("/heartbeat") if b.get("progress")]
+    assert beats and all(type(b["progress"]["job_id"]) is int for b in beats)
     for j in jobs:
         # The heartbeat naming a job comes before that job's results.
         assert order.index(("/heartbeat", j.job_id)) < order.index(("/results", j.job_id))
@@ -1007,8 +1013,10 @@ def test_none_fit_ends_the_window_whatever_on_empty(broker, sleeps, on_empty, ca
     assert clock.waits == []
     assert any("no job fits the time left" in r.getMessage() for r in caplog.records)
     assert job.status == "queued" and fake.loads == []
-    # none_fit did not end the session at the broker, so the session release does.
-    assert len(session_releases(broker)) == 1
+    # none_fit ended the session at the broker: no session release after it.
+    assert session_releases(broker) == []
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["none_fit"]
+    assert worker.session_closed
 
 
 def test_no_lost_warning_for_a_job_being_settled(broker, sleeps, caplog):

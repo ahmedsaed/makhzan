@@ -1,8 +1,8 @@
 # AI matching: the worker
 
 Status: **built, tested against a contract-following fake broker, and checked against the
-phase 2 broker app on its final contract** (five end-to-end sessions, below). Nothing has run on the home server yet.
-What is not here yet is listed at the end.
+phase 2 broker app on its final contract** (five end-to-end sessions, below). Nothing has
+run on the home server yet. What is not here yet is listed at the end.
 
 A worker is one process that serves the model key(s) its configuration names. It talks only
 to the broker, over HTTPS with its own bearer token. It loads its model once, scores the
@@ -76,8 +76,9 @@ The parity check below confirms it on stored GPU scores.
      that runs "always" sends no time, and only `max_jobs` limits its leases.
    - An empty lease that says `"reason": "none_fit"` means jobs are queued but none fits
      the time left. The worker logs "no job fits the time left" and stops for this window,
-     whatever `on_empty` says: polling would only find the same. (The broker's side of this
-     field is landing separately; without it, an empty lease is an empty queue, as before.)
+     whatever `on_empty` says: polling would only find the same. The broker ends the session
+     on this answer (`end_reason` "none_fit", with no P16 rebuild), so no session release
+     follows it. An empty lease without the field is an empty queue.
    - Each job's `prompt_version` is compared with the ones hello announced. A mismatch is
      logged, not refused: the broker renders, so it means the registry moved since hello.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
@@ -119,13 +120,14 @@ The parity check below confirms it on stored GPU scores.
    ends, using its measured seconds per request.
 6. **Empty queue.** With `on_empty = "exit"`, the worker exits. With `"wait"`, it polls every
    `poll_s` until the window ends.
-7. **Session end, exactly once.** The broker records a session's end (P16) at an empty lease
-   ("empty") or at a graceful release, with jobs or without ("released"). The worker ends
-   every session it opened exactly once:
-   - when an empty lease or a graceful release of held jobs already ended it, nothing more
-     is sent (a session release would overwrite "empty" with "released");
-   - otherwise (stopped between leases with nothing held: the window's end, a signal,
-     `none_fit`, an error, a 403 for a model key) it sends `POST /release {"session"}`, a
+7. **Session end, exactly once.** The broker records a session's end at an empty lease
+   ("empty"), at a lease answering `none_fit` ("none_fit", no P16 rebuild), or at a graceful
+   release, with jobs or without ("released"). The worker ends every session it opened
+   exactly once:
+   - when one of those already ended it, nothing more is sent (a session release would
+     overwrite "empty" or "none_fit" with "released");
+   - otherwise (stopped between leases with nothing held: the window's end, a signal, an
+     error, a 403 for a model key) it sends `POST /release {"session"}`, a
      graceful release naming no jobs (broker-api.md §3.5);
    - nothing is sent to a broker that is unreachable or refused the token (401);
    - a stop that comes before hello opens no session at all.
@@ -603,9 +605,10 @@ no model. CI runs it with the ingestion suite.
     SIGTERM mid-lease, a 403 at lease), none sent to a broker that is down or refused the
     token, and none opened by a stop before hello; a lost lease answer retried into the
     same lease, and a lease retry carrying the time left now under the same id; `none_fit`
-    ending the window whatever `on_empty`; no lost warning for a job being settled; leases carrying honest time and holding only jobs that fit; a heartbeat
-    naming each job as it starts, before its results; a crash charged to the job in hand
-    alone; an unannounced prompt version logged.
+    ending the window whatever `on_empty`, and the session with no release after it; no
+    lost warning for a job being settled; leases carrying honest time and holding only jobs
+    that fit; a heartbeat naming each job as it starts, before its results, with an integer
+    job id; a crash charged to the job in hand alone; an unannounced prompt version logged.
 - **Pins**: `pins.PINS` equals `policy.MODELS`, the worker's request hash equals
   `prompt.request_sha256` on rendered requests, the mapped-weights check can fire, and scores
   outside [0, 1] are refused.
