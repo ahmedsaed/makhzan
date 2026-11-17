@@ -809,3 +809,43 @@ def test_a_second_grouping_from_the_first_changes_nothing():
             listing.product_id = uuid.uuid5(uuid.NAMESPACE_URL, key)
     second = _group_listings(listings)
     assert _members_by_shop(second) == _members_by_shop(first)
+
+
+def test_an_incumbent_is_seeded_by_its_member_with_fewest_conflicts():
+    # A wrong product: one 40 °C switch among three 90 °C ones and a title
+    # silent on temperature. The 40 °C one sorts first; seeding from it (the
+    # natural order) would keep the silent one with it and evict the majority.
+    # Seeded by fewest conflicts, the majority keeps the silent one and only
+    # the misfit leaves.
+    import uuid as _uuid
+    from decimal import Decimal as _Decimal
+
+    from makhzan_schemas.enums import SourceType as _SourceType
+    from makhzan_schemas.grouping import _group_listings as _group
+    from makhzan_schemas.models import Listing as _Listing
+
+    product = _uuid.uuid4()
+
+    def mk(title, source):
+        return _Listing(
+            id=_uuid.uuid4(),
+            supplier_id=_uuid.uuid5(_uuid.NAMESPACE_URL, source),
+            source=source,
+            source_type=_SourceType.SCRAPED,
+            external_id="1",
+            domain="electronics",
+            title_en=title,
+            part_number="KSD301",
+            price=_Decimal("20"),
+            images=[],
+            attributes={},
+            product_id=product,
+        )
+
+    misfit = mk("KSD301 Thermal Switch NC 40C", "shop-0")
+    silent = mk("KSD301 Thermal Switch NC", "shop-s")
+    majority = [mk("KSD301 Thermal Switch NC 90C", s) for s in ("shop-b", "shop-c", "shop-d")]
+    groups = list(_group([misfit, silent, *majority]).values())
+    assert sorted(len(g) for g in groups) == [1, 4]
+    assert [misfit] in groups
+    assert any(silent in g and all(m in g for m in majority) for g in groups)
