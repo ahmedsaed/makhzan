@@ -10,9 +10,10 @@ answers it (`app.broker.main` in apps/api):
   stage, prompt version) its leases will carry;
 - leases sized by `seconds_left` minus a 60 s margin, stopping at the first job that does
   not fit; an empty answer says why (`reason`: "empty", or "none_fit" when jobs are queued
-  but none fits; both end the session, as "empty" or "none_fit"); a repeated `lease_request_id` gives the session's last lease back (its jobs
-  still held); lazy expiry that charges an attempt only to the job in hand (the last
-  heartbeat's `progress.job_id`), or to every job of a lease with none in hand;
+  but none fits; both end the session, as "empty" or "none_fit"); a repeated
+  `lease_request_id` gives the session's last lease back (its jobs still held); lazy
+  expiry that charges an attempt only to the job in hand (the last heartbeat's
+  `progress.job_id`), or to every job of a lease with none in hand;
 - heartbeats that extend every live lease named and answer 409 lease_lost (with the lost
   `job_ids` and `lease_ids`) when a named lease or job is no longer held;
 - results that are idempotent on the request hash (a retry after the job is done is a

@@ -36,7 +36,9 @@
    release is not sent after the broker already recorded the end (it would overwrite
    "empty" with "released"), nor to a broker that is unreachable or refused the token. A
    stop that comes before hello opens no session at all. A lease that answers "none_fit"
-   (jobs are queued, none fits the time left) ends the window's work, whatever `on_empty`.
+   (jobs are queued, none fits the time left) means that model key is done for the window:
+   the other keys are still asked, and the window's work ends, whatever `on_empty`, once
+   every key has answered "none_fit".
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its
 job, order, request hash and score (never the payload), the moment it is known not to
@@ -420,15 +422,21 @@ class Worker:
         return ok
 
     def _serve(self, ok: list[str]) -> None:
+        none_fit: set[str] = set()  # keys with work that does not fit: done for the window
         while self._may_continue():
-            empty = 0
-            for key in ok:
+            for key in [k for k in ok if k not in none_fit]:
                 if not self._may_continue():
                     return
-                if self._drain(key) == "empty":
-                    empty += 1
-            if empty < len(ok):
-                continue  # stopped, or the window is ending: the loop condition decides
+                if self._drain(key) == "none_fit":
+                    none_fit.add(key)
+            if not self._may_continue():
+                return  # stopped, or the window ended
+            if none_fit == set(ok):
+                # Every key has work, none of it fits: polling would only find the same.
+                log.info("no job fits the time left in the window for any model; stopping")
+                self.request_stop("no job fits the time left")
+                return
+            # Every key still asked came back empty.
             if self.cfg.schedule.on_empty == "exit":
                 self.stop_reason = "the queue is empty"
                 log.info("the queue is empty; exiting (on_empty = exit)")
@@ -479,14 +487,13 @@ class Worker:
             jobs = lease.get("jobs") or []
             if not lease.get("lease_id") or not jobs:
                 if lease.get("reason") == "none_fit":
-                    # Jobs are queued but none fits the time left: this window is done,
-                    # whatever on_empty says; polling would only find the same.
-                    log.info("no job fits the time left in the window; stopping for it")
-                    # The broker ends the session on this answer (end_reason "none_fit"),
-                    # as on an empty lease: no session release follows it.
+                    # Jobs are queued but none fits the time left: this key is done for the
+                    # window (the caller asks the others). The broker ends the session on
+                    # this answer (end_reason "none_fit"), as on an empty lease: no session
+                    # release follows unless a later lease reopens it.
+                    log.info("no %s job fits the time left in the window", key)
                     self.session_closed = True
-                    self.request_stop("no job fits the time left")
-                    return "stop"
+                    return "none_fit"
                 self.session_closed = True  # an empty lease ends the session at the broker
                 return "empty"
             self.session_closed = False  # a lease with jobs reopens it
@@ -516,12 +523,17 @@ class Worker:
                 )
 
     def _held_jobs(self, lease_id: str) -> list[int]:
+        """The lease's jobs still this worker's: not settled, not found lost (a release
+        naming a lost job would be refused whole, 409)."""
         with self.held.lock:
-            return sorted(self.held.leases.get(lease_id, ()))
+            return sorted(
+                j for j in self.held.leases.get(lease_id, ()) if (lease_id, j) not in self.held.lost
+            )
 
     def _settling(self, lease_id: str, job_ids) -> None:
-        """These jobs are being submitted in full or released: heartbeats stop naming them
-        now, and a 409 that names them is not a loss worth reporting."""
+        """These jobs are being submitted in full or released. Heartbeats keep naming them
+        (a final post retrying through an outage must keep its lease alive), but a 409 that
+        names them is not marked lost: they are on their way out."""
         with self.held.lock:
             self.held.settling.update((lease_id, j) for j in job_ids)
 
@@ -717,12 +729,10 @@ class Worker:
             except Unreachable as e:
                 self._undelivered(job_id, scores, f"broker unreachable: {e}")
                 raise
-            except LeaseLost:
-                log.warning(
-                    "job %s: results refused, lease lost (%s); the job's new holder scores it",
-                    job_id,
-                    ", ".join(f"{s['order']} {s['request_sha256']} p={s['p']:.4f}" for s in scores),
-                )
+            except LeaseLost as e:
+                # Scored, posted, refused: they did not arrive from this worker. The job's
+                # new holder may score it again, but these scores are lost: say so.
+                self._undelivered(job_id, scores, f"refused, lease lost: {e}")
                 self._settle(lease_id, [job_id])
                 return
             except BrokerError as e:
@@ -782,9 +792,10 @@ class Worker:
 
     def heartbeat_once(self) -> None:
         with self.held.lock:
-            skip = self.held.lost | self.held.settling
+            # Settling jobs are still named: their final post may be retrying, and the
+            # lease must not expire under it.
             held = {
-                lid: {j for j in jobs if (lid, j) not in skip}
+                lid: {j for j in jobs if (lid, j) not in self.held.lost}
                 for lid, jobs in self.held.leases.items()
             }
             held = {lid: jobs for lid, jobs in held.items() if jobs}

@@ -74,11 +74,13 @@ The parity check below confirms it on stored GPU scores.
      The broker returns only jobs that fit, keeping a 60 s margin, and stops at the first
      that does not. A job the worker cannot start after all goes back gracefully. A worker
      that runs "always" sends no time, and only `max_jobs` limits its leases.
-   - An empty lease that says `"reason": "none_fit"` means jobs are queued but none fits
-     the time left. The worker logs "no job fits the time left" and stops for this window,
-     whatever `on_empty` says: polling would only find the same. The broker ends the session
-     on this answer (`end_reason` "none_fit", with no P16 rebuild), so no session release
-     follows it. An empty lease without the field is an empty queue.
+   - An empty lease that says `"reason": "none_fit"` means that model's jobs are queued but
+     none fits the time left. That key is done for the window: it is not asked again, and
+     the worker goes on to its other keys. When every key has answered `none_fit`, the
+     worker logs "no job fits the time left" and stops for the window, whatever `on_empty`
+     says: polling would only find the same. The broker ends the session on this answer
+     (`end_reason` "none_fit", with no P16 rebuild), so no session release follows it unless
+     a later lease reopens the session. An empty lease without the field is an empty queue.
    - Each job's `prompt_version` is compared with the ones hello announced. A mismatch is
      logged, not refused: the broker renders, so it means the registry moved since hello.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
@@ -150,17 +152,23 @@ the worker exits within:
 | retries, all calls together (`STOP_GRACE_S`) | 60 s |
 | one last attempt each for the results, the lease release and the session release (`STOP_TIMEOUT_S`) | 3 × 10 s |
 | joining the heartbeat thread | 10 s |
+| or, instead of a request: a model load in flight at the stop (it cannot be interrupted) | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU |
+| on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
 
-That is the request plus about 100 s. Anything still undelivered is logged before the process
-exits. Set `--stop-timeout` above it: 240 s on the home server's CPU, 120 s on the GPU.
+That is the request plus about 100 s: 204 s for the slowest measured CPU request. A load in
+flight is followed by one call only (the lease's release, no results to post): about 150 s,
+plus at most 60 s of retries and two 10 s steps, 230 s. Anything still undelivered is logged
+before the process exits. Set `--stop-timeout` above the bound: 240 s on the home server's
+CPU, 120 s on the GPU.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its job,
 order, request hash and score (never the payload), the moment it is known not to have
 arrived: the broker unreachable past the retry budget or the stop deadline, the broker
-refusing it (422 or any other 4xx), or an unexpected error while posting. A summary is
-logged at exit on every path. When the session would otherwise have exited 0, the exit code
-says so (6); otherwise the code names what ended the session (for example 4). A score for a
-lease the broker reports lost is logged at WARNING: the job's new holder scores it again.
+refusing it (a 409 lease_lost, a 422, any other 4xx), or an unexpected error while posting.
+A summary is logged at exit on every path. When the session would otherwise have exited 0,
+the exit code says so (6); otherwise the code names what ended the session (for example 4).
+A score never posted because a heartbeat found its lease lost is dropped with a WARNING: the
+job's new holder scores it again.
 
 **Unexpected errors** end the session with exit 1. These are a broker answer with no
 handling (400, 404, 413), a malformed reply, or a bug. The jobs still held go back
@@ -605,7 +613,10 @@ no model. CI runs it with the ingestion suite.
     SIGTERM mid-lease, a 403 at lease), none sent to a broker that is down or refused the
     token, and none opened by a stop before hello; a lost lease answer retried into the
     same lease, and a lease retry carrying the time left now under the same id; `none_fit`
-    ending the window whatever `on_empty`, and the session with no release after it; no
+    ending one key's window and, once every key answered it, the window whatever
+    `on_empty`, with no session release after it; heartbeats that keep naming a job whose
+    final results are retrying; results refused with a 409 logged as undelivered; no
+    release naming a job found lost; no
     lost warning for a job being settled; leases carrying honest time and holding only jobs
     that fit; a heartbeat naming each job as it starts, before its results, with an integer
     job id; a crash charged to the job in hand alone; an unannounced prompt version logged.

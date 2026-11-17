@@ -413,8 +413,10 @@ def test_a_result_refused_as_lease_lost_is_logged(broker, sleeps, caplog):
     worker, fake, _ = make_worker(broker, sleeps)
     fake.on_score = lambda i: i == 1 and broker.lose_lease(job.job_id)
     with caplog.at_level(logging.WARNING):
-        assert worker.run() == run.EXIT_OK
-    assert any("lease lost" in r.getMessage() for r in caplog.records)
+        assert worker.run() == run.EXIT_UNDELIVERED
+    # The posted scores were refused: logged as undelivered, each one.
+    lines = [r.getMessage() for r in caplog.records if "UNDELIVERED" in r.getMessage()]
+    assert len(lines) == 2 and all("lease lost" in m for m in lines)
     # Re-queued by the broker, leased again and scored in full.
     assert job.status == "done" and job.attempts == 1
 
@@ -918,7 +920,8 @@ def test_a_crash_is_charged_to_the_job_in_hand_alone(broker, sleeps):
             seen["attempts"] = (done.attempts, in_hand.attempts, waiting.attempts)
 
     fake.on_score = crash
-    assert worker.run() == run.EXIT_OK
+    # The in-hand job's posted scores are refused after the expiry: undelivered, logged.
+    assert worker.run() == run.EXIT_UNDELIVERED
     assert seen["attempts"] == (0, 1, 0)  # only the job its heartbeat named was charged
 
 
@@ -1034,3 +1037,85 @@ def test_no_lost_warning_for_a_job_being_settled(broker, sleeps, caplog):
         assert worker.run() == run.EXIT_OK
     assert not any("heartbeat: lost" in r.getMessage() for r in caplog.records)
     assert job.status == "done"
+
+
+def test_final_results_retrying_is_kept_alive_by_heartbeats(broker, sleeps, caplog):
+    # The reviewer's regression: while the job's final /results retries through an outage,
+    # heartbeats must keep naming it, or its lease expires and the reaper charges a job
+    # that was scored in full.
+    job = broker.add_job("kev", pair(1))
+    broker.fail("/results", times=6, status=503)  # 1+2+4+8+16+32 = 63 s of backoff
+    worker, fake, _ = make_worker(broker, sleeps, retry_max_s=900)
+    beats = []
+    sleep = worker.broker._sleep
+
+    def sleep_and_beat(seconds):
+        sleep(seconds)
+        before = len(broker.bodies("/heartbeat"))
+        worker.heartbeat_once()  # what the heartbeat thread does during the backoff
+        beats.append(broker.bodies("/heartbeat")[before:])
+
+    worker.broker._sleep = sleep_and_beat
+    with caplog.at_level(logging.WARNING):
+        assert worker.run() == run.EXIT_OK
+    assert len(beats) == 6 and all(len(b) == 1 for b in beats)
+    assert all(b[0]["job_ids"] == [job.job_id] for b in beats)  # still named while settling
+    assert job.status == "done" and job.attempts == 0
+    assert not any("heartbeat: lost" in r.getMessage() for r in caplog.records)
+
+
+def test_none_fit_on_one_model_still_asks_the_next(broker, sleeps):
+    # The reviewer's regression: Kev's job does not fit the time left, pplx's does; the
+    # window is not over for pplx.
+    kev = broker.add_job("kev", pair(1))  # two 200 s orders: 400 s
+    pplx = broker.add_job("pplx", pair(2))
+    pplx.scores["ba"] = {"p": 0.5}  # one order still owed: 200 s
+    clock = FakeClock(datetime(2026, 11, 17, 4, 20, tzinfo=CAIRO))  # 10 minutes left
+    worker, fake, _ = make_worker(
+        broker, sleeps, clock=clock,
+        worker={"models": ["kev", "pplx"]},
+        schedule={"windows": ["00:30-04:30"], "on_empty": "wait", "poll_s": 60},
+        leases={"seconds_per_request": 200},
+    )  # fmt: skip
+    assert worker.run() == run.EXIT_OK
+    # 600 s less a 150 s load less the 60 s margin: 390 s. Kev's 400 s job does not fit; it
+    # is not asked again this window. pplx's 200 s fits and is scored.
+    models = [b["model"] for b in broker.bodies("/lease")]
+    assert models.count("kev") == 1
+    assert kev.status == "queued" and kev.attempts == 0
+    assert pplx.status == "done" and fake.loads == ["pplx"]
+
+
+def test_every_key_none_fit_ends_the_window(broker, sleeps, caplog):
+    broker.add_job("kev", pair(1))
+    broker.add_job("pplx", pair(2))
+    clock = FakeClock(datetime(2026, 11, 17, 4, 24, tzinfo=CAIRO))  # 6 minutes left
+    worker, fake, clock = make_worker(
+        broker, sleeps, clock=clock,
+        worker={"models": ["kev", "pplx"]},
+        schedule={"windows": ["00:30-04:30"], "on_empty": "wait", "poll_s": 60},
+        leases={"seconds_per_request": 200},
+    )  # fmt: skip
+    with caplog.at_level(logging.INFO):
+        assert worker.run() == run.EXIT_OK
+    assert [b["model"] for b in broker.bodies("/lease")] == ["kev", "pplx"]  # once each
+    assert clock.waits == [] and fake.loads == []
+    assert worker.stop_reason == "no job fits the time left"
+    assert session_releases(broker) == []  # the broker ended the session at none_fit
+
+
+def test_a_release_never_names_a_job_found_lost(broker, sleeps):
+    _, b = broker.add_job("kev", pair(1)), broker.add_job("kev", pair(2))
+    worker, fake, _ = make_worker(broker, sleeps)
+
+    def on(i):
+        if i == 0:  # job b is lost (re-leased elsewhere) and the session is stopping
+            broker.lose_lease(b.job_id)
+            worker.heartbeat_once()
+            worker.request_stop("SIGTERM")
+
+    fake.on_score = on
+    worker.run()
+    with_jobs = [r for r in broker.bodies("/release") if r.get("job_ids")]
+    assert all(b.job_id not in r["job_ids"] for r in with_jobs)
+    assert not any(r.get("error") == "lease_lost" for r in with_jobs)
