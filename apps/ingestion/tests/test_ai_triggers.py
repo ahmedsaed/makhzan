@@ -135,7 +135,7 @@ async def test_the_first_run_records_a_baseline_and_offers_nothing():
     a, b = await _shop("shop-a"), await _shop("shop-b")
     await _listing(a, "carbon film resistor 10k ohm")
     await _listing(b, "carbon film resistor 10k ohm quarter watt")
-    [candidates, *_] = await _daily()
+    _, candidates, *_ = await _daily()
     assert candidates["baseline"] == 2
     assert await _jobs() == []
     async with SessionLocal() as session:
@@ -163,7 +163,7 @@ async def test_new_listings_get_their_top_k_filtered_by_todays_vetoes():
         await rulings.add(session, a4, c4, rulings.NEVER, created_by="test", note="test")
         await session.commit()
 
-    [candidates, *_] = await _daily()
+    _, candidates, *_ = await _daily()
     jobs = await _jobs(pipeline="match")
     assert _pairs(jobs) == {pair(a1, b1), pair(a2, b1)}
     assert {(j.stage, j.priority, j.reason) for j in jobs} == {("kev", 60, "candidates")}
@@ -174,7 +174,7 @@ async def test_new_listings_get_their_top_k_filtered_by_todays_vetoes():
     assert candidates["veto_same_shop"] == 0  # one shop's listings are never candidates
 
     # Nothing changed since: nothing is due, nothing more is queued.
-    [again, *_] = await _daily()
+    _, again, *_ = await _daily()
     assert again["queries"] == 0
     assert len(await _jobs(pipeline="match")) == 2
 
@@ -241,7 +241,7 @@ async def test_a_changed_text_requeues_a_standing_same_first():
             update(Listing).where(Listing.id == y).values(title_en="carbon resistor 10k ohm 1/4w")
         )
         await session.commit()
-    _, rescore, _ = await _daily()
+    _, _, rescore, _ = await _daily()
     assert rescore["text"] == 1
     [job] = await _jobs()
     assert (job.pipeline, job.stage, job.priority, job.reason) == ("match", "kev", 100, "rescore")
@@ -263,7 +263,7 @@ async def test_a_change_no_judge_can_see_rewrites_the_decision_in_place():
     async with SessionLocal() as session:
         await session.execute(update(Listing).where(Listing.id == y).values(title_ar="مقاومة"))
         await session.commit()
-    _, rescore, _ = await _daily()
+    _, _, rescore, _ = await _daily()
     assert rescore["text"] == 1 and rescore["decided"] == 1 and rescore["queued"] == 0
     async with SessionLocal() as session:
         rows = list(await session.scalars(select(AiDecision)))
@@ -272,7 +272,7 @@ async def test_a_change_no_judge_can_see_rewrites_the_decision_in_place():
     side = "content_sha256_b" if pair(x, y)[1] == y else "content_sha256_a"
     assert getattr(rows[0], side) == shown[y].content_sha256
     assert await _jobs() == []
-    _, again, _ = await _daily()
+    _, _, again, _ = await _daily()
     assert again.get("text", 0) == 0  # settled: not offered again
 
 
@@ -402,3 +402,37 @@ async def test_a_dead_job_is_left_for_a_person_not_requeued_by_the_next_run():
         assert await core.retry_job(session, job.id) is not None
         await session.commit()
     assert [j.status for j in await _jobs()] == ["queued"]
+
+
+async def test_two_producer_runs_never_overlap():
+    a = await _shop("shop-a")
+    await _listing(a, "seed listing for the baseline")
+    async with SessionLocal() as holding:
+        first = await producers.daily(holding)
+        assert first[0]["trigger"] == "judge sweep"
+        async with SessionLocal() as other:
+            assert await producers.daily(other) == [producers.BUSY]
+            assert await producers.backlog(other) == producers.BUSY
+        await holding.commit()
+    async with SessionLocal() as session:
+        assert (await producers.daily(session))[0]["trigger"] == "judge sweep"
+        await session.commit()
+
+
+async def test_a_listing_that_leaves_electronics_loses_its_state():
+    """So the re-score trigger stops looking at its decisions, instead of
+    rewriting them every day against a hash nothing updates."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    await _daily()
+    await _score_all(x, y)
+    await _decide(x, y)
+    async with SessionLocal() as session:
+        await session.execute(update(Listing).where(Listing.id == y).values(domain="tools"))
+        await session.commit()
+    _, _, rescore, _ = await _daily()
+    assert rescore.get("text", 0) == 0 and rescore["decided"] == 0
+    async with SessionLocal() as session:
+        ids = set(await session.scalars(select(AiListingState.listing_id)))
+    assert ids == {x}

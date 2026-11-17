@@ -297,21 +297,27 @@ async def _rescore_due(session: AsyncSession, judges: dict) -> dict:
 
 
 async def _audit(session: AsyncSession, judges: dict) -> dict:
-    """Rules-merged pairs the audit scored in both orders (at the judge each
-    job was queued at), and how many fell below each of P12's counts."""
+    """Pairs a recording pipeline (the audit: `decides=False`) scored in both
+    orders, at the judge each job was queued at, one per pair (its latest
+    job), and how many fell below each of P12's counts."""
+    recording = [p.name for p in PIPELINES.values() if not p.decides]
+    if not recording:
+        return {"scored": 0, **{f"below_{limit}": 0 for limit in AUDIT_BELOW}}
     rows = (
         await session.execute(
             text(
                 """
-            SELECT LEAST(sab.p, sba.p) AS low
+            SELECT DISTINCT ON (j.listing_a, j.listing_b) LEAST(sab.p, sba.p) AS low
               FROM ai_jobs j
               JOIN ai_scores sab ON sab.model_version_id = j.model_version_id
                                 AND sab.request_sha256 = decode(j.request_sha256->>'ab', 'hex')
               JOIN ai_scores sba ON sba.model_version_id = j.model_version_id
                                 AND sba.request_sha256 = decode(j.request_sha256->>'ba', 'hex')
-             WHERE j.pipeline = 'audit' AND j.status = 'done'
+             WHERE j.pipeline = ANY(:recording) AND j.status = 'done'
+             ORDER BY j.listing_a, j.listing_b, j.done_at DESC NULLS LAST, j.id DESC
             """
-            )
+            ),
+            {"recording": recording},
         )
     ).all()
     lows = [row.low for row in rows]
