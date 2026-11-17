@@ -31,6 +31,7 @@ inside the model image.
 from __future__ import annotations
 
 import argparse
+import atexit
 import gc
 import logging
 import math
@@ -254,7 +255,13 @@ def _load_kev(rt: Runtime, pin: Pin) -> Judge:
     os.environ["KEV_TEMPERATURE"] = repr(pin.temperature)
     os.environ["KEV_CUDA_GRAPHS"] = "0"
     os.environ["KEV_DTYPE"] = rt.dtype
-    code = os.environ.get("MAKHZAN_KEV_COMMIT")
+    # The Kev code commit, when the image records it. The base images do not yet (their
+    # KEV_COMMIT is a build ARG only), so today this is "unrecorded" and the check is the
+    # image's pinned tarball checksum alone; set MAKHZAN_KEV_COMMIT at build time from a
+    # base that records it, and a mismatch is refused here.
+    code = os.environ.get("MAKHZAN_KEV_COMMIT") or None
+    if code is None:
+        log.warning("kev: the image does not record its Kev code commit; not checked")
     if code and code != pin.code:
         raise LoadError(f"kev: the image's Kev code is {code}, pinned {pin.code}")
     from dataclasses import replace
@@ -298,7 +305,15 @@ def _load_kev(rt: Runtime, pin: Pin) -> Judge:
         "code": code or "unrecorded",
         "torch": torch.__version__,
     }
-    return Judge("kev", score, info, srv.close)
+
+    def close() -> None:
+        # Server.__post_init__ registers srv.close with atexit; that bound method would keep
+        # the server, and with it the model, alive after unloading.
+        srv.close()
+        atexit.unregister(srv.close)
+        srv.model = srv.tok = srv.prefix_cache = None
+
+    return Judge("kev", score, info, close)
 
 
 def _load_pplx(rt: Runtime, pin: Pin) -> Judge:

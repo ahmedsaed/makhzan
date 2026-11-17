@@ -85,7 +85,7 @@ class Schedule:
         return datetime.now(self.timezone) if self.timezone else datetime.now().astimezone()
 
     def is_open(self, now: datetime) -> bool:
-        return self.windows is None or any(w.contains(now.timetz()) for w in self.windows)
+        return self.windows is None or any(w.contains(now.time()) for w in self.windows)
 
     def closes_at(self, now: datetime) -> datetime | None:
         """When the open window containing `now` ends, following windows that touch or
@@ -95,7 +95,7 @@ class Schedule:
             return None
         end = now
         for _ in range(len(self.windows) + 1):
-            here = [w.end_after(end) for w in self.windows if w.contains(end.timetz())]
+            here = [w.end_after(end) for w in self.windows if w.contains(end.time())]
             if not here:
                 break
             end = max(here)
@@ -167,6 +167,13 @@ def _typed(where: str, key: str, value: Any, kind: type | tuple[type, ...]) -> A
     return value
 
 
+def _nonempty(where: str, key: str, value: Any) -> str:
+    value = _typed(where, key, value, str)
+    if not value.strip():
+        raise ConfigError(f"[{where}] {key} is empty; leave the key out instead")
+    return value
+
+
 def _positive(where: str, key: str, value: Any, *, integer: bool = False) -> float:
     value = _typed(where, key, value, int if integer else (int, float))
     if value <= 0:
@@ -234,8 +241,8 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     broker_url = _broker_url(worker.get("broker_url"))
     token, token_file = _token(worker, base)
     ca_file = None
-    if worker.get("ca_file"):
-        ca_file = base / _typed("worker", "ca_file", worker["ca_file"], str)
+    if "ca_file" in worker:
+        ca_file = base / _nonempty("worker", "ca_file", worker["ca_file"])
         if not ca_file.is_file():
             raise ConfigError(f"[worker] ca_file {str(ca_file)!r} does not exist")
 
@@ -290,8 +297,8 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     # evict and re-read from the HDD under memory pressure, and the cgroup does not count it.
     mmap = _typed("compute", "mmap", compute.get("mmap", device == "gpu"), bool)
     weights_cache = None
-    if compute.get("weights_cache"):
-        weights_cache = base / _typed("compute", "weights_cache", compute["weights_cache"], str)
+    if "weights_cache" in compute:
+        weights_cache = base / _nonempty("compute", "weights_cache", compute["weights_cache"])
 
     windows_raw = schedule.get("windows", "always")
     if windows_raw == "always":
@@ -303,8 +310,8 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             raise ConfigError('[schedule] windows: "always" or a list of "HH:MM-HH:MM"')
         windows = tuple(Window.parse(_typed("schedule", "windows", w, str)) for w in windows_raw)
     tz = None
-    if schedule.get("timezone"):
-        tz_name = _typed("schedule", "timezone", schedule["timezone"], str)
+    if "timezone" in schedule:
+        tz_name = _nonempty("schedule", "timezone", schedule["timezone"])
         try:
             tz = ZoneInfo(tz_name)
         except (ZoneInfoNotFoundError, ValueError):

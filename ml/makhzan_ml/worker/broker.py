@@ -10,6 +10,14 @@ caller decides what that means. A 4xx is the broker's answer, never retried: it 
 a typed error (§3.6) so the caller can act on it: `Unauthorized`, `Forbidden`,
 `VersionDrift`, `LeaseLost`, `Invalid`.
 
+**A stop cuts retries short.** Once the worker is stopping (window end, SIGTERM), a call
+in backoff wakes at once and keeps retrying for `STOP_RETRY_S` more at most, so the
+scores in hand get their chance inside a `docker stop` grace period, and anything still
+undelivered is logged by the worker rather than killed with the process.
+
+Redirects are refused (a 3xx is an error): urllib would otherwise re-send the
+Authorization header to wherever the redirect points.
+
 The token is sent only in the Authorization header and never logged; request bodies
 (which carry catalogue text on the way back from `/lease`) are never logged either.
 """
@@ -20,6 +28,7 @@ import http.client
 import json
 import logging
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +41,13 @@ BACKOFF_FIRST_S = 1.0
 BACKOFF_CAP_S = 60.0
 #: Per-call socket timeout: a results POST is small, a lease renders a few requests.
 TIMEOUT_S = 60.0
+#: Once the worker is stopping, how much longer a call keeps retrying.
+STOP_RETRY_S = 30.0
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        return None  # the 3xx surfaces as an HTTPError, never followed
 
 
 class BrokerError(Exception):
@@ -114,6 +130,11 @@ class Broker:
         self.timeout_s = timeout_s
         self._sleep, self._monotonic = sleep, monotonic
         self._ssl = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
+        self._opener = urllib.request.build_opener(
+            _NoRedirect(), urllib.request.HTTPSHandler(context=self._ssl)
+        )
+        #: Set by the worker: when it is set, retries are cut short (STOP_RETRY_S).
+        self.stop_event: threading.Event | None = None
 
     # -- endpoints (broker-api.md §3) --------------------------------------------------------
 
@@ -149,13 +170,13 @@ class Broker:
                 "User-Agent": "makhzan-ai-worker/1",
             },
         )
-        context = self._ssl if req.type == "https" else None
-        with urllib.request.urlopen(req, timeout=self.timeout_s, context=context) as resp:
+        with self._opener.open(req, timeout=self.timeout_s) as resp:
             raw = resp.read()
         return json.loads(raw) if raw else {}
 
     def call(self, path: str, body: dict, *, retry: bool = True) -> dict:
         start = self._monotonic()
+        stopped_at: float | None = None
         delay = BACKOFF_FIRST_S
         attempt = 0
         while True:
@@ -167,8 +188,8 @@ class Broker:
                 status = e.code
                 try:
                     payload = json.loads(e.read() or b"{}")
-                except ValueError:
-                    payload = {}
+                except (ValueError, OSError, http.client.HTTPException):
+                    payload = {}  # an unreadable error body: the status alone decides
                 if not isinstance(payload, dict):
                     payload = {}
                 if status not in _RETRYABLE_STATUS:
@@ -181,11 +202,29 @@ class Broker:
                 reason = f"{type(e).__name__}: {e}"
             except ValueError as e:  # a 2xx whose body is not JSON: a proxy, not the broker
                 reason = f"unreadable response: {e}"
-            elapsed = self._monotonic() - start
-            if not retry or elapsed + wait > self.retry_max_s:
+            now = self._monotonic()
+            elapsed = now - start
+            stopping = self.stop_event is not None and self.stop_event.is_set()
+            if stopping and stopped_at is None:
+                stopped_at = now
+            over_stop = stopped_at is not None and now - stopped_at + wait > STOP_RETRY_S
+            if not retry or elapsed + wait > self.retry_max_s or over_stop:
+                why = " (stopping)" if over_stop else ""
                 raise Unreachable(
-                    f"{path}: {reason} (attempt {attempt}, {elapsed:.0f} s)"
+                    f"{path}: {reason} (attempt {attempt}, {elapsed:.0f} s){why}"
                 ) from None
             log.warning("%s: %s; retrying in %.0f s (attempt %d)", path, reason, wait, attempt)
-            self._sleep(wait)
+            self._pause(wait)
             delay = min(delay * 2, BACKOFF_CAP_S)
+
+    def _pause(self, seconds: float) -> None:
+        # Before a stop, a backoff wakes as soon as the stop comes; after it, it sleeps out
+        # its time (no tight loop), within STOP_RETRY_S.
+        if (
+            self.stop_event is not None
+            and not self.stop_event.is_set()
+            and self._sleep is time.sleep
+        ):
+            self.stop_event.wait(seconds)
+        else:
+            self._sleep(seconds)
