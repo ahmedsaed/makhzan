@@ -37,8 +37,9 @@ import asyncio
 import getpass
 import sys
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 
@@ -184,12 +185,23 @@ class Reviewed:
     withdrawn: int = 0
 
 
-async def review_reports(session, ids: Sequence[int], status: str, *, by: str) -> list[Reviewed]:
+async def review_reports(
+    session,
+    ids: Sequence[int],
+    status: str,
+    *,
+    by: str,
+    audit: Callable[[Any, Reviewed], Awaitable[None]] | None = None,
+) -> list[Reviewed]:
     """Accept or reject reports, each committed on its own; what `reports accept|reject` does.
 
     Accepting a grouping report records its rulings (`overrides.accept_report`);
     one no ruling could act on is refused, not shown accepted with nothing
     behind it. Rejecting withdraws whatever rulings the report had made.
+
+    Each report's verdict, its rulings and, when `audit` is given (the admin
+    dashboard), the audit row it writes are one transaction. A refusal is
+    passed to `audit` too, and committed on its own.
     """
     out: list[Reviewed] = []
     for report_id in ids:
@@ -203,10 +215,16 @@ async def review_reports(session, ids: Sequence[int], status: str, *, by: str) -
                     pairs = await rulings.report_pairs(session, found)
                 except rulings.ReportRefused as refused:
                     out.append(Reviewed(report_id, status, refused=str(refused)))
+                    if audit is not None:
+                        await audit(session, out[-1])
+                        await session.commit()
                     continue
-        report = await rules.review(session, report_id, status)
+        report = await rules.review(session, report_id, status, commit=False)
         if report is None:
             out.append(Reviewed(report_id, status, refused="no such report"))
+            if audit is not None:
+                await audit(session, out[-1])
+                await session.commit()
             continue
         done = Reviewed(report_id, status)
         if status == "accepted":
@@ -215,6 +233,8 @@ async def review_reports(session, ids: Sequence[int], status: str, *, by: str) -
             done.withdrawn = await rulings.withdraw_report(
                 session, report_id, removed_by=f"{by} (report rejected)"
             )
+        if audit is not None:
+            await audit(session, done)
         await session.commit()
         out.append(done)
     return out

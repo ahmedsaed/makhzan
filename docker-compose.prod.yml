@@ -202,7 +202,9 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       MEILI_URL: ${MEILI_URL:-http://search:7700}
-      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      # Only to count the index's documents: a key allowed `stats.get` alone,
+      # when MEILI_STATS_KEY is set; until then the master key, under this name.
+      MEILI_STATS_KEY: ${MEILI_STATS_KEY:-${MEILI_MASTER_KEY}}
       SITE_URL: ${SITE_URL:-}
       CRAWL_ENABLED: ${CRAWL_ENABLED:-true}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}

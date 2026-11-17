@@ -1272,7 +1272,15 @@ async def collect_index_drift(session) -> dict:
 
         from worker.indexer import get_client
 
-        stats = get_client().index(INDEX_NAME).get_stats()
+        # A key allowed only `stats.get`, where one is given (the admin service
+        # gets no master key); otherwise the worker's own client.
+        if stats_key := os.getenv("MEILI_STATS_KEY"):
+            import meilisearch
+
+            client = meilisearch.Client(os.getenv("MEILI_URL", "http://localhost:7700"), stats_key)
+        else:
+            client = get_client()
+        stats = client.index(INDEX_NAME).get_stats()
         indexed = stats.number_of_documents
     except Exception as exc:  # noqa: BLE001 — status must not fail because search is down
         return {"products": product_count, "indexed": None, "error": type(exc).__name__}

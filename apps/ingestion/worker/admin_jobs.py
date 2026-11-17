@@ -28,7 +28,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.grouping import describe, rebuild_products
@@ -43,6 +44,40 @@ JOBS = (RUN_LIMIT, PROBE, REGROUP_DRY_RUN)
 
 #: The largest `limit` the dashboard may ask for: a quick look, not a sweep.
 MAX_LIMIT = 200
+
+
+#: A row still `queued` after this long, whose arq job is gone (the queue was
+#: flushed, or the enqueue never landed), is marked failed: nothing will run it.
+LOST_AFTER = timedelta(minutes=10)
+
+
+async def expire_lost(session, exists: Callable[[str], Awaitable[bool]]) -> int:
+    """Mark queued rows whose arq job no longer exists as failed (flushed, not committed).
+
+    `exists(key)` asks Redis for a key; arq keeps `arq:job:<id>` while a job is
+    queued or deferred and `arq:in-progress:<id>` while it runs.
+    """
+    from sqlalchemy import select
+
+    cutoff = datetime.now(timezone.utc) - LOST_AFTER
+    rows = list(
+        await session.scalars(
+            select(AdminAction).where(
+                AdminAction.status == "queued", AdminAction.created_at < cutoff
+            )
+        )
+    )
+    lost = 0
+    for row in rows:
+        key = job_id(row.id)
+        if await exists(f"arq:job:{key}") or await exists(f"arq:in-progress:{key}"):
+            continue
+        row.status = "failed"
+        row.error = "lost: the worker's queue no longer holds this job"
+        row.finished_at = datetime.now(timezone.utc)
+        lost += 1
+    await session.flush()
+    return lost
 
 
 def job_id(action_id: int) -> str:
@@ -146,6 +181,7 @@ async def admin_job(ctx: dict, action_id: int) -> str:
         action, target, detail = row.action, row.target, dict(row.detail or {})
         row.status, row.started_at = "running", datetime.now(timezone.utc)
         await session.commit()
+    finished = False
     try:
         if action == RUN_LIMIT:
             result = await _run_limit(ctx, target, int(detail.get("limit") or 0))
@@ -163,11 +199,26 @@ async def admin_job(ctx: dict, action_id: int) -> str:
             error=f"{type(exc).__name__}: {exc}"[:2000],
             finished_at=datetime.now(timezone.utc),
         )
+        finished = True
         return "failed"
-    await _set(
-        action_id,
-        status="done",
-        result=_jsonable(result),
-        finished_at=datetime.now(timezone.utc),
-    )
-    return "done"
+    else:
+        await _set(
+            action_id,
+            status="done",
+            result=_jsonable(result),
+            finished_at=datetime.now(timezone.utc),
+        )
+        finished = True
+        return "done"
+    finally:
+        if not finished:
+            # Cancelled: arq's job timeout, or the worker stopping. Shielded, so
+            # the row is not left `running` for the page to poll forever.
+            await asyncio.shield(
+                _set(
+                    action_id,
+                    status="failed",
+                    error="cancelled: the job timed out or the worker stopped",
+                    finished_at=datetime.now(timezone.utc),
+                )
+            )

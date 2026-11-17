@@ -177,3 +177,47 @@ async def test_an_unknown_source_fails_the_probe_cleanly(monkeypatch):
     action_id = await _job(admin_jobs.PROBE, "missing")
     assert await admin_jobs.admin_job({}, action_id) == "failed"
     assert (await _row(action_id)).error.startswith("KeyError")
+
+
+async def test_a_cancelled_job_is_marked_failed_not_left_running(monkeypatch):
+    """arq cancels a job at its timeout; the page must not poll a `running` row forever."""
+    started = asyncio.Event()
+
+    async def slow():
+        started.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(admin_jobs, "_regroup_dry_run", slow)
+    action_id = await _job(admin_jobs.REGROUP_DRY_RUN)
+    task = asyncio.create_task(admin_jobs.admin_job({}, action_id))
+    await started.wait()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    row = await _row(action_id)
+    assert row.status == "failed" and row.error.startswith("cancelled")
+
+
+async def test_a_queued_job_the_queue_lost_is_marked_failed():
+    from datetime import UTC, datetime
+
+    lost_id = await _job(admin_jobs.REGROUP_DRY_RUN)
+    waiting_id = await _job(admin_jobs.REGROUP_DRY_RUN)
+    fresh_id = await _job(admin_jobs.REGROUP_DRY_RUN)
+    async with SessionLocal() as session:
+        for action_id in (lost_id, waiting_id):
+            row = await session.get(AdminAction, action_id)
+            row.created_at = datetime.now(UTC) - admin_jobs.LOST_AFTER * 2
+        await session.commit()
+
+    async def exists(key: str) -> bool:
+        return key == f"arq:job:{admin_jobs.job_id(waiting_id)}"
+
+    async with SessionLocal() as session:
+        assert await admin_jobs.expire_lost(session, exists) == 1
+        await session.commit()
+    assert (await _row(lost_id)).status == "failed"
+    assert (await _row(waiting_id)).status == "queued"
+    assert (await _row(fresh_id)).status == "queued"

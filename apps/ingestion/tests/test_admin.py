@@ -88,6 +88,14 @@ async def _actions(action: str | None = None) -> list[AdminAction]:
         return list(await session.scalars(query))
 
 
+async def _accepted(action: str) -> list[AdminAction]:
+    return [a for a in await _actions(action) if "refused" not in a.detail]
+
+
+async def _refused(action: str) -> list[AdminAction]:
+    return [a for a in await _actions(action) if "refused" in a.detail]
+
+
 # --------------------------------------------------------------------------- #
 # Login
 # --------------------------------------------------------------------------- #
@@ -371,8 +379,9 @@ async def test_run_now_queues_an_ephemeral_job_and_checks_the_limit(queued):
         assert r.status_code == 303
         await client.post("/shops/shop-a/run", data={"csrf": csrf, "limit": "5000"})
         await client.post("/shops/shop-a/run", data={"csrf": csrf, "limit": "ten"})
-    (job,) = await _actions("job.run_limit")
+    (job,) = await _accepted("job.run_limit")
     assert (job.target, job.detail, job.status) == ("shop-a", {"limit": 10}, "queued")
+    assert [r.status for r in await _refused("job.run_limit")] == [None, None]
     assert queued == [job.id]
 
 
@@ -470,8 +479,9 @@ async def test_adding_an_override_needs_a_note_and_two_shops_for_must(queued):
         "manual",
         "owner",
     )
-    (added,) = await _actions("override.add")
+    (added,) = await _accepted("override.add")
     assert added.target == str(row.id)
+    assert len(await _refused("override.add")) == 2
 
 
 async def test_removing_an_override_is_soft_and_needs_a_note(queued):
@@ -492,7 +502,8 @@ async def test_removing_an_override_is_soft_and_needs_a_note(queued):
     async with SessionLocal() as session:
         row = await session.get(GroupingOverride, row.id)
     assert (row.removed_by, row.remove_note) == ("owner", "different revisions")
-    assert len(await _actions("override.remove")) == 1
+    assert len(await _accepted("override.remove")) == 1
+    assert len(await _refused("override.remove")) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -509,8 +520,32 @@ async def test_the_ai_mode_changes_only_when_confirmed(queued):
         await client.post("/ai/mode", data={"csrf": csrf, "mode": "live", "confirm": "yes"})
         async with SessionLocal() as session:
             assert await ai_mode(session) == "live"
-    (changed,) = await _actions("ai.mode")
+    refused, changed = await _actions("ai.mode")
+    assert refused.detail == {"refused": "Confirm the change of mode first."}
     assert changed.detail == {"before": "off"}
+
+
+async def test_refused_actions_are_audited_as_refused(queued):
+    (listing,) = await _listings(1)
+    same_shop_report = await _report("same_as_other", [(listing, True)])
+    async with _client() as client:
+        csrf = await _session(client)
+        await client.post(
+            "/overrides/add",
+            data={"csrf": csrf, "a": "x", "b": "y", "kind": "never_merge", "note": ""},
+        )
+        await client.post(f"/reports/{same_shop_report}/accept", data={"csrf": csrf})
+        await client.post("/ai/workers/nobody/revoke", data={"csrf": csrf, "confirmed": "yes"})
+    add, report, revoke = (
+        await _actions("override.add")
+        + await _actions("report.accept")
+        + await _actions("ai.worker.revoke")
+    )
+    assert "Both listings must be full listing ids" in add.detail["refused"]
+    assert "no listing" in report.detail["refused"]
+    assert revoke.detail["refused"] == "No worker named 'nobody'."
+    async with SessionLocal() as session:
+        assert (await session.get(Report, same_shop_report)).status == "new"
 
 
 async def test_a_worker_token_is_shown_once_and_revoking_takes_two_clicks(queued):
@@ -531,7 +566,12 @@ async def test_a_worker_token_is_shown_once_and_revoking_takes_two_clicks(queued
         await client.post("/ai/workers/cpu-box/revoke", data={"csrf": csrf, "confirmed": "yes"})
         async with SessionLocal() as session:
             assert (await session.scalar(select(AiWorker))).revoked_at is not None
-    assert [a.action for a in await _actions()][1:] == ["ai.worker.add", "ai.worker.revoke"]
+    assert [a.action for a in await _actions()][1:] == [
+        "ai.worker.add",
+        "ai.worker.revoke",  # the first click: refused, audited
+        "ai.worker.revoke",
+    ]
+    assert len(await _refused("ai.worker.revoke")) == 1
     assert all(token not in str(a.detail) for a in await _actions())
 
 
@@ -586,7 +626,8 @@ async def test_revoking_a_decision_from_the_review_list(queued):
         "owner",
         admin_app.DEFAULT_REVOKE_NOTE,
     )
-    assert len(await _actions("ai.decision.revoke")) == 1
+    assert len(await _accepted("ai.decision.revoke")) == 1
+    assert len(await _refused("ai.decision.revoke")) == 1  # the second, of a revoked one
 
 
 async def test_redecide_is_a_dry_run(queued):

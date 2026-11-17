@@ -42,7 +42,14 @@ from makhzan_schemas.models import AdminAction, Source
 from sqlalchemy import select
 from worker import ai as ai_cli
 from worker import pause
-from worker.admin_jobs import MAX_LIMIT, PROBE, REGROUP_DRY_RUN, RUN_LIMIT, job_id
+from worker.admin_jobs import (
+    MAX_LIMIT,
+    PROBE,
+    REGROUP_DRY_RUN,
+    RUN_LIMIT,
+    expire_lost,
+    job_id,
+)
 from worker.overrides import OverrideRefused, add_override
 from worker.reports import review_reports, ruling_line
 
@@ -242,6 +249,45 @@ async def audit(
     return row
 
 
+async def refuse(
+    request: Request,
+    to: str,
+    action: str,
+    target: str | None,
+    message: str,
+    detail: dict | None = None,
+) -> Response:
+    """Audit an action the dashboard refused (`detail.refused`), then go back and say why."""
+    async with SessionLocal() as db:
+        await audit(db, request, action, target, {**(detail or {}), "refused": message[:500]})
+        await db.commit()
+    return back(to, message, "error")
+
+
+async def sweep_lost_jobs() -> None:
+    """Mark jobs the worker's queue has lost as failed (`admin_jobs.expire_lost`).
+
+    Asked whenever a page shows jobs or polls one, so a lost job stops being
+    shown as queued. Redis unreachable: nothing is marked.
+    """
+    from redis import asyncio as aioredis
+
+    try:
+        client = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
+        try:
+
+            async def exists(key: str) -> bool:
+                return bool(await client.exists(key))
+
+            async with SessionLocal() as db:
+                if await expire_lost(db, exists):
+                    await db.commit()
+        finally:
+            await client.aclose()
+    except Exception:  # noqa: BLE001 — a page must not fail because Redis is down
+        return
+
+
 async def enqueue_admin_job(action_id: int) -> None:
     """Queue `worker.admin_jobs.admin_job` for the row. Replaced in tests."""
     from arq import create_pool
@@ -406,6 +452,7 @@ async def overview(request: Request):
 async def crawl_view(request: Request):
     if current_session(request) is None:
         return RedirectResponse("/login", status_code=303)
+    await sweep_lost_jobs()
     async with SessionLocal() as db:
         view = await data.crawl_view(db)
     return await page(request, "crawl.html", "crawl", {"c": view, "max_limit": MAX_LIMIT})
@@ -422,6 +469,7 @@ async def catalog_view(
 ):
     if current_session(request) is None:
         return RedirectResponse("/login", status_code=303)
+    await sweep_lost_jobs()
     async with SessionLocal() as db:
         view = await data.catalog_view(
             db, shop=shop, sort=sort, q=q.strip()[:200], uncat_shop=ushop, look=lookup[:500]
@@ -478,6 +526,7 @@ async def activity(request: Request):
 async def job_state(request: Request, action_id: int):
     if current_session(request) is None:
         raise HTTPException(401, "Sign in first.")
+    await sweep_lost_jobs()
     async with SessionLocal() as db:
         row = await db.get(AdminAction, action_id)
     if row is None or row.status is None:
@@ -578,7 +627,14 @@ async def shop_run(request: Request, source_id: str):
     except ValueError:
         limit = 0
     if not 1 <= limit <= MAX_LIMIT:
-        return back("/crawl", f"Limit must be between 1 and {MAX_LIMIT}.", "error")
+        return await refuse(
+            request,
+            "/crawl",
+            RUN_LIMIT,
+            source_id,
+            f"Limit must be between 1 and {MAX_LIMIT}.",
+            {"limit": fields.get("limit", "")[:20]},
+        )
     async with SessionLocal() as db:
         await _source_or_404(db, source_id)
     await _queue_job(request, RUN_LIMIT, source_id, {"limit": limit})
@@ -598,7 +654,7 @@ async def shop_probe(request: Request, source_id: str):
     return back(
         "/crawl",
         f"Queued the probe for {source_id}: robots.txt first, then browser, makhzanbot and "
-        "signed, 15 s apart.",
+        "signed, at least 15 s apart and through the crawl's own per-host gate.",
     )
 
 
@@ -625,15 +681,18 @@ async def review(request: Request, report_id: int, verdict: str):
     if verdict not in ("accept", "reject"):
         raise HTTPException(404, "Accept or reject.")
     status = "accepted" if verdict == "accept" else "rejected"
-    async with SessionLocal() as db:
-        (done,) = await review_reports(db, [report_id], status, by=who())
+
+    async def audited(db, done) -> None:
         detail = {
-            "refused": done.refused,
             "overrides": [{"id": a.row.id, "outcome": a.outcome} for a in done.added],
             "withdrawn": done.withdrawn,
         }
+        if done.refused:
+            detail["refused"] = done.refused
         await audit(db, request, f"report.{verdict}", str(report_id), detail)
-        await db.commit()
+
+    async with SessionLocal() as db:
+        (done,) = await review_reports(db, [report_id], status, by=who(), audit=audited)
     if done.refused:
         return back("/reports", f"R-{report_id} not {status}: {done.refused}.", "error")
     lines = [f"R-{report_id} {status}."] + [ruling_line(a) for a in done.added]
@@ -663,13 +722,15 @@ async def override_add(request: Request):
         errors.append("Kind is never_merge or must_merge.")
     if not note:
         errors.append("A note is required: say why.")
+    asked = {"a": fields.get("a", "")[:64], "b": fields.get("b", "")[:64], "kind": kind[:16]}
     if errors:
-        return back("/overrides", " ".join(errors), "error")
+        return await refuse(request, "/overrides", "override.add", None, " ".join(errors), asked)
     async with SessionLocal() as db:
         try:
             added = await add_override(db, a, b, kind, forced=forced, note=note, by=who())
         except OverrideRefused as refused:
-            return back("/overrides", str(refused), "error")
+            await db.rollback()
+            return await refuse(request, "/overrides", "override.add", None, str(refused), asked)
         await audit(
             db,
             request,
@@ -686,10 +747,12 @@ async def override_remove(request: Request, override_id: int):
     _, fields = await checked_form(request)
     note = fields.get("note", "").strip()[:2000]
     if not note:
-        return back(
+        return await refuse(
+            request,
             f"/overrides?remove={override_id}#ov-{override_id}",
+            "override.remove",
+            str(override_id),
             "A note is required to remove an override.",
-            "error",
         )
     async with SessionLocal() as db:
         row = await rulings.remove(db, override_id, removed_by=who(), note=note)
@@ -713,9 +776,11 @@ async def ai_set_mode(request: Request):
     _, fields = await checked_form(request)
     value = fields.get("mode", "")
     if value not in MODES:
-        return back("/ai", f"The mode is one of {', '.join(MODES)}.", "error")
+        return await refuse(
+            request, "/ai", "ai.mode", value[:16], f"The mode is one of {', '.join(MODES)}."
+        )
     if fields.get("confirm") != "yes":
-        return back("/ai", "Confirm the change of mode first.", "error")
+        return await refuse(request, "/ai", "ai.mode", value, "Confirm the change of mode first.")
     async with SessionLocal() as db:
         before = await ai_mode(db)
         await set_ai_mode(db, value)
@@ -732,12 +797,19 @@ async def ai_worker_add(request: Request):
     name = fields.get("name", "").strip()
     models = [m for m in MODELS if fields.get(f"model_{m}") == "on"]
     if not (3 <= len(name) <= 32) or not all(c.isalnum() or c in "-_" for c in name):
-        return back("/ai", "Name it with 3-32 letters, digits, hyphens or underscores.", "error")
+        return await refuse(
+            request,
+            "/ai",
+            "ai.worker.add",
+            name[:64],
+            "Name it with 3-32 letters, digits, hyphens or underscores.",
+        )
     async with SessionLocal() as db:
         try:
             token = await ai_cli.add_worker(db, name, models)
         except ai_cli.Refused as refused:
-            return back("/ai", str(refused), "error")
+            await db.rollback()
+            return await refuse(request, "/ai", "ai.worker.add", name, str(refused))
         await audit(db, request, "ai.worker.add", name, {"models": models})
         await db.commit()
     # Rendered, not redirected: the token is shown this once and never put in a URL.
@@ -748,12 +820,15 @@ async def ai_worker_add(request: Request):
 async def ai_worker_revoke(request: Request, name: str):
     _, fields = await checked_form(request)
     if fields.get("confirmed") != "yes":
-        return back("/ai", f"Click revoke twice to revoke {name}.", "error")
+        return await refuse(
+            request, "/ai", "ai.worker.revoke", name, f"Click revoke twice to revoke {name}."
+        )
     async with SessionLocal() as db:
         try:
             await ai_cli.revoke_worker(db, name)
         except ai_cli.Refused as refused:
-            return back("/ai", str(refused), "error")
+            await db.rollback()
+            return await refuse(request, "/ai", "ai.worker.revoke", name, str(refused))
         await audit(db, request, "ai.worker.revoke", name)
         await db.commit()
     return back("/ai", f"Revoked {name}: its token is refused from now on; its leases requeue.")
@@ -764,13 +839,18 @@ async def ai_flag_dismiss(request: Request, flag_id: int):
     _, fields = await checked_form(request)
     note = fields.get("note", "").strip()[:2000]
     if not note:
-        return back("/ai", "A note is required to dismiss a flag.", "error")
+        return await refuse(
+            request, "/ai", "ai.flag.dismiss", str(flag_id), "A note is required to dismiss a flag."
+        )
     async with SessionLocal() as db:
         missing = await ai_cli.dismiss_flags(db, [flag_id], note=note, by=who())
+        if missing:
+            await db.rollback()
+            return await refuse(
+                request, "/ai", "ai.flag.dismiss", str(flag_id), f"#{flag_id} is not an open flag."
+            )
         await audit(db, request, "ai.flag.dismiss", str(flag_id), {"note": note})
         await db.commit()
-    if missing:
-        return back("/ai", f"#{flag_id} is not an open flag.", "error")
     return back("/ai", f"Flag #{flag_id} dismissed.")
 
 
@@ -788,7 +868,9 @@ async def ai_decision_revoke(request: Request, decision_id: int):
         )
         if refusal:
             await db.rollback()
-            return back("/ai", refusal, "error")
+            return await refuse(
+                request, "/ai", "ai.decision.revoke", str(decision_id), refusal, {"note": note}
+            )
         await audit(db, request, "ai.decision.revoke", str(decision_id), {"note": note})
         await db.commit()
     return back(

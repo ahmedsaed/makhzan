@@ -47,6 +47,7 @@
 
   var jobs = Array.prototype.slice.call(document.querySelectorAll("[data-job]"));
   if (jobs.length) {
+    var polls = 0;
     var poll = function () {
       Promise.all(
         jobs.map(function (el) {
@@ -60,8 +61,11 @@
         var ended = states.some(function (s) {
           return s && s.status !== "queued" && s.status !== "running";
         });
+        polls += 1;
+        // Done or failed: reload to show it. Still queued after 5 minutes: stop
+        // asking (a lost job is marked failed on the next page load).
         if (ended) window.location.reload();
-        else setTimeout(poll, 2500);
+        else if (polls < 120) setTimeout(poll, 2500);
       });
     };
     setTimeout(poll, 2500);

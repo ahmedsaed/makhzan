@@ -21,7 +21,9 @@ deploys, backups and `.env.prod` stay with `./makhzan` on the server.
   copy buttons, two-click revoke and polling a queued job; no build step).
 - It mounts the private configuration read-only (the report loads the adapters
   and crosswalks), and gets only the variables it uses: the database, Redis,
-  Meilisearch (for the index check), `SITE_URL`, `CRAWL_ENABLED` (shown as
+  Meilisearch (for the index check: set `MEILI_STATS_KEY` to a key allowed
+  only `stats.get`, made once with `POST /keys` and the master key; until then
+  compose hands it the master key under that name), `SITE_URL`, `CRAWL_ENABLED` (shown as
   this service's copy) and its own `ADMIN_*`. It holds **no crawler signing
   key**: the probe and runs happen in the worker.
 - **Long or outbound work is queued to the worker** (`worker/admin_jobs.py`):
