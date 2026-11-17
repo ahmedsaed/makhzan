@@ -492,9 +492,13 @@ class Worker:
         with self.held.lock:
             self.held.leases[lease_id] = {j["job_id"] for j in jobs}
         try:
-            if self._may_continue():  # stopped while leasing: no load, nothing scored
+            # The window may have ended, or a stop come, while the lease was taken: then
+            # nothing is loaded, and the whole lease goes back gracefully (below).
+            if self._may_continue():
                 judge = self._ensure_loaded(key, lease_id)
                 for job in jobs:
+                    # Checked again before each job, so right after the load too: a stop that
+                    # came during a long load scores nothing.
                     if not self._may_continue():
                         break
                     if not self._process_job(judge, key, lease_id, job):

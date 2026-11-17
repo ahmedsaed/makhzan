@@ -315,6 +315,7 @@ def test_the_window_end_drops_the_current_job(broker, sleeps):
     assert job.status == "queued" and job.attempts == 0 and other.attempts == 0
     assert fake.unloads == ["kev"]
     assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
+    assert session_releases(broker) == []  # the lease's release ended it: exactly one end
 
 
 # --- retries -------------------------------------------------------------------------------
@@ -1034,3 +1035,39 @@ def test_a_release_never_names_a_job_found_lost(broker, sleeps):
     with_jobs = [r for r in broker.bodies("/release") if r.get("job_ids")]
     assert all(b.job_id not in r["job_ids"] for r in with_jobs)
     assert not any(r.get("error") == "lease_lost" for r in with_jobs)
+
+
+def test_a_lease_taken_as_the_window_ends_is_released_without_a_load(broker, sleeps):
+    job = broker.add_job("kev", pair(1))
+    worker, fake, _ = make_worker(broker, sleeps)
+    lease = worker.broker.lease
+
+    def lease_then_stop(body):
+        out = lease(body)
+        worker.request_stop("the window has ended")  # it ends while the lease comes back
+        return out
+
+    worker.broker.lease = lease_then_stop
+    assert worker.run() == run.EXIT_OK
+    assert fake.loads == []  # nothing loaded for a lease it cannot use
+    assert job.status == "queued" and job.attempts == 0
+    assert [b["job_ids"] for b in job_releases(broker)] == [[job.job_id]]
+    assert session_releases(broker) == []
+
+
+def test_a_stop_during_the_load_scores_nothing(broker, sleeps):
+    job = broker.add_job("kev", pair(1))
+    fake = FakeJudges()
+    worker, fake, _ = make_worker(broker, sleeps, fake=fake)
+    load = worker.load_judge
+
+    def slow_load(key, rt):
+        judge = load(key, rt)
+        worker.request_stop("SIGTERM")  # arrives while the model is loading
+        return judge
+
+    worker.load_judge = slow_load
+    assert worker.run() == run.EXIT_OK
+    assert fake.loads == ["kev"] and fake.scored == []
+    assert job.status == "queued" and job.attempts == 0
+    assert fake.unloads == ["kev"]
