@@ -610,7 +610,13 @@ async def lease(
     if model not in worker.models or model not in MODELS:
         raise _not_allowed(model)
     row = await _session_of(session, worker, body["session"], lock=True)
-    reported = (row.models or {}).get(model) or {}
+    if model not in (row.models or {}):
+        # The session said hello for another model: a session serves one.
+        raise BrokerError(
+            409,
+            {"error": "wrong_model", "model": model, "session_model": next(iter(row.models), None)},
+        )
+    reported = row.models[model]
     if (
         body.get("model_version") != MODELS[model].model_version
         or reported.get("model_version") != MODELS[model].model_version

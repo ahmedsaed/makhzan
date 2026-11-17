@@ -28,9 +28,8 @@ before going back to `off`, which undoes every AI merge at the next regroup.
 policy (P7) and changes nothing: only `--dry-run` exists. `revoke` withdraws
 one decision; the next regroup undoes what it joined, and the triggers do not
 offer that pair again (to rule on it for good, use `./makhzan overrides`).
-`flags dismiss` closes a flag with a note and always sets `resolved_at`,
-which a `nothing_fits` flag's count starts from; a flag closed by hand in
-SQL must set it too, or old sessions reopen it at once.
+`flags dismiss` sets `resolved_at` (a hand-closed flag must too). Given
+several ids it dismisses the open ones and exits 1 if any was not open.
 """
 
 from __future__ import annotations

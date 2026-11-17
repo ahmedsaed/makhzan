@@ -398,6 +398,7 @@ the code to change.
 |---|---|---|
 | Blame on a crash | An expired lease charges an attempt only to the job the worker's last heartbeat named in hand (`progress.job_id`); its other jobs go back free. With none reported, every job of the lease is charged. | `broker.reap` |
 | A job that does not fit the worker's time | Jobs go in priority order while they fit `seconds_left` less 60 s; the first that does not fit stops the lease (no skipping ahead to a smaller job). Nothing fitting answers `reason: "none_fit"`, not `"empty"`, and ends the session; one that had leased (a healthy night out of window) considers P16. 3 never-leased none_fit sessions of one worker and model in a week, since that subject's last dismissal or action, open a `nothing_fits` flag. | `broker.lease`, `NONE_FIT_FLAG_AFTER` |
+| One model per session | `/hello` names exactly one model (422 otherwise); a lease for another model is `409 wrong_model`. A machine still serves two models by running two workers (or one worker with two sessions), so "never leased" and `end_model` are per model by construction. A protocol rule chosen by the session. | `broker.hello`, `broker.lease` |
 | Retrying a lease | `lease_request_id`: the same id gets the same lease back (still-held, unexpired jobs, re-rendered); a session's leases take turns on its row lock. | `broker._replay` |
 
 Owner decisions pending, with the value in force until answered:
