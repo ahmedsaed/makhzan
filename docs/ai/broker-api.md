@@ -145,8 +145,11 @@ writes decisions, so the backlog can be scored while the mode is off.
      "lease_s": 900, "heartbeat_s": 60}
 ```
 
-- `models` keys must be a subset of the worker's `ai_workers.models`; any
-  other key is `403 {"error": "model_not_allowed", "model": "…"}`.
+- **One model per session.** `models` names exactly one model key, else
+  `422 {"error": "invalid"}`; a worker serving two keys opens one session
+  per key. So "never leased" and `end_model` are per model by construction.
+  The key must be one of the worker's `ai_workers.models`, else
+  `403 {"error": "model_not_allowed", "model": "…"}`.
 - For each model key the broker answers the model version the registry uses
   now (`policy.MODELS[key].model_version`). A worker whose `model_version`
   or `weights_revision` differs gets `"ok": false` for that key (and a
@@ -229,11 +232,9 @@ writes decisions, so the backlog can be scored while the mode is off.
   request hash) is finished there and then, not renewed and left out. So a
   lease whose answer was lost on the way is not orphaned until it expires.
   If none of it is still held (released, completed, or expired: reaped or
-  not yet), a fresh lease is made, which reaps first. The same id for another
-  model is `422`, but only while the original lease's jobs are still held
-  (that is where the broker reads the original model from); once none is, the
-  id no longer names anything and a fresh lease is made for the model asked.
-  A new id, or none, is always a fresh lease.
+  not yet), a fresh lease is made, which reaps first. A session serves one
+  model, so a replay is always of that model. A new id, or none, is always a
+  fresh lease.
 - **Batch size, and a job that does not fit.** Jobs are added in priority
   order while `owed requests × seconds_per_request` fits in `seconds_left`
   minus a 60 s margin; at most `max_jobs`. The first job that does not fit
@@ -428,8 +429,8 @@ The regroup reads standing "same" decisions (`decisions.load_ai_same`) at the
 next rebuild, only when the mode is `live`.
 
 **Rebuild after a window (P16).** The broker cannot see worker windows, so it
-uses what it can see: when a worker ends a session, by a graceful `/release`
-or by a lease that came back empty, and new standing "same" decisions were
+uses what it can see: when a worker ends a session, by a graceful `/release`,
+by a lease that came back empty, or by a none_fit after a lease, and new standing "same" decisions were
 written since the last rebuild the broker queued, it queues
 `rebuild_and_reindex` through the existing `request_rebuild` job-id scheme
 (deduplicated by window; the scheme is `makhzan_schemas.rebuild`, shared
@@ -465,8 +466,11 @@ absent, `lease_id` optional) is how a worker that holds nothing ends its
 session: window over, a stop signal between leases, or done after its last
 results. It marks the session ended and considers the P16 rebuild, as a
 release with jobs does. A worker that stops between leases should always send
-it; otherwise only an empty lease ends its session. An `error` release must
-name its jobs (422 otherwise).
+it. **After an `empty` or `none_fit` answer the broker has already ended the
+session, and the worker sends nothing more** (§3.2). A release that comes
+anyway keeps the recorded end (`empty` or `none_fit`, what `nothing_fits`
+counts) and only considers P16. An `error` release must name its jobs (422
+otherwise).
 
 The caller must hold the lease and serve the jobs' model (as for `/results`).
 `graceful` (window end, SIGTERM) re-queues with no attempt counted; `error`
@@ -503,6 +507,11 @@ rebuild is considered.
   closes its poison flag). A trigger never queues a pair again at a stage and
   judge where its job is dead (`triggers.enqueue`): that is the "handled by
   hand" of P6, rather than three more attempts every day.
+- Flags are listed and closed by hand with `./makhzan ai flags list` and
+  `./makhzan ai flags dismiss ID --note "why"`, which always sets
+  `resolved_at`. A flag closed by hand in SQL must set `resolved_at` too: a
+  `nothing_fits` flag's count starts from its subject's last dismissal or
+  action, and without it old sessions reopen the flag at once.
 - Any number of workers, on any machines, may lease at once; `SKIP LOCKED`
   and the request-hash idempotency make overlap harmless.
 

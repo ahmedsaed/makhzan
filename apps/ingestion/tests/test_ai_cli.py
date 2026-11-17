@@ -176,3 +176,23 @@ async def test_a_dead_job_is_retried_by_hand(capsys):
     async with SessionLocal() as session:
         again = await session.get(AiJob, job.id)
     assert (again.status, again.attempts) == ("queued", 0)
+
+
+async def test_a_flag_is_dismissed_with_a_note_and_its_resolved_time(capsys):
+    from makhzan_schemas.models import AiFlag
+
+    async with SessionLocal() as session:
+        flag = AiFlag(kind="nothing_fits", subject="cpu-kev/kev", detail={})
+        session.add(flag)
+        await session.commit()
+    assert await ai.run(["flags", "list"]) == 0
+    assert f"#{flag.id} nothing_fits open cpu-kev/kev" in capsys.readouterr().out
+    assert (
+        await ai.run(["flags", "dismiss", str(flag.id), "--note", "window fixed", "--by", "tester"])
+        == 0
+    )
+    async with SessionLocal() as session:
+        row = await session.get(AiFlag, flag.id)
+    assert (row.status, row.resolved_by, row.note) == ("dismissed", "tester", "window fixed")
+    assert row.resolved_at is not None
+    assert await ai.run(["flags", "dismiss", str(flag.id), "--note", "again"]) == 1

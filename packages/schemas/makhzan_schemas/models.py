@@ -1208,9 +1208,10 @@ class AiFlag(Base):
       keep from taking effect.
     - `version_drift`: a worker reported a model that is not the one in use;
       `subject` is "<worker>/<model>".
-    - `nothing_fits`: a worker's sessions keep ending with work queued but no
-      job fitting its time (`broker.NONE_FIT_FLAG_AFTER` in a week);
-      `subject` is "<worker>/<model>".
+    - `nothing_fits`: a worker's sessions for one model keep ending "none_fit"
+      without ever getting a lease (`broker.NONE_FIT_FLAG_AFTER` in a week,
+      counted since that subject's last dismissed or actioned flag); `subject`
+      is "<worker>/<model>". Dismissing one by hand must set `resolved_at`.
 
     One open flag per (kind, pair, subject).
     """
