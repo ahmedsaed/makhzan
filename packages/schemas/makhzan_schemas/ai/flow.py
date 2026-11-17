@@ -27,7 +27,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -218,6 +218,53 @@ def _lock_key(pipeline_name: str, a: uuid.UUID, b: uuid.UUID):
     return func.hashtextextended(f"ai_decision:{pipeline_name}:{a}:{b}", 0)
 
 
+async def revoke_decision(
+    session: AsyncSession, decision_id: int, *, by: str, note: str
+) -> tuple[AiDecision | None, int, str | None]:
+    """Revoke a standing decision and cancel its pair's queued jobs (flushed,
+    not committed). Returns (decision, jobs cancelled, refusal).
+
+    Takes `write_decision`'s advisory lock for the pair before locking and
+    marking the row, in the same order: a decision being written for the pair
+    meanwhile either finishes first (and this sees its outcome) or waits and
+    then sees the revocation, so its guard refuses it. A leased job finishes;
+    its result is stored and decides nothing the guard refuses."""
+    found = await session.get(AiDecision, decision_id)
+    if found is None:
+        return None, 0, f"No decision #{decision_id}."
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(_lock_key(found.pipeline, found.listing_a, found.listing_b))
+        )
+    )
+    decision = await session.get(
+        AiDecision, decision_id, with_for_update=True, populate_existing=True
+    )
+    if decision.state != STANDING:
+        return (
+            decision,
+            0,
+            (f"Decision #{decision_id} is {decision.state}; only a standing one is revoked."),
+        )
+    decision.state = REVOKED
+    decision.revoked_at = await session.scalar(select(func.now()))
+    decision.revoked_by, decision.revoke_note = by, note
+    cancelled = (
+        await session.execute(
+            update(AiJob)
+            .where(
+                AiJob.pipeline == decision.pipeline,
+                AiJob.listing_a == decision.listing_a,
+                AiJob.listing_b == decision.listing_b,
+                AiJob.status == "queued",
+            )
+            .values(status="cancelled", last_error=f"decision #{decision_id} revoked")
+        )
+    ).rowcount
+    await session.flush()
+    return decision, cancelled or 0, None
+
+
 #: What `write_decision` returns when a person's revocation stands in the way.
 BLOCKED = object()
 #: The step a job's result reports then (`/results` `next.action`).
@@ -233,9 +280,10 @@ async def _revocation_stands(
     after the latest revocation **and** for a request no revoked decision
     recorded: a model looked, at text the revocation did not see. Old
     scores (a revert to text scored earlier, a job queued before the
-    revocation) and fresh scores of text the revocation saw (a new model
-    version) cannot undo a person's revocation. A revoked decision recorded
-    without request hashes counts as having seen everything."""
+    revocation) and fresh scores of requests the revoked decision recorded
+    (a new model version, for the stages that decision used) cannot undo a
+    person's revocation. A revoked decision recorded without request hashes,
+    or with no evidence at all, counts as having seen everything."""
     revoked = (
         await session.execute(
             select(AiDecision.revoked_at, AiDecision.scores).where(
@@ -251,9 +299,10 @@ async def _revocation_stands(
     latest = max(r.revoked_at for r in revoked)
     seen: set[tuple[str, str]] = set()
     for _, scores in revoked:
-        for name, entry in (scores or {}).items():
-            if not isinstance(entry, dict):
-                continue
+        stages = {n: e for n, e in (scores or {}).items() if isinstance(e, dict)}
+        if not stages:
+            return True  # no evidence: it counts as having seen everything
+        for name, entry in stages.items():
             if not entry.get("requests"):
                 return True
             seen.update((name, digest) for digest in entry["requests"].values())
