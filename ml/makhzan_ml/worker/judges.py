@@ -423,8 +423,8 @@ def load(key: str, rt: Runtime) -> Judge:
 
 
 def unload(judge: Judge, device: str) -> None:
-    """Free a judge before loading another: two 4B models do not fit side by side in 20 GB
-    (or on a 12 GB card)."""
+    """Free a judge at the end of a session, so its memory goes back before the process
+    exits (and before another worker's window on the same machine)."""
     judge.close()
     judge.score_fn = judge.close_fn = lambda *a: None  # drop the model's references
     gc.collect()

@@ -4,7 +4,9 @@ Status: **built, tested against a contract-following fake broker, and checked ag
 phase 2 broker app on its final contract** (five end-to-end sessions, below). Nothing has
 run on the home server yet. What is not here yet is listed at the end.
 
-A worker is one process that serves the model key(s) its configuration names. It talks only
+A worker is one process that serves the one model key its configuration names: the broker
+takes exactly one model per session, so two models are two workers (for example `home-kev`
+and `home-pplx`, each with its own window). It talks only
 to the broker, over HTTPS with its own bearer token. It loads its model once, scores the
 requests the broker renders, one request per forward call, and posts the scores back. The
 broker treats every worker the same. Each worker's TOML file decides what it runs, on what
@@ -51,18 +53,18 @@ The parity check below confirms it on stored GPU scores.
 
 1. **Window.** Outside every window, the worker exits 0 and sends nothing. Start it at the
    window's start, with a systemd timer or cron.
-2. **Pre-flight.** Every model key must be loadable in this image. Each model image holds
+2. **Pre-flight.** The model key must be loadable in this image. Each model image holds
    one model's code, so naming a key the image lacks is refused before anything is sent. If
    the container's memory limit (cgroup v2 `memory.max`) is below `memory_gib`, the worker
    refuses to start, because it would be killed mid-job and the broker would count an
    attempt. When no limit is visible (no `--memory`, or cgroup v1), the check is skipped and
    the log says so. The worker then lowers its own priority by `nice`.
-3. **`POST /hello`** sends the worker's name, its model keys with each model version and
+3. **`POST /hello`** sends the worker's name, its one model key with its model version and
    weights revision, the image, device, dtype, threads and its configuration. The broker
-   answers `ok` per model key, and the `stages` that use it: each (pipeline, stage) and the
-   prompt version its leases will carry, which the worker logs. A key answered `ok: false`
-   (version drift) is never leased. If no key is `ok`, the worker exits 3.
-4. **Lease, load, score, submit.** The worker drains each model key in the configured order:
+   answers `ok` for the key, and the `stages` that use it: each (pipeline, stage) and the
+   prompt version its leases will carry, which the worker logs. If the key is answered
+   `ok: false` (version drift), nothing is leased and the worker exits 3.
+4. **Lease, load, score, submit.** The worker drains its model's queue:
    - `POST /lease` carries a fresh `lease_request_id` per lease. The client's retries of
      that call send the same id, so a lease whose answer was lost on the way comes back as
      the same lease instead of being orphaned until it expires. The body is rebuilt for
@@ -74,13 +76,11 @@ The parity check below confirms it on stored GPU scores.
      The broker returns only jobs that fit, keeping a 60 s margin, and stops at the first
      that does not. A job the worker cannot start after all goes back gracefully. A worker
      that runs "always" sends no time, and only `max_jobs` limits its leases.
-   - An empty lease that says `"reason": "none_fit"` means that model's jobs are queued but
-     none fits the time left. That key is done for the window: it is not asked again, and
-     the worker goes on to its other keys. When every key has answered `none_fit`, the
-     worker logs "no job fits the time left" and stops for the window, whatever `on_empty`
-     says: polling would only find the same. The broker ends the session on this answer
-     (`end_reason` "none_fit", with no P16 rebuild), so no session release follows it unless
-     a later lease reopens the session. An empty lease without the field is an empty queue.
+   - An empty lease that says `"reason": "none_fit"` means jobs are queued but none fits
+     the time left. The worker logs "no job fits the time left" and stops for the window,
+     whatever `on_empty` says: polling would only find the same. The broker ends the session
+     on this answer (`end_reason` "none_fit", with no P16 rebuild), so no session release
+     follows it. An empty lease without the field is an empty queue.
    - Each job's `prompt_version` is compared with the ones hello announced. A mismatch is
      logged, not refused: the broker renders, so it means the registry moved since hello.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
@@ -105,8 +105,6 @@ The parity check below confirms it on stored GPU scores.
      progress. A `409 lease_lost` names the jobs and leases that moved on. The worker drops
      those after its current request, without posting them, and keeps the rest. If the broker
      queues a dropped job again, it is scored afresh whenever it comes back.
-   - When the worker moves on to another model key, the first model is unloaded before the
-     next one loads. Two 4B models do not fit side by side in 20 GB, or on a 12 GB card.
 5. **Graceful stop** happens at the window's end, on SIGTERM or on SIGINT. A timer enforces
    the window's end, and it is also checked between retries, with no backoff sleeping past
    it. So a call retrying through a broker outage cannot keep the model loaded past the
@@ -202,7 +200,7 @@ header.
 The configuration is one TOML file, by default `/etc/makhzan-ai/worker.toml` inside the
 container. Unknown sections and keys are errors. Relative paths resolve against the file's
 directory. `python -m makhzan_ml.worker --config FILE --check` validates a file, checks that
-this image can load each model key, and exits.
+this image can load the model key, and exits.
 
 ### `[worker]`
 
@@ -212,7 +210,7 @@ this image can load each model key, and exits.
 | `broker_url` | required | the broker's base URL, `https://<broker host>/ai/v1`. Plain `http://` is refused except to a loopback address (the tests, the parity check, or a local broker on the same machine) |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
 | `ca_file` | system CAs | a CA bundle to trust instead, for a privately signed broker certificate |
-| `models` | required | the model keys served, from `policy.MODELS`: `["kev"]` or `["pplx"]`. Each image holds one model's code, so today a worker serves one key; a key the image cannot load is refused at start and by `--check`. A list exists for an image that holds several (drained in order) |
+| `model` | required | the one model key served, from `policy.MODELS`: `"kev"` or `"pplx"`. The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
 
 ### `[model.<key>]` (optional)
 
@@ -264,7 +262,7 @@ The home server's Kev worker:
 name = "home-kev"
 broker_url = "https://<broker host>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
-models = ["kev"]
+model = "kev"
 
 [model.kev]
 expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
@@ -298,7 +296,7 @@ The home server's pplx worker. Its window follows Kev's, so the two never share 
 name = "home-pplx"
 broker_url = "https://<broker host>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
-models = ["pplx"]
+model = "pplx"
 
 [model.pplx]
 expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
@@ -333,7 +331,7 @@ time: each 4B model needs most of the 12 GB card.
 name = "desk-kev"
 broker_url = "https://<broker host>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
-models = ["kev"]
+model = "kev"
 
 [model.kev]
 expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
@@ -360,7 +358,7 @@ seconds_per_request = 1   # measured: about 3 requests a second
 name = "desk-pplx"
 broker_url = "https://<broker host>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
-models = ["pplx"]
+model = "pplx"
 
 [model.pplx]
 expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
@@ -615,16 +613,16 @@ no model. CI runs it with the ingestion suite.
     that never name a finished job; a redirect refused; proxy settings ignored; a model the
     image cannot load; threads from the CPU quota; seconds left counted in real time across
     a DST change;
-  - version drift at hello, on one key only, and at lease;
+  - version drift at hello and at lease;
   - a tampered payload, a failing request, a model that keeps failing, and a model that
     will not load;
-  - a wrong token, a key not granted, a memory limit too small, and two models in turn;
+  - a wrong token, a key not granted, a memory limit too small, and two models run as two
+    workers (one session each);
   - every session ending exactly once (window end, SIGTERM, empty queue, a fatal error,
     SIGTERM mid-lease, a 403 at lease), none sent to a broker that is down or refused the
     token, and none opened by a stop before hello; a lost lease answer retried into the
     same lease, and a lease retry carrying the time left now under the same id; `none_fit`
-    ending one key's window and, once every key answered it, the window whatever
-    `on_empty`, with no session release after it; heartbeats that keep naming a job whose
+    ending the window whatever `on_empty`, with no session release after it; heartbeats that keep naming a job whose
     final results are retrying; results refused with a 409 logged as undelivered; no
     release naming a job found lost; no
     lost warning for a job being settled; leases carrying honest time and holding only jobs
@@ -643,13 +641,8 @@ no model. CI runs it with the ingestion suite.
   only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
   Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
   `ml/kev/Dockerfile*`, passed on as `MAKHZAN_KEV_COMMIT`.
-- **One model per worker.** Each image holds one model's code, so a worker names one key;
-  the start-up check refuses any other. The code still unloads one model before loading
-  another, for an image that someday holds both. Freeing Kev's memory on unload is coded (the
-  atexit hook that held it is removed) but has not been measured with real models. In a
-  multi-key session the broker records only the last key's answer as the session's end
-  ("none_fit" or "empty"), so its `end_reason` would depend on the order of the keys. That
-  does not matter today, with one key per image.
+- **Freeing Kev's memory on unload** at the end of a session is coded (the atexit hook that
+  held it is removed) but has not been measured with real models.
 - **No systemd units or network rules are shipped**: only the examples above. Setting them up
   on the home server is a separate, supervised step.
 - **No registry or image digests.** The images are local builds.

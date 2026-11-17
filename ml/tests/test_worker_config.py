@@ -22,7 +22,7 @@ def base(**sections) -> dict:
             "name": "home-kev",
             "broker_url": "https://broker.example.test/ai/v1",
             "token": "secret-token",
-            "models": ["kev"],
+            "model": "kev",
         }
     }
     for name, values in sections.items():
@@ -40,7 +40,7 @@ def refused(data: dict, match: str) -> None:
 
 def test_minimal_config_takes_the_validated_cpu_defaults():
     cfg = parse(base())
-    assert cfg.models == ("kev",)
+    assert cfg.model == "kev"
     assert (cfg.device, cfg.dtype, cfg.mmap, cfg.nice) == ("cpu", "fp32", False, 10)
     assert cfg.schedule.windows is None and cfg.schedule.on_empty == "exit"
     assert (cfg.max_jobs, cfg.lease_s, cfg.heartbeat_s) == (2, 900, 60)
@@ -62,7 +62,7 @@ def test_full_config(tmp_path):
 name = "desk-pplx"
 broker_url = "https://broker.example.test/ai/v1/"
 token_file = "tok"
-models = ["pplx"]
+model = "pplx"
 
 [model.pplx]
 expect_version = "{PINS["pplx"].model_version}"
@@ -103,16 +103,27 @@ retry_max_s = 1200
     assert cfg.hello_config()["window"] == "22:30-02:00,13:00-14:00"
 
 
-def test_a_single_model_and_a_single_window_may_be_strings():
-    cfg = parse(
-        base(worker={"models": "kev"},
-             schedule={"windows": "00:30-04:30", "timezone": "Africa/Cairo"})
-    )  # fmt: skip
-    assert cfg.models == ("kev",) and cfg.schedule.describe() == "00:30-04:30"
+def test_a_single_window_may_be_a_string():
+    cfg = parse(base(schedule={"windows": "00:30-04:30", "timezone": "Africa/Cairo"}))
+    assert cfg.schedule.describe() == "00:30-04:30"
 
 
-def test_two_models_on_one_worker():
-    assert parse(base(worker={"models": ["kev", "pplx"]})).models == ("kev", "pplx")
+def older(models) -> dict:
+    data = base()
+    del data["worker"]["model"]
+    data["worker"]["models"] = models
+    return data
+
+
+@pytest.mark.parametrize("models", [["kev"], "kev"])
+def test_the_older_models_key_is_read_when_it_names_one(models):
+    assert parse(older(models)).model == "kev"
+
+
+@pytest.mark.parametrize("models", [["kev", "pplx"], ["kev", "kev"], []])
+def test_one_worker_serves_exactly_one_model(models):
+    # The broker takes exactly one model per session: two models are two workers.
+    refused(older(models), "exactly one model key per worker")
 
 
 # --- refusals ------------------------------------------------------------------------------
@@ -171,9 +182,12 @@ def test_broker_url_is_https_except_on_loopback(url, ok):
 
 
 def test_model_keys_are_checked():
-    refused(base(worker={"models": ["kev", "gpt"]}), "unknown model key 'gpt'")
-    refused(base(worker={"models": ["kev", "kev"]}), "listed twice")
-    refused(base(worker={"models": []}), "non-empty list")
+    refused(base(worker={"model": "gpt"}), "unknown model key 'gpt'")
+    refused(base(worker={"model": ["kev"]}), "model")
+    refused(base(worker={"models": ["kev"]}), "set model")  # both keys at once
+    neither = base()
+    del neither["worker"]["model"]
+    refused(neither, "set model")
     refused({**base(), "model": {"pplx": {}}}, "does not serve")
 
 
