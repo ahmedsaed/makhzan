@@ -18,7 +18,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from makhzan_ml.worker import judges, run
-from makhzan_ml.worker.broker import STOP_GRACE_S, STOP_TIMEOUT_S, Broker, BrokerError
+from makhzan_ml.worker.broker import (
+    STOP_GRACE_S,
+    STOP_TIMEOUT_S,
+    Broker,
+    BrokerError,
+    Forbidden,
+)
 from makhzan_ml.worker.config import parse
 from makhzan_ml.worker.fake_broker import FakeBroker
 from makhzan_ml.worker.pins import PINS
@@ -140,7 +146,7 @@ def make_worker(
 # --- the whole session ---------------------------------------------------------------------
 
 
-def test_a_session_scores_every_job_in_order_and_ends_with_a_release(broker, sleeps):
+def test_a_session_scores_every_job_in_order_and_ends_once(broker, sleeps):
     jobs = [broker.add_job("kev", pair(n)) for n in range(3)]
     worker, fake, _ = make_worker(broker, sleeps)
     assert worker.run() == run.EXIT_OK
@@ -170,12 +176,11 @@ def test_a_session_scores_every_job_in_order_and_ends_with_a_release(broker, sle
     ids = [b["lease_request_id"] for b in leases]
     assert len(set(ids)) == len(ids) and all(len(i) <= 64 for i in ids)
     assert len(broker.bodies("/results")) == 3  # one POST per job
-    # The session ends with a graceful release naming no jobs (P16).
-    assert broker.paths()[-1] == "/release"
-    assert broker.bodies("/release")[-1] == {"session": hello and worker.session,
-                                             "reason": "graceful"}  # fmt: skip
-    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
-    assert worker.session_closed
+    # The empty lease ended the session at the broker (P16), so no session release follows
+    # to overwrite "empty" with "released".
+    assert broker.paths()[-1] == "/lease" and "/release" not in broker.paths()
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["empty"]
+    assert worker.session_closed and hello
     assert sleeps == []
 
 
@@ -192,8 +197,8 @@ def test_an_empty_queue_loads_nothing_and_exits(broker, sleeps):
     worker, fake, _ = make_worker(broker, sleeps)
     assert worker.run() == run.EXIT_OK
     assert fake.loads == []
-    assert broker.paths() == ["/hello", "/lease", "/release"]
-    assert broker.bodies("/release")[0] == {"session": worker.session, "reason": "graceful"}
+    assert broker.paths() == ["/hello", "/lease"]  # the empty lease ended the session
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["empty"]
 
 
 def test_on_empty_wait_polls_until_the_window_ends(broker, sleeps):
@@ -800,8 +805,24 @@ def test_proxy_settings_in_the_environment_are_ignored(broker, sleeps, monkeypat
 # --- the final contract ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("how", ["window", "sigterm", "empty", "fatal"])
-def test_every_session_ends_with_a_session_release(broker, sleeps, how):
+def session_releases(broker):
+    return [b for b in broker.bodies("/release") if not b.get("job_ids")]
+
+
+def job_releases(broker, reason="graceful"):
+    return [b for b in broker.bodies("/release") if b.get("job_ids") and b["reason"] == reason]
+
+
+@pytest.mark.parametrize(
+    "how, end, n_session, n_jobs",
+    [
+        ("window", "released", 1, 0),  # stopped between leases: the session release
+        ("sigterm", "released", 1, 0),  # SIGTERM after the job's last request: likewise
+        ("empty", "empty", 0, 0),  # the empty lease ended it; nothing to add
+        ("fatal", "released", 0, 1),  # the lease's graceful release ended it
+    ],
+)
+def test_every_session_ends_exactly_once(broker, sleeps, how, end, n_session, n_jobs):
     jobs = [broker.add_job("kev", pair(n)) for n in range(2)]
     schedule, clock = {}, None
     if how == "window":  # the window ends right after the first job
@@ -814,8 +835,11 @@ def test_every_session_ends_with_a_session_release(broker, sleeps, how):
     if how == "fatal":
         fake.fail_load = judges.LoadError("x")
     worker.run()
-    assert broker.bodies("/release")[-1] == {"session": worker.session, "reason": "graceful"}
-    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
+    assert [s["end_reason"] for s in broker.sessions.values()] == [end]
+    assert len(session_releases(broker)) == n_session
+    assert len(job_releases(broker)) == n_jobs
+    if n_session:
+        assert session_releases(broker)[0] == {"session": worker.session, "reason": "graceful"}
     assert all(j.attempts == 0 for j in jobs)
 
 
@@ -902,3 +926,103 @@ def test_a_prompt_version_hello_did_not_announce_is_logged(broker, sleeps, caplo
     assert any("K2-150@elsewhere is not one hello announced" in m for m in msgs)
     assert any("stages: audit/kev prompt K2-150@test" in m for m in msgs)
     assert job.status == "done"  # the broker renders; a mismatch is logged, not refused
+
+
+def test_sigterm_mid_lease_ends_the_session_with_the_lease_release_only(broker, sleeps):
+    # From the review's repro: the graceful release of the unstarted job ends the session;
+    # no session release follows it.
+    broker.add_job("kev", pair(1))
+    second = broker.add_job("kev", pair(2))
+    worker, fake, _ = make_worker(broker, sleeps)
+    fake.on_score = lambda i: i == 1 and worker.request_stop("SIGTERM")
+    worker.run()
+    assert len(job_releases(broker)) == 1 and job_releases(broker)[0]["job_ids"] == [second.job_id]
+    assert session_releases(broker) == []
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
+
+
+def test_a_refused_model_key_at_lease_still_ends_the_session(broker, sleeps):
+    broker.add_job("kev", pair(1))
+    worker, fake, _ = make_worker(broker, sleeps)
+
+    def lease(body):
+        raise Forbidden(403, {"error": "model_not_allowed", "model": "kev"}, "/lease")
+
+    worker.broker.lease = lease
+    assert worker.run() == run.EXIT_AUTH
+    assert len(session_releases(broker)) == 1  # the token was good: end what it opened
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
+
+
+def test_a_refused_token_gets_no_session_release(broker, sleeps):
+    cfg = parse(config(broker.url))
+    worker = run.Worker(cfg, Broker(cfg.broker_url, "wrong", sleep=sleeps.append),
+                        load_judge=FakeJudges(), importable=lambda k: True)  # fmt: skip
+    assert worker.run() == run.EXIT_AUTH
+    assert broker.calls == []  # the fake records only authorised calls; none got through
+
+
+def test_a_stop_before_hello_opens_no_session(broker, sleeps):
+    worker, fake, _ = make_worker(broker, sleeps)
+    worker.request_stop("SIGTERM")
+    assert worker.run() == run.EXIT_OK
+    assert broker.calls == [] and broker.sessions == {}
+
+
+def test_a_lease_retry_says_the_time_left_now_under_the_same_id(broker, sleeps):
+    broker.add_job("kev", pair(1))
+    broker.fail("/lease", times=3, status=503)  # never reached the broker's lease code
+    clock = FakeClock(datetime(2026, 11, 17, 4, 0, tzinfo=CAIRO))
+    worker, _, _ = make_worker(broker, sleeps, clock=clock, retry_max_s=600,
+                               schedule={"windows": ["00:30-04:30"]},
+                               leases={"seconds_per_request": 10})  # fmt: skip
+    seen = []
+    once = worker.broker._once
+
+    def recording(path, body):
+        if path == "/lease":
+            seen.append((body["lease_request_id"], body["seconds_left"]))
+        return once(path, body)
+
+    worker.broker._once = recording
+    assert worker.run() == run.EXIT_OK
+    first = seen[:4]  # three 503s (backoffs 1, 2, 4 s), then the lease that worked
+    assert len({rid for rid, _ in first}) == 1
+    load = run.LOAD_ESTIMATE_S["cpu"]
+    assert [left for _, left in first] == [1800 - load - d for d in (0, 1, 3, 7)]
+
+
+@pytest.mark.parametrize("on_empty", ["exit", "wait"])
+def test_none_fit_ends_the_window_whatever_on_empty(broker, sleeps, on_empty, caplog):
+    job = broker.add_job("kev", pair(1))
+    clock = FakeClock(datetime(2026, 11, 17, 4, 26, tzinfo=CAIRO))  # 4 minutes left
+    worker, fake, clock = make_worker(
+        broker, sleeps, clock=clock,
+        schedule={"windows": ["00:30-04:30"], "on_empty": on_empty, "poll_s": 60},
+        leases={"seconds_per_request": 100},
+    )  # fmt: skip
+    with caplog.at_level(logging.INFO):
+        assert worker.run() == run.EXIT_OK
+    assert broker.paths().count("/lease") == 1  # no polling for work that cannot fit
+    assert clock.waits == []
+    assert any("no job fits the time left" in r.getMessage() for r in caplog.records)
+    assert job.status == "queued" and fake.loads == []
+    # none_fit did not end the session at the broker, so the session release does.
+    assert len(session_releases(broker)) == 1
+
+
+def test_no_lost_warning_for_a_job_being_settled(broker, sleeps, caplog):
+    job = broker.add_job("kev", pair(1))
+    worker, _, _ = make_worker(broker, sleeps)
+    results = worker.broker.results
+
+    def results_then_heartbeat(body):
+        out = results(body)  # the broker has the job done and its lease cleared ...
+        worker.heartbeat_once()  # ... and a heartbeat goes out before the worker settles it
+        return out
+
+    worker.broker.results = results_then_heartbeat
+    with caplog.at_level(logging.WARNING):
+        assert worker.run() == run.EXIT_OK
+    assert not any("heartbeat: lost" in r.getMessage() for r in caplog.records)
+    assert job.status == "done"
