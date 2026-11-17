@@ -1048,6 +1048,10 @@ class AiJob(Base):
     lease_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     leased_by: Mapped[int | None] = mapped_column(SmallInteger, ForeignKey("ai_workers.id"))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Set by a heartbeat whose `progress` names this job (and cleared on the
+    #: lease's other jobs): the job the worker was scoring. When the lease
+    #: expires, only that job is charged an attempt; the rest go back free.
+    in_hand_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     request_sha256: Mapped[dict | None] = mapped_column(JSONB)
     #: The two listings' content hashes (`hashing.listing_hash`) when the
     #: requests were rendered, at lease time: the text the scores are about.
@@ -1202,9 +1206,10 @@ class AiFlag(Base):
     - `poison_job`: a job that failed `max_attempts` times.
     - `blocked_same`: a "same" decision today's vetoes or an existing product
       keep from taking effect.
-    - `version_drift`: a worker reported a model that is not the one in use.
+    - `version_drift`: a worker reported a model that is not the one in use;
+      `subject` is "<worker>/<model>".
 
-    One open flag per (kind, pair).
+    One open flag per (kind, pair, subject).
     """
 
     __tablename__ = "ai_flags"
@@ -1223,16 +1228,19 @@ class AiFlag(Base):
             "kind",
             "listing_a",
             "listing_b",
+            "subject",
             unique=True,
             postgresql_where=text("status = 'open'"),
-            # A flag with no pair (a version drift) is still one open flag
-            # per kind: NULLs compare equal here (Postgres 15+).
+            # A flag with no pair (a version drift) is one open flag per kind
+            # and subject: NULLs compare equal here (Postgres 15+).
             postgresql_nulls_not_distinct=True,
         ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: What a flag without a pair is about: "<worker>/<model>" for a version drift.
+    subject: Mapped[str | None] = mapped_column(String(100))
     listing_a: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE")
     )
@@ -1290,3 +1298,7 @@ class AiSession(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_reason: Mapped[str | None] = mapped_column(String(16))
+    #: The worker's id for its last /lease and the lease it got: a retried
+    #: /lease with the same id gets the same jobs back instead of orphaning them.
+    last_lease_request: Mapped[str | None] = mapped_column(String(64))
+    last_lease_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

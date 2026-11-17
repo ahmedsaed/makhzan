@@ -36,7 +36,7 @@ from makhzan_schemas.ai import candidates  # noqa: F401  (registers the triggers
 from makhzan_schemas.ai.status import collect
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.rebuild import REBUILD_FUNCTION, rebuild_job_id
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.body_limit import BodyLimit
 
@@ -45,7 +45,9 @@ log = logging.getLogger(__name__)
 PREFIX = "/ai/v1"
 MAX_BODY = int(os.getenv("AI_BROKER_MAX_BODY", str(256 * 1024)))
 
-app = FastAPI(title="makhzan AI broker", version="1", docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="makhzan AI broker", version="1", docs_url=None, redoc_url=None, openapi_url=None
+)
 # Results are small; nothing posted here should be large.
 app.add_middleware(BodyLimit, limit=MAX_BODY, guards=lambda method, path: method == "POST")
 
@@ -78,6 +80,15 @@ class ModelReport(BaseModel):
     weights_revision: str
 
 
+class HelloConfig(BaseModel):
+    """The worker's configuration as it reports it. Only `lease_s` is acted
+    on; the rest (window, max_jobs, on_empty, ...) is kept for status."""
+
+    model_config = ConfigDict(extra="allow")
+
+    lease_s: StrictInt = Field(core.DEFAULT_LEASE_S, ge=core.LEASE_S_MIN, le=core.LEASE_S_MAX)
+
+
 class HelloBody(BaseModel):
     worker: str | None = None
     models: dict[str, ModelReport]
@@ -85,7 +96,7 @@ class HelloBody(BaseModel):
     device: str | None = None
     dtype: str | None = None
     threads: int | None = None
-    config: dict[str, Any] = Field(default_factory=dict)
+    config: HelloConfig = Field(default_factory=HelloConfig)
 
 
 class LeaseBody(BaseModel):
@@ -95,6 +106,9 @@ class LeaseBody(BaseModel):
     max_jobs: int = Field(1, ge=1, le=1000)
     seconds_left: float | None = Field(None, ge=0)
     seconds_per_request: float | None = Field(None, gt=0)
+    #: The worker's id for this request: a retry with the same id gets the
+    #: same jobs back instead of a second lease.
+    lease_request_id: str | None = Field(None, min_length=1, max_length=64)
 
 
 class HeartbeatBody(BaseModel):
@@ -124,9 +138,11 @@ class ResultsBody(BaseModel):
 
 
 class ReleaseBody(BaseModel):
+    """No jobs (and no lease) with reason graceful: the session ends."""
+
     session: str
-    lease_id: str
-    job_ids: list[int] = Field(min_length=1)
+    lease_id: str | None = None
+    job_ids: list[int] = Field(default_factory=list)
     reason: Literal["graceful", "error"] = "graceful"
     error: str | None = None
 
@@ -155,11 +171,15 @@ async def _as_worker(
     **kwargs,
 ) -> JSONResponse:
     """Authenticate, run one core call in one transaction, commit."""
+    token = _bearer(authorization)
+    if not token or not 16 <= len(token) <= 256:
+        # Refused before a database session is opened: nothing to look up.
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
     async with SessionLocal() as session:
         worker = None
         try:
             now = await core.db_now(session)
-            worker = await core.authenticate(session, _bearer(authorization), now)
+            worker = await core.authenticate(session, token, now)
             result = await handler(session, worker, body, now, **kwargs)
             await session.commit()
             return JSONResponse(jsonable_encoder(result))
@@ -171,7 +191,7 @@ async def _as_worker(
                 await session.rollback()
                 if worker is not None:
                     # Every request a known worker makes counts as seen.
-                    await core.authenticate(session, _bearer(authorization), now)
+                    await core.authenticate(session, token, now)
                     await session.commit()
             return JSONResponse(status_code=refusal.status, content=refusal.body)
 

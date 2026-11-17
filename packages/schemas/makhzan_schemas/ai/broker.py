@@ -52,14 +52,18 @@ QUEUED, LEASED, DONE, CANCELLED, DEAD = "queued", "leased", "done", "cancelled",
 OPEN = (QUEUED, LEASED)
 
 DEFAULT_LEASE_S = 900
+#: Bounds on the lease length a hello may ask for.
+LEASE_S_MIN, LEASE_S_MAX = 60, 7200
 HEARTBEAT_S = 60
 #: Kept free at the end of a worker's `seconds_left` when sizing a lease.
 LEASE_MARGIN_S = 60
-#: Queued jobs examined per round while filling a lease.
-_SCAN = 50
-
-#: `worker_state` key: the newest standing "same" decision a rebuild was queued for (P16).
+#: `worker_state` key: the newest decision id a rebuild was queued for (P16).
 REBUILD_STATE_KEY = "ai_rebuild"
+#: P16 queues a rebuild for new standing "same" decisions. True queues one for
+#: any new standing decision, so a "same" replaced by "not same" (an AI merge
+#: to undo) is applied at the window's end, not the next daily rebuild. An
+#: owner decision pending; off until then.
+REBUILD_ON_UNMERGE = False
 
 
 class BrokerError(Exception):
@@ -133,15 +137,74 @@ async def _session_of(session: AsyncSession, worker: AiWorker, session_id: str) 
 
 
 async def _open_flag(session: AsyncSession, kind: str, **values) -> None:
-    """One open flag per (kind, pair): a second is left alone."""
+    """One open flag per (kind, pair, subject): a second is left alone."""
     await session.execute(
         insert(AiFlag)
         .values(kind=kind, **values)
         .on_conflict_do_nothing(
-            index_elements=["kind", "listing_a", "listing_b"],
+            index_elements=["kind", "listing_a", "listing_b", "subject"],
             index_where=text("status = 'open'"),  # literal: see triggers.enqueue
         )
     )
+
+
+def lease_seconds(value) -> int:
+    """A hello's `config.lease_s`: an integer within the bounds, else 422."""
+    if value is None:
+        return DEFAULT_LEASE_S
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BrokerError(422, {"error": "invalid", "detail": "config.lease_s is not an integer"})
+    if not LEASE_S_MIN <= value <= LEASE_S_MAX:
+        raise BrokerError(
+            422,
+            {"error": "invalid", "detail": f"config.lease_s is {LEASE_S_MIN}..{LEASE_S_MAX}"},
+        )
+    return value
+
+
+async def sweep_judges(session: AsyncSession, judges: flow.Judges | None = None) -> int:
+    """Move every queued job whose (pipeline, stage, judge) is not its stage's
+    current judge (a new model or prompt version) to the current one, keeping
+    its reason and priority; a job whose stage left the registry is only
+    cancelled. Set-based: one UPDATE, then batched inserts. Run at hello and by
+    the daily producers, never inside a lease, so a version bump with a large
+    queue does not hold a lease's rows (or its HTTP request) for long. Rows a
+    lease has locked are skipped and moved by the next sweep."""
+    judges = judges or await flow.current_judges(session)
+    current = [(p, s, judge) for (p, s), judge in judges.items()]
+    stale = (
+        select(AiJob.id)
+        .where(
+            AiJob.status == QUEUED,
+            tuple_(AiJob.pipeline, AiJob.stage, AiJob.model_version_id).not_in(current),
+        )
+        .with_for_update(skip_locked=True)
+    )
+    moved = (
+        await session.execute(
+            update(AiJob)
+            .where(AiJob.id.in_(stale))
+            .values(status=CANCELLED, last_error="judge changed; moved to the current judge")
+            .returning(
+                AiJob.pipeline,
+                AiJob.stage,
+                AiJob.reason,
+                AiJob.priority,
+                AiJob.listing_a,
+                AiJob.listing_b,
+            )
+            .execution_options(synchronize_session=False)
+        )
+    ).all()
+    by_stage: dict[tuple[str, str], list[triggers.PairRequest]] = {}
+    for pipeline_name, stage, reason, priority, a, b in moved:
+        if (pipeline_name, stage) in judges:
+            by_stage.setdefault((pipeline_name, stage), []).append(
+                triggers.PairRequest(a, b, pipeline_name, priority, reason)
+            )
+    for (_, stage), requests in by_stage.items():
+        await triggers.enqueue(session, requests, stage=stage)
+    return len(moved)
 
 
 # --- hello ------------------------------------------------------------------------------------
@@ -170,6 +233,12 @@ async def hello(session: AsyncSession, worker: AiWorker, body: dict, now: dateti
     for key in reported:
         if key not in allowed or key not in MODELS:
             raise _not_allowed(key)
+    config = body.get("config") or {}
+    lease_s = lease_seconds(config.get("lease_s"))
+    # Jobs queued at an old judge move to the current one before the counts
+    # below, so this worker's own leases see them.
+    judges = await flow.current_judges(session)
+    await sweep_judges(session, judges)
     answer: dict[str, dict] = {}
     for key, versions in reported.items():
         current = MODELS[key]
@@ -181,6 +250,7 @@ async def hello(session: AsyncSession, worker: AiWorker, body: dict, now: dateti
             await _open_flag(
                 session,
                 "version_drift",
+                subject=f"{worker.name}/{key}"[:100],
                 detail={
                     "worker": worker.name,
                     "model": key,
@@ -195,9 +265,17 @@ async def hello(session: AsyncSession, worker: AiWorker, body: dict, now: dateti
             "model_version": current.model_version,
             "ok": ok,
             "queued_requests": await queued_requests(session, key),
+            # What the broker renders for this model now, per stage: the
+            # prompt versions a worker's leases will carry.
+            "stages": [
+                {
+                    "pipeline": p,
+                    "stage": s,
+                    "prompt_version": PIPELINES[p].stage(s).prompt_version,
+                }
+                for p, s in stages_for_models({key})
+            ],
         }
-    config = body.get("config") or {}
-    lease_s = int(config.get("lease_s") or DEFAULT_LEASE_S)
     row = AiSession(
         id=uuid.uuid4(),
         worker_id=worker.id,
@@ -234,7 +312,7 @@ async def _fail(session: AsyncSession, jobs: list[AiJob], error: str) -> None:
     for job in jobs:
         job.attempts += 1
         job.last_error = error
-        job.lease_id = job.leased_by = job.lease_expires_at = None
+        job.lease_id = job.leased_by = job.lease_expires_at = job.in_hand_at = None
         if job.attempts >= job.max_attempts:
             job.status = DEAD
             await _open_flag(
@@ -250,10 +328,20 @@ async def _fail(session: AsyncSession, jobs: list[AiJob], error: str) -> None:
             job.status = QUEUED
 
 
+def _requeue_free(job: AiJob) -> None:
+    job.status = QUEUED
+    job.lease_id = job.leased_by = job.lease_expires_at = job.in_hand_at = None
+
+
 async def reap(session: AsyncSession) -> int:
-    """Leases past their time go back to the queue with an attempt counted
-    (the worker died: killed for memory, a lost machine); at `max_attempts`
-    the job is dead and flagged. Lazy, at the start of every lease: no cron."""
+    """Leases past their time go back to the queue (the worker died: killed
+    for memory, a lost machine). Only the job the worker was scoring is
+    charged an attempt: the one its last heartbeat named (`in_hand_at`). Its
+    co-leased jobs never started, so they go back free, and one poison job no
+    longer takes them down with it. A lease with no job reported in hand
+    (the worker died before any heartbeat said) charges every job, as before.
+    At `max_attempts` a job is dead and flagged. Lazy, at the start of every
+    lease: no cron."""
     expired = list(
         await session.scalars(
             select(AiJob)
@@ -261,49 +349,43 @@ async def reap(session: AsyncSession) -> int:
             .with_for_update(skip_locked=True)
         )
     )
-    await _fail(session, expired, "lease expired")
+    by_lease: dict[uuid.UUID, list[AiJob]] = {}
+    for job in expired:
+        by_lease.setdefault(job.lease_id, []).append(job)
+    for jobs in by_lease.values():
+        in_hand = [job for job in jobs if job.in_hand_at is not None]
+        if not in_hand:
+            await _fail(session, jobs, "lease expired")
+            continue
+        await _fail(session, in_hand, "lease expired while in hand")
+        for job in jobs:
+            if job not in in_hand:
+                job.last_error = "lease expired before it was started; re-queued free"
+                _requeue_free(job)
     await session.flush()
     return len(expired)
 
 
 async def _move(session: AsyncSession, job: AiJob, judges: flow.Judges) -> int:
-    """Cancel a queued job that is not at its stage's current judge; queue it
-    again there as a re-score, or not at all if its stage left the registry."""
+    """Cancel one queued job that is not at its stage's current judge (the
+    sweep missed it: locked, or the version changed since) and queue it
+    there, keeping its reason, so its trigger's `still_wanted` still applies."""
     job.status = CANCELLED
     if (job.pipeline, job.stage) not in judges:
         job.last_error = "pipeline or stage no longer registered"
         await session.flush()
         return 0
-    job.last_error = "judge changed; queued again at the current judge"
+    job.last_error = "judge changed; moved to the current judge"
     await session.flush()
     return await triggers.enqueue(
         session,
-        [triggers.PairRequest(job.listing_a, job.listing_b, job.pipeline, job.priority, "rescore")],
+        [
+            triggers.PairRequest(
+                job.listing_a, job.listing_b, job.pipeline, job.priority, job.reason
+            )
+        ],
         stage=job.stage,
     )
-
-
-async def _requeue_stale_judges(session: AsyncSession, judges: flow.Judges) -> int:
-    """Queued jobs whose stage now uses another judge (a new model or prompt
-    version) are cancelled and queued again at the current judge, as a
-    re-score; a job whose pipeline or stage left the registry is cancelled.
-    Compared per job, on (pipeline, stage, judge): a judge id that is current
-    for another stage is still stale for this one."""
-    current = [(p, s, judge) for (p, s), judge in judges.items()]
-    stale = list(
-        await session.scalars(
-            select(AiJob)
-            .where(
-                AiJob.status == QUEUED,
-                tuple_(AiJob.pipeline, AiJob.stage, AiJob.model_version_id).not_in(current),
-            )
-            .with_for_update(skip_locked=True)
-        )
-    )
-    moved = 0
-    for job in stale:
-        moved += await _move(session, job, judges)
-    return moved
 
 
 # --- lease ------------------------------------------------------------------------------------
@@ -354,6 +436,20 @@ async def _prepare(
     if not await triggers.still_wanted(session, job):
         job.status, job.last_error = CANCELLED, f"no longer wanted by {job.reason}"
         return None
+    owed = await _render_owed(session, job, a, b)
+    if not owed:
+        # A job never carries zero orders: done now, and on to the next step.
+        job.status, job.done_at = DONE, now
+        await session.flush()
+        await flow.on_scores(session, job)
+        return None
+    return _Ready(job, owed)
+
+
+async def _render_owed(session: AsyncSession, job: AiJob, a, b) -> list[dict]:
+    """Render the job's two requests from the current rows, record their
+    hashes and the content hashes on the job, and return the orders that have
+    no score under its judge yet."""
     stage = PIPELINES[job.pipeline].stage(job.stage)
     rendered = render(stage, a, b)
     job.request_sha256 = rendered.hex()
@@ -366,24 +462,62 @@ async def _prepare(
             )
         )
     )
-    owed = [order for order, digest in rendered.sha256.items() if digest not in scored]
-    if not owed:
-        # A job never carries zero orders: done now, and on to the next step.
-        job.status, job.done_at = DONE, now
-        await session.flush()
-        await flow.on_scores(session, job)
-        return None
-    return _Ready(
-        job,
-        [
+    return [
+        {
+            "order": order,
+            "request_sha256": rendered.sha256[order].hex(),
+            "payload": rendered.payloads[order],
+        }
+        for order, digest in rendered.sha256.items()
+        if digest not in scored
+    ]
+
+
+def _lease_answer(lease_id: uuid.UUID, expires: datetime, taken: list[_Ready]) -> dict:
+    return {
+        "lease_id": str(lease_id),
+        "expires_at": expires.isoformat(),
+        "jobs": [
             {
-                "order": order,
-                "request_sha256": rendered.sha256[order].hex(),
-                "payload": rendered.payloads[order],
+                "job_id": ready.job.id,
+                "prompt_version": PIPELINES[ready.job.pipeline]
+                .stage(ready.job.stage)
+                .prompt_version,
+                "requests": ready.requests,
             }
-            for order in owed
+            for ready in taken
         ],
+    }
+
+
+async def _replay(
+    session: AsyncSession, worker: AiWorker, row: AiSession, now: datetime
+) -> dict | None:
+    """A retried /lease (same `lease_request_id`): the jobs of the lease it
+    got, still held, re-rendered, their expiry renewed. None when none is
+    still held, and a fresh lease is made instead."""
+    jobs = list(
+        await session.scalars(
+            select(AiJob)
+            .where(
+                AiJob.status == LEASED,
+                AiJob.lease_id == row.last_lease_id,
+                AiJob.leased_by == worker.id,
+            )
+            .order_by(AiJob.priority.desc(), AiJob.created_at, AiJob.id)
+            .with_for_update()
+        )
     )
+    expires = now + timedelta(seconds=row.lease_s)
+    taken = []
+    for job in jobs:
+        shown = await load_shown(session, (job.listing_a, job.listing_b))
+        owed = await _render_owed(session, job, shown[job.listing_a], shown[job.listing_b])
+        job.lease_expires_at = expires
+        if owed:
+            taken.append(_Ready(job, owed))
+    await session.flush()
+    return _lease_answer(row.last_lease_id, expires, taken) if taken else None
 
 
 async def lease(
@@ -407,10 +541,14 @@ async def lease(
     ):
         raise _version(model)
     row.last_seen_at = now
+    request_id = body.get("lease_request_id")
+    if request_id and request_id == row.last_lease_request and row.last_lease_id:
+        replay = await _replay(session, worker, row, now)
+        if replay is not None:
+            return replay
 
     await reap(session)
     judges = await flow.current_judges(session)
-    await _requeue_stale_judges(session, judges)
     mine = sorted({judges[key] for key in judges if PIPELINES[key[0]].stage(key[1]).model == model})
 
     max_jobs = int(body.get("max_jobs") or 1)
@@ -421,33 +559,38 @@ async def lease(
     lease_id = uuid.uuid4()
     expires = now + timedelta(seconds=row.lease_s)
     taken: list[_Ready] = []
+    seen: list[int] = []
     owed = 0
     full = False
     while not full and len(taken) < max_jobs:
-        batch = list(
-            await session.scalars(
-                select(AiJob)
-                .where(AiJob.status == QUEUED, AiJob.model_version_id.in_(mine))
-                .order_by(AiJob.priority.desc(), AiJob.created_at, AiJob.id)
-                .limit(_SCAN)
-                .with_for_update(skip_locked=True)
-            )
+        # Lock only as many rows as are still wanted: a concurrent lease must
+        # not find the queue empty because this one holds a wide scan.
+        query = (
+            select(AiJob)
+            .where(AiJob.status == QUEUED, AiJob.model_version_id.in_(mine))
+            .order_by(AiJob.priority.desc(), AiJob.created_at, AiJob.id)
+            .limit(max_jobs - len(taken))
+            .with_for_update(skip_locked=True)
         )
+        if seen:
+            # Explicit, not left to autoflush: a job looked at once is not
+            # fetched again in this lease, whatever became of it.
+            query = query.where(AiJob.id.not_in(seen))
+        batch = list(await session.scalars(query))
         if not batch:
             break
         for job in batch:
-            if len(taken) >= max_jobs:
-                full = True
-                break
+            seen.append(job.id)
             ready = await _prepare(session, job, judges, now)
             if ready is None:
                 continue
             if budget is not None and (owed + len(ready.requests)) * float(per_request) > budget:
-                # Rendered but not leased: it stays queued for the next lease.
+                # It does not fit: stop here, so priority order holds. It
+                # stays queued for the next lease.
                 full = True
                 break
             job.status, job.lease_id, job.leased_by = LEASED, lease_id, worker.id
-            job.leased_at, job.lease_expires_at = now, expires
+            job.leased_at, job.lease_expires_at, job.in_hand_at = now, expires, None
             owed += len(ready.requests)
             taken.append(ready)
     await session.flush()
@@ -457,20 +600,11 @@ async def lease(
         await maybe_rebuild(session, on_session_end)
         return {"lease_id": None, "jobs": []}
     row.ended_at = row.end_reason = None
-    return {
-        "lease_id": str(lease_id),
-        "expires_at": expires.isoformat(),
-        "jobs": [
-            {
-                "job_id": ready.job.id,
-                "prompt_version": PIPELINES[ready.job.pipeline]
-                .stage(ready.job.stage)
-                .prompt_version,
-                "requests": ready.requests,
-            }
-            for ready in taken
-        ],
-    }
+    row.last_lease_request, row.last_lease_id = (
+        (str(request_id)[:64] if request_id else None),
+        (lease_id),
+    )
+    return _lease_answer(lease_id, expires, taken)
 
 
 # --- heartbeat --------------------------------------------------------------------------------
@@ -502,8 +636,14 @@ async def heartbeat(session: AsyncSession, worker: AiWorker, body: dict, now: da
             .with_for_update()
         )
     )
+    progress = body.get("progress") or {}
+    in_hand = progress.get("job_id") if isinstance(progress, dict) else None
+    in_hand_lease = next((job.lease_id for job in held if job.id == in_hand), None)
     for job in held:
         job.lease_expires_at = expires
+        if in_hand_lease is not None and job.lease_id == in_hand_lease:
+            # The job in hand is the one a crash is blamed on (`reap`).
+            job.in_hand_at = now if job.id == in_hand else None
     await session.flush()
     live_leases = {job.lease_id for job in held}
     lost_leases = [str(x) for x in lease_ids if x not in live_leases]
@@ -602,7 +742,7 @@ async def results(session: AsyncSession, worker: AiWorker, body: dict, now: date
             "next": None,
         }
     job.status, job.done_at = DONE, now
-    job.lease_id = job.leased_by = job.lease_expires_at = None
+    job.lease_id = job.leased_by = job.lease_expires_at = job.in_hand_at = None
     await session.flush()
     step = await flow.on_scores(session, job)
     nxt: dict = {"action": step.action}
@@ -626,11 +766,14 @@ async def release(
 ) -> dict:
     """Hand leased jobs back (§3.5): graceful counts no attempt; an error
     counts one, and the job is dead at `max_attempts`. Scores already
-    submitted are kept."""
+    submitted are kept. A graceful release with no jobs is how a worker that
+    holds nothing ends its session (so P16 can fire)."""
     row = await _session_of(session, worker, body["session"])
     row.last_seen_at = now
     lease_id = _uuid(body.get("lease_id"))
     ids = [int(j) for j in body.get("job_ids") or []]
+    if not ids and body.get("reason", "graceful") != "graceful":
+        raise BrokerError(422, {"error": "invalid", "detail": "an error release names its jobs"})
     jobs = list(
         await session.scalars(
             select(AiJob).where(AiJob.id.in_(ids or [-1])).with_for_update().order_by(AiJob.id)
@@ -656,8 +799,7 @@ async def release(
     graceful = body.get("reason", "graceful") == "graceful"
     if graceful:
         for job in jobs:
-            job.status = QUEUED
-            job.lease_id = job.leased_by = job.lease_expires_at = None
+            _requeue_free(job)
     else:
         await _fail(session, jobs, str(body.get("error") or "released with an error")[:2000])
     await session.flush()
@@ -676,18 +818,22 @@ async def maybe_rebuild(session: AsyncSession, queue: Callable[[], Awaitable[Non
     standing "same" decisions were written since the last rebuild this
     queued, queue `rebuild_and_reindex` through the window job id
     (`makhzan_schemas.rebuild`). Only when the mode is live: off, the regroup
-    reads nothing. Records the newest decision covered, so the next session
-    end queues again only for newer ones."""
+    reads nothing. Records the highest decision id covered, so the next
+    session end queues again only for newer ones.
+
+    The marker is the decision id (an identity, allocated at the insert), not
+    `created_at`, which is the writing transaction's start and can lag well
+    behind a long lease's commit."""
     if queue is None or await ai_mode(session) != LIVE:
         return False
     state = await session.get(WorkerState, REBUILD_STATE_KEY)
-    since = (state.value or {}).get("through") if state is not None else None
-    query = select(func.max(AiDecision.created_at)).where(
-        AiDecision.state == STANDING, AiDecision.outcome == SAME
+    since = int((state.value or {}).get("through_id") or 0) if state is not None else 0
+    wanted = (AiDecision.state == STANDING) & (AiDecision.outcome == SAME)
+    if REBUILD_ON_UNMERGE:
+        wanted = AiDecision.state == STANDING
+    newest = await session.scalar(
+        select(func.max(AiDecision.id)).where(wanted, AiDecision.id > since)
     )
-    if since:
-        query = query.where(AiDecision.created_at > datetime.fromisoformat(since))
-    newest = await session.scalar(query)
     if newest is None:
         return False
     try:
@@ -695,7 +841,7 @@ async def maybe_rebuild(session: AsyncSession, queue: Callable[[], Awaitable[Non
     except Exception:  # noqa: BLE001 - the next session end will try again
         log.exception("could not queue the rebuild after an AI window")
         return False
-    value = {"through": newest.isoformat()}
+    value = {"through_id": int(newest)}
     await session.execute(
         insert(WorkerState)
         .values(key=REBUILD_STATE_KEY, value=value)
