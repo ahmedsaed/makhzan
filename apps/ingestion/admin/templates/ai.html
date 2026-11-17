@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}AI matching · makhzan admin{% endblock %}
+{% macro side(listing, lid) -%}
+<div class="side">{% if listing %}<span class="t">{{ listing.title_en or listing.title_ar or "(untitled)" }}</span><span class="mono muted">{{ listing.supplier.slug if listing.supplier else listing.source }} · {{ lid|short }}</span><span class="num ink2">{{ listing.price|money(listing.currency) }}</span>
+{% else %}<span class="mono muted">{{ lid }} (gone)</span>{% endif %}</div>
+{%- endmacro %}
+{% block content %}
+{% set s = a.status %}
+<div class="vhead">
+  <div><h1>AI matching</h1><p>Local models only. Workers pull jobs with a token; decisions are read by the regroup only while the mode is live.</p></div>
+  {% if not s.error %}{% set live = s.mode == "live" %}
+  <details class="switcher">
+    <summary class="switch" role="switch" aria-checked="{{ 'true' if live else 'false' }}"><span class="knob" aria-hidden="true"></span><span>Mode: {{ s.mode }}</span></summary>
+    <form method="post" action="/ai/mode" class="inline-confirm" role="alertdialog" aria-label="Confirm the change of mode">{{ m.csrf_field(csrf) }}
+      <input type="hidden" name="mode" value="{{ 'off' if live else 'live' }}"><input type="hidden" name="confirm" value="yes">
+      {% if live %}<div><b>Turn AI matching off?</b> The next regroup undoes every AI merge; decisions and scores are kept, and workers keep scoring.</div>
+      {% else %}<div><b>Turn AI matching live?</b> The next regroup reads standing "same" decisions. Run <span class="mono">make regroup-dry-run ARGS=--ai</span> on a copy first.</div>{% endif %}
+      <div class="toolbar"><button class="btn primary" type="submit">Confirm: set {{ 'off' if live else 'live' }}</button></div>
+    </form>
+  </details>
+  {% endif %}
+</div>
+
+{% if s.error %}<div class="flash error">AI status is unavailable: {{ s.error }}</div>{% else %}
+
+<div class="grid3">
+  <section class="panel"><header><h2>Throughput</h2><span class="chip c-info">last 24 h</span></header><div class="body">
+    <div class="kv">
+      {% for model, t in s.throughput.items() %}<div><span>{{ model }} scores</span><b>{{ t.scores_24h|num }}</b></div>{% endfor %}
+      <div><span>Queued</span><b>{{ a.queue|map(attribute="queued")|sum|num }}</b></div>
+    </div>
+    {% set sp = a.spark %}
+    <svg class="spark" viewBox="0 0 280 60" role="img" aria-label="Scores per day over the last 7 days, from {{ sp.min }} to {{ sp.max }}">
+      <line class="grid" x1="0" y1="50" x2="280" y2="50"/><line class="grid" x1="0" y1="25" x2="280" y2="25" stroke-dasharray="2 3"/>
+      <path class="area" d="{{ sp.area }}"/><path class="line" d="{{ sp.line }}"/><circle class="dot" cx="{{ sp.last[0]|round|int }}" cy="{{ sp.last[1]|round|int }}" r="3.5"/>
+    </svg>
+    <div class="muted small">{{ sp.days[0] }} to {{ sp.days[-1] }} (UTC days) · today {{ sp.counts[-1]|num }}{% for model, t in s.throughput.items() %} · {{ model }} median {{ t.median_seconds if t.median_seconds is not none else "-" }} s{% endfor %}</div>
+  </div></section>
+  <section class="panel"><header><h2>Decisions</h2><span class="muted">all time</span></header><div class="body">
+    <div class="kv">
+      <div><span>Same</span><b>{{ a.totals.same|num }}</b></div><div><span>Not same</span><b>{{ a.totals.not_same|num }}</b></div>
+      <div><span>Stale</span><b>{{ a.totals.stale|num }}</b></div><div><span>Revoked</span><b>{{ a.totals.revoked|num }}</b></div>
+    </div>
+    <p class="muted small" style="margin:10px 0 0">Re-scores due: {{ s.rescore_due.due|num }} ({{ s.rescore_due.open_job }} with an open job, {{ s.rescore_due.dead_job }} dead, {{ s.rescore_due.no_job }} with none). Policy <span class="mono">{{ s.policy.name }}</span>.</p>
+  </div></section>
+  <section class="panel"><header><h2>Pipelines</h2></header><div class="body" style="display:flex;flex-direction:column;gap:8px">
+    {% for p in a.pipelines.values() %}
+    <div><b>{{ p.name }}</b> <span class="muted">· {{ "decides" if p.decides else "records only" }}</span><div class="mono ink2">{{ p.stages|map(attribute="model")|join(" → ") }}</div></div>{% if not loop.last %}<hr class="sep">{% endif %}
+    {% endfor %}
+    {% if s.audit.scored %}<p class="muted small" style="margin:0">Audit: {{ s.audit.scored|num }} rules-merged pairs scored; {{ s.audit["below_0.8"]|num }} below 0.8, {{ s.audit["below_0.05"]|num }} below 0.05.</p>{% endif %}
+  </div></section>
+</div>
+
+<div class="grid2">
+  <section class="panel">
+    <header><div><h2>Queue by pipeline and stage</h2></div></header>
+    <div class="tw"><table><thead><tr><th>Pipeline</th><th>Stage</th><th class="n">Queued</th><th class="n">Leased</th><th class="n">Dead</th><th>Oldest queued</th><th class="n">Nights to drain</th></tr></thead><tbody>
+      {% for q in a.queue %}
+      <tr><td class="mono">{{ q.pipeline }}</td><td class="mono">{{ q.stage }}</td><td class="n">{{ q.queued|num }}</td>{{ m.n(q.leased) }}{{ m.n(q.dead) }}<td>{{ q.oldest_queued|age("-") }}</td><td class="n">{{ q.nights if q.nights is not none else "unknown" }}</td></tr>
+      {% else %}<tr><td colspan="7" class="muted">Nothing queued.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+  <section class="panel">
+    <header><div><h2>Flags</h2><p>Dismissing needs a note.</p></div></header>
+    {% if a.flags %}
+    <ul class="attn">
+      {% for f in a.flags %}
+      <li><span><span class="chip c-warn">{{ f.kind }}</span></span>
+        <div class="what"><b>#{{ f.id }} {{ f.subject or ((f.listing_a|short) ~ " / " ~ (f.listing_b|short) if f.listing_a else "") }}</b><span>{{ f.created_at|age }}{% if f.score is not none %} · score {{ "%.2f"|format(f.score) }}{% endif %}{% if f.detail %} · {{ f.detail|tojson|truncate(160) }}{% endif %}</span></div>
+        <div class="acts"><details class="more"><summary class="btn sm">Dismiss</summary>
+          <form method="post" action="/ai/flags/{{ f.id }}/dismiss" class="toolbar">{{ m.csrf_field(csrf) }}<label class="sr" for="fn-{{ f.id }}">Why</label><input class="note" type="text" id="fn-{{ f.id }}" name="note" required placeholder="Why (required)"><button class="btn sm primary" type="submit">Dismiss</button></form></details></div></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="empty">No open flags.</p>{% endif %}
+  </section>
+</div>
+
+<section class="panel">
+  <header><div><h2>Workers</h2><p>A token is shown once when issued; only its sha256 is kept.</p></div>
+    <details class="more"><summary class="btn">Issue token</summary>
+      <form method="post" action="/ai/workers/add" class="toolbar" style="align-items:flex-end">{{ m.csrf_field(csrf) }}
+        <label class="f" for="wname">Worker name<input type="text" id="wname" name="name" required pattern="[A-Za-z0-9_-]{3,32}" placeholder="e.g. cpu-box-2"></label>
+        {% for model in models %}<label class="check"><input type="checkbox" name="model_{{ model }}" {% if loop.first %}checked{% endif %}> {{ model }}</label>{% endfor %}
+        <button class="btn primary" type="submit">Issue</button></form></details></header>
+  {% if issued %}
+  <div class="body"><div class="result">
+    <div><b>Copy this now.</b> It will not be shown again. Worker <span class="mono">{{ issued.name }}</span> may lease jobs for {{ issued.models|join(", ") }}; put the token in its <span class="mono">token_file</span>.</div>
+    <div class="token"><code>{{ issued.token }}</code><button class="btn sm" type="button" data-copy="{{ issued.token }}" data-copied="Copied the token">Copy</button></div>
+  </div></div>
+  {% endif %}
+  <div class="tw"><table><thead><tr><th>Worker</th><th>Model keys</th><th>Device</th><th>Last seen</th><th>Versions</th><th class="n">Scores 24 h</th><th></th></tr></thead><tbody>
+    {% for w in s.workers %}{% set seen_days = w.last_seen_at|age_days %}
+    <tr><td class="mono">{{ w.name }}</td><td class="mono">{{ w.models|join(", ") }}</td><td>{{ w.device or "-" }}{% if w.threads %} · {{ w.threads }} threads{% endif %}{% if w.window %} · window {{ w.window }}{% endif %}</td>
+      <td>{% if w.revoked %}<span class="chip c-neutral">revoked</span>{% elif w.last_seen_at and seen_days is not none and seen_days >= 1 %}<span class="chip c-warn plain">{{ w.last_seen_at|age }}</span>{% else %}{{ w.last_seen_at|age }}{% endif %}</td>
+      <td class="mono small">{% for k, v in w.versions.items() %}{{ k }} {{ v|truncate(28) }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+      {{ m.n(w.scores_24h) }}
+      <td>{% if not w.revoked %}<form class="inline" method="post" action="/ai/workers/{{ w.name }}/revoke">{{ m.csrf_field(csrf) }}<input type="hidden" name="confirmed" value=""><button class="btn sm danger" type="submit" data-arm="Confirm revoke">Revoke</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No workers.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <header><div><h2>Review AI merges</h2><p>Standing "same" decisions, those merged now (no rule would have) first. Revoking needs no confirm: the pair splits at the next regroup and is not re-asked until its text changes.</p></div>
+    {{ m.post("/ai/redecide", "Redecide (dry run)", csrf, "btn") }}</header>
+  {% if redecided %}
+  <div class="body"><div class="result">
+    <h3>Redecide (dry run) · policy <span class="mono">{{ redecided.policy }}</span> {{ redecided.thresholds }} · nothing written</h3>
+    <div class="kv">{% for key, n in redecided.counts.items() %}<div><span>{{ key }}</span><b>{{ n|num }}</b></div>{% else %}<div><span>Standing decisions</span><b>0</b></div>{% endfor %}</div>
+    {% for key, ids in redecided.examples.items() %}{% if "unchanged" not in key %}<div class="small muted">{{ key }}: e.g. {% for i in ids %}#{{ i }} {% endfor %}</div>{% endif %}{% endfor %}
+  </div></div>
+  {% endif %}
+  <div class="body"><div class="cards">
+    {% for it in a.merges %}{% set d = it.decision %}
+    <article class="card"><div class="hd"><span class="mono muted">#{{ d.id }} · {{ d.pipeline }} · same {% if it.merged %}<span class="chip c-info">merged now</span>{% else %}<span class="chip c-neutral plain">not merged{{ " (mode off)" if s.mode != "live" else "" }}</span>{% endif %}</span>
+      <span class="scores">{% for stage, sc in (d.scores or {}).items() %}{% set lo = sc.min if sc.min is not none else ([sc.ab or 0, sc.ba or 0]|min) %}<span class="chip c-{{ 'ok' if lo >= 0.9 else 'warn' }} plain mono">{{ stage }} {{ "%.2f"|format(lo) }}</span>{% endfor %}</span></div>
+      <div class="bd"><div class="pair">{{ side(it.a, d.listing_a) }}{{ side(it.b, d.listing_b) }}</div><div class="muted small">decided {{ d.created_at|age }} by {{ d.decided_by }} under {{ d.policy_version }}</div></div>
+      <div class="ft"><form class="toolbar" method="post" action="/ai/decisions/{{ d.id }}/revoke">{{ m.csrf_field(csrf) }}<label class="sr" for="rv-{{ d.id }}">Note</label><input class="note" type="text" id="rv-{{ d.id }}" name="note" placeholder="Note (optional)"><button class="btn sm danger" type="submit">Revoke decision</button></form></div></article>
+    {% else %}<p class="muted">No standing "same" decisions.</p>{% endfor %}
+  </div></div>
+</section>
+{% endblock %}

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Overview · makhzan admin{% endblock %}
+{% block content %}
+{% set crit = o.attention|selectattr("sev", "equalto", "crit")|list|length %}
+{% set warn = o.attention|selectattr("sev", "equalto", "warn")|list|length %}
+{% set info = o.attention|selectattr("sev", "equalto", "info")|list|length %}
+<div class="vhead">
+  <div><h1>Overview</h1><p>The same data as <span class="mono">./makhzan status</span>, read {{ now|dt }} UTC{% if o.git_sha %} · image <span class="mono">{{ o.git_sha|short(7) }}</span>{% endif %}</p></div>
+  <div class="toolbar"><a class="btn" href="/">Refresh</a></div>
+</div>
+
+<section class="panel" aria-labelledby="h-attn">
+  <header><div><h2 id="h-attn">Needs attention</h2><p>Most serious first. Each links to the view where it is handled.</p></div>
+    <div class="legend"><span class="chip c-crit">critical {{ crit }}</span><span class="chip c-warn">warning {{ warn }}</span><span class="chip c-info">info {{ info }}</span></div></header>
+  {% if o.attention %}
+  <ul class="attn">
+    {% for item in o.attention %}
+    <li><span>{{ m.sev_chip(item.sev) }}</span>
+      <div class="what"><b>{{ item.title }}</b>{% if item.detail %}<span>{{ item.detail }}</span>{% endif %}</div>
+      <div class="acts">
+        {% for kind, target in item.actions %}{% if kind == "probe" %}{{ m.post("/shops/" ~ target ~ "/probe", "Probe", csrf) }}{% endif %}{% endfor %}
+        <a class="btn sm" href="{{ item.href }}">Open</a>
+      </div></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="empty">Nothing needs attention.</p>{% endif %}
+</section>
+
+<div class="tiles">
+  {% set sw = o.switch %}
+  <div class="tile"><span class="k">Crawl</span><span class="v">{{ "On" if sw.on else ("Paused" if sw.pause else "Off") }}</span>
+    <span><span class="chip {{ 'c-ok' if sw.on else 'c-warn' }}">{{ "ok" if sw.on else "attention" }}</span></span>
+    <span class="s">{% if sw.pause %}paused by {{ sw.pause.by }} {{ sw.pause.at|age }}{% elif not sw.env %}CRAWL_ENABLED is off in the worker{% else %}worker on, no pause{% endif %}</span><a href="/crawl">Crawl view</a></div>
+  {% set idx = o.index %}
+  <div class="tile"><span class="k">Search index</span>
+    {% if idx.indexed is none %}<span class="v">Unknown</span><span class="s">meilisearch unreachable ({{ idx.error }})</span>
+    {% elif idx.indexed == idx.products %}<span class="v">In sync</span><span><span class="chip c-ok">ok</span></span><span class="s">{{ idx.products|num }} in db · {{ idx.indexed|num }} indexed</span>
+    {% else %}<span class="v">Drift {{ "%+d"|format(idx.products - idx.indexed) }}</span><span><span class="chip c-warn">attention</span></span><span class="s">{{ idx.products|num }} in db · {{ idx.indexed|num }} indexed</span>{% endif %}
+    <a href="/catalog">Catalog</a></div>
+  <div class="tile"><span class="k">Worker queue</span>
+    {% if o.queue.queued is none %}<span class="v">Unknown</span><span class="s">redis unreachable ({{ o.queue.error }})</span>
+    {% else %}<span class="v">{{ o.queue.queued|num }}</span><span class="s">arq jobs queued</span>{% endif %}</div>
+  <div class="tile"><span class="k">Review queue</span>
+    {% if o.review %}<span class="v">{{ o.review.values()|sum|num }}</span><span class="s">{% for r, n in o.review.items() %}{{ r }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+    {% else %}<span class="v">Empty</span><span class="s">ingestion review items</span>{% endif %}</div>
+  <div class="tile"><span class="k">Visitor reports</span><span class="v">{{ o.counts.reports }} open</span>
+    {% if o.counts.reports %}<span><span class="chip c-warn">attention</span></span><span class="s">oldest {{ o.oldest_report|age }}</span>{% endif %}<a href="/reports">Reports</a></div>
+  <div class="tile"><span class="k">Price observations</span><span class="v">{{ o.prices.day|num }} / {{ o.prices.week|num }}</span><span class="s">last 24 h / last 7 d</span></div>
+  <div class="tile"><span class="k">AI pipeline</span>
+    {% if o.ai.error %}<span class="v">Unknown</span><span class="s">{{ o.ai.error }}</span>
+    {% else %}
+      {% set queued = o.ai.queue.values()|map(attribute="queued")|sum %}
+      {% set active = o.ai.workers|rejectattr("revoked")|list|length %}
+      <span class="v">{{ o.ai.mode|capitalize }}</span><span class="s">{{ queued|num }} queued · {{ active }} worker{{ "" if active == 1 else "s" }}</span>
+    {% endif %}<a href="/ai">AI view</a></div>
+  <div class="tile"><span class="k">Products</span><span class="v">{{ o.index.products|num }}</span><span class="s">{{ o.shops }} shops, {{ o.paused_shops }} paused</span><a href="/catalog">Catalog</a></div>
+</div>
+
+<div class="grid2">
+  <section class="panel">
+    <header><div><h2>Health</h2><p>Read-only. Containers, deploys and restarts stay with <span class="mono">./makhzan</span> on the server.</p></div></header>
+    <div class="tw"><table><thead><tr><th>Service</th><th>Checked at</th><th>Answer</th></tr></thead><tbody>
+      {% for h in o.health %}
+      <tr><td>{{ h.name }}</td><td class="mono muted">{{ h.url }}</td><td>{% if h.ok %}<span class="chip c-ok">answers</span>{% else %}<span class="chip c-crit">not answering{% if h.error %} ({{ h.error }}){% endif %}</span>{% endif %}</td></tr>
+      {% endfor %}
+      <tr><td>Database</td><td class="mono muted">DATABASE_URL</td><td><span class="chip c-ok">answers</span></td></tr>
+    </tbody></table></div>
+  </section>
+  <section class="panel">
+    <header><div><h2>Sweeps at a glance</h2><p>Partitions done this cycle</p></div><a href="/crawl">Crawl view</a></header>
+    <div class="body glance" style="display:flex;flex-direction:column;gap:8px">
+      {% for s in o.sweeps %}
+      <div class="barline"><span class="mono name">{{ s.source }}</span>{{ m.bar(s.done, s.total, "paused" if s.state == "paused" else ("done" if s.total and s.done == s.total else "")) }}<span class="frac">{{ s.done }}/{{ s.total }}</span></div>
+      {% else %}<p class="muted">No sources.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

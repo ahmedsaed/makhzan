@@ -34,6 +34,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
+from worker.admin_jobs import admin_job, close_interrupted_jobs
 from worker.indexer import get_client, reindex_all
 from worker.pause import paused_reason, paused_sources
 from worker import pipeline as _pipeline
@@ -93,6 +94,7 @@ async def startup(ctx: dict) -> None:
     await load_adapters()
     async with SessionLocal() as session:
         await close_interrupted_runs(session)
+        await close_interrupted_jobs(session)
         # The API reports the crawl flag from here, not from its own
         # environment: `./makhzan crawl off` recreates this container alone.
         await crawl.record_crawl_enabled(session, CRAWL_ENABLED)
@@ -399,6 +401,9 @@ class WorkerSettings:
         func(crawl_source, timeout=JOB_TIMEOUT, max_tries=1),
         func(rebuild_and_reindex, timeout=REBUILD_TIMEOUT, max_tries=1),
         func(ai_candidates, timeout=AI_CANDIDATES_TIMEOUT, max_tries=1),
+        # The admin dashboard's jobs (worker/admin_jobs.py): a `limit=` run,
+        # the probe, a regroup dry run. Never retried: a person asked once.
+        func(admin_job, timeout=JOB_TIMEOUT, max_tries=1),
         run_source,
         run_partition,
     ]

@@ -1,0 +1,45 @@
+{% macro brand() -%}
+<a class="brand" href="/">
+  <svg viewBox="0 0 24 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M2 8 12 2l10 6v10H2z"/><path d="M7 18v-6h10v6"/><path class="accent" d="M7 15h10"/></svg>
+  makhzan <small>admin</small>
+</a>
+{%- endmacro %}
+
+{% macro navlinks(nav, view, counts) -%}
+<nav class="views">
+  {% for key, href, label in nav %}
+  <a href="{{ href }}" {% if key == view %}aria-current="page"{% endif %}>{{ label }}{% if counts.get(key) %}<span class="count" title="needs attention">{{ counts[key] }}</span>{% endif %}</a>
+  {% endfor %}
+</nav>
+{%- endmacro %}
+
+{% macro csrf_field(csrf) -%}<input type="hidden" name="csrf" value="{{ csrf }}">{%- endmacro %}
+
+{% macro post(action, label, csrf, cls="btn sm", fields={}) -%}
+<form class="inline" method="post" action="{{ action }}">{{ csrf_field(csrf) }}{% for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button class="{{ cls }}" type="submit">{{ label }}</button></form>
+{%- endmacro %}
+
+{% macro sev_chip(sev) -%}
+<span class="chip c-{{ sev }}">{{ {"crit": "critical", "warn": "warning", "info": "info"}[sev] }}</span>
+{%- endmacro %}
+
+{% macro run_chip(status) -%}
+<span class="chip {{ {'success': 'c-ok', 'partial': 'c-warn', 'failed': 'c-crit', 'running': 'c-info'}.get(status, 'c-neutral') }}">{{ status }}</span>
+{%- endmacro %}
+
+{% macro job_chip(row) -%}
+{% if row.status in ("queued", "running") %}<span class="chip c-info" data-job="{{ row.id }}">{{ row.status }}</span>
+{% elif row.status == "done" %}<span class="chip c-ok">done</span>
+{% else %}<span class="chip c-crit">failed</span>{% endif %}
+{%- endmacro %}
+
+{% macro n(value) -%}<td class="n{% if not value %} zero{% endif %}">{{ value|num }}</td>{%- endmacro %}
+
+{% macro pctcell(part, whole) -%}
+{% set p = part|pct(whole) %}<td><span class="mini"><i style="width:{{ p }}%"></i></span><span class="num">{{ p }}%</span></td>
+{%- endmacro %}
+
+{% macro bar(done, total, cls="") -%}
+{% set p = ((100 * done / total)|round|int) if total else 0 %}
+<div class="bar {{ cls }}" role="img" aria-label="{{ done }} of {{ total }} partitions"><i style="width:{{ p }}%"></i></div>
+{%- endmacro %}

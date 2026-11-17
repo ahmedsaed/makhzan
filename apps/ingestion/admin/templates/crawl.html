@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Crawl · makhzan admin{% endblock %}
+{% macro probe_result(row) -%}
+<div class="probe"><span class="muted">Probe {{ row.created_at|age }}:</span> {{ m.job_chip(row) }}
+  {% if row.status == "done" and row.result %}
+    {% for col in ("robots", "browser", "makhzanbot", "signed") %}{% set cell = row.result.cells.get(col) %}{% if cell %}
+      <span class="chip plain {{ 'c-ok' if cell.status and cell.status < 300 else ('c-neutral' if not cell.status and not cell.error else 'c-crit') }} mono">{{ col }} {{ cell.text }}</span>
+    {% endif %}{% endfor %}
+    <span class="muted mono">{{ row.result.url }}</span>
+    {% for note in row.result.notes %}<div class="muted">({{ note }})</div>{% endfor %}
+  {% elif row.status == "failed" %}<span class="err">{{ row.error }}</span>{% endif %}
+</div>
+{%- endmacro %}
+{% block content %}
+{% set sw = c.switch %}
+<div class="vhead">
+  <div><h1>Crawl</h1><p>The daily cron queues one job per enabled, unpaused shop. Worker says <b>{{ "on" if sw.env else "off" }}</b> (CRAWL_ENABLED; this service's copy: <span class="mono">{{ sw.configured }}</span>); pause: <b>{{ "set" if sw.pause else "none" }}</b>.</p></div>
+  <div class="toolbar">
+    {% if sw.pause %}
+      <span class="chip c-neutral">crawl paused by {{ sw.pause.by }} {{ sw.pause.at|age }}{% if sw.pause.note %}: {{ sw.pause.note }}{% endif %}</span>
+      {{ m.post("/crawl/resume", "Resume crawl", csrf, "btn primary") }}
+    {% else %}
+      <span class="chip {{ 'c-ok' if sw.env else 'c-warn' }}">{{ "crawl on" if sw.env else "CRAWL_ENABLED off" }}</span>
+      <details class="more"><summary class="btn danger">Pause crawl</summary>
+        <form method="post" action="/crawl/pause" class="inline-confirm">{{ m.csrf_field(csrf) }}
+          <span>No new source jobs are queued; a run in flight finishes its page and stops, cursors kept.</span>
+          <label class="f" for="gnote">Why (optional)<input class="note" type="text" id="gnote" name="note" maxlength="500"></label>
+          <div class="toolbar"><button class="btn primary" type="submit">Pause the crawl</button></div>
+        </form></details>
+    {% endif %}
+  </div>
+</div>
+
+<section class="panel">
+  <header><div><h2>Sweep progress</h2><p>"Run now" is an ephemeral <span class="mono">limit=</span> run: cursors untouched, nothing archived. It and "Probe" work on a paused shop.</p></div>
+    <div class="legend"><span class="chip c-info">between runs</span><span class="chip c-ok">idle</span><span class="chip c-warn">running</span><span class="chip c-crit">stalled</span><span class="chip c-neutral">paused</span></div></header>
+  {% for e in c.declared.errors.items() %}<p class="err" style="padding:8px 14px 0">{{ e[0] }}: not loaded, so not being swept: {{ e[1] }}</p>{% endfor %}
+  {% if c.declared.failed %}<p class="err" style="padding:8px 14px 0">Could not load sources: {{ c.declared.failed }}</p>{% endif %}
+  {% for s in c.sweeps %}
+  <div class="sweep">
+    <span class="name">{{ s.source }}</span>
+    <div class="barline">{{ m.bar(s.done, s.total, "paused" if s.state == "paused" else ("done" if s.total and s.done == s.total else "")) }}<span class="frac">{{ s.done }}/{{ s.total }} partitions</span>
+      <span class="chip {{ {'between': 'c-info', 'idle': 'c-ok', 'running': 'c-warn', 'stalled': 'c-crit'}.get(s.state, 'c-neutral') }}">{{ {'between': 'between runs', 'never': 'never swept'}.get(s.state, s.state) }}</span></div>
+    <div class="meta">
+      {% if s.state == "paused" %}paused:
+        {% if s.disabled %}enabled = false in sources.toml{% endif %}{% if s.disabled and s.paused %}; {% endif %}
+        {% if s.paused %}paused by {{ s.paused.by }} {{ s.paused.at|age }}{% if s.paused.note %}: {{ s.paused.note }}{% endif %}{% endif %}
+        {% if s.cycle_started_at %} (cycle started {{ s.cycle_started_at|age }}){% endif %}
+      {% elif s.state == "running" %}cycle started {{ s.cycle_started_at|age }} · run active since {{ s.active_since|age }}
+      {% elif s.state in ("between", "stalled") %}cycle started {{ s.cycle_started_at|age }} · no run active (last finished {{ s.last_finished|age }})
+      {% elif s.state == "idle" %}idle: last sweep completed, last finished {{ s.last_finished|age }}
+      {% else %}no cursor yet: never swept{% endif %}
+      {% if s.pending %} · resumes at {% for p, page in s.pending[:3] %}<span class="mono">{{ p or "default" }} page {{ page }}</span>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+    </div>
+    <div class="acts">
+      <form class="inline toolbar" method="post" action="/shops/{{ s.source }}/run">{{ m.csrf_field(csrf) }}
+        <label class="sr" for="lim-{{ s.source }}">Limit for {{ s.source }}</label>
+        <input class="limit" type="number" min="1" max="{{ max_limit }}" value="10" id="lim-{{ s.source }}" name="limit" required>
+        <button class="btn sm" type="submit">Run now</button></form>
+      {{ m.post("/shops/" ~ s.source ~ "/probe", "Probe", csrf) }}
+      {% if s.paused %}
+        {{ m.post("/shops/" ~ s.source ~ "/resume", "Resume", csrf, "btn sm primary") }}
+      {% else %}
+        <details class="more"><summary class="btn sm">Pause</summary>
+          <form method="post" action="/shops/{{ s.source }}/pause" class="toolbar">{{ m.csrf_field(csrf) }}
+            <label class="sr" for="pn-{{ s.source }}">Why pause {{ s.source }}</label>
+            <input class="note" type="text" id="pn-{{ s.source }}" name="note" placeholder="Why (optional)" maxlength="500">
+            <button class="btn sm danger" type="submit">Pause {{ s.source }}</button></form></details>
+      {% endif %}
+    </div>
+    {% if c.probes.get(s.source) %}{{ probe_result(c.probes[s.source]) }}{% endif %}
+    {% set rn = c.runs_now.get(s.source) %}{% if rn %}
+    <div class="probe"><span class="muted">Run now (limit {{ rn.detail.limit }}) {{ rn.created_at|age }}:</span> {{ m.job_chip(rn) }}
+      {% if rn.status == "done" and rn.result %}<span class="mono">{{ rn.result.status }}: seen {{ rn.result.seen }}, new {{ rn.result.created }}, updated {{ rn.result.updated }}, failed {{ rn.result.failed }}</span>
+      {% elif rn.status == "failed" %}<span class="err">{{ rn.error }}</span>{% endif %}</div>
+    {% endif %}
+  </div>
+  {% else %}<p class="empty">No sources. Run <span class="mono">make sources</span>.</p>{% endfor %}
+</section>
+
+<section class="panel">
+  <header><div><h2>Recent runs</h2><p>Last {{ c.runs|length }}</p></div></header>
+  <div class="tw"><table><thead><tr><th>When</th><th>Shop</th><th>Status</th><th class="n">Seen</th><th class="n">New</th><th class="n">Updated</th><th class="n">Failed</th><th class="n">Archived</th><th>Errors</th></tr></thead><tbody>
+    {% for r in c.runs %}
+    <tr><td>{{ r.started_at|age }}</td><td class="mono">{{ r.source }}{% if r.limit %} <span class="chip c-neutral plain">limit {{ r.limit }}</span>{% endif %}</td><td>{{ m.run_chip(r.status) }}</td>
+      {{ m.n(r.seen) }}{{ m.n(r.created) }}{{ m.n(r.updated) }}{{ m.n(r.failed) }}{{ m.n(r.archived) }}
+      <td class="wrap">{% if r.errors or r.error or r.stopped or r.warnings %}<details class="err-row"><summary>{{ r.errors|length }} error{{ "" if r.errors|length == 1 else "s" }}{% if r.stopped %}, stopped early{% endif %}</summary><pre>{% for e in r.errors %}{{ e }}
+{% endfor %}{% if r.error %}{{ r.error }}
+{% endif %}{% if r.stopped %}stopped: {{ r.stopped }}
+{% endif %}{% for w in r.warnings %}? {{ w }}
+{% endfor %}</pre></details>{% else %}<span class="muted">none</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="9" class="muted">No runs recorded.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel">
+  <header><div><h2>Cycle history</h2><p>Last {{ c.cycles.days }} days</p></div></header>
+  <div class="tw"><table><thead><tr><th>Shop</th><th class="n">Runs</th><th class="n">OK</th><th class="n">Partial</th><th class="n">Fail</th><th class="n">Items</th><th class="n">Bad</th><th class="n">Archived</th><th>Last complete sweep</th></tr></thead><tbody>
+    {% for s in c.cycles.sources %}
+    <tr><td class="mono">{{ s.source }}</td>{{ m.n(s.runs) }}{{ m.n(s.ok) }}
+      <td class="n{% if not s.partial %} zero{% endif %}">{% if s.partial %}<span class="chip c-warn plain">{{ s.partial }}</span>{% else %}0{% endif %}</td>
+      <td class="n{% if not s.failed %} zero{% endif %}">{% if s.failed %}<span class="chip c-crit plain">{{ s.failed }}</span>{% else %}0{% endif %}</td>
+      {{ m.n(s["items"]) }}{{ m.n(s.bad) }}{{ m.n(s.archived) }}
+      <td>{% if s.last_complete %}{{ s.last_complete.finished_at|age }} ({{ s.last_complete.minutes|round|int|num }} min, {{ s.last_complete.partitions }} partitions){% else %}<span class="muted">none recorded</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="9" class="muted">No runs in this window.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if c.cycles.frequent_errors %}
+  <div class="body"><h3 style="margin-bottom:6px">Most frequent errors</h3>
+    <div class="tw"><table><tbody>
+      {% for e in c.cycles.frequent_errors %}<tr><td class="n">×{{ e.count }}</td><td class="mono">{{ e.source }}</td><td class="mono muted wrap">{{ e.message }}</td></tr>{% endfor %}
+    </tbody></table></div></div>
+  {% endif %}
+</section>
+
+{% if c.budget %}
+<section class="panel">
+  <header><div><h2>Cycle targets</h2><p>Sources with <span class="mono">target_cycle_days</span>: the latest run's page budget</p></div></header>
+  <div class="tw"><table><thead><tr><th>Shop</th><th class="n">Target</th><th class="n">Budget</th><th class="n">Ceiling</th><th class="n">Projected</th><th>Note</th></tr></thead><tbody>
+    {% for source, b in c.budget.items() %}
+    <tr><td class="mono">{{ source }}</td><td class="n">{{ b.target_cycle_days }} d</td><td class="n">{{ b.pages }} pages</td><td class="n">{{ b.ceiling or "none" }}</td>
+      <td class="n">{% if b.projected_cycle_days is defined %}<span class="chip plain {{ 'c-warn' if b.projected_cycle_days > b.target_cycle_days else 'c-ok' }}">{{ b.projected_cycle_days }} d</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td class="muted">{% if b.ceiling_limited %}ceiling-limited (planned {{ b.planned }}){% elif b.projected_cycle_days is not defined %}{{ b.basis or "no plan yet" }}{% endif %}</td></tr>
+    {% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+
+<div class="grid2">
+  <section class="panel">
+    <header><div><h2>Short-page end (T1)</h2><p>Go live only after a full shadow cycle with zero disagreements.</p></div></header>
+    <div class="tw"><table><thead><tr><th>Shop</th><th>Mode</th><th class="n">Compared</th><th class="n">Disagree</th><th class="n">Saves</th><th>Since</th><th>Verdict</th></tr></thead><tbody>
+      {% for t in c.t1 %}
+      <tr><td class="mono">{{ t.source }}</td><td><span class="chip {{ 'c-ok' if t.mode == 'live' else 'c-neutral' }} plain">{{ t.mode }}</span></td>{{ m.n(t.compared) }}
+        <td class="n{% if not t.disagreements %} zero{% endif %}">{% if t.disagreements %}<span class="chip c-crit plain">{{ t.disagreements }}</span>{% else %}0{% endif %}</td>
+        <td class="n">{{ t.saved|num }} req</td><td>{{ t.since|dt("%Y-%m-%d") if t.since else "last " ~ t.days ~ " d" }}</td>
+        <td>{% if t.mode == "live" %}<span class="chip c-ok">live</span>{% elif t.ready %}<span class="chip c-ok">ready: end_on_short_page = "live"</span>{% elif t.disagreements %}<span class="chip c-crit">not the last page: {{ t.disagreed[:3]|join(", ") }}</span>{% elif not t.covered and t.since %}<span class="chip c-info">not all of the cycle in shadow</span>{% elif not t.since %}<span class="chip c-info">no full cycle yet</span>{% else %}<span class="muted">-</span>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="7" class="muted">No source has a shadow tally yet.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+  <section class="panel">
+    <header><div><h2>Confirm before archiving (T4/T12)</h2><p>Each source's last cycle-end check</p></div></header>
+    <div class="tw"><table><thead><tr><th>Shop</th><th>When</th><th class="n">Candidates</th><th class="n">Kept</th><th class="n">Archived</th><th>Via</th></tr></thead><tbody>
+      {% for source, pair in c.confirm.items() %}{% set started, r = pair %}
+      <tr><td class="mono">{{ source }}</td><td>{{ started|age }}</td>{{ m.n(r.candidates or 0) }}{{ m.n(r.kept or 0) }}{{ m.n(r.absent or 0) }}
+        <td class="wrap">{{ r.via or "" }}{% if r.held_by_sitemap is not none and r.held_by_sitemap is defined %} ({{ r.held_by_sitemap }} held by the sitemap){% endif %}
+          {% if r.held %}<span class="chip c-warn plain">{{ r.held }} held for the next run</span>{% endif %}
+          {% if r.failed %}<span class="chip c-crit plain">failed: {{ r.failed|string|truncate(60) }}</span>{% endif %}
+          {% if r.overdue %}<span class="chip c-warn plain">waited a cycle: archived as before</span>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="6" class="muted">No confirmation recorded in 45 days.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+</div>
+
+<div class="grid2">
+  <section class="panel">
+    <header><div><h2>Crawler identity</h2><p>{% if c.identity.keyid %}Signing key here: <span class="mono">{{ c.identity.keyid|short(12) }}…</span>{% else %}This service holds no signing key (the worker does); key ids below are what the last runs sent.{% endif %}</p></div></header>
+    <div class="tw"><table><thead><tr><th>Shop</th><th>Configured</th><th>Last run sent</th></tr></thead><tbody>
+      {% for r in c.identity.sources %}
+      <tr><td class="mono">{{ r.source }}</td><td><span class="chip {{ 'c-brand' if r.configured == 'makhzanbot' else 'c-neutral' }} plain">{{ r.configured }}</span></td>
+        <td>{% if r.seen is none %}<span class="muted">no run has recorded it yet{% if not r.enabled %} (disabled){% endif %}</span>
+          {% else %}{{ r.seen.name }}, {% if r.seen.signed %}<span class="chip c-ok">signed</span>{% else %}unsigned{% endif %}{% if r.seen.keyid %} <span class="mono muted">{{ r.seen.keyid|short(12) }}…</span>{% endif %}
+            {% if r.unverifiable %}<span class="chip c-warn plain">unverifiable: no key on the worker</span>{% endif %}
+            {% if r.changed %}<span class="chip c-warn plain">changed since the last run</span>{% endif %}
+            {% if not r.enabled %}<span class="muted">(disabled)</span>{% endif %}{% endif %}</td></tr>
+      {% endfor %}
+    </tbody></table></div>
+  </section>
+  <section class="panel">
+    <header><div><h2>robots.txt</h2><p>Latest run, per host. Copies older than {{ c.stale_copy_days }} days are flagged.</p></div></header>
+    <div class="tw"><table><thead><tr><th>Shop</th><th>Host</th><th>Result</th></tr></thead><tbody>
+      {% for source, entry in c.robots.items() %}{% for host, said in entry.hosts.items() %}
+      <tr><td class="mono">{{ source }}</td><td class="mono muted">{{ host }}</td><td class="wrap">
+        {% if said.state in ("fetched", "no_rules") %}<span class="chip c-ok">{{ said.state|replace("_", " ") }}</span>
+        {% elif said.state == "stale" %}<span class="chip {{ 'c-crit' if (said.copy_age_days or 0) > c.stale_copy_days else 'c-warn' }}">unreadable, copy {{ said.copy_age_days }} d old</span> <span class="muted">{{ said.error }}</span>
+        {% else %}<span class="chip c-crit">unavailable</span> <span class="muted">{{ said.error }}</span>{% endif %}
+        {% if loop.last and entry.stopped %}<div class="muted small">run stopped early: {{ entry.stopped }}</div>{% endif %}</td></tr>
+      {% endfor %}{% else %}<tr><td colspan="3" class="muted">No run has recorded robots.txt yet.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+</div>
+
+<section class="panel" id="drift">
+  <header><div><h2>Crosswalk drift</h2><p>Crosswalks live in the private configuration. Both buttons copy a snippet to paste there; nothing is written from this page.</p></div></header>
+  <div class="drift">
+    {% set clean = [] %}
+    {% for d in c.drift %}
+      {% if d.checked and not (d.unmapped or d.unused or d.hidden) and d.covered and not d.why_unfiltered %}{% set _ = clean.append(d.source) %}
+      {% else %}
+      {% set file = (d.crosswalk or "?") ~ ".toml" %}
+      <div class="shop"><span><span class="mono" style="font-weight:500">{{ d.source }}</span> · <span class="muted">{{ d.checked }} run{{ "" if d.checked == 1 else "s" }} checked ({{ d.scope }})</span></span>
+        <span class="chip {{ 'c-warn' if d.unmapped or d.unused or d.hidden else 'c-neutral' }}">{% if d.unmapped %}{{ d.unmapped|length }} unmapped ({{ d.unmapped.values()|sum|num }} listings){% elif not d.checked %}no run checked{% elif not (d.unused or d.hidden) %}no unmapped names seen{% if not d.covered %} (no completed cycle to vouch for the rest){% endif %}{% else %}see below{% endif %}</span></div>
+      {% if d.why_unfiltered %}<div class="row"><span></span><span class="muted small">not filtered by the current crosswalk: {{ d.why_unfiltered }}</span><span></span></div>{% endif %}
+      {% for name, count in d.unmapped.items() %}
+      <div class="row"><span class="num">{{ count|num }}</span><span style="overflow-wrap:anywhere">{{ name }}</span>
+        <span class="acts toolbar">
+          <button class="btn sm" type="button" data-copy='ignore = [..., {{ name|tojson }}]' data-copied="Copied the ignore entry; paste it into crosswalks/{{ file }}">Add to ignore</button>
+          <button class="btn sm" type="button" data-copy='{{ name|tojson }} = ""  # {{ count }} listings: fill in a domain:slug ref' data-copied="Copied the crosswalk line; paste it into crosswalks/{{ file }} and fill in the ref">Copy for crosswalk</button>
+        </span></div>
+      {% endfor %}
+      {% if d.hidden %}<div class="row"><span></span><span class="muted small">+{{ "?" if d.hidden[0] is none else d.hidden[0] }} more names / {{ d.hidden[1] }} listings not listed (a run's stored list was capped; may include names since mapped)</span><span></span></div>{% endif %}
+      {% if d.unused %}<div class="row"><span></span><span class="small"><span class="chip c-warn plain">{{ "at least " if d.unused_capped else "" }}{{ d.unused_count }} entries never matched</span> retired or renamed away: {{ d.unused[:8]|join(", ") }}</span><span></span></div>{% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if clean %}<div class="shop"><span class="mono">{{ clean|join(" · ") }}</span><span class="chip c-ok">crosswalk matches the source</span></div>{% endif %}
+    {% if not c.drift %}<p class="empty">No mapped source has reported yet.</p>{% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <header><div><h2>Product details</h2><p>Coverage on active listings, and for page readers what is due</p></div></header>
+  <div class="tw"><table><thead><tr><th>Shop</th><th>Reader</th><th class="n">Active</th><th>Description</th><th>Specs</th><th>2+ photos</th><th>Documents</th><th class="n">Never fetched</th><th class="n">Changed</th><th class="n">Stale</th><th>Last run</th><th class="n">Runs to catch up</th></tr></thead><tbody>
+    {% for e in c.details.sources %}{% set cov = e.coverage or {"active": 0, "description": 0, "specs": 0, "gallery": 0, "documents": 0} %}
+    <tr><td class="mono">{{ e.source }}</td>
+      <td>{% if e.reader == "pages_on" %}<span class="chip c-info plain">pages on, {{ e.per_run }}/run</span>{% elif e.reader == "pages_off" %}<span class="chip c-warn plain">pages off</span>{% elif e.reader == "not_configured" %}<span class="chip c-warn plain">not configured</span>{% else %}<span class="muted">list feed only</span>{% endif %}{% if not e.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
+      {{ m.n(cov.active) }}{{ m.pctcell(cov.description, cov.active) }}{{ m.pctcell(cov.specs, cov.active) }}{{ m.pctcell(cov.gallery, cov.active) }}{{ m.pctcell(cov.documents, cov.active) }}
+      {% if e.queue %}<td class="n">{% if e.runs_to_catch_up and e.runs_to_catch_up >= 10 %}<span class="chip c-warn plain">{{ e.queue.never_fetched|num }}</span>{% else %}{{ e.queue.never_fetched|num }}{% endif %}</td>{{ m.n(e.queue.changed) }}{{ m.n(e.queue.stale) }}{% else %}<td class="n muted">-</td><td class="n muted">-</td><td class="n muted">-</td>{% endif %}
+      <td>{% if e.last %}{{ e.last.started_at|age }}: {{ e.last.fetched }} fetched, {{ e.last.failed }} failed{% if e.last.stopped %}, stopped{% endif %}{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td class="n">{{ e.runs_to_catch_up|num if e.runs_to_catch_up is not none else "-" }}</td></tr>
+    {% else %}<tr><td colspan="12" class="muted">{{ c.details.unavailable or "No sources loaded." }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel">
+  <header><div><h2>Dashboard jobs</h2><p>Run now, probes and dry runs, newest first. All actions: <a href="/activity">activity</a>.</p></div></header>
+  <div class="tw"><table><thead><tr><th>When</th><th>Job</th><th>Target</th><th>By</th><th>Status</th><th>Outcome</th></tr></thead><tbody>
+    {% for j in c.jobs %}
+    <tr><td>{{ j.created_at|age }}</td><td class="mono">{{ j.action }}</td><td class="mono">{{ j.target or "" }}</td><td>{{ j.actor }}</td><td>{{ m.job_chip(j) }}</td>
+      <td class="wrap muted">{% if j.error %}<span class="err">{{ j.error }}</span>{% elif j.result and j.result.line %}{{ j.result.line }}{% elif j.result and j.result.status %}{{ j.result.status }}: seen {{ j.result.seen }}{% elif j.result and j.result.cells %}{% for k, v in j.result.cells.items() %}{{ k }} {{ v.text }}{% if not loop.last %} · {% endif %}{% endfor %}{% endif %}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No jobs yet.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}
