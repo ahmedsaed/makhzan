@@ -55,6 +55,12 @@ DEFAULT_LEASE_S = 900
 #: Bounds on the lease length a hello may ask for.
 LEASE_S_MIN, LEASE_S_MAX = 60, 7200
 HEARTBEAT_S = 60
+#: Why a lease came back with no job, in its `reason` and the session's
+#: `end_reason`: nothing queued for the model, or work queued but the first
+#: job does not fit the time the worker said it has.
+EMPTY, NONE_FIT = "empty", "none_fit"
+#: Sessions ending "none_fit" in a week before a `nothing_fits` flag opens.
+NONE_FIT_FLAG_AFTER = 3
 #: Kept free at the end of a worker's `seconds_left` when sizing a lease.
 LEASE_MARGIN_S = 60
 #: `worker_state` key: the newest decision id a rebuild was queued for (P16).
@@ -125,12 +131,17 @@ async def db_now(session: AsyncSession) -> datetime:
     return await session.scalar(select(func.now()))
 
 
-async def _session_of(session: AsyncSession, worker: AiWorker, session_id: str) -> AiSession:
+async def _session_of(
+    session: AsyncSession, worker: AiWorker, session_id: str, *, lock: bool = False
+) -> AiSession:
+    """The caller's session row. `lock` holds it for the transaction: a
+    session's leases take turns, so a retried /lease that overlaps the
+    original waits for it and then replays its answer."""
     try:
         sid = uuid.UUID(str(session_id))
     except ValueError:
         raise BrokerError(422, {"error": "invalid", "detail": "session is not a uuid"}) from None
-    row = await session.get(AiSession, sid)
+    row = await session.get(AiSession, sid, with_for_update=lock or None)
     if row is None or row.worker_id != worker.id:
         raise BrokerError(422, {"error": "invalid", "detail": "unknown session"})
     return row
@@ -491,11 +502,14 @@ def _lease_answer(lease_id: uuid.UUID, expires: datetime, taken: list[_Ready]) -
 
 
 async def _replay(
-    session: AsyncSession, worker: AiWorker, row: AiSession, now: datetime
+    session: AsyncSession, worker: AiWorker, row: AiSession, model: str, now: datetime
 ) -> dict | None:
-    """A retried /lease (same `lease_request_id`): the jobs of the lease it
-    got, still held, re-rendered, their expiry renewed. None when none is
-    still held, and a fresh lease is made instead."""
+    """A retried /lease (same `lease_request_id`, the session row locked):
+    the jobs of the lease it got, still held, re-rendered, their expiry
+    renewed. A job found to owe nothing now (scored meanwhile, by request
+    hash) is finished, not renewed and left out. None when no job is still
+    held, and a fresh lease is made instead. An id reused for another model
+    is refused."""
     jobs = list(
         await session.scalars(
             select(AiJob)
@@ -503,21 +517,67 @@ async def _replay(
                 AiJob.status == LEASED,
                 AiJob.lease_id == row.last_lease_id,
                 AiJob.leased_by == worker.id,
+                # An expired lease is not renewed by a replay, even before
+                # the reaper has reached it: it is lost, and a fresh lease
+                # (which reaps first) follows.
+                AiJob.lease_expires_at > now,
             )
             .order_by(AiJob.priority.desc(), AiJob.created_at, AiJob.id)
             .with_for_update()
         )
     )
+    for job in jobs:
+        if await _judge_model(session, job) != model:
+            raise BrokerError(
+                422, {"error": "invalid", "detail": "lease_request_id reused for another model"}
+            )
     expires = now + timedelta(seconds=row.lease_s)
     taken = []
     for job in jobs:
         shown = await load_shown(session, (job.listing_a, job.listing_b))
         owed = await _render_owed(session, job, shown[job.listing_a], shown[job.listing_b])
-        job.lease_expires_at = expires
         if owed:
+            job.lease_expires_at = expires
             taken.append(_Ready(job, owed))
+            continue
+        job.status, job.done_at = DONE, now
+        job.lease_id = job.leased_by = job.lease_expires_at = job.in_hand_at = None
+        await session.flush()
+        await flow.on_scores(session, job)
     await session.flush()
     return _lease_answer(row.last_lease_id, expires, taken) if taken else None
+
+
+async def _flag_if_never_fits(
+    session: AsyncSession, worker: AiWorker, model: str, body: dict, head_owed: int, now: datetime
+) -> None:
+    """A worker whose sessions keep ending with nothing fitting its time (a
+    window too short for one job, or a wrong `seconds_per_request`) never
+    scores anything; after `NONE_FIT_FLAG_AFTER` such sessions in a week a
+    person is told."""
+    recent = await session.scalar(
+        select(func.count())
+        .select_from(AiSession)
+        .where(
+            AiSession.worker_id == worker.id,
+            AiSession.end_reason == NONE_FIT,
+            AiSession.ended_at >= now - timedelta(days=7),
+        )
+    )
+    if (recent or 0) >= NONE_FIT_FLAG_AFTER:
+        await _open_flag(
+            session,
+            "nothing_fits",
+            subject=f"{worker.name}/{model}"[:100],
+            detail={
+                "worker": worker.name,
+                "model": model,
+                "sessions_7d": int(recent),
+                "seconds_left": body.get("seconds_left"),
+                "seconds_per_request": body.get("seconds_per_request"),
+                "head_job_owes": head_owed,
+            },
+        )
 
 
 async def lease(
@@ -532,7 +592,7 @@ async def lease(
     model = body["model"]
     if model not in worker.models or model not in MODELS:
         raise _not_allowed(model)
-    row = await _session_of(session, worker, body["session"])
+    row = await _session_of(session, worker, body["session"], lock=True)
     reported = (row.models or {}).get(model) or {}
     if (
         body.get("model_version") != MODELS[model].model_version
@@ -543,7 +603,7 @@ async def lease(
     row.last_seen_at = now
     request_id = body.get("lease_request_id")
     if request_id and request_id == row.last_lease_request and row.last_lease_id:
-        replay = await _replay(session, worker, row, now)
+        replay = await _replay(session, worker, row, model, now)
         if replay is not None:
             return replay
 
@@ -561,6 +621,7 @@ async def lease(
     taken: list[_Ready] = []
     seen: list[int] = []
     owed = 0
+    head_owed = 0  # requests the first job that did not fit still owed
     full = False
     while not full and len(taken) < max_jobs:
         # Lock only as many rows as are still wanted: a concurrent lease must
@@ -588,17 +649,26 @@ async def lease(
                 # It does not fit: stop here, so priority order holds. It
                 # stays queued for the next lease.
                 full = True
+                head_owed = head_owed or len(ready.requests)
                 break
             job.status, job.lease_id, job.leased_by = LEASED, lease_id, worker.id
             job.leased_at, job.lease_expires_at, job.in_hand_at = now, expires, None
             owed += len(ready.requests)
             taken.append(ready)
     await session.flush()
+    if not taken and head_owed:
+        # Work is queued, but its first job does not fit the time the worker
+        # has: not "empty". The session ends, but no window closed with the
+        # queue drained, so P16 is not considered.
+        row.ended_at, row.end_reason = now, NONE_FIT
+        await session.flush()
+        await _flag_if_never_fits(session, worker, model, body, head_owed, now)
+        return {"lease_id": None, "jobs": [], "reason": NONE_FIT}
     if not taken:
-        row.ended_at, row.end_reason = now, "empty"
+        row.ended_at, row.end_reason = now, EMPTY
         await session.flush()
         await maybe_rebuild(session, on_session_end)
-        return {"lease_id": None, "jobs": []}
+        return {"lease_id": None, "jobs": [], "reason": EMPTY}
     row.ended_at = row.end_reason = None
     row.last_lease_request, row.last_lease_id = (
         (str(request_id)[:64] if request_id else None),

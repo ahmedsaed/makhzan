@@ -1208,6 +1208,9 @@ class AiFlag(Base):
       keep from taking effect.
     - `version_drift`: a worker reported a model that is not the one in use;
       `subject` is "<worker>/<model>".
+    - `nothing_fits`: a worker's sessions keep ending with work queued but no
+      job fitting its time (`broker.NONE_FIT_FLAG_AFTER` in a week);
+      `subject` is "<worker>/<model>".
 
     One open flag per (kind, pair, subject).
     """
@@ -1215,7 +1218,8 @@ class AiFlag(Base):
     __tablename__ = "ai_flags"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift')",
+            "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift',"
+            " 'nothing_fits')",
             name="ck_ai_flag_kind",
         ),
         CheckConstraint("status IN ('open', 'dismissed', 'actioned')", name="ck_ai_flag_status"),

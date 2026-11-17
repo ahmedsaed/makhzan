@@ -247,7 +247,11 @@ async def test_an_empty_queue_answers_no_lease(broker):
     kev = await _worker("cpu-kev", ["kev"])
     hello = await _hello(broker, kev, "kev")
     assert hello["models"]["kev"]["queued_requests"] == 0
-    assert await _lease(broker, kev, hello["session"], "kev") == {"lease_id": None, "jobs": []}
+    assert await _lease(broker, kev, hello["session"], "kev") == {
+        "lease_id": None,
+        "jobs": [],
+        "reason": "empty",
+    }
 
 
 async def test_a_lease_fits_the_time_left(broker, db):
@@ -321,7 +325,11 @@ async def test_a_job_whose_requests_are_all_scored_is_not_leased(broker, db):
     [job] = lease["jobs"]
     await _post(broker, kev, hello["session"], lease, job, _scores(job, 0.9, 0.9))
     # The audit and match Kev stages share a judge, so the other job is owed nothing.
-    assert await _lease(broker, kev, hello["session"], "kev") == {"lease_id": None, "jobs": []}
+    assert await _lease(broker, kev, hello["session"], "kev") == {
+        "lease_id": None,
+        "jobs": [],
+        "reason": "empty",
+    }
     statuses = {(j.pipeline, j.stage): j.status for j in await _jobs()}
     assert statuses == {
         ("audit", "kev"): "done",
