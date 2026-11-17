@@ -864,14 +864,19 @@ async def ai_flag_dismiss(request: Request, flag_id: int):
     return back("/ai", f"Flag #{flag_id} dismissed.")
 
 
-#: The note a revocation from the review list carries when the person adds none.
-DEFAULT_REVOKE_NOTE = "revoked in the admin dashboard's review of AI merges"
-
-
 @app.post("/ai/decisions/{decision_id}/revoke")
 async def ai_decision_revoke(request: Request, decision_id: int):
+    """No confirm (owner), but a note, as `./makhzan ai revoke --note` requires (owner)."""
     _, fields = await checked_form(request)
-    note = fields.get("note", "").strip()[:2000] or DEFAULT_REVOKE_NOTE
+    note = fields.get("note", "").strip()[:2000]
+    if not note:
+        return await refuse(
+            request,
+            "/ai",
+            "ai.decision.revoke",
+            str(decision_id),
+            "A note is required to revoke a decision: say why.",
+        )
     async with SessionLocal() as db:
         decision, cancelled, refusal = await flow.revoke_decision(
             db, decision_id, by=who(), note=note

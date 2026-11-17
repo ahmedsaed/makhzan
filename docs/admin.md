@@ -196,9 +196,9 @@ between one shop's listings is refused, since the same shop never merges).
   second click.
 - **Review AI merges**: standing "same" decisions, those merged now first
   (`listings.matched_via = 'ai'`; with the mode off none are, and the list is
-  what going live would merge). **Revoke decision** needs no confirm and takes
-  an optional note (default: "revoked in the admin dashboard's review of AI
-  merges"). **Redecide (dry run)** re-applies the active policy to stored
+  what going live would merge). **Revoke decision** needs no confirm but a
+  note, as `./makhzan ai revoke --note` does (owner, 2026-11-17).
+  **Redecide (dry run)** re-applies the active policy to stored
   scores and writes nothing.
 
 ## Pausing the crawl

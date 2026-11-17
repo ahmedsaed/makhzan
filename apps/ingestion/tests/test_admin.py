@@ -662,18 +662,25 @@ async def test_revoking_a_decision_from_the_review_list(queued):
         csrf = await _session(client)
         page = await client.get("/ai")
         assert f"#{decision_id}" in page.text
-        await client.post(f"/ai/decisions/{decision_id}/revoke", data={"csrf": csrf})
-        again = await client.post(f"/ai/decisions/{decision_id}/revoke", data={"csrf": csrf})
+        # No note: refused, nothing revoked.
+        await client.post(f"/ai/decisions/{decision_id}/revoke", data={"csrf": csrf, "note": " "})
+        async with SessionLocal() as session:
+            assert (await session.get(AiDecision, decision_id)).state == "standing"
+        note = {"csrf": csrf, "note": "a bracket, not the sensor"}
+        await client.post(f"/ai/decisions/{decision_id}/revoke", data=note)
+        again = await client.post(f"/ai/decisions/{decision_id}/revoke", data=note)
         assert again.status_code == 303
     async with SessionLocal() as session:
         row = await session.get(AiDecision, decision_id)
     assert (row.state, row.revoked_by, row.revoke_note) == (
         "revoked",
         "owner",
-        admin_app.DEFAULT_REVOKE_NOTE,
+        "a bracket, not the sensor",
     )
     assert len(await _accepted("ai.decision.revoke")) == 1
-    assert len(await _refused("ai.decision.revoke")) == 1  # the second, of a revoked one
+    refused = await _refused("ai.decision.revoke")
+    assert [r.detail["refused"] for r in refused][0].startswith("A note is required")
+    assert len(refused) == 2  # no note, then a decision already revoked
 
 
 async def test_redecide_is_a_dry_run(queued):

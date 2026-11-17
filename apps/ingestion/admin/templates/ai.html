@@ -101,7 +101,7 @@
 {% endif %}
 
 <section class="panel">
-  <header><div><h2>Review AI merges</h2><p>Standing "same" decisions, those merged now (no rule would have) first. Revoking needs no confirm: the pair splits at the next regroup and is not re-asked until its text changes.</p></div>
+  <header><div><h2>Review AI merges</h2><p>Standing "same" decisions, those merged now (no rule would have) first. Revoking needs no confirm, only a note: the pair splits at the next regroup and is not re-asked until its text changes.</p></div>
     {{ m.post("/ai/redecide", "Redecide (dry run)", csrf, "btn") }}</header>
   {% if redecided %}
   <div class="body"><div class="result">
@@ -115,7 +115,7 @@
     <article class="card"><div class="hd"><span class="mono muted">#{{ d.id }} · {{ d.pipeline }} · same {% if it.merged %}<span class="chip c-info">merged now</span>{% else %}<span class="chip c-neutral plain">not merged{{ " (mode off)" if s.mode != "live" else "" }}</span>{% endif %}</span>
       <span class="scores">{% for stage, sc in (d.scores or {}).items() %}{% set lo = sc.min if sc.min is not none else ([sc.ab or 0, sc.ba or 0]|min) %}<span class="chip c-{{ 'ok' if lo >= 0.9 else 'warn' }} plain mono">{{ stage }} {{ "%.2f"|format(lo) }}</span>{% endfor %}</span></div>
       <div class="bd"><div class="pair">{{ side(it.a, d.listing_a) }}{{ side(it.b, d.listing_b) }}</div><div class="muted small">decided {{ d.created_at|age }} by {{ d.decided_by }} under {{ d.policy_version }}</div></div>
-      <div class="ft"><form class="toolbar" method="post" action="/ai/decisions/{{ d.id }}/revoke">{{ m.csrf_field(csrf) }}<label class="sr" for="rv-{{ d.id }}">Note</label><input class="note" type="text" id="rv-{{ d.id }}" name="note" placeholder="Note (optional)"><button class="btn sm danger" type="submit">Revoke decision</button></form></div></article>
+      <div class="ft"><form class="toolbar" method="post" action="/ai/decisions/{{ d.id }}/revoke">{{ m.csrf_field(csrf) }}<label class="sr" for="rv-{{ d.id }}">Note</label><input class="note" type="text" id="rv-{{ d.id }}" name="note" required placeholder="Why (required)"><button class="btn sm danger" type="submit">Revoke decision</button></form></div></article>
     {% else %}<p class="muted">No standing "same" decisions.</p>{% endfor %}
   </div></div>
 </section>
