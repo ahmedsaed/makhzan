@@ -1258,3 +1258,35 @@ class AiFlag(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class AiSession(Base):
+    """One worker session with the broker, from its hello (docs/ai/broker-api.md §3.1).
+
+    `models` holds what the worker reported at hello and what the broker
+    answered, by model key: {"kev": {"model_version": ..., "weights_revision":
+    ..., "ok": true}}. A lease names its session, and is refused for a model
+    the session did not report, or reported at another version (§3.2).
+    `lease_s` is the lease length the worker asked for at hello. `ended_at`
+    and `end_reason` record how it last stopped (`released`: a graceful
+    `/release`; `empty`: a lease came back empty), for status; a session that
+    leases again afterwards is open again.
+    """
+
+    __tablename__ = "ai_sessions"
+    __table_args__ = (Index("ix_ai_session_worker_started", "worker_id", "started_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    worker_id: Mapped[int] = mapped_column(
+        SmallInteger, ForeignKey("ai_workers.id", ondelete="CASCADE"), nullable=False
+    )
+    models: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    #: The rest of the hello: image, device, dtype, threads, config.
+    hello: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    lease_s: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_reason: Mapped[str | None] = mapped_column(String(16))
