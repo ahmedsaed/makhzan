@@ -424,6 +424,8 @@ each snapshot file is a symlink to a suffix-less blob, and `/proc/self/maps` sho
 The first version matched on file suffix, so it could not fire on a standard cache: runs that
 loaded from one and reported "no weights mapped" prove nothing. `bench_cpu.py selfcheck` maps
 files through Hub-style symlinks and confirms they are detected. `run` runs that check first.
+The self-check writes a few small files to a temporary directory, so a container run with
+`--read-only` needs a writable `/tmp`: add `--tmpfs /tmp`.
 Two defaults were chosen by a session and await owner review (decision-review D23): 60 pairs
 (`N_PAIRS`, `--n`) and a parity tolerance of 0.05 (`--tolerance`). These are measurement
 parameters, not merge rules.
@@ -453,7 +455,8 @@ parameters, not merge rules.
 - `models/`, superseded (an archive of what was run; each file's header names the ruling it
   predates): `judge.py`, the Phase E bake-off (Kev with session-written rules, pplx at 32
   requests per call, Qwen3.5-4B); `context.py`, the full-context test (price in the payload,
-  unlabelled, "confounded, reopen"); `edges.py` and `score.py`, which serve them.
+  title unlabelled, category, brand, part number and price labelled, empty fields dropped
+  rather than "not stated"; "confounded, reopen"); `edges.py` and `score.py`, which serve them.
 - `bakeoff/`: the Phase D bake-off (candidate finding and pair judging, with the prompt study).
   Run in this order:
   1. `catalogue.py`: dump the local database copy.

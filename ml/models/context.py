@@ -3,8 +3,9 @@
 SUPERSEDED, kept as the record of what was run (2026-11-16); the owner marked its result
 "confounded, reopen" (docs/ai/decision-review.md, D9). Session choices it rests on: price is in
 the payload (price is not evidence of identity, and the owner excluded it), the two listings
-run together unlabelled with missing fields left out (the owner chose labelled fields with
-"not stated"), the one-sentence I2 question with no rules, pplx at 32 requests per call, and
+run together in one state, the title unlabelled and Category / Brand / Part number / Price
+labelled on one line, with empty fields dropped rather than written as "not stated" (the owner
+chose every field labelled, with "not stated"), the one-sentence I2 question with no rules, pplx at 32 requests per call, and
 RULE = (0.9, 0.5), the old title-only operating point. The approved payloads are
 ml/models/grid_payloads.py, run by prompt_grid.py.
 
