@@ -400,7 +400,7 @@ async def main_async(args: argparse.Namespace) -> int:
     gap = max(args.delay, MIN_GAP)
     print(f"gap:       {gap:g} s between requests to one host; no retries, no redirects\n")
     # Rows print as they arrive, so the name column is sized before the first:
-    # "ampere-electronics" overran a fixed 14 and pushed its row out of line.
+    # A long source id overran a fixed 14 and pushed its row out of line.
     _WIDTHS["source"] = max(len("source"), *(len(t.source_id) for t in targets))
     print(_line({k: k for k in _WIDTHS}))
     print(_line({k: "-" * len(k) for k in _WIDTHS}))
