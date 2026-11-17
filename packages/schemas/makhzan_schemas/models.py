@@ -12,14 +12,18 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Identity,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -28,7 +32,7 @@ from sqlalchemy import (
     text,
     true,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from makhzan_schemas.domains.base import DEFAULT_DOMAIN
@@ -170,6 +174,13 @@ class Listing(TimestampMixin, Base):
         Index("ix_listing_part_number", "part_number"),
         Index("ix_listing_category_status", "category_id", "status"),
         Index("ix_listing_last_verified", "last_verified_at"),
+        CheckConstraint(
+            "matched_via IS NULL OR matched_via IN ('rules', 'ai')", name="ck_listing_matched_via"
+        ),
+        CheckConstraint(
+            "matched_ai_decision_id IS NULL OR matched_via = 'ai'",
+            name="ck_listing_matched_ai_decision",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
@@ -253,6 +264,21 @@ class Listing(TimestampMixin, Base):
     #: The latest counted read. Not `last_verified_at`, which a stock-only read
     #: leaves alone: spans between checks are measured on this.
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    #: How the listing came to be an offer of its product, written only by the
+    #: regroup (`grouping.rebuild_products`), like `part_number`: `rules` (the
+    #: grouping rules alone put it with the product's core) or `ai` (an AI
+    #: "same" decision did, which the rules alone would not have). NULL until a
+    #: regroup has run since the column came; read as `rules`
+    #: (`matching.matched_by`).
+    matched_via: Mapped[str | None] = mapped_column(String(8))
+    #: For `ai`: the `ai_decisions` row that linked this listing's part of the
+    #: product to the rest; NULL when no single decision did (see
+    #: `grouping._attribute`). Not a foreign key, like
+    #: `products.min_price_listing_id`: `ai_decisions` already points at
+    #: listings, and a second path between the tables would make their joins
+    #: ambiguous. Decision rows are never deleted.
+    matched_ai_decision_id: Mapped[int | None] = mapped_column(BigInteger)
 
     supplier: Mapped[Supplier] = relationship(back_populates="listings")
     category: Mapped[Category | None] = relationship()
@@ -842,3 +868,393 @@ class GroupingOverride(Base):
     blocked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     blocked_reason: Mapped[str | None] = mapped_column(Text)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------------------
+# AI matching (docs/ai/broker-api.md, makhzan_schemas.ai)
+# ---------------------------------------------------------------------------
+#
+# Pairs are unordered and stored with `listing_a < listing_b`
+# (`overrides.pair()`), as `grouping_overrides` stores them: listing ids are
+# permanent. "ab" is the reading order that shows `listing_a` as LISTING A.
+# Production never runs a model: the broker hands rendered requests to the
+# owner's workers and stores what they score. Which worker runs which model,
+# when, is each worker's own configuration (owner, 2026-11-17).
+#
+# Model keys, pipeline and stage names are plain strings, validated against
+# the registry in code (`makhzan_schemas.ai.pipelines`, `ai.policy.MODELS`),
+# never database enums: a new model or pipeline needs no migration.
+
+
+class AiModelVersion(Base):
+    """One judge as scored: a model version read through a prompt version (P8).
+
+    `model` is the model key (`policy.MODELS`); `model_version` names its
+    weights revision, serving code and scoring parameters; `prompt_version`
+    the prompt variant's layout, cap and a hash of the rules and the renderer
+    (`prompt.PROMPT_VERSIONS`). A score belongs to one row, so its
+    `model_version_id` says which model read which prompt. The registry in
+    code says which row each pipeline stage uses now; a row is created the
+    first time a stage needs it (`triggers.model_version_id`). GPU and CPU
+    runs are the same version; each score records its device and dtype.
+    """
+
+    __tablename__ = "ai_model_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "model", "model_version", "prompt_version", name="uq_ai_model_version_judge"
+        ),
+        CheckConstraint("status IN ('active', 'retired')", name="ck_ai_model_version_status"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, Identity(), primary_key=True)
+    model: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    weights_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Scoring parameters, e.g. {"temperature": 1.0, "prefix_cache": 0}.
+    scoring: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", server_default="active", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiWorker(Base):
+    """A machine allowed to lease jobs from the broker (P3).
+
+    One bearer token each, stored only as its sha256 (a high-entropy random
+    token needs no slow hash); issued and revoked by `./makhzan ai worker`.
+    `models` are the model keys it may serve: it leases any job whose stage
+    needs one of them (`pipelines.stages_for_models`). There is no host or
+    host group: the broker treats every worker the same, and each worker's
+    configuration decides what it runs and when (owner, 2026-11-17).
+    """
+
+    __tablename__ = "ai_workers"
+    __table_args__ = (CheckConstraint("cardinality(models) > 0", name="ck_ai_worker_models"),)
+
+    id: Mapped[int] = mapped_column(SmallInteger, Identity(), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    token_sha256: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, nullable=False)
+    models: Mapped[list[str]] = mapped_column(ARRAY(String(32)), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The worker's last hello: its configuration, versions, device, for status.
+    last_hello: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class AiListingState(Base):
+    """What the candidates trigger last saw of each listing (P5).
+
+    `content_sha256` is `hashing.listing_hash` as last computed;
+    `candidates_sha256` the hash its candidates were last found for. A listing
+    whose two differ is new or changed, and due for candidates.
+    """
+
+    __tablename__ = "ai_listing_state"
+
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), primary_key=True
+    )
+    content_sha256: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    content_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    candidates_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    candidates_sha256: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+
+
+class AiJob(Base):
+    """One pair to score at one stage of one pipeline, both reading orders (P11).
+
+    `pipeline` and `stage` name an entry of `pipelines.PIPELINES` (`match`
+    and `audit` today); `model_version_id` is the judge that stage used when
+    the job was queued. A trigger queues a pair into its pipeline's first
+    stage; each later stage is queued by the broker's result handling
+    (`pipelines.transition`). `reason` says which trigger, or `rescore`.
+    Leased by a worker until `lease_expires_at`; an expired lease is queued
+    again and counts an attempt; after `max_attempts` the job is `dead`.
+    Enqueueing is idempotent: one open job per (pipeline, stage, judge, pair).
+    `request_sha256` holds {"ab": hex, "ba": hex} as rendered at lease time,
+    and `content_sha256_a` and `_b` the listings' content hashes then
+    (docs/ai/broker-api.md).
+    """
+
+    __tablename__ = "ai_jobs"
+    __table_args__ = (
+        CheckConstraint("listing_a < listing_b", name="ck_ai_job_ordered"),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'done', 'cancelled', 'dead')",
+            name="ck_ai_job_status",
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (lease_id IS NOT NULL)", name="ck_ai_job_leased_has_lease"
+        ),
+        Index(
+            "uq_ai_job_open_pair",
+            "pipeline",
+            "stage",
+            "model_version_id",
+            "listing_a",
+            "listing_b",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+        # What `/lease` scans: queued jobs of a judge, best first.
+        Index(
+            "ix_ai_job_lease",
+            "model_version_id",
+            text("priority DESC"),
+            "created_at",
+            postgresql_where=text("status = 'queued'"),
+        ),
+        # What the expiry reaper scans: leases past their time.
+        Index(
+            "ix_ai_job_lease_expiry",
+            "lease_expires_at",
+            postgresql_where=text("status = 'leased'"),
+        ),
+        Index("ix_ai_job_pair", "listing_a", "listing_b"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    pipeline: Mapped[str] = mapped_column(String(32), nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_version_id: Mapped[int] = mapped_column(
+        SmallInteger, ForeignKey("ai_model_versions.id"), nullable=False
+    )
+    listing_a: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    listing_b: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    priority: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="queued", server_default="queued", nullable=False
+    )
+    attempts: Mapped[int] = mapped_column(
+        SmallInteger, default=0, server_default="0", nullable=False
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        SmallInteger, default=3, server_default="3", nullable=False
+    )
+    lease_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    leased_by: Mapped[int | None] = mapped_column(SmallInteger, ForeignKey("ai_workers.id"))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    request_sha256: Mapped[dict | None] = mapped_column(JSONB)
+    #: The two listings' content hashes (`hashing.listing_hash`) when the
+    #: requests were rendered, at lease time: the text the scores are about.
+    content_sha256_a: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    content_sha256_b: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiScore(Base):
+    """One judge's score for one reading order of one pair.
+
+    Idempotent on (judge, `request_sha256`): the same request is never stored
+    twice, so a retried or late result is a duplicate, not a second score. A
+    score belongs to its judge, not to a pipeline: any stage that uses the same
+    model and prompt version reads it. `content_sha256_a` and `_b` are the
+    two listings' content hashes (`hashing.listing_hash`) the request was
+    rendered from. `p` is the model's score as `policy.MODELS` defines it
+    (Kev: raw P(yes) at temperature 1; pplx: P(true) at its checkpoint
+    temperature).
+    """
+
+    __tablename__ = "ai_scores"
+    __table_args__ = (
+        CheckConstraint("listing_a < listing_b", name="ck_ai_score_ordered"),
+        CheckConstraint("reading_order IN ('ab', 'ba')", name="ck_ai_score_order"),
+        CheckConstraint("p >= 0 AND p <= 1", name="ck_ai_score_p"),
+        UniqueConstraint("model_version_id", "request_sha256", name="uq_ai_score_request"),
+        Index("ix_ai_score_pair", "listing_a", "listing_b"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    model_version_id: Mapped[int] = mapped_column(
+        SmallInteger, ForeignKey("ai_model_versions.id"), nullable=False
+    )
+    listing_a: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    listing_b: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    reading_order: Mapped[str] = mapped_column(String(2), nullable=False)
+    request_sha256: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    content_sha256_a: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    content_sha256_b: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    p: Mapped[float] = mapped_column(Float, nullable=False)
+    #: Anything else the worker reported: margin, token usage.
+    extra: Mapped[dict | None] = mapped_column(JSONB)
+    seconds: Mapped[float | None] = mapped_column(Float)
+    device: Mapped[str | None] = mapped_column(String(16))
+    dtype: Mapped[str | None] = mapped_column(String(16))
+    threads: Mapped[int | None] = mapped_column(SmallInteger)
+    worker_id: Mapped[int | None] = mapped_column(SmallInteger, ForeignKey("ai_workers.id"))
+    job_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ai_jobs.id", ondelete="SET NULL")
+    )
+    scored_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AiDecision(Base):
+    """What a deciding pipeline concluded about one pair, under one policy.
+
+    Written by the broker's result handling when `pipelines.transition` says
+    DECIDE. `outcome` is `same` or `not_same`; `decided_by` is the stage that
+    settled it (the stage whose score fell below its threshold, or the last
+    stage). `scores` keeps every stage's evidence, by stage name:
+    {"kev": {"model": "kev", "model_version_id": 1, "ab": 0.91, "ba": 0.88,
+    "min": 0.88}, ...}. `state`:
+
+    - `standing`: the pair's decision in force, one per (pipeline, pair). It
+      stays in force until the pair is scored again, with no timeout, even
+      after a listing's text changed (P6); a re-score that is due and never
+      completes shows in status and is handled by hand.
+    - `stale`: replaced by a later decision about the pair (a re-score, a new
+      judge version, a new policy). Kept as evidence.
+    - `revoked`: withdrawn by a person (`revoked_at`, `revoked_by`,
+      `revoke_note`).
+
+    The regroup reads standing "same" decisions only when the mode is `live`
+    (`ai.mode`), or in a dry run's preview. `effect`,
+    `blocked_reason` and `checked_at` are for what a regroup found
+    (`in_effect`, `blocked`, `inactive`, `overridden`); nothing writes them yet.
+    """
+
+    __tablename__ = "ai_decisions"
+    __table_args__ = (
+        CheckConstraint("listing_a < listing_b", name="ck_ai_decision_ordered"),
+        CheckConstraint("outcome IN ('same', 'not_same')", name="ck_ai_decision_outcome"),
+        CheckConstraint("state IN ('standing', 'stale', 'revoked')", name="ck_ai_decision_state"),
+        CheckConstraint(
+            "effect IS NULL OR effect IN ('in_effect', 'blocked', 'inactive', 'overridden')",
+            name="ck_ai_decision_effect",
+        ),
+        CheckConstraint(
+            "(state = 'revoked') = (revoked_at IS NOT NULL)", name="ck_ai_decision_revoked_at"
+        ),
+        Index(
+            "uq_ai_decision_standing_pair",
+            "pipeline",
+            "listing_a",
+            "listing_b",
+            unique=True,
+            postgresql_where=text("state = 'standing'"),
+        ),
+        Index("ix_ai_decision_listing_a", "listing_a"),
+        Index("ix_ai_decision_listing_b", "listing_b"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    pipeline: Mapped[str] = mapped_column(String(32), nullable=False)
+    listing_a: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    listing_b: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(8), nullable=False)
+    decided_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Every stage's scores, by stage name (see the class docstring).
+    scores: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    #: The thresholds in force (`ai.policy.POLICIES`).
+    policy_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: The two listings' current content hashes, computed when the decision was
+    #: written (not copied from the scores, which may reuse an older label).
+    content_sha256_a: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    content_sha256_b: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16), default="standing", server_default="standing", nullable=False
+    )
+    effect: Mapped[str | None] = mapped_column(String(16))
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(100))
+    revoke_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AiFlag(Base):
+    """Something about AI matching a person should look at.
+
+    - `rules_low_kev`: Kev scored a pair the rules merged low (P12: every such
+      score is recorded; no threshold is chosen yet).
+    - `poison_job`: a job that failed `max_attempts` times.
+    - `blocked_same`: a "same" decision today's vetoes or an existing product
+      keep from taking effect.
+    - `version_drift`: a worker reported a model that is not the one in use.
+
+    One open flag per (kind, pair).
+    """
+
+    __tablename__ = "ai_flags"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift')",
+            name="ck_ai_flag_kind",
+        ),
+        CheckConstraint("status IN ('open', 'dismissed', 'actioned')", name="ck_ai_flag_status"),
+        CheckConstraint(
+            "listing_a IS NULL OR listing_b IS NULL OR listing_a < listing_b",
+            name="ck_ai_flag_ordered",
+        ),
+        Index(
+            "uq_ai_flag_open",
+            "kind",
+            "listing_a",
+            "listing_b",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+            # A flag with no pair (a version drift) is still one open flag
+            # per kind: NULLs compare equal here (Postgres 15+).
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    listing_a: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE")
+    )
+    listing_b: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE")
+    )
+    #: Not a foreign key, like `product_events.product_id`: product ids outlive rows.
+    product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    job_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ai_jobs.id", ondelete="SET NULL")
+    )
+    score: Mapped[float | None] = mapped_column(Float)
+    model_version_id: Mapped[int | None] = mapped_column(
+        SmallInteger, ForeignKey("ai_model_versions.id")
+    )
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="open", server_default="open", nullable=False
+    )
+    resolved_by: Mapped[str | None] = mapped_column(String(100))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

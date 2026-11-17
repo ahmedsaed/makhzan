@@ -623,6 +623,21 @@ offers → never; "same as another" → one must between listings of two shops),
 removes. AI matching must read the same set
 (`load_overrides`), never re-ask a model about a ruled pair.
 
+**AI "same" decisions are read only when `worker_state['ai_matching']` is
+`live`** (`off` by default; `makhzan_schemas.ai`, `docs/ai/broker-api.md`).
+Then they act last (`grouping._ai_phase`): once the rules and the rulings have
+formed every cluster, an AI pair may join two whole clusters, today's vetoes
+checked between every member, a ruled pair never read, and a Kev score below
+0.05 between any two members blocks the join. Acting last is what makes the
+result independent of placement order and keeps it from ever splitting a
+rules merge. The regroup alone writes `listings.matched_via`
+(`matching.matched_by` reads it). With no decision read, grouping is byte for
+byte what it was (`test_grouping_differential.py`); `make regroup-dry-run
+ARGS=--ai` previews standing decisions while off, which is how the backlog's
+groupings are reviewed on a local copy before production.
+Pipelines, models and prompts are data (`ai/pipelines.py`, `ai/policy.py`,
+`ai/prompt.py`): a new one is a registry entry, not a migration.
+
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
 under exactly "Services". Narrow on purpose — a false positive deletes real stock.
