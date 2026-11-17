@@ -244,12 +244,21 @@ async def targets_from_sources(
     for adapter in all_enabled():
         if source_filter and adapter.source_id != source_filter:
             continue
-        url = adapter.probe_url() or sites.get(adapter.source_id)
-        if not url and adapter.base_url:
-            url = f"{adapter.base_url}/"
-        if url:
-            targets.append(Target(adapter.source_id, url, adapter.identity))
+        if target := target_for(adapter, sites):
+            targets.append(target)
     return targets
+
+
+def target_for(adapter, sites: dict[str, str]) -> Target | None:
+    """Where to probe one source: its real first page, else the sites list, else its home page.
+
+    Any source, enabled or not: the admin dashboard probes one shop at a time,
+    and the shop it asks about is usually one paused because it was blocked.
+    """
+    url = adapter.probe_url() or sites.get(adapter.source_id)
+    if not url and adapter.base_url:
+        url = f"{adapter.base_url}/"
+    return Target(adapter.source_id, url, adapter.identity) if url else None
 
 
 # --------------------------------------------------------------------------- #

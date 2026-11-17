@@ -38,6 +38,7 @@ import getpass
 import sys
 import textwrap
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
@@ -169,45 +170,78 @@ def who(by: str | None) -> str:
         return "cli"
 
 
+@dataclass
+class Reviewed:
+    """What closing one report did: the CLI prints it, the admin dashboard shows it."""
+
+    report_id: int
+    status: str
+    #: Why it was not closed: no such report, or an accept no ruling could act on.
+    refused: str | None = None
+    #: An accept's rulings (`overrides.Added`), created, already there, or in conflict.
+    added: list = field(default_factory=list)
+    #: A reject's withdrawn rulings.
+    withdrawn: int = 0
+
+
+async def review_reports(session, ids: Sequence[int], status: str, *, by: str) -> list[Reviewed]:
+    """Accept or reject reports, each committed on its own; what `reports accept|reject` does.
+
+    Accepting a grouping report records its rulings (`overrides.accept_report`);
+    one no ruling could act on is refused, not shown accepted with nothing
+    behind it. Rejecting withdraws whatever rulings the report had made.
+    """
+    out: list[Reviewed] = []
+    for report_id in ids:
+        pairs = None
+        if status == "accepted":
+            # The rulings first: a report no ruling could act on is
+            # refused, not shown accepted with nothing behind it.
+            found = await session.get(Report, report_id)
+            if found is not None:
+                try:
+                    pairs = await rulings.report_pairs(session, found)
+                except rulings.ReportRefused as refused:
+                    out.append(Reviewed(report_id, status, refused=str(refused)))
+                    continue
+        report = await rules.review(session, report_id, status)
+        if report is None:
+            out.append(Reviewed(report_id, status, refused="no such report"))
+            continue
+        done = Reviewed(report_id, status)
+        if status == "accepted":
+            done.added = await rulings.accept_report(session, report, created_by=by, pairs=pairs)
+        else:
+            done.withdrawn = await rulings.withdraw_report(
+                session, report_id, removed_by=f"{by} (report rejected)"
+            )
+        await session.commit()
+        out.append(done)
+    return out
+
+
 async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int:
-    missing = 0
     async with SessionLocal() as session:
-        for report_id in ids:
-            pairs = None
-            if status == "accepted":
-                # The rulings first: a report no ruling could act on is
-                # refused, not shown accepted with nothing behind it.
-                found = await session.get(Report, report_id)
-                if found is not None:
-                    try:
-                        pairs = await rulings.report_pairs(session, found)
-                    except rulings.ReportRefused as refused:
-                        print(
-                            f"{rules.reference(report_id)} not accepted: {refused}. "
-                            "Reject it, or rule by hand with `overrides add`.",
-                            file=sys.stderr,
-                        )
-                        missing += 1
-                        continue
-            report = await rules.review(session, report_id, status)
-            if report is None:
-                print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
-                missing += 1
-                continue
-            print(f"{rules.reference(report_id)} {status}.")
-            if status == "accepted":
-                added_all = await rulings.accept_report(
-                    session, report, created_by=who(by), pairs=pairs
-                )
-                for added in added_all:
-                    print("  " + ruling_line(added))
-            else:
-                withdrawn = await rulings.withdraw_report(
-                    session, report_id, removed_by=f"{who(by)} (report rejected)"
-                )
-                if withdrawn:
-                    print(f"  withdrew {withdrawn} grouping override(s) it had made")
-            await session.commit()
+        outcomes = await review_reports(session, ids, status, by=who(by))
+    missing = 0
+    for done in outcomes:
+        ref = rules.reference(done.report_id)
+        if done.refused == "no such report":
+            print(f"No report {ref}.", file=sys.stderr)
+            missing += 1
+        elif done.refused:
+            print(
+                f"{ref} not accepted: {done.refused}. "
+                "Reject it, or rule by hand with `overrides add`.",
+                file=sys.stderr,
+            )
+            missing += 1
+        else:
+            print(f"{ref} {status}.")
+            for added in done.added:
+                print("  " + ruling_line(added))
+            if done.withdrawn:
+                print(f"  withdrew {done.withdrawn} grouping override(s) it had made")
     return 1 if missing else 0
 
 
@@ -220,6 +254,8 @@ def override_lines(row: GroupingOverride) -> list[str]:
     ]
     if row.removed_at is not None:
         lines.append(f"    removed {row.removed_at:%Y-%m-%d %H:%M} UTC by {row.removed_by}")
+        if row.remove_note:
+            lines.append(f"    why removed: {row.remove_note}")
     elif row.status is None:
         lines.append("    not yet checked: applies at the next regroup")
     else:

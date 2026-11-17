@@ -177,14 +177,21 @@ async def add(
 
 
 async def remove(
-    session: AsyncSession, override_id: int, *, removed_by: str, now: datetime | None = None
+    session: AsyncSession,
+    override_id: int,
+    *,
+    removed_by: str,
+    note: str | None = None,
+    now: datetime | None = None,
 ) -> GroupingOverride | None:
     """Withdraw one ruling, keeping its row (flushed, not committed); None if
-    there is no such row. Removing a removed ruling changes nothing."""
+    there is no such row. Removing a removed ruling changes nothing. `note`
+    says why (`remove_note`)."""
     row = await session.get(GroupingOverride, override_id)
     if row is not None and row.removed_at is None:
         row.removed_at = now or datetime.now(UTC)
         row.removed_by = removed_by.strip()[:100] or "cli"
+        row.remove_note = (note or "").strip() or None
         await session.flush()
     return row
 
