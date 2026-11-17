@@ -10,7 +10,7 @@ answers it (`app.broker.main` in apps/api):
   stage, prompt version) its leases will carry;
 - leases sized by `seconds_left` minus a 60 s margin, stopping at the first job that does
   not fit; an empty answer says why (`reason`: "empty", or "none_fit" when jobs are queued
-  but none fits, which does not end the session); a repeated `lease_request_id` gives the session's last lease back (its jobs
+  but none fits; both end the session, as "empty" or "none_fit"); a repeated `lease_request_id` gives the session's last lease back (its jobs
   still held); lazy expiry that charges an attempt only to the job in hand (the last
   heartbeat's `progress.job_id`), or to every job of a lease with none in hand;
 - heartbeats that extend every live lease named and answer 409 lease_lost (with the lost
@@ -348,7 +348,9 @@ class FakeBroker:
             j.expires = self.clock() + session["lease_s"]
             picked.append(j)
         if not picked and unfit:
-            # Jobs are queued, none fits the time left: not an empty queue, no session end.
+            # Jobs are queued, none fits the time left: not an empty queue, but the session
+            # ends all the same (end_reason "none_fit", no P16 rebuild).
+            session["end_reason"] = "none_fit"
             return 200, {"lease_id": None, "jobs": [], "reason": "none_fit"}
         if not picked:
             session["end_reason"] = "empty"
