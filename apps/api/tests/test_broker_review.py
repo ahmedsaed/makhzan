@@ -16,27 +16,46 @@ from makhzan_schemas.ai import flow
 from makhzan_schemas.ai.mode import set_ai_mode
 from makhzan_schemas.ai.triggers import PairRequest, enqueue
 from makhzan_schemas.db import SessionLocal
-from makhzan_schemas.models import AiDecision, AiFlag, AiJob, AiModelVersion, AiSession
+from makhzan_schemas.models import (
+    AiDecision,
+    AiFlag,
+    AiJob,
+    AiModelVersion,
+    AiScore,
+    AiSession,
+    AiWorker,
+)
 from makhzan_schemas.overrides import pair
 from sqlalchemy import func, select, update
 
 from tests.factories import make_listing, make_supplier
 from tests.test_broker import (
+    MODELS,
     _auth,
     _expire_all,
     _hello,
     _jobs,
     _lease,
+    _post,
     _report,
+    _scores,
     _worker,
 )
 
 
 async def _grid(db, n: int) -> list[tuple[uuid.UUID, uuid.UUID]]:
-    """n x n cross-shop pairs."""
+    """n x n cross-shop pairs, every title distinct across calls: identical
+    text renders identical requests, and one pair's scores would settle the
+    other's (freshness by request hash)."""
+    tag = uuid.uuid4().hex[:6]
     shop_a, shop_b = await make_supplier(db, name="Shop A"), await make_supplier(db, name="Shop B")
-    xs = [await make_listing(db, supplier=shop_a, title_en=f"Widget alpha {i}") for i in range(n)]
-    ys = [await make_listing(db, supplier=shop_b, title_en=f"Widget beta {i}") for i in range(n)]
+    xs = [
+        await make_listing(db, supplier=shop_a, title_en=f"Widget alpha {tag} {i}")
+        for i in range(n)
+    ]
+    ys = [
+        await make_listing(db, supplier=shop_b, title_en=f"Widget beta {tag} {i}") for i in range(n)
+    ]
     return [pair(x.id, y.id) for x in xs for y in ys]
 
 
@@ -243,3 +262,224 @@ async def test_partial_index_upserts_survive_asyncpgs_generic_plan(db):
         await session.commit()
         assert await session.scalar(select(func.count()).select_from(AiJob)) == 10
         assert await session.scalar(select(func.count()).select_from(AiFlag)) == 10
+
+
+# --- second review -------------------------------------------------------------------------
+
+
+async def _session_body(token: str, broker, **extra) -> tuple[AiWorker, dict]:
+    hello = await _hello(broker, token, "kev")
+    async with SessionLocal() as session:
+        worker = await session.scalar(
+            select(AiWorker).where(AiWorker.token_sha256 == core.token_sha256(token))
+        )
+    body = {
+        "session": hello["session"],
+        "model": "kev",
+        "model_version": MODELS["kev"].model_version,
+        "max_jobs": 2,
+        **extra,
+    }
+    return worker, body
+
+
+async def test_a_retry_that_overlaps_the_original_waits_and_replays_it(broker, db):
+    """The repro: the retry arrives while the original lease is still
+    uncommitted. The session row lock makes it wait, then replay: one lease,
+    and nothing charged when the original's jobs are the ones the worker has."""
+    await _queue_many(await _grid(db, 2))
+    token = await _worker("cpu-kev", ["kev"])
+    worker, body = await _session_body(token, broker, lease_request_id="r1")
+    s1, s2 = SessionLocal(), SessionLocal()
+    try:
+        w1, w2 = await s1.get(AiWorker, worker.id), await s2.get(AiWorker, worker.id)
+        original = await core.lease(s1, w1, body, await core.db_now(s1))  # not committed
+        retry = asyncio.create_task(core.lease(s2, w2, body, await core.db_now(s2)))
+        await asyncio.sleep(0.5)
+        assert not retry.done()  # waiting on the session row
+        await s1.commit()
+        replayed = await retry
+        await s2.commit()
+    finally:
+        await s1.close()
+        await s2.close()
+    assert replayed["lease_id"] == original["lease_id"]
+    assert [j["job_id"] for j in replayed["jobs"]] == [j["job_id"] for j in original["jobs"]]
+    jobs = await _jobs()
+    assert sum(j.status == "leased" for j in jobs) == 2
+    assert len({j.lease_id for j in jobs if j.lease_id}) == 1
+
+
+async def test_a_lease_request_id_reused_for_another_model_is_refused(broker, db):
+    await _queue_many(await _grid(db, 1))
+    x, y = (await _grid(db, 1))[0]
+    async with SessionLocal() as session:
+        await enqueue(session, [PairRequest(x, y, "match", 60, "x")], stage="pplx")
+        await session.commit()
+    token = await _worker("both", ["kev", "pplx"])
+    hello = await _hello(broker, token, "kev", "pplx")
+    await _lease(broker, token, hello["session"], "kev", lease_request_id="r1")
+    r = await broker.post(
+        "/ai/v1/lease",
+        json={
+            "session": hello["session"],
+            "model": "pplx",
+            "model_version": MODELS["pplx"].model_version,
+            "lease_request_id": "r1",
+        },
+        headers=_auth(token),
+    )
+    assert r.status_code == 422
+
+
+async def _store_scores(job: dict, orders=("ab", "ba"), p: float = 0.1) -> None:
+    """Scores for a leased job's requests, as if another worker posted them."""
+    async with SessionLocal() as session:
+        row = await session.get(AiJob, job["job_id"])
+        for request in job["requests"]:
+            if request["order"] in orders:
+                session.add(
+                    AiScore(
+                        model_version_id=row.model_version_id,
+                        listing_a=row.listing_a,
+                        listing_b=row.listing_b,
+                        reading_order=request["order"],
+                        request_sha256=bytes.fromhex(request["request_sha256"]),
+                        content_sha256_a=row.content_sha256_a or b"\0" * 32,
+                        content_sha256_b=row.content_sha256_b or b"\0" * 32,
+                        p=p,
+                    )
+                )
+        await session.commit()
+
+
+async def test_a_replayed_job_scored_meanwhile_is_finished_not_renewed(broker, db):
+    await _queue_many(await _grid(db, 1) + await _grid(db, 1))
+    token = await _worker("cpu-kev", ["kev"])
+    hello = await _hello(broker, token, "kev")
+    first = await _lease(broker, token, hello["session"], "kev", max_jobs=2, lease_request_id="r1")
+    scored, kept = first["jobs"]
+    await _store_scores(scored)
+    again = await _lease(broker, token, hello["session"], "kev", max_jobs=2, lease_request_id="r1")
+    assert [j["job_id"] for j in again["jobs"]] == [kept["job_id"]]
+    jobs = {j.id: j for j in await _jobs()}
+    assert (jobs[scored["job_id"]].status, jobs[scored["job_id"]].lease_id) == ("done", None)
+
+
+@pytest.mark.parametrize("ending", ["release", "results", "reap"])
+async def test_a_replay_of_a_lease_no_longer_held_is_a_fresh_lease(broker, db, ending):
+    await _queue_many(await _grid(db, 1) + await _grid(db, 1))
+    token = await _worker("cpu-kev", ["kev"])
+    hello = await _hello(broker, token, "kev")
+    first = await _lease(broker, token, hello["session"], "kev", max_jobs=1, lease_request_id="r1")
+    [job] = first["jobs"]
+    if ending == "release":
+        await broker.post(
+            "/ai/v1/release",
+            json={
+                "session": hello["session"],
+                "lease_id": first["lease_id"],
+                "job_ids": [job["job_id"]],
+            },
+            headers=_auth(token),
+        )
+    elif ending == "results":
+        await _post(broker, token, hello["session"], first, job, _scores(job, 0.1, 0.1))
+    else:
+        await _expire_all()
+    again = await _lease(broker, token, hello["session"], "kev", max_jobs=1, lease_request_id="r1")
+    assert again["lease_id"] != first["lease_id"]
+    assert len(again["jobs"]) == 1
+    leased = [j for j in await _jobs() if j.status == "leased"]
+    assert [str(j.lease_id) for j in leased] == [again["lease_id"]]
+    if ending == "results":
+        assert again["jobs"][0]["job_id"] != job["job_id"]
+
+
+async def test_a_lease_stops_at_the_first_job_that_does_not_fit(broker, db):
+    """A head job owing two requests, behind it one owing one: with time for
+    one request, nothing is leased (the broker never skips ahead), and the
+    answer says none fit rather than empty."""
+    head, small = await _grid(db, 1), await _grid(db, 1)
+    await _queue_many(small, priority=60)
+    token = await _worker("cpu-kev", ["kev"])
+    hello = await _hello(broker, token, "kev")
+    # Make `small` owe one request only: lease it, score "ab", release it.
+    first = await _lease(broker, token, hello["session"], "kev", max_jobs=1)
+    await _store_scores(first["jobs"][0], orders=("ab",))
+    await broker.post(
+        "/ai/v1/release",
+        json={
+            "session": hello["session"],
+            "lease_id": first["lease_id"],
+            "job_ids": [first["jobs"][0]["job_id"]],
+        },
+        headers=_auth(token),
+    )
+    await _queue_many(head, priority=70)
+    tight = await _lease(
+        broker,
+        token,
+        hello["session"],
+        "kev",
+        max_jobs=2,
+        seconds_left=60 + 150,
+        seconds_per_request=100,
+    )
+    assert tight == {"lease_id": None, "jobs": [], "reason": "none_fit"}
+    roomy = await _lease(
+        broker,
+        token,
+        hello["session"],
+        "kev",
+        max_jobs=2,
+        seconds_left=60 + 250,
+        seconds_per_request=100,
+    )
+    assert [len(j["requests"]) for j in roomy["jobs"]] == [2]  # the head job, alone
+
+
+async def test_nothing_fitting_is_not_empty_queues_no_rebuild_and_is_flagged(broker, db):
+    a, b = (await _grid(db, 1))[0]
+    await _queue_many([(a, b)])
+    async with SessionLocal() as session:
+        session.add(
+            AiDecision(
+                pipeline="match",
+                listing_a=a,
+                listing_b=b,
+                outcome="same",
+                decided_by="pplx",
+                scores={},
+                policy_version="p1",
+                content_sha256_a=b"\0" * 32,
+                content_sha256_b=b"\0" * 32,
+            )
+        )
+        await set_ai_mode(session, "live")
+        await session.commit()
+    token = await _worker("cpu-kev", ["kev"])
+    for night in range(core.NONE_FIT_FLAG_AFTER):
+        hello = await _hello(broker, token, "kev")
+        answer = await _lease(
+            broker, token, hello["session"], "kev", seconds_left=100, seconds_per_request=100
+        )
+        assert answer["reason"] == "none_fit"
+        async with SessionLocal() as session:
+            row = await session.get(AiSession, uuid.UUID(hello["session"]))
+            flags = list(await session.scalars(select(AiFlag)))
+        assert row.end_reason == "none_fit"
+        assert bool(flags) == (night == core.NONE_FIT_FLAG_AFTER - 1)
+    assert broker.rebuilds == []
+    assert (flags[0].kind, flags[0].subject) == ("nothing_fits", "cpu-kev/kev")
+
+
+async def test_a_heartbeat_progress_job_id_must_be_an_integer(broker):
+    token = await _worker("cpu-kev", ["kev"])
+    hello = await _hello(broker, token, "kev")
+    r = await broker.post(
+        "/ai/v1/heartbeat",
+        json={"session": hello["session"], "lease_ids": [], "progress": {"job_id": "12"}},
+        headers=_auth(token),
+    )
+    assert r.status_code == 422

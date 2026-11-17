@@ -111,12 +111,21 @@ class LeaseBody(BaseModel):
     lease_request_id: str | None = Field(None, min_length=1, max_length=64)
 
 
+class Progress(BaseModel):
+    """The job the worker is scoring now: the one an expiry is charged to."""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: StrictInt
+    order: Literal["ab", "ba"] | None = None
+
+
 class HeartbeatBody(BaseModel):
     session: str
     lease_ids: list[str] = Field(default_factory=list)
     job_ids: list[int] = Field(default_factory=list)
     rss_bytes: int | None = None
-    progress: dict[str, Any] | None = None
+    progress: Progress | None = None
 
 
 class Score(BaseModel):
