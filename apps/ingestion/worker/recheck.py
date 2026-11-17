@@ -99,17 +99,19 @@ async def due(session: AsyncSession, source_id: str, limit: int = MAX_PER_RUN) -
     )
 
 
-async def clear(session: AsyncSession, listing_ids) -> None:
-    """Clear the marker on listings that were asked about (flushed, not committed)."""
+async def clear(session: AsyncSession, listing_ids) -> int:
+    """Clear the marker on these listings (flushed, not committed). Returns how many had one."""
     ids = list(listing_ids)
-    if ids:
-        await session.execute(
-            update(Listing)
-            .where(Listing.id.in_(ids))
-            .values(recheck_requested_at=None)
-            .execution_options(synchronize_session=False)
-        )
-        await session.flush()
+    if not ids:
+        return 0
+    result = await session.execute(
+        update(Listing)
+        .where(Listing.id.in_(ids), Listing.recheck_requested_at.is_not(None))
+        .values(recheck_requested_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    await session.flush()
+    return result.rowcount or 0
 
 
 async def pending(session: AsyncSession) -> list[dict]:

@@ -187,6 +187,8 @@ class Reviewed:
     withdrawn: int = 0
     #: An accepted wrong price or stock report: listings marked to be read first.
     rechecks: int = 0
+    #: Rejecting one accepted before: its listings' re-check markers cleared.
+    rechecks_cleared: int = 0
 
 
 async def review_reports(
@@ -210,6 +212,7 @@ async def review_reports(
     out: list[Reviewed] = []
     for report_id in ids:
         pairs = None
+        was = await session.scalar(select(Report.status).where(Report.id == report_id))
         if status == "accepted":
             # The rulings first: a report no ruling could act on is
             # refused, not shown accepted with nothing behind it.
@@ -241,6 +244,9 @@ async def review_reports(
             done.withdrawn = await rulings.withdraw_report(
                 session, report_id, removed_by=f"{by} (report rejected)"
             )
+            if report.reason == RECHECK_REASON and was == "accepted":
+                # The accept that marked them is withdrawn: so are its re-checks.
+                done.rechecks_cleared = await recheck.clear(session, _ticked_ids(report))
         if audit is not None:
             await audit(session, done)
         await session.commit()
@@ -272,6 +278,8 @@ async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int
                 print(f"  withdrew {done.withdrawn} grouping override(s) it had made")
             if done.rechecks:
                 print(f"  marked {done.rechecks} listing(s) to be re-read first by their shop")
+            if done.rechecks_cleared:
+                print(f"  cleared the re-check on {done.rechecks_cleared} listing(s)")
     return 1 if missing else 0
 
 

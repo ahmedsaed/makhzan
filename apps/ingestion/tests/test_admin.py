@@ -512,6 +512,28 @@ async def test_accepting_a_wrong_price_report_marks_the_listing_to_be_read_first
     (accepted,) = await _actions("report.accept")
     assert accepted.detail["rechecks"] == 1
 
+    # Rejected after all: the re-check its accept asked for is withdrawn.
+    async with _client() as client:
+        csrf = await _session(client)
+        await client.post(f"/reports/{report_id}/reject", data={"csrf": csrf})
+    async with SessionLocal() as session:
+        assert (await session.get(Listing, listing)).recheck_requested_at is None
+    (rejected,) = await _actions("report.reject")
+    assert rejected.detail["rechecks_cleared"] == 1
+
+
+async def test_rejecting_a_new_price_report_clears_no_one_elses_re_check(queued):
+    """Only the reject of an accepted report withdraws markers: a new one never set any."""
+    (listing,) = await _listings(1)
+    accepted = await _report("wrong_price_stock", [(listing, True)])
+    fresh = await _report("wrong_price_stock", [(listing, True)])
+    async with _client() as client:
+        csrf = await _session(client)
+        await client.post(f"/reports/{accepted}/accept", data={"csrf": csrf})
+        await client.post(f"/reports/{fresh}/reject", data={"csrf": csrf})
+    async with SessionLocal() as session:
+        assert (await session.get(Listing, listing)).recheck_requested_at is not None
+
 
 async def test_adding_an_override_needs_a_note_and_two_shops_for_must(queued):
     a, b = await _listings(2)
