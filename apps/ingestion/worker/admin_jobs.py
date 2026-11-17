@@ -13,7 +13,10 @@ outcome in `result` (or `error`) with `done`/`failed`. The page polls the row.
   of it is going). Works on a paused source: it is how one is tried.
 - `job.probe` {source}: `worker.probe` for that one source, paused or
   disabled included, with the crawler's own client, robots.txt asked first
-  and obeyed, `probe.MIN_GAP` between requests to the host. Held under the
+  and obeyed, `probe.MIN_GAP` between requests to the host, and every
+  request through `worker.http.take_turn`, the gate the crawl uses in this
+  process (its pace, Retry-After and slowdown). A host with a Retry-After
+  pending or slowed after errors is refused, not asked. Held under the
   source's lock, so it never overlaps a run of the same shop.
 - `job.regroup_dry_run` {}: `rebuild_products(dry_run=True, reidentify=True)`,
   what `make regroup-dry-run` prints: every listing read, nothing kept (the
@@ -86,6 +89,9 @@ async def _probe(source_id: str) -> dict:
     target = probing.target_for(get(source_id), sites)
     if target is None:
         raise RuntimeError(f"{source_id} has no URL to probe")
+    # The crawl's own gate, in this process: a host holding us off is not asked.
+    if why := probing.refusal(target.url):
+        raise RuntimeError(why)
     lock = main._SOURCE_LOCKS.setdefault(source_id, asyncio.Lock())
     if lock.locked():
         raise RuntimeError("a run of it is in progress; probe it once that ends")

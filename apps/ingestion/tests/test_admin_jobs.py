@@ -118,6 +118,28 @@ async def test_the_probe_asks_one_shop_disabled_or_not_and_records_each_cell(mon
     assert result["notes"] == ["signed skipped: no key"]
 
 
+async def test_a_recorded_retry_after_refuses_the_probe(monkeypatch):
+    import time
+
+    from worker import http as http_mod
+
+    adapter = StubAdapter()
+    adapter.base_url = "https://shop.test"
+    _registered(monkeypatch, adapter)
+    probed: list = []
+
+    async def never(targets, **kw):
+        probed.append(targets)
+        return [], []
+
+    monkeypatch.setattr(probing, "probe", never)
+    http_mod._NOT_BEFORE["https://shop.test"] = time.monotonic() + 300
+    action_id = await _job(admin_jobs.PROBE, SRC)
+    assert await admin_jobs.admin_job({}, action_id) == "failed"
+    assert "Retry-After" in (await _row(action_id)).error
+    assert probed == []
+
+
 async def test_the_probe_waits_for_no_run_of_the_same_shop(monkeypatch):
     adapter = StubAdapter()
     adapter.base_url = "https://shop.test"

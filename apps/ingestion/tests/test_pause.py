@@ -202,7 +202,7 @@ async def test_make_status_shows_both_pauses(capsys):
     assert "the daily run skips it" in out
 
 
-async def test_a_pause_holds_a_held_cycle_without_counting_confirmation_attempts(woo):
+async def test_a_pause_holds_a_held_cycle_without_counting_confirmation_attempts(woo):  # noqa: F811
     """A paused run must not reach the archive confirmation: its refusal to ask
     would count as a failed attempt, and after CONFIRM_MAX_FAILED_RUNS the
     candidates archive unconfirmed, on the very shop a person paused."""

@@ -110,7 +110,12 @@ is root on the host.
   cursors untouched, nothing archived, no price history, refused while a run
   of the shop is going. **Probe** queues `worker.probe` for that one shop,
   paused or disabled included, with the crawler's own client: robots.txt first
-  and obeyed, then browser, makhzanbot and signed, 15 s apart; the cells show
+  and obeyed, then browser, makhzanbot and signed, at least 15 s apart. Each
+  request also passes the worker's own per-host gate (`worker.http.take_turn`:
+  the shop's pace, a pending `Retry-After`, the slowdown after errors), and
+  what the shop answers binds the crawl in turn (a 429's `Retry-After` holds
+  the next run too). A shop with a `Retry-After` pending, or slowed down after
+  recent errors, is not probed: the job fails and says why. The cells show
   under the shop. **Pause / Resume** the shop. Run now and Probe work on a
   paused shop: they are how a blocked shop is looked at.
 - Recent runs (errors expandable), cycle history with the most frequent

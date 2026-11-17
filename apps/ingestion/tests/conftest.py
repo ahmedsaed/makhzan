@@ -91,6 +91,7 @@ def _fresh_host_gate(monkeypatch):
     monkeypatch.setattr(http_mod, "_LAST_SENT", {})
     monkeypatch.setattr(http_mod, "_TURN_LOCKS", {})
     monkeypatch.setattr(http_mod, "_HEALTH", {})
+    monkeypatch.setattr(http_mod, "_NOT_BEFORE", {})
 
 
 @pytest.fixture

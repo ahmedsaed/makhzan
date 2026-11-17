@@ -174,6 +174,61 @@ async def test_the_probe_url_is_the_first_request_a_run_sends(monkeypatch, adapt
     assert sent and sent[0] == adapter.probe_url()
 
 
+async def test_a_pending_retry_after_keeps_the_probe_off_the_host(wire):
+    """The probe goes through the crawl's gate: a host holding us off is not asked."""
+    import time
+
+    http_mod._NOT_BEFORE["https://shop.test"] = time.monotonic() + 120
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    target = probe_mod.Target("shop", "https://shop.test/products.json")
+    rows, notes = await probe_mod.probe([target], gate=gate)
+    assert wire["sent"] == []
+    assert all(cell.error == "not asked" for cell in rows[0].cells.values())
+    assert any("Retry-After" in note for note in notes)
+    assert "Retry-After" in probe_mod.refusal(target.url)
+
+
+async def test_every_probe_request_takes_the_crawls_turn_and_a_429_binds_it(wire, monkeypatch):
+    turns: list[str] = []
+    real = http_mod.take_turn
+
+    async def recording(host, **kw):
+        turns.append(host)
+        await real(host, **kw)
+
+    monkeypatch.setattr(probe_mod, "take_turn", recording)
+    state_handler = wire
+
+    def throttled(request: httpx.Request) -> httpx.Response:
+        state_handler["sent"].append((0, request))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /\n")
+        return httpx.Response(429, headers={"Retry-After": "60"})
+
+    transport = httpx.MockTransport(throttled)
+    original = httpx.AsyncClient
+
+    def client(**kwargs):
+        kwargs["transport"] = transport
+        return original(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    target = probe_mod.Target("shop", "https://shop.test/products.json")
+    rows, _ = await probe_mod.probe([target], gate=gate, sign=False)
+    assert turns and set(turns) == {"https://shop.test"}
+    assert len(turns) == len(wire["sent"])
+    # robots.txt, then browser got the 429; makhzanbot was not asked after it.
+    assert [r.url.path for _, r in wire["sent"]] == ["/robots.txt", "/products.json"]
+    assert rows[0].cells["browser"].status == 429
+    assert rows[0].cells["makhzanbot"].error == "not asked"
+    # The 429 now holds the host for the crawl as well.
+    assert http_mod._NOT_BEFORE["https://shop.test"] > 0
+    assert probe_mod.refusal(target.url) is not None
+
+
 def test_the_sites_list_is_read_as_label_and_url(tmp_path):
     path = tmp_path / "probe-sites.txt"
     path.write_text("# comment\nshop-a|https://a.test/x?y=1\n\nshop-b | https://b.test/\n")

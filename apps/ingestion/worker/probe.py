@@ -48,7 +48,8 @@ from pathlib import Path
 
 import httpx
 
-from worker.http import host_of, make_client
+from worker import http
+from worker.http import HostBackingOff, host_of, make_client, take_turn
 from worker.identity import BROWSER, MAKHZANBOT, Identity, identity_for
 from worker.robots import ROBOTS_TOKEN, Rules, _agent_token
 
@@ -92,7 +93,16 @@ class Row:
 
 
 class _Gate:
-    """At least `gap` seconds between requests to one host."""
+    """At least `gap` seconds between requests to one host, and the crawler's own gate.
+
+    Every request also passes `worker.http.take_turn`, the per-host gate every
+    crawl request passes: it waits out a pending `Retry-After`, honours the
+    host's slowdown after errors and its pace, shares the last-sent time with
+    any run in the same process, and refuses (`HostBackingOff`) a host that
+    asked for longer than `RETRY_AFTER_CAP`. In the worker (the dashboard's
+    probe) that gate is the one the crawl uses; run on its own, it is this
+    process's.
+    """
 
     def __init__(
         self,
@@ -112,7 +122,25 @@ class _Gate:
             remaining = last + self.gap - self._clock()
             if remaining > 0:
                 await self._sleep(remaining)
+        await take_turn(host)
         self._last[host] = self._clock()
+
+
+def refusal(url: str) -> str | None:
+    """Why the probe must not ask `url`'s host now, if the crawler's gate says so.
+
+    A `Retry-After` still pending, or a host slowed down after recent errors:
+    the probe is a diagnosis, and a host in either state has already said what
+    it thinks. Read from the process's gate (`worker.http`), which in the
+    worker is the crawl's.
+    """
+    host = host_of(url)
+    remaining = http._NOT_BEFORE.get(host, 0.0) - time.monotonic()
+    if remaining > 0:
+        return f"{host} asked us to wait {remaining:.0f}s more (Retry-After); not probed"
+    if http.slowdown(host) > 1:
+        return f"{host} is slowed down after recent errors; not probed"
+    return None
 
 
 async def _get(identity: Identity, url: str, gate: _Gate) -> tuple[Cell, httpx.Response | None]:
@@ -121,7 +149,15 @@ async def _get(identity: Identity, url: str, gate: _Gate) -> tuple[Cell, httpx.R
         async with make_client(identity=identity) as client:
             response = await client.get(url)
     except httpx.HTTPError as exc:
+        if isinstance(exc, httpx.TimeoutException):
+            http.note_trouble(host_of(url))
         return Cell(error=f"ERR {type(exc).__name__}"), None
+    # What the host answered binds the crawl too: a 429's Retry-After holds
+    # every later request to it, and errors slow it down (worker.http).
+    host = host_of(url)
+    http.note_response(host, response.status_code)
+    if response.status_code in http._RETRYABLE:
+        http.hold_host(host, response.headers.get("Retry-After"))
     return Cell(status=response.status_code, http_version=response.http_version), response
 
 
@@ -186,20 +222,39 @@ async def probe(
     rows = []
     for target in targets:
         row = Row(target)
-        robots_identity = identities.get(target.identity, identities["browser"])
-        robots = row.cells["robots"] = await _robots(robots_identity, target.url, gate)
-        for column in ("browser", "makhzanbot", "signed"):
-            identity = identities.get(column)
-            if robots.forbids:
-                row.cells[column] = Cell(error="not asked")
-            elif identity is None:
-                row.cells[column] = Cell()
-            else:
-                row.cells[column] = (await _get(identity, target.url, gate))[0]
+        if why := refusal(target.url):
+            row.cells = {column: Cell(error="not asked") for column in COLUMNS}
+            rows.append(row)
+            notes.append(f"{target.source_id}: {why}")
+            if on_row:
+                on_row(row)
+            continue
+        try:
+            await _probe_target(row, identities, gate)
+        except HostBackingOff as exc:
+            for column in COLUMNS:
+                row.cells.setdefault(column, Cell(error="not asked"))
+            notes.append(f"{target.source_id}: {exc}; not probed further")
         rows.append(row)
         if on_row:
             on_row(row)
     return rows, notes
+
+
+async def _probe_target(row: Row, identities: dict[str, Identity], gate: _Gate) -> None:
+    target = row.target
+    robots_identity = identities.get(target.identity, identities["browser"])
+    robots = row.cells["robots"] = await _robots(robots_identity, target.url, gate)
+    for column in ("browser", "makhzanbot", "signed"):
+        identity = identities.get(column)
+        if robots.forbids or refusal(target.url):
+            # robots.txt rules it out, or the host just told us to hold off
+            # (a 429's Retry-After): ask it nothing more.
+            row.cells[column] = Cell(error="not asked")
+        elif identity is None:
+            row.cells[column] = Cell()
+        else:
+            row.cells[column] = (await _get(identity, target.url, gate))[0]
 
 
 # --------------------------------------------------------------------------- #
