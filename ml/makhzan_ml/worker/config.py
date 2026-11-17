@@ -131,7 +131,6 @@ class Config:
     max_jobs: int
     lease_s: int
     heartbeat_s: float
-    seconds_per_request: float
     retry_max_s: float
     ca_file: Path | None = None
     token_file: Path | None = None
@@ -152,7 +151,7 @@ _SCHEMA: dict[str, set[str]] = {
     "worker": {"name", "broker_url", "token", "token_file", "ca_file", "model", "models"},
     "compute": {"device", "dtype", "threads", "nice", "memory_gib", "mmap", "weights_cache"},
     "schedule": {"windows", "timezone", "on_empty", "poll_s"},
-    "leases": {"max_jobs", "lease_s", "heartbeat_s", "seconds_per_request", "retry_max_s"},
+    "leases": {"max_jobs", "lease_s", "heartbeat_s", "retry_max_s"},
 }
 _MODEL_KEYS = {"expect_version"}
 
@@ -186,13 +185,25 @@ def _positive(where: str, key: str, value: Any, *, integer: bool = False) -> flo
     return value
 
 
-def _loopback(host: str) -> bool:
+#: Tailscale's address ranges (CGNAT IPv4 and its ULA IPv6 prefix). Traffic to them goes
+#: through the tailnet's WireGuard tunnel, encrypted and authenticated end to end.
+TAILSCALE_NETS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
+
+def _plain_http_ok(host: str) -> bool:
+    """Where plain http:// may go: a loopback address (the tests, the parity check, a broker
+    on the same machine) or a Tailscale address (the broker, reached over the tailnet: owner
+    decision 2026-11-17). Addresses only, never names, so DNS cannot redirect it."""
     if host == "localhost":
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        ip = ipaddress.ip_address(host)
     except ValueError:
         return False
+    return ip.is_loopback or any(ip in net for net in TAILSCALE_NETS)
 
 
 def _broker_url(url: Any) -> str:
@@ -200,10 +211,14 @@ def _broker_url(url: Any) -> str:
     parts = urlsplit(url)
     if not parts.hostname:
         raise ConfigError(f"[worker] broker_url {url!r} has no host")
-    # Workers talk to the broker over TLS only. Plain HTTP is accepted for a loopback
-    # address alone, which is where the tests and the parity check run their fake broker.
-    if parts.scheme != "https" and not (parts.scheme == "http" and _loopback(parts.hostname)):
-        raise ConfigError(f"[worker] broker_url {url!r} must be https://")
+    # The broker is reached over Tailscale, http://<tailscale-ip>:<port>: the tailnet's
+    # WireGuard tunnel encrypts it. Plain HTTP is accepted for a Tailscale or loopback
+    # address only; anything else must be https://.
+    if parts.scheme != "https" and not (parts.scheme == "http" and _plain_http_ok(parts.hostname)):
+        raise ConfigError(
+            f"[worker] broker_url {url!r}: https://, or http:// to a Tailscale address "
+            "(100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one"
+        )
     if parts.username or parts.password or parts.query or parts.fragment:
         raise ConfigError("[worker] broker_url carries no credentials, query or fragment")
     return url
@@ -352,7 +367,6 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             f"[leases] heartbeat_s {heartbeat_s} must be at most half of lease_s {lease_s}, "
             "or one late heartbeat loses the lease"
         )
-    spr = float(_positive("leases", "seconds_per_request", leases.get("seconds_per_request", 90)))
     retry_max_s = float(_positive("leases", "retry_max_s", leases.get("retry_max_s", lease_s)))
 
     return Config(
@@ -374,7 +388,6 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         max_jobs=max_jobs,
         lease_s=lease_s,
         heartbeat_s=heartbeat_s,
-        seconds_per_request=spr,
         retry_max_s=retry_max_s,
         source=source,
     )

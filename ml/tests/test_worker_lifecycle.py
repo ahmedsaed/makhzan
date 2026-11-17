@@ -102,7 +102,7 @@ def config(url: str, **sections) -> dict:
         "worker": {"name": "home-kev", "broker_url": url, "token": TOKEN, "model": "kev"},
         "compute": {"threads": 6, "nice": 0},
         "schedule": {"windows": "always", "timezone": "Africa/Cairo", "on_empty": "exit"},
-        "leases": {"max_jobs": 2, "lease_s": 900, "heartbeat_s": 60, "seconds_per_request": 10},
+        "leases": {"max_jobs": 2, "lease_s": 900, "heartbeat_s": 60},
     }
     for name, values in sections.items():
         data.setdefault(name, {}).update(values)
@@ -171,8 +171,9 @@ def test_a_session_scores_every_job_in_order_and_ends_once(broker, sleeps):
     leases = broker.bodies("/lease")
     assert leases[0]["max_jobs"] == 2 and leases[0]["model"] == "kev"
     assert leases[0]["model_version"] == PINS["kev"].model_version
-    # Always open: no time to fit, so only max_jobs limits a lease. A fresh id each lease.
-    assert all("seconds_left" not in b and "seconds_per_request" not in b for b in leases)
+    # No time fit: a lease asks for max_jobs and nothing else. A fresh id each lease.
+    assert all(set(b) == {"session", "model", "model_version", "max_jobs", "lease_request_id"}
+               for b in leases)  # fmt: skip
     ids = [b["lease_request_id"] for b in leases]
     assert len(set(ids)) == len(ids) and all(len(i) <= 64 for i in ids)
     assert len(broker.bodies("/results")) == 3  # one POST per job
@@ -252,12 +253,11 @@ def test_the_window_closing_across_midnight_releases_the_rest_gracefully(broker,
     fake = FakeJudges(clock, seconds=300)  # five minutes a request
     worker, fake, clock = make_worker(
         broker, sleeps, clock=clock, fake=fake,
-        schedule={"windows": ["23:00-00:10"]}, leases={"max_jobs": 4, "seconds_per_request": 60},
+        schedule={"windows": ["23:00-00:10"]}, leases={"max_jobs": 4},
     )  # fmt: skip
     assert worker.run() == run.EXIT_OK
-    # The lease was sized on the 60 s estimate, so it holds all four jobs. Measured at 300 s,
-    # requests run 23:50 -> 23:55 -> 00:00 -> 00:05 -> 00:10; a fifth would not fit and is
-    # never started.
+    # No time fit: the lease holds all four jobs. Requests run 23:50 -> 23:55 -> 00:00 ->
+    # 00:05 -> 00:10, where the window ends: the rest goes back, gracefully.
     assert len(fake.scored) == 4
     assert clock.now() == datetime(2026, 11, 18, 0, 10, tzinfo=CAIRO)
     assert set(jobs[0].scores) == {"ab", "ba"} and set(jobs[1].scores) == {"ab", "ba"}
@@ -297,14 +297,24 @@ def test_sigterm_stops_after_the_request_in_flight(broker, sleeps):
     assert jobs[1].status == "queued" and jobs[1].attempts == 0
 
 
-def test_a_request_that_would_overrun_the_window_is_not_started(broker, sleeps):
-    broker.add_job("kev", pair(1))
+def test_the_window_end_drops_the_current_job(broker, sleeps):
+    # A minute before the window ends, a 90 s request starts; it cannot be interrupted and
+    # runs past the end. Then the job is dropped: its finished order is posted, the rest
+    # goes back gracefully (no attempt), for another worker or a later window.
+    job, other = broker.add_job("kev", pair(1)), broker.add_job("kev", pair(2))
     clock = FakeClock(datetime(2026, 11, 17, 4, 29, tzinfo=CAIRO))
-    worker, fake, _ = make_worker(broker, sleeps, clock=clock,
-                                  schedule={"windows": ["00:30-04:30"]},
-                                  leases={"seconds_per_request": 90})  # fmt: skip
+    fake = FakeJudges(clock, seconds=90)
+    worker, fake, _ = make_worker(broker, sleeps, clock=clock, fake=fake,
+                                  schedule={"windows": ["00:30-04:30"]})  # fmt: skip
     assert worker.run() == run.EXIT_OK
-    assert fake.scored == [] and "/lease" not in broker.paths()
+    assert worker.stop_reason == "the window has ended"
+    assert len(fake.scored) == 1 and set(job.scores) == {"ab"}
+    released = [b for b in broker.bodies("/release") if b.get("job_ids")]
+    assert released == [{"session": worker.session, "lease_id": released[0]["lease_id"],
+                         "job_ids": [job.job_id, other.job_id], "reason": "graceful"}]  # fmt: skip
+    assert job.status == "queued" and job.attempts == 0 and other.attempts == 0
+    assert fake.unloads == ["kev"]
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
 
 
 # --- retries -------------------------------------------------------------------------------
@@ -563,14 +573,14 @@ def test_a_windowed_schedule_runs_in_any_zone(broker, sleeps, timezone):
     assert len(fake.scored) == 2
 
 
-def test_seconds_left_count_real_time_across_a_dst_change(broker, sleeps):
+def test_the_window_end_counts_real_time_across_a_dst_change(broker, sleeps):
     # Berlin's clocks went back an hour at 03:00 on 2026-10-25: 01:30 to 05:00 that night
     # is four and a half real hours, not three and a half.
     tz = ZoneInfo("Europe/Berlin")
     clock = FakeClock(datetime(2026, 10, 25, 1, 30, tzinfo=tz))
     worker, _, _ = make_worker(broker, sleeps, clock=clock,
                                schedule={"windows": ["01:00-05:00"], "timezone": "Europe/Berlin"})  # fmt: skip
-    assert worker._seconds_left() == 4.5 * 3600
+    assert worker._seconds_to_window_end() == 4.5 * 3600
 
 
 def test_undelivered_scores_are_logged_when_a_fatal_ends_the_session(broker, sleeps, caplog):
@@ -827,7 +837,7 @@ def test_every_session_ends_exactly_once(broker, sleeps, how, end, n_session, n_
         schedule = {"windows": ["00:30-04:30"]}
         fake = FakeJudges(clock, seconds=150)
     worker, fake, _ = make_worker(broker, sleeps, clock=clock, schedule=schedule, fake=fake,
-                                  leases={"max_jobs": 1, "seconds_per_request": 1})  # fmt: skip
+                                  leases={"max_jobs": 1})  # fmt: skip
     if how == "sigterm":
         fake.on_score = lambda i: i == 1 and worker.request_stop("SIGTERM")
     if how == "fatal":
@@ -861,30 +871,6 @@ def test_a_lease_whose_answer_was_lost_comes_back_the_same(broker, sleeps):
     assert all(j.status == "done" and j.attempts == 0 for j in jobs)
     assert len(fake.scored) == 4
     assert list(broker.sessions.values())[0]["leases"] == 1
-
-
-def test_leases_carry_honest_time_and_hold_only_jobs_that_fit(broker, sleeps):
-    jobs = [broker.add_job("kev", pair(n)) for n in range(4)]
-    clock = FakeClock(datetime(2026, 11, 17, 4, 0, tzinfo=CAIRO))
-    fake = FakeJudges(clock, seconds=300)
-    worker, fake, clock = make_worker(
-        broker, sleeps, clock=clock, fake=fake,
-        schedule={"windows": ["00:30-04:30"]},
-        leases={"max_jobs": 4, "seconds_per_request": 300},
-    )  # fmt: skip
-    assert worker.run() == run.EXIT_OK
-    leases = broker.bodies("/lease")
-    # 30 minutes left, less a CPU model load still to come; the configured pace.
-    assert leases[0]["seconds_left"] == 1800 - run.LOAD_ESTIMATE_S["cpu"]
-    assert leases[0]["seconds_per_request"] == 300
-    # 1650 - 60 s margin fits two jobs of two 300 s requests; the third stops the lease.
-    assert [j.status for j in jobs] == ["done", "done", "queued", "queued"]
-    # 20 minutes later, model loaded: 600 s left, no load to take off; nothing fits.
-    assert leases[1]["seconds_left"] == 600
-    assert all(j.attempts == 0 for j in jobs)
-    # The second lease answered none_fit, which ended the session: no release after it.
-    assert [s["end_reason"] for s in broker.sessions.values()] == ["none_fit"]
-    assert session_releases(broker) == []
 
 
 def test_a_heartbeat_names_each_job_as_it_starts(broker, sleeps):
@@ -973,48 +959,22 @@ def test_a_stop_before_hello_opens_no_session(broker, sleeps):
     assert broker.calls == [] and broker.sessions == {}
 
 
-def test_a_lease_retry_says_the_time_left_now_under_the_same_id(broker, sleeps):
+def test_a_lease_retry_keeps_its_request_id(broker, sleeps):
     broker.add_job("kev", pair(1))
-    broker.fail("/lease", times=3, status=503)  # never reached the broker's lease code
-    clock = FakeClock(datetime(2026, 11, 17, 4, 0, tzinfo=CAIRO))
-    worker, _, _ = make_worker(broker, sleeps, clock=clock, retry_max_s=600,
-                               schedule={"windows": ["00:30-04:30"]},
-                               leases={"seconds_per_request": 10})  # fmt: skip
+    broker.fail("/lease", times=3, status=503)
+    worker, _, _ = make_worker(broker, sleeps, retry_max_s=600)
     seen = []
     once = worker.broker._once
 
     def recording(path, body):
         if path == "/lease":
-            seen.append((body["lease_request_id"], body["seconds_left"]))
+            seen.append(body["lease_request_id"])
         return once(path, body)
 
     worker.broker._once = recording
     assert worker.run() == run.EXIT_OK
-    first = seen[:4]  # three 503s (backoffs 1, 2, 4 s), then the lease that worked
-    assert len({rid for rid, _ in first}) == 1
-    load = run.LOAD_ESTIMATE_S["cpu"]
-    assert [left for _, left in first] == [1800 - load - d for d in (0, 1, 3, 7)]
-
-
-@pytest.mark.parametrize("on_empty", ["exit", "wait"])
-def test_none_fit_ends_the_window_whatever_on_empty(broker, sleeps, on_empty, caplog):
-    job = broker.add_job("kev", pair(1))
-    clock = FakeClock(datetime(2026, 11, 17, 4, 26, tzinfo=CAIRO))  # 4 minutes left
-    worker, fake, clock = make_worker(
-        broker, sleeps, clock=clock,
-        schedule={"windows": ["00:30-04:30"], "on_empty": on_empty, "poll_s": 60},
-        leases={"seconds_per_request": 100},
-    )  # fmt: skip
-    with caplog.at_level(logging.INFO):
-        assert worker.run() == run.EXIT_OK
-    assert broker.paths().count("/lease") == 1  # no polling for work that cannot fit
-    assert clock.waits == []
-    assert any("no job fits the time left" in r.getMessage() for r in caplog.records)
-    assert job.status == "queued" and fake.loads == []
-    # none_fit ended the session at the broker: no session release after it.
-    assert session_releases(broker) == []
-    assert [s["end_reason"] for s in broker.sessions.values()] == ["none_fit"]
-    assert worker.session_closed
+    assert len(set(seen[:4])) == 1  # three 503s, then the lease that worked: one id
+    assert len(set(seen)) == len(seen) - 3  # each later lease has its own
 
 
 def test_no_lost_warning_for_a_job_being_settled(broker, sleeps, caplog):

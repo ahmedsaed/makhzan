@@ -85,7 +85,6 @@ poll_s = 300
 max_jobs = 4
 lease_s = 600
 heartbeat_s = 30
-seconds_per_request = 100
 retry_max_s = 1200
 """
     path = tmp_path / "w.toml"
@@ -99,7 +98,7 @@ retry_max_s = 1200
     assert cfg.schedule.timezone == CAIRO
     assert (cfg.schedule.on_empty, cfg.schedule.poll_s) == ("wait", 300.0)
     assert (cfg.max_jobs, cfg.lease_s, cfg.heartbeat_s) == (4, 600, 30.0)
-    assert (cfg.seconds_per_request, cfg.retry_max_s) == (100.0, 1200.0)
+    assert cfg.retry_max_s == 1200.0
     assert cfg.hello_config()["window"] == "22:30-02:00,13:00-14:00"
 
 
@@ -166,14 +165,21 @@ def test_token_or_token_file_exactly_one(tmp_path):
         ("http://127.0.0.1:8123/ai/v1", True),
         ("http://localhost:8123/ai/v1", True),
         ("http://[::1]:8123/ai/v1", True),
-        ("http://broker.example.test/ai/v1", False),
+        # Tailscale: the broker over the tailnet, plain http (owner decision 2026-11-17)
+        ("http://100.64.0.1:8080/ai/v1", True),
+        ("http://100.127.255.254:8080/ai/v1", True),
+        ("http://[fd7a:115c:a1e0::1]:8080/ai/v1", True),
+        ("http://100.63.255.255:8080/ai/v1", False),  # just below 100.64.0.0/10
+        ("http://100.128.0.1:8080/ai/v1", False),  # just above it
+        ("http://[fd7a:115c:a1e1::1]:8080/ai/v1", False),  # outside the /48
+        ("http://broker.example.test/ai/v1", False),  # a name, never: DNS could redirect it
         ("http://192.0.2.5/ai/v1", False),
         ("ftp://broker.example.test/", False),
         ("https://user:pw@broker.example.test/ai/v1", False),
         ("https:///ai/v1", False),
     ],
 )
-def test_broker_url_is_https_except_on_loopback(url, ok):
+def test_broker_url_is_https_except_to_tailscale_or_loopback(url, ok):
     data = base(worker={"broker_url": url})
     if ok:
         parse(data)
@@ -244,7 +250,6 @@ def test_schedule_values_are_checked(schedule, match):
         ({"lease_s": 100, "heartbeat_s": 60}, "at most half of lease_s"),
         ({"heartbeat_s": -1}, "heartbeat_s must be positive"),
         ({"heartbeat_s": 0.5}, "at least 5 s"),
-        ({"seconds_per_request": 0}, "seconds_per_request"),
         ({"retry_max_s": 0}, "retry_max_s"),
     ],
 )
@@ -323,6 +328,12 @@ def test_every_documented_example_parses(name, body):
     data["worker"].pop("token_file", None)
     data["worker"]["token"] = "example"
     data.get("compute", {}).pop("weights_cache", None)
+    # The broker URL's placeholders, filled with a Tailscale address and a port.
+    url = data["worker"]["broker_url"]
+    assert url == "http://<tailscale-ip>:<port>/ai/v1"
+    data["worker"]["broker_url"] = url.replace("<tailscale-ip>", "100.101.102.103").replace(
+        "<port>", "8080"
+    )
     cfg = parse(data)
     assert cfg.name == name
     if name.startswith("desk-"):

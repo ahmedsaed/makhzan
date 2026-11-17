@@ -8,38 +8,34 @@ session, so two models are two workers.
    limit against `memory_gib`; then lower the process priority (`nice`).
 3. `POST /hello` with the name, the model key and its versions, device, dtype and
    threads. If the broker answers `ok: false` (version drift), nothing is leased: exit 3.
-4. Until the queue is empty:
-   `POST /lease` (seconds left in the window, the measured seconds per request); the
+4. Until the queue is empty or the window ends:
+   `POST /lease` for up to `max_jobs` jobs (no time is sent: the worker takes what it is
+   given and drops what the window's end interrupts); the
    model is loaded on the first lease that brings jobs, never on an empty night, and
    checked against its pins (`judges.load`); each job's requests are scored **in the
    order given, one per call**, each request's `request_sha256` first checked against
    its payload, and `POST /results` after each job. Each lease carries a fresh
    `lease_request_id` (the same on a retry of that call, so a lost answer gives the same
-   lease back) and honest time: the seconds left in the window, less a model load still
-   to come, and the measured seconds per request; the broker returns only jobs that fit.
+   lease back).
    A heartbeat goes out as each job starts, naming it in hand (so an expiry is charged to
    it alone), and a background thread sends one every `heartbeat_s` naming the jobs still
    held. Each job's prompt version is compared with the stages hello announced.
-5. Stop (the window's end, SIGTERM, SIGINT): no new request is started, the one in
-   flight finishes (a forward pass cannot be interrupted), finished orders are
-   submitted, the rest of the lease goes back with `/release` reason "graceful", and
-   the model is unloaded. The window's end is enforced by a timer and checked between
+5. Stop (the window's end, SIGTERM, SIGINT): the current job is dropped. No new request
+   is started, the one in flight finishes (a forward pass cannot be interrupted), the
+   finished orders are submitted, the rest of the lease (the current job's unscored
+   orders included) goes back with `/release` reason "graceful", no attempt charged, for
+   another worker or a later window, and the model is unloaded. The window's end is enforced by a timer and checked between
    retries, so a call retrying through a broker outage cannot keep the model loaded past
    the window. A stop sets one deadline for the rest of the session (`broker.STOP_GRACE_S`,
-   short socket timeouts), so all of this fits a `docker stop` grace period. Before each
-   request the worker also checks the window: a request it does not expect to finish
-   before the window ends is not started.
+   short socket timeouts), so all of this fits a `docker stop` grace period.
 6. Empty queues: `on_empty = "exit"` exits; `"wait"` polls every `poll_s` until the
    window ends.
 7. Every session that said hello is ended at the broker exactly once (P16): by an empty
-   lease (including one answering "none_fit"), by a graceful release of held jobs, or else
-   by `POST /release {"session"}`, a
+   lease, by a graceful release of held jobs, or else by `POST /release {"session"}`, a
    graceful release naming no jobs (broker-api.md §3.5), however it stopped. A session
    release is not sent after the broker already recorded the end (it would overwrite
-   "empty" or "none_fit" with "released"), nor to a broker that is unreachable or refused
-   the token. A stop that comes before hello opens no session at all. A lease that
-   answers "none_fit" (jobs are queued, none fits the time left) ends the window's work,
-   whatever `on_empty`: polling would only find the same.
+   "empty" with "released"), nor to a broker that is unreachable or refused the token. A
+   stop that comes before hello opens no session at all.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its
 job, order, request hash and score (never the payload), the moment it is known not to
@@ -90,12 +86,6 @@ EXIT_UNDELIVERED = 6  # the session ended, but some scores could not be delivere
 #: would otherwise turn the whole queue into failed attempts. One job failing again and
 #: again is that job's problem: the broker makes it dead at max_attempts (a poison job).
 MAX_CONSECUTIVE_ERRORS = 3
-#: For the window check when a worker runs always: a day's worth. (Leases then carry no
-#: seconds_left at all: only max_jobs limits them.)
-ALWAYS_SECONDS_LEFT = 86_400
-#: A model load still to come, taken off the time a first lease says it has. Measured:
-#: Kev 130 s and pplx 73-95 s on the home server's CPU, under 10 s on the GPU.
-LOAD_ESTIMATE_S = {"cpu": 150.0, "gpu": 30.0}
 
 
 def canonical_json(request: object) -> str:
@@ -177,8 +167,6 @@ class Worker:
         self.judge: judges.Judge | None = None
         self.held = _Held()
         self.key = cfg.model  # the one model this worker serves
-        self.spr = cfg.seconds_per_request  # seconds per request: measured once scoring
-        self._measured = False
         self.judge_info: dict[str, dict] = {}  # what each load reported, kept after unloading
         self.undelivered: list[dict] = []
         self.session_closed = False  # the broker has recorded the session's end (P16)
@@ -209,14 +197,13 @@ class Worker:
     def _closes_at(self) -> datetime | None:
         return self.cfg.schedule.closes_at(self.clock.now())
 
-    def _seconds_left(self) -> float:
+    def _seconds_to_window_end(self) -> float | None:
+        """Real seconds until the window ends (None: always open). Real elapsed time, not a
+        wall-clock difference, so a DST change inside the window does not move it."""
         closes = self._closes_at()
         if closes is None:
-            return ALWAYS_SECONDS_LEFT
+            return None
         return max(0.0, closes.timestamp() - self.clock.now().timestamp())
-
-    def _seconds_to_window_end(self) -> float | None:
-        return None if self._closes_at() is None else self._seconds_left()
 
     def _window_open(self) -> bool:
         if self.cfg.schedule.is_open(self.clock.now()):
@@ -232,7 +219,7 @@ class Worker:
         if self._closes_at() is None:
             return
         self._window_timer = threading.Timer(
-            self._seconds_left(), self.request_stop, args=("the window has ended",)
+            self._seconds_to_window_end(), self.request_stop, args=("the window has ended",)
         )
         self._window_timer.daemon = True
         self._window_timer.start()
@@ -414,10 +401,6 @@ class Worker:
     def _serve(self) -> None:
         while self._may_continue():
             outcome = self._drain(self.key)
-            if outcome == "none_fit":
-                # Jobs are queued, none fits the time left: polling would only find the same.
-                self.request_stop("no job fits the time left")
-                return
             if outcome == "stop" or not self._may_continue():
                 return  # stopped, or the window ended
             # The queue is empty.
@@ -426,42 +409,29 @@ class Worker:
                 log.info("the queue is empty; exiting (on_empty = exit)")
                 return
             wait = self.cfg.schedule.poll_s
-            if self._closes_at() is not None:
-                wait = min(wait, self._seconds_left())
+            left = self._seconds_to_window_end()
+            if left is not None:
+                wait = min(wait, left)
             log.info("the queue is empty; polling again in %.0f s", wait)
             if self.clock.wait(wait, self.stop):
                 return
 
-    def _lease_body(self, key: str, request_id: str) -> dict:
-        """A lease request, built afresh for each attempt: a retry after a backoff says how
-        much time is left now. The id stays the attempt's own, so a retry of a call whose
-        answer was lost still gets the same lease back."""
-        body = {
-            "session": self.session,
-            "model": key,
-            "model_version": PINS[key].model_version,
-            "max_jobs": self.cfg.max_jobs,
-            "lease_request_id": request_id,
-        }
-        if self._closes_at() is not None:
-            # Honest time, so every job the broker returns fits (it keeps a 60 s margin):
-            # the window, less a model load still to come; the measured pace.
-            loading = 0.0 if self._loaded(key) else LOAD_ESTIMATE_S[self.cfg.device]
-            body["seconds_left"] = max(0, int(self._seconds_left() - loading))
-            body["seconds_per_request"] = max(0.01, round(self.spr, 2))
-        return body
-
     def _drain(self, key: str) -> str:
         """Lease and score `key`'s jobs until its queue is empty ("empty") or the session
-        must stop ("stop")."""
+        must stop ("stop"). A lease asks for up to `max_jobs`: no time is sent, and what the
+        window's end interrupts goes back gracefully."""
         while self._may_continue():
-            left = self._seconds_left()
-            if left < self.spr:
-                self.request_stop("too little of the window is left for one request")
-                return "stop"
-            request_id = uuid.uuid4().hex  # one per lease attempt, the same on its retries
+            body = {
+                "session": self.session,
+                "model": key,
+                "model_version": PINS[key].model_version,
+                "max_jobs": self.cfg.max_jobs,
+                # One id per lease attempt, the same on the client's retries of it: a lease
+                # whose answer was lost comes back as the same lease, not orphaned.
+                "lease_request_id": uuid.uuid4().hex,
+            }
             try:
-                lease = self.broker.lease(lambda: self._lease_body(key, request_id))
+                lease = self.broker.lease(body)
             except VersionDrift as e:
                 raise _Fatal(
                     EXIT_VERSION,
@@ -470,13 +440,6 @@ class Worker:
                 ) from None
             jobs = lease.get("jobs") or []
             if not lease.get("lease_id") or not jobs:
-                if lease.get("reason") == "none_fit":
-                    # Jobs are queued but none fits the time left: the window's work is
-                    # done. The broker ends the session on this answer (end_reason
-                    # "none_fit"), as on an empty lease: no session release follows it.
-                    log.info("no job fits the time left in the window; stopping for it")
-                    self.session_closed = True
-                    return "none_fit"
                 self.session_closed = True  # an empty lease ends the session at the broker
                 return "empty"
             self.session_closed = False  # a lease with jobs reopens it
@@ -485,9 +448,6 @@ class Worker:
         return "stop"
 
     # -- one lease -------------------------------------------------------------------------
-
-    def _loaded(self, key: str) -> bool:
-        return self.judge is not None
 
     def _check_prompts(self, key: str, jobs: list[dict]) -> None:
         """Each job's prompt version should be one hello announced for this model. The
@@ -617,11 +577,9 @@ class Worker:
         for req in requests:
             if self._lost(lease_id, job_id):
                 break
-            if not self._may_continue() or (
-                self._closes_at() is not None and self._seconds_left() < self.spr
-            ):
-                if self._may_continue():
-                    self.request_stop("the next request would not finish inside the window")
+            if not self._may_continue():
+                # The window ended or a stop came: drop the job here. Its finished orders
+                # are posted; the rest goes back with the lease, gracefully.
                 self._submit(lease_id, job_id, scores, final=False)
                 return False
             payload = req.get("payload")
@@ -648,12 +606,6 @@ class Worker:
             seconds = self.clock.monotonic() - t0
             self.failed_jobs.clear()
             self.scored += 1
-            # Seconds per request, for lease sizing and the window check: a moving average.
-            if self._measured:
-                self.spr = 0.7 * self.spr + 0.3 * seconds
-            else:
-                self.spr = seconds
-                self._measured = True
             scores.append(
                 {
                     "order": req.get("order"),

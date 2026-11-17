@@ -8,10 +8,9 @@ answers it (`app.broker.main` in apps/api):
 - hello answers `lease_s` from the worker's `config.lease_s` (an integer from 60 to 7200,
   default 900), `heartbeat_s = min(60, lease_s / 3)`, and per model the `stages` (pipeline,
   stage, prompt version) its leases will carry;
-- leases sized by `seconds_left` minus a 60 s margin, stopping at the first job that does
-  not fit; an empty answer says why (`reason`: "empty", or "none_fit" when jobs are queued
-  but none fits; both end the session, as "empty" or "none_fit"); a repeated
-  `lease_request_id` gives the session's last lease back (its jobs still held); lazy
+- leases of up to `max_jobs` (no time fit: the worker sends no time); an empty lease
+  ends the session ("empty"); a repeated `lease_request_id` gives the session's last
+  lease back (its jobs still held); lazy
   expiry that charges an attempt only to the job in hand (the last heartbeat's
   `progress.job_id`), or to every job of a lease with none in hand;
 - heartbeats that extend every live lease named and answer 409 lease_lost (with the lost
@@ -328,9 +327,8 @@ class FakeBroker:
         session["last_request"] = request_id
         self._reap()
         n = int(body.get("max_jobs") or 1)
-        spr, left = body.get("seconds_per_request"), body.get("seconds_left")
         lease_id = uuid.uuid4().hex
-        picked, budget, unfit = [], 0.0, False
+        picked = []
         for j in sorted(self.jobs.values(), key=lambda j: (-j.priority, j.job_id)):
             if len(picked) >= n:
                 break
@@ -340,22 +338,12 @@ class FakeBroker:
             if not todo:  # a job never carries zero orders
                 j.status = "done"
                 continue
-            cost = len(todo) * float(spr) if spr and left is not None else 0.0
-            if cost and budget + cost > float(left) - 60:
-                unfit = True
-                break  # the first job that does not fit stops the lease (it stays queued)
-            budget += cost
             j.status, j.lease_id, j.leased_by = "leased", lease_id, name
             j.expires = self.clock() + session["lease_s"]
             picked.append(j)
-        if not picked and unfit:
-            # Jobs are queued, none fits the time left: not an empty queue, but the session
-            # ends all the same (end_reason "none_fit", no P16 rebuild).
-            session["end_reason"] = "none_fit"
-            return 200, {"lease_id": None, "jobs": [], "reason": "none_fit"}
         if not picked:
             session["end_reason"] = "empty"
-            return 200, {"lease_id": None, "jobs": [], "reason": "empty"}
+            return 200, {"lease_id": None, "jobs": []}
         session["end_reason"] = None  # a lease with jobs reopens the session
         session["last_lease"] = lease_id
         session["leases"] += 1

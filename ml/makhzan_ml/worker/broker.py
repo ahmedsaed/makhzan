@@ -166,7 +166,7 @@ class Broker:
     def hello(self, body: dict) -> dict:
         return self.call("/hello", body)
 
-    def lease(self, body: dict | Callable[[], dict]) -> dict:
+    def lease(self, body: dict) -> dict:
         return self.call("/lease", body)
 
     def heartbeat(self, body: dict) -> dict:
@@ -200,9 +200,8 @@ class Broker:
             raw = resp.read()
         return json.loads(raw) if raw else {}
 
-    def call(self, path: str, body: dict | Callable[[], dict], *, retry: bool = True) -> dict:
-        """POST `body` to `path`, retrying as the module says. `body` may be a callable,
-        called afresh for each attempt (a lease's time left changes while it retries)."""
+    def call(self, path: str, body: dict, *, retry: bool = True) -> dict:
+        """POST `body` to `path`, retrying as the module says (the same body each time)."""
         start = self._monotonic()
         delay = BACKOFF_FIRST_S
         attempt = 0
@@ -210,7 +209,7 @@ class Broker:
             attempt += 1
             wait = delay
             try:
-                return self._once(path, body() if callable(body) else body)
+                return self._once(path, body)
             except urllib.error.HTTPError as e:
                 status = e.code
                 try:
