@@ -28,6 +28,16 @@ def main(argv: list[str] | None = None) -> int:
         logging.error("configuration: %s", e)
         return run.EXIT_CONFIG
     if args.check:
+        from makhzan_ml.worker.judges import importable
+
+        missing = [k for k in cfg.models if not importable(k)]
+        if missing:
+            logging.error(
+                "configuration: this image cannot load %s (each model image holds one "
+                "model's code)",
+                missing,
+            )
+            return run.EXIT_CONFIG
         logging.info(
             "configuration ok: %s serves %s on %s %s, window %s, on_empty %s",
             cfg.name,

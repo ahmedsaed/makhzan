@@ -29,6 +29,10 @@ DEVICES = ("cpu", "gpu")
 #: pairing was never measured against the stored scores, so it is refused, not guessed.
 DTYPES = {"cpu": ("fp32",), "gpu": ("bf16",)}
 ON_EMPTY = ("exit", "wait")
+#: Floors on the two intervals: a heartbeat or a poll every few milliseconds would only
+#: load the broker.
+MIN_HEARTBEAT_S = 5.0
+MIN_POLL_S = 5.0
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -316,14 +320,22 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             tz = ZoneInfo(tz_name)
         except (ZoneInfoNotFoundError, ValueError):
             raise ConfigError(f"[schedule] timezone {tz_name!r} is not a known zone") from None
+    if windows is not None and tz is None:
+        # A container's local time is UTC unless told otherwise: a window without a zone
+        # would silently run at the wrong hours.
+        raise ConfigError('[schedule] timezone is required with windows (e.g. "Africa/Cairo")')
     on_empty = schedule.get("on_empty", "exit")
     if on_empty not in ON_EMPTY:
         raise ConfigError(f"[schedule] on_empty {on_empty!r}: one of {list(ON_EMPTY)}")
     poll_s = float(_positive("schedule", "poll_s", schedule.get("poll_s", 600)))
+    if poll_s < MIN_POLL_S:
+        raise ConfigError(f"[schedule] poll_s {poll_s}: at least {MIN_POLL_S:.0f} s")
 
     max_jobs = int(_positive("leases", "max_jobs", leases.get("max_jobs", 2), integer=True))
     lease_s = int(_positive("leases", "lease_s", leases.get("lease_s", 900), integer=True))
     heartbeat_s = float(_positive("leases", "heartbeat_s", leases.get("heartbeat_s", 60)))
+    if heartbeat_s < MIN_HEARTBEAT_S:
+        raise ConfigError(f"[leases] heartbeat_s {heartbeat_s}: at least {MIN_HEARTBEAT_S:.0f} s")
     if heartbeat_s * 2 > lease_s:
         raise ConfigError(
             f"[leases] heartbeat_s {heartbeat_s} must be at most half of lease_s {lease_s}, "

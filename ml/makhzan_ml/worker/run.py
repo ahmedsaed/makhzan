@@ -1,8 +1,8 @@
 """One worker session, from hello to the last release (docs/ai/worker.md, "Lifecycle").
 
 1. Outside every window: exit 0, nothing sent.
-2. Pre-flight: the container's memory limit against `memory_gib`, then lower the
-   process priority (`nice`).
+2. Pre-flight: every model key must be loadable in this image; the container's memory
+   limit against `memory_gib`; then lower the process priority (`nice`).
 3. `POST /hello` with the name, model keys and versions, device, dtype and threads. A
    key the broker answers `ok: false` for (version drift) is never leased; no `ok` key
    at all exits 3.
@@ -12,12 +12,16 @@
    checked against its pins (`judges.load`); each job's requests are scored **in the
    order given, one per call**, each request's `request_sha256` first checked against
    its payload, and `POST /results` after each job. A background thread sends
-   `/heartbeat` every `heartbeat_s` while a lease is held.
-5. Graceful stop (window end, SIGTERM, SIGINT): no new request is started, the one in
+   `/heartbeat` every `heartbeat_s` naming the jobs still held.
+5. Stop (the window's end, SIGTERM, SIGINT): no new request is started, the one in
    flight finishes (a forward pass cannot be interrupted), finished orders are
-   submitted, the rest of the lease goes back with `/release` reason "graceful".
-   Before each request the worker also checks the window: a request it does not expect
-   to finish before the window ends is not started.
+   submitted, the rest of the lease goes back with `/release` reason "graceful", and
+   the model is unloaded. The window's end is enforced by a timer and checked between
+   retries, so a call retrying through a broker outage cannot keep the model loaded past
+   the window. A stop sets one deadline for the rest of the session (`broker.STOP_GRACE_S`,
+   short socket timeouts), so all of this fits a `docker stop` grace period. Before each
+   request the worker also checks the window: a request it does not expect to finish
+   before the window ends is not started.
 6. Empty queues: `on_empty = "exit"` exits; `"wait"` polls every `poll_s` until the
    window ends.
 7. The broker sees a session end (P16) at a graceful `/release` of held jobs or at a
@@ -25,10 +29,11 @@
    valid, so a session that stops between leases with nothing held is not seen to end,
    and the log says so.
 
-**Never drop a result silently.** A results POST is retried through network failures
-for `retry_max_s` (`broker.Broker`); a score that still cannot be delivered, or that the
-broker refuses, is logged at ERROR with its job, order, request hash and score (never
-the payload), and the exit code says the session did not end clean.
+**Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its
+job, order, request hash and score (never the payload), the moment it is known not to
+have arrived: the broker unreachable past the retry budget or the stop deadline, or the
+broker refusing it. The exit code says the session did not end clean. Any unexpected
+error is caught, logged, and the jobs still held are handed back.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import signal
 import threading
 import time
@@ -48,7 +54,6 @@ from makhzan_ml.worker.broker import (
     Broker,
     BrokerError,
     Forbidden,
-    Invalid,
     LeaseLost,
     Unauthorized,
     Unreachable,
@@ -111,7 +116,8 @@ class _Fatal(Exception):
 
 @dataclass
 class _Held:
-    """The leases this worker holds, shared with the heartbeat thread."""
+    """The jobs this worker holds, by lease, shared with the heartbeat thread. A job leaves
+    when it is submitted in full, released, or found lost."""
 
     lock: threading.Lock = field(default_factory=threading.Lock)
     leases: dict[str, set[int]] = field(default_factory=dict)  # lease_id -> job ids
@@ -126,6 +132,7 @@ class Worker:
         broker: Broker | None = None,
         *,
         load_judge: Callable[[str, judges.Runtime], judges.Judge] = judges.load,
+        importable: Callable[[str], bool] = judges.importable,
         clock: Clock | None = None,
         image: str | None = None,
     ):
@@ -134,14 +141,20 @@ class Worker:
             cfg.broker_url, cfg.token, ca_file=cfg.ca_file, retry_max_s=cfg.retry_max_s
         )
         self.load_judge = load_judge
+        self.importable = importable
         self.clock = clock or Clock(cfg)
         self.image = image
         self.stop = threading.Event()
-        # A stop cuts the broker's retries short, so a SIGTERM's grace period is enough.
+        # A stop wakes the broker's backoff and sets its deadline; between retries the
+        # broker asks whether the window has ended.
         self.broker.stop_event = self.stop
+        self.broker.cutoff = self._window_open
+        self.broker.until_cutoff = self._seconds_to_window_end
         self.stop_reason: str | None = None
         self.session: str | None = None
         self.heartbeat_s = cfg.heartbeat_s
+        # Threads: as configured, else the container's CPU quota (never the host's cores).
+        self.threads = cfg.threads or (judges.default_threads() if cfg.device == "cpu" else None)
         self.judge: judges.Judge | None = None
         self.held = _Held()
         self.spr = {k: cfg.seconds_per_request for k in cfg.models}  # measured, per model
@@ -153,6 +166,7 @@ class Worker:
         self.scored = 0
         self._hb_thread: threading.Thread | None = None
         self._hb_stop = threading.Event()
+        self._window_timer: threading.Timer | None = None
 
     # -- control ---------------------------------------------------------------------------
 
@@ -160,6 +174,7 @@ class Worker:
         if not self.stop.is_set():
             self.stop_reason = reason
             log.info("stopping: %s", reason)
+            self.broker.stopping()
             self.stop.set()
 
     def install_signal_handlers(self) -> None:
@@ -178,6 +193,9 @@ class Worker:
             return ALWAYS_SECONDS_LEFT
         return max(0.0, closes.timestamp() - self.clock.now().timestamp())
 
+    def _seconds_to_window_end(self) -> float | None:
+        return None if self._closes_at() is None else self._seconds_left()
+
     def _window_open(self) -> bool:
         if self.cfg.schedule.is_open(self.clock.now()):
             return True
@@ -187,31 +205,51 @@ class Worker:
     def _may_continue(self) -> bool:
         return not self.stop.is_set() and self._window_open()
 
+    def _start_window_timer(self) -> None:
+        """Stop at the window's end even while blocked in a broker call's backoff."""
+        if self._closes_at() is None:
+            return
+        self._window_timer = threading.Timer(
+            self._seconds_left(), self.request_stop, args=("the window has ended",)
+        )
+        self._window_timer.daemon = True
+        self._window_timer.start()
+
     # -- the session -----------------------------------------------------------------------
 
     def run(self) -> int:
-        cfg = self.cfg
-        if not cfg.schedule.is_open(self.clock.now()):
-            log.info("outside the window (%s); nothing to do", cfg.schedule.describe())
+        if not self.cfg.schedule.is_open(self.clock.now()):
+            log.info("outside the window (%s); nothing to do", self.cfg.schedule.describe())
             return EXIT_OK
-        code = self._session()
-        # Every exit path, whatever ended the session, says which scores did not arrive.
-        if self._report_undelivered() and code == EXIT_OK:
-            code = EXIT_UNDELIVERED
-        log.info(
-            "session ended (%s), exit %d: %d requests scored",
-            self.stop_reason or "done",
-            code,
-            self.scored,
-        )
-        if self.session and not self.session_closed:
+        code = EXIT_ERROR
+        try:
+            code = self._session()
+        finally:
+            if self._window_timer is not None:
+                self._window_timer.cancel()
+            # Every exit path, whatever ended the session, says which scores did not arrive.
+            if self.undelivered:
+                log.error(
+                    "%d score(s) were not delivered; each is logged above",
+                    len(self.undelivered),
+                )
+                if code == EXIT_OK:
+                    code = EXIT_UNDELIVERED
             log.info(
-                "the broker was not told this session ended: it stopped between leases "
-                "with nothing held (no release was due)"
+                "session ended (%s), exit %d: %d requests scored",
+                self.stop_reason or "done",
+                code,
+                self.scored,
             )
+            if self.session and not self.session_closed:
+                log.info(
+                    "the broker was not told this session ended: it stopped between leases "
+                    "with nothing held (no release was due)"
+                )
         return code
 
     def _session(self) -> int:
+        self._start_window_timer()
         try:
             self._preflight()
             ok = self._hello()
@@ -233,11 +271,30 @@ class Worker:
         except Unreachable as e:
             log.error("the broker is unreachable: %s", e)
             return EXIT_UNREACHABLE
+        except BrokerError as e:  # an answer this worker has no handling for (400, 404, 413 ...)
+            log.error("the broker answered something unexpected: %s", e)
+            return EXIT_ERROR
+        except Exception:  # noqa: BLE001 - logged in full; the held jobs were handed back
+            log.exception("unexpected error")
+            return EXIT_ERROR
         return EXIT_OK
 
     def _preflight(self) -> None:
         cfg = self.cfg
+        missing = [k for k in cfg.models if not self.importable(k)]
+        if missing:
+            raise _Fatal(
+                EXIT_CONFIG,
+                f"this image cannot load {missing}: each model image holds one model's code "
+                "(use the image built on that model's base)",
+            )
         limit = judges.cgroup_memory_max()
+        if cfg.memory_gib and limit is None:
+            log.warning(
+                "memory_gib = %s not checked: no cgroup v2 memory limit is visible "
+                "(no --memory, or cgroup v1)",
+                cfg.memory_gib,
+            )
         if cfg.memory_gib and limit is not None and limit < cfg.memory_gib * 2**30:
             raise _Fatal(
                 EXIT_CONFIG,
@@ -246,15 +303,11 @@ class Worker:
                 "memory_gib)",
             )
         if cfg.nice:
-            import os
-
             try:
                 os.nice(cfg.nice)
             except OSError as e:  # never fatal: the container's cpu-shares still apply
                 log.warning("could not lower the priority by %d: %s", cfg.nice, e)
         if cfg.weights_cache is not None:
-            import os
-
             if not cfg.weights_cache.is_dir():
                 raise _Fatal(EXIT_CONFIG, f"weights_cache {cfg.weights_cache} does not exist")
             if os.access(cfg.weights_cache, os.W_OK):
@@ -274,10 +327,12 @@ class Worker:
             "image": self.image,
             "device": cfg.device,
             "dtype": cfg.dtype,
-            "threads": cfg.threads,
+            "threads": self.threads,
             "config": cfg.hello_config(),
         }
         resp = self.broker.hello(body)
+        if not isinstance(resp, dict) or not resp.get("session"):
+            raise _Fatal(EXIT_ERROR, "hello: the broker's answer carries no session")
         self.session = resp["session"]
         if resp.get("heartbeat_s"):
             self.heartbeat_s = min(self.heartbeat_s, float(resp["heartbeat_s"]))
@@ -309,7 +364,7 @@ class Worker:
             ",".join(cfg.models),
             cfg.device,
             cfg.dtype,
-            cfg.threads,
+            self.threads,
             cfg.schedule.describe(),
         )
         if not ok:
@@ -372,52 +427,68 @@ class Worker:
 
     # -- one lease -------------------------------------------------------------------------
 
+    def _held_jobs(self, lease_id: str) -> list[int]:
+        with self.held.lock:
+            return sorted(self.held.leases.get(lease_id, ()))
+
+    def _settle(self, lease_id: str, job_ids) -> None:
+        """These jobs need nothing more from this worker: heartbeats stop naming them."""
+        with self.held.lock:
+            held = self.held.leases.get(lease_id)
+            if held is not None:
+                held.difference_update(job_ids)
+
     def _process_lease(self, key: str, lease_id: str, jobs: list[dict]) -> None:
         with self.held.lock:
             self.held.leases[lease_id] = {j["job_id"] for j in jobs}
-        started: set[int] = set()
         try:
-            if not self._may_continue():  # stopped while leasing: no load, nothing scored
-                self._release(lease_id, [j["job_id"] for j in jobs], "graceful")
-                return
-            judge = self._ensure_loaded(key, lease_id, jobs)
-            unfinished: list[int] = []
-            for job in jobs:
-                if unfinished or not self._may_continue():
-                    unfinished.append(job["job_id"])
-                    continue
-                started.add(job["job_id"])
-                if not self._process_job(judge, key, lease_id, job):
-                    unfinished.append(job["job_id"])
-            if unfinished:
-                self._release(lease_id, unfinished, "graceful")
-        except _Fatal:
-            # The jobs never started go back with no attempt counted; the one that failed
-            # was already released as an error.
-            rest = [j["job_id"] for j in jobs if j["job_id"] not in started]
+            if self._may_continue():  # stopped while leasing: no load, nothing scored
+                judge = self._ensure_loaded(key, lease_id)
+                for job in jobs:
+                    if not self._may_continue():
+                        break
+                    if not self._process_job(judge, key, lease_id, job):
+                        break  # stopped mid-job
+        except Unreachable:
+            # A release would only retry against the same dead broker, for another full
+            # budget; the held jobs come back to the queue when their leases expire.
+            raise
+        except BaseException:
+            # Whatever went wrong (a model that keeps failing or will not load, an
+            # unexpected answer, an interrupt), the jobs still held go back once, with
+            # no attempt counted, before the error ends the session.
+            rest = self._held_jobs(lease_id)
+            if rest:
+                try:
+                    self._release(lease_id, rest, "graceful")
+                except Exception as e:  # noqa: BLE001 - the original error matters more
+                    log.warning("could not hand back %s: %s", rest, e)
+            raise
+        else:
+            rest = self._held_jobs(lease_id)
             if rest:
                 self._release(lease_id, rest, "graceful")
-            raise
         finally:
             with self.held.lock:
                 self.held.leases.pop(lease_id, None)
                 self.held.progress = None
 
-    def _ensure_loaded(self, key: str, lease_id: str, jobs: list[dict]) -> judges.Judge:
+    def _ensure_loaded(self, key: str, lease_id: str) -> judges.Judge:
         if self.judge is not None and self.judge.key == key:
             return self.judge
         self._unload()
         cfg = self.cfg
-        rt = judges.Runtime(cfg.device, cfg.dtype, cfg.threads, cfg.mmap, cfg.weights_cache)
+        rt = judges.Runtime(cfg.device, cfg.dtype, self.threads, cfg.mmap, cfg.weights_cache)
         log.info("loading %s (%s, %s) for lease %s", key, cfg.device, cfg.dtype, lease_id)
         try:
             self.judge = self.load_judge(key, rt)
         except Exception as e:  # noqa: BLE001 - every load failure ends the session the same way
-            # The jobs are not at fault, so no attempt is counted: a misconfigured worker
-            # restarted by a timer must not turn healthy jobs dead. Exit 2 carries the error.
-            msg = f"{type(e).__name__}: {str(e)[:400]}"
-            self._release(lease_id, [j["job_id"] for j in jobs], "graceful")
-            raise _Fatal(EXIT_CONFIG, f"could not load {key}: {msg}") from None
+            # The jobs are not at fault: the lease goes back gracefully (once, in
+            # _process_lease), so a misconfigured worker restarted by a timer cannot turn
+            # healthy jobs dead. Exit 2 carries the error.
+            raise _Fatal(
+                EXIT_CONFIG, f"could not load {key}: {type(e).__name__}: {str(e)[:400]}"
+            ) from None
         info = self.judge.info
         self.judge_info[key] = info
         log.info("loaded %s: %s", key, json.dumps(info, default=str))
@@ -434,31 +505,34 @@ class Worker:
             judges.unload(self.judge, self.cfg.device)
             self.judge = None
 
+    def _lost(self, lease_id: str, job_id: int) -> bool:
+        with self.held.lock:
+            return (lease_id, job_id) in self.held.lost
+
     def _process_job(self, judge: judges.Judge, key: str, lease_id: str, job: dict) -> bool:
         """Score one job's requests in the order the broker sent them, then submit.
-        True when the job needs nothing more from this worker."""
+        False when the session stopped before the job was finished (it stays held, and
+        goes back with the rest of the lease)."""
         job_id = job["job_id"]
         requests = job.get("requests") or []
         if not requests:  # the contract says a job never carries zero orders; never hold one
             self._release(lease_id, [job_id], "error", "the job carried no requests")
             return True
         scores: list[dict] = []
-        complete = True
         for req in requests:
-            if (lease_id, job_id) in self.held.lost:
+            if self._lost(lease_id, job_id):
                 break
-            if not self._may_continue():
-                complete = False
-                break
-            closes = self._closes_at()
-            if closes is not None and self._seconds_left() < self.spr[key]:
-                self.request_stop("the next request would not finish inside the window")
-                complete = False
-                break
+            if not self._may_continue() or (
+                self._closes_at() is not None and self._seconds_left() < self.spr[key]
+            ):
+                if self._may_continue():
+                    self.request_stop("the next request would not finish inside the window")
+                self._submit(lease_id, job_id, scores, final=False)
+                return False
             payload = req.get("payload")
             if request_sha256(payload) != req.get("request_sha256"):
                 # Never score something other than what the broker rendered and hashed.
-                self._submit(lease_id, job_id, scores)
+                self._submit(lease_id, job_id, scores, final=False)
                 self._release(lease_id, [job_id], "error", "request_sha256 does not match payload")
                 return True
             with self.held.lock:
@@ -467,7 +541,7 @@ class Worker:
             try:
                 p, extra = judge.score(payload)
             except Exception as e:  # noqa: BLE001 - recorded on the job, never swallowed
-                self._submit(lease_id, job_id, scores)
+                self._submit(lease_id, job_id, scores, final=False)
                 self._release(lease_id, [job_id], "error", f"{type(e).__name__}: {str(e)[:400]}")
                 self.failed_jobs.add(job_id)
                 log.error("job %s %s failed: %s", job_id, req.get("order"), type(e).__name__)
@@ -495,7 +569,7 @@ class Worker:
                 }
             )
             log.info("job %s %s: %.4f in %.1f s", job_id, req.get("order"), p, seconds)
-        if (lease_id, job_id) in self.held.lost:
+        if self._lost(lease_id, job_id):
             for s in scores:
                 log.warning(
                     "job %s: lease lost; dropping %s %s p=%.4f (another worker holds the job)",
@@ -504,46 +578,67 @@ class Worker:
                     s["request_sha256"],
                     s["p"],
                 )
+            self._settle(lease_id, [job_id])
             return True
-        self._submit(lease_id, job_id, scores)
-        return complete
+        self._submit(lease_id, job_id, scores, final=True)
+        return True
 
-    def _submit(self, lease_id: str, job_id: int, scores: list[dict]) -> None:
-        if not scores:
-            return
-        cfg = self.cfg
-        body = {
-            "session": self.session,
-            "lease_id": lease_id,
-            "job_id": job_id,
-            "scores": scores,
-            "device": cfg.device,
-            "dtype": cfg.dtype,
-            "threads": cfg.threads,
-        }
-        try:
-            resp = self.broker.results(body)
-        except Unreachable:
-            self.undelivered.extend({"job_id": job_id, **s} for s in scores)
-            raise
-        except LeaseLost:
-            log.warning(
-                "job %s: results refused, lease lost (%s); the job's new holder scores it",
+    def _undelivered(self, job_id: int, scores: list[dict], why: str) -> None:
+        """Scores that did not arrive: logged now, one line each, never only at exit."""
+        for s in scores:
+            self.undelivered.append({"job_id": job_id, **s})
+            log.error(
+                "UNDELIVERED score: job %s %s %s p=%.6f (%s)",
                 job_id,
-                ", ".join(f"{s['order']} {s['request_sha256']} p={s['p']:.4f}" for s in scores),
+                s["order"],
+                s["request_sha256"],
+                s["p"],
+                why,
             )
-            return
-        except (Invalid, BrokerError) as e:
-            self.undelivered.extend({"job_id": job_id, "refused": str(e), **s} for s in scores)
-            log.error("job %s: results refused: %s", job_id, e)
-            return
-        log.info(
-            "job %s: %s accepted, %s duplicate, job %s",
-            job_id,
-            resp.get("accepted"),
-            resp.get("duplicate"),
-            resp.get("job"),
-        )
+
+    def _submit(self, lease_id: str, job_id: int, scores: list[dict], *, final: bool) -> None:
+        """Post a job's scores. `final`: the job is finished, so it is settled whatever the
+        answer; otherwise it stays held for a release."""
+        if scores:
+            cfg = self.cfg
+            body = {
+                "session": self.session,
+                "lease_id": lease_id,
+                "job_id": job_id,
+                "scores": scores,
+                "device": cfg.device,
+                "dtype": cfg.dtype,
+                "threads": self.threads,
+            }
+            try:
+                resp = self.broker.results(body)
+            except Unreachable as e:
+                self._undelivered(job_id, scores, f"broker unreachable: {e}")
+                raise
+            except LeaseLost:
+                log.warning(
+                    "job %s: results refused, lease lost (%s); the job's new holder scores it",
+                    job_id,
+                    ", ".join(f"{s['order']} {s['request_sha256']} p={s['p']:.4f}" for s in scores),
+                )
+                self._settle(lease_id, [job_id])
+                return
+            except BrokerError as e:
+                self._undelivered(job_id, scores, f"refused: {e}")
+            except Exception as e:
+                # Whether they arrived is unknown: say so before the error ends the session.
+                self._undelivered(job_id, scores, f"{type(e).__name__} while posting: {e}")
+                raise
+            else:
+                log.info(
+                    "job %s: %s accepted, %s duplicate, job %s",
+                    job_id,
+                    resp.get("accepted"),
+                    resp.get("duplicate"),
+                    resp.get("job"),
+                )
+        if final:
+            self._settle(lease_id, [job_id])
 
     def _release(self, lease_id: str, job_ids: list[int], reason: str, error=None) -> None:
         body = {"session": self.session, "lease_id": lease_id, "job_ids": job_ids, "reason": reason}
@@ -558,18 +653,8 @@ class Worker:
             log.warning("release of %s: lease already lost (%s)", job_ids, e.job_ids)
         except BrokerError as e:
             log.warning("release of %s refused: %s", job_ids, e)
-
-    def _report_undelivered(self) -> bool:
-        for s in self.undelivered:
-            log.error(
-                "UNDELIVERED score: job %s %s %s p=%.6f%s",
-                s["job_id"],
-                s["order"],
-                s["request_sha256"],
-                s["p"],
-                f" ({s['refused']})" if s.get("refused") else "",
-            )
-        return bool(self.undelivered)
+        # Back with the broker, lost, or refused: none of them is this worker's to hold.
+        self._settle(lease_id, job_ids)
 
     # -- heartbeat -------------------------------------------------------------------------
 
@@ -594,20 +679,19 @@ class Worker:
 
     def heartbeat_once(self) -> None:
         with self.held.lock:
-            lease_ids = sorted(self.held.leases)
-            job_ids = sorted(
-                j
-                for lid in lease_ids
-                for j in self.held.leases[lid]
-                if (lid, j) not in self.held.lost
-            )
+            held = {
+                lid: {j for j in jobs if (lid, j) not in self.held.lost}
+                for lid, jobs in self.held.leases.items()
+            }
+            held = {lid: jobs for lid, jobs in held.items() if jobs}
             progress = dict(self.held.progress) if self.held.progress else None
-        if not lease_ids:
+        if not held:
             return
+        lease_ids = sorted(held)
         body = {
             "session": self.session,
             "lease_ids": lease_ids,
-            "job_ids": job_ids,
+            "job_ids": sorted(j for jobs in held.values() for j in jobs),
             "rss_bytes": judges.proc_status("VmRSS"),
         }
         if progress:
@@ -616,8 +700,8 @@ class Worker:
             self.broker.heartbeat(body)
         except LeaseLost as e:
             # The live leases were extended all the same; drop only what was lost, and only
-            # jobs still held under the leases this heartbeat named (one released or
-            # finished meanwhile is not this worker's to drop).
+            # jobs still held under the leases this heartbeat named (one finished or
+            # released meanwhile is not this worker's to drop).
             lost_jobs = set(e.job_ids)
             lost_leases = set(e.body.get("lease_ids") or [])
             with self.held.lock:

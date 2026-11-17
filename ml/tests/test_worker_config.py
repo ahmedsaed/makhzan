@@ -104,7 +104,10 @@ retry_max_s = 1200
 
 
 def test_a_single_model_and_a_single_window_may_be_strings():
-    cfg = parse(base(worker={"models": "kev"}, schedule={"windows": "00:30-04:30"}))
+    cfg = parse(
+        base(worker={"models": "kev"},
+             schedule={"windows": "00:30-04:30", "timezone": "Africa/Cairo"})
+    )  # fmt: skip
     assert cfg.models == ("kev",) and cfg.schedule.describe() == "00:30-04:30"
 
 
@@ -212,6 +215,8 @@ def test_compute_values_are_checked(compute, match):
         ({"timezone": "Mars/Olympus"}, "not a known zone"),
         ({"on_empty": "sleep"}, "on_empty"),
         ({"poll_s": 0}, "poll_s must be positive"),
+        ({"poll_s": 1}, "at least 5 s"),
+        ({"windows": ["00:30-04:30"]}, "timezone is required with windows"),
     ],
 )
 def test_schedule_values_are_checked(schedule, match):
@@ -224,6 +229,7 @@ def test_schedule_values_are_checked(schedule, match):
         ({"max_jobs": 0}, "max_jobs"),
         ({"lease_s": 100, "heartbeat_s": 60}, "at most half of lease_s"),
         ({"heartbeat_s": -1}, "heartbeat_s must be positive"),
+        ({"heartbeat_s": 0.5}, "at least 5 s"),
         ({"seconds_per_request": 0}, "seconds_per_request"),
         ({"retry_max_s": 0}, "retry_max_s"),
     ],
@@ -331,7 +337,13 @@ def test_windows_work_in_fixed_offset_zones(zone):
     assert s.is_open(now) and s.closes_at(now) == datetime(2026, 11, 18, 2, 0, tzinfo=tz)
 
 
-def test_windows_work_without_a_zone():
+def test_a_schedule_object_without_a_zone_still_works():
+    # The configuration requires a zone with windows; the object alone still copes with
+    # the machine's local time (a fixed offset), which once crashed.
     s = Schedule((Window.parse("00:00-23:59"),))
-    now = s.now()  # the machine's local time, a fixed offset
+    now = s.now()
     assert s.is_open(now) == (now.time() < time(23, 59))
+
+
+def test_always_needs_no_zone():
+    assert parse(base(schedule={"windows": "always"})).schedule.timezone is None

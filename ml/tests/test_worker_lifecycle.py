@@ -7,6 +7,7 @@ milliseconds. The broker client is the real one, over real HTTP on 127.0.0.1.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import signal
@@ -17,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from makhzan_ml.worker import judges, run
-from makhzan_ml.worker.broker import Broker, BrokerError
+from makhzan_ml.worker.broker import STOP_GRACE_S, STOP_TIMEOUT_S, Broker, BrokerError
 from makhzan_ml.worker.config import parse
 from makhzan_ml.worker.fake_broker import FakeBroker
 from makhzan_ml.worker.pins import PINS
@@ -94,7 +95,7 @@ def config(url: str, **sections) -> dict:
     data = {
         "worker": {"name": "home-kev", "broker_url": url, "token": TOKEN, "models": ["kev"]},
         "compute": {"threads": 6, "nice": 0},
-        "schedule": {"windows": "always", "on_empty": "exit"},
+        "schedule": {"windows": "always", "timezone": "Africa/Cairo", "on_empty": "exit"},
         "leases": {"max_jobs": 2, "lease_s": 900, "heartbeat_s": 60, "seconds_per_request": 10},
     }
     for name, values in sections.items():
@@ -113,19 +114,26 @@ def sleeps():
     return []
 
 
-def make_worker(broker, sleeps, *, clock=None, fake=None, retry_max_s=30.0, **sections):
+def make_worker(
+    broker, sleeps, *, clock=None, fake=None, retry_max_s=30.0, cfg_overrides=None, **sections
+):
     cfg = parse(config(broker.url, **sections))
+    if cfg_overrides:  # below the configuration's floors, for tests that run in real time
+        cfg = dataclasses.replace(cfg, **cfg_overrides)
     clock = clock or FakeClock(datetime(2026, 11, 17, 1, 0, tzinfo=CAIRO))
     fake = fake or FakeJudges(clock)
     elapsed = [0.0]
 
     def sleep(seconds):
+        # A broker backoff passes the worker's time too, so windows end during retries.
         sleeps.append(seconds)
         elapsed[0] += seconds
+        clock.advance(seconds)
 
     client = Broker(cfg.broker_url, cfg.token, retry_max_s=retry_max_s, sleep=sleep,
                     monotonic=lambda: elapsed[0])  # fmt: skip
-    worker = run.Worker(cfg, client, load_judge=fake, clock=clock, image="sha256:test")
+    worker = run.Worker(cfg, client, load_judge=fake, importable=lambda k: True, clock=clock,
+                        image="sha256:test")  # fmt: skip
     return worker, fake, clock
 
 
@@ -345,7 +353,7 @@ def test_heartbeats_extend_the_lease_during_a_long_job(broker, sleeps):
 
     fake.on_score = slow
     worker, fake, _ = make_worker(broker, sleeps, fake=fake,
-                                  leases={"heartbeat_s": 0.1, "lease_s": 1})  # fmt: skip
+                                  cfg_overrides={"heartbeat_s": 0.1, "lease_s": 1})  # fmt: skip
     assert worker.run() == run.EXIT_OK
     # Without the heartbeats the lease would have expired mid-job and been reaped.
     assert job.status == "done" and job.attempts == 0
@@ -358,7 +366,7 @@ def test_heartbeats_extend_the_lease_during_a_long_job(broker, sleeps):
 
 
 def test_no_heartbeat_without_a_lease(broker, sleeps):
-    worker, _, _ = make_worker(broker, sleeps, leases={"heartbeat_s": 0.01, "lease_s": 900})
+    worker, _, _ = make_worker(broker, sleeps)
     worker.session = "s"
     worker.heartbeat_once()
     assert broker.bodies("/heartbeat") == []
@@ -491,21 +499,23 @@ def test_a_model_that_will_not_load_hands_its_lease_back(broker, sleeps):
     fake.fail_load = judges.LoadError("kev: loaded snapshot 'abc', pinned '6cfc...'")
     worker, _, _ = make_worker(broker, sleeps, fake=fake)
     assert worker.run() == run.EXIT_CONFIG
-    # The worker's fault, not the job's: handed back with no attempt counted.
+    # The worker's fault, not the job's: handed back with no attempt counted, and once.
     assert job.status == "queued" and job.attempts == 0
+    assert [b["job_ids"] for b in broker.bodies("/release")] == [[job.job_id]]
 
 
 def test_a_wrong_token_exits(broker, sleeps):
     cfg = parse(config(broker.url))
     client = Broker(cfg.broker_url, "not-the-token", sleep=sleeps.append)
-    worker = run.Worker(cfg, client, load_judge=FakeJudges())
+    worker = run.Worker(cfg, client, load_judge=FakeJudges(), importable=lambda k: True)
     assert worker.run() == run.EXIT_AUTH
 
 
 def test_a_model_key_the_broker_does_not_grant_exits():
     with FakeBroker({TOKEN: ("home-kev", ["kev"])}) as b:
         cfg = parse(config(b.url, worker={"models": ["pplx"]}))
-        worker = run.Worker(cfg, Broker(cfg.broker_url, TOKEN), load_judge=FakeJudges())
+        worker = run.Worker(cfg, Broker(cfg.broker_url, TOKEN), load_judge=FakeJudges(),
+                            importable=lambda k: True)  # fmt: skip
         assert worker.run() == run.EXIT_AUTH
 
 
@@ -529,18 +539,13 @@ def test_two_models_are_drained_one_after_the_other(broker, sleeps):
 # --- review regressions ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("timezone", [None, "UTC", "Etc/UTC", "Africa/Cairo"])
+@pytest.mark.parametrize("timezone", ["UTC", "Etc/UTC", "Africa/Cairo"])
 def test_a_windowed_schedule_runs_in_any_zone(broker, sleeps, timezone):
-    # A fixed-offset zone (UTC, or the machine's when none is set) once crashed the first
-    # window check: an aware time compared with the naive window bounds.
+    # A fixed-offset zone (UTC) once crashed the first window check: an aware time compared
+    # with the naive window bounds. (A window now requires a zone; "always" needs none.)
     broker.add_job("kev", pair(1))
-    schedule = {"windows": ["00:00-23:59"]}
-    if timezone:
-        schedule["timezone"] = timezone
-    cfg = parse(config(broker.url, schedule=schedule))
-    tz = cfg.schedule.timezone
-    start = datetime(2026, 11, 17, 12, 0, tzinfo=tz) if tz else datetime(2026, 11, 17, 12, 0)
-    clock = FakeClock(start if tz else start.astimezone())
+    schedule = {"windows": ["00:00-23:59"], "timezone": timezone}
+    clock = FakeClock(datetime(2026, 11, 17, 12, 0, tzinfo=ZoneInfo(timezone)))
     worker, fake, _ = make_worker(broker, sleeps, clock=clock, schedule=schedule)
     assert worker.run() == run.EXIT_OK
     assert len(fake.scored) == 2
@@ -578,7 +583,9 @@ def test_a_stop_cuts_the_brokers_retries_short(broker, sleeps):
     worker, fake, _ = make_worker(broker, sleeps, retry_max_s=900)
     fake.on_score = lambda i: i == 1 and worker.request_stop("SIGTERM")
     assert worker.run() == run.EXIT_UNREACHABLE
-    assert sum(sleeps) <= 30  # not the 900 s budget: a docker stop would kill it first
+    # One deadline for the rest of the session, not the 900 s budget: a docker stop would
+    # kill the process first.
+    assert sum(sleeps) <= STOP_GRACE_S
     assert job.scores == {}
 
 
@@ -644,3 +651,137 @@ def test_a_redirect_is_refused_not_followed(sleeps):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- second review ------------------------------------------------------------------------
+
+
+def test_the_window_end_stops_a_session_retrying_through_an_outage(broker, sleeps, caplog):
+    # The broker goes down while the worker posts its last results, ten minutes before the
+    # window ends. Retrying for the full 15-minute budget would keep Kev loaded past the
+    # window while the next worker (pplx) loads: both in memory. The window's end stops it.
+    job = broker.add_job("kev", pair(1))
+    broker.fail("/results", times=1000, status=503)
+    clock = FakeClock(datetime(2026, 11, 17, 4, 20, tzinfo=CAIRO))
+    worker, fake, clock = make_worker(
+        broker, sleeps, clock=clock, retry_max_s=900, schedule={"windows": ["00:30-04:30"]}
+    )
+    with caplog.at_level(logging.ERROR):
+        assert worker.run() == run.EXIT_UNREACHABLE
+    assert worker.stop_reason == "the window has ended"
+    assert fake.unloads == ["kev"]  # unloaded on the way out
+    # Stopped at 04:30, then at most the stop grace for the rest of the session.
+    end = datetime(2026, 11, 17, 4, 30, tzinfo=CAIRO).timestamp() + STOP_GRACE_S
+    assert clock.now().timestamp() <= end
+    assert sum("UNDELIVERED" in r.getMessage() for r in caplog.records) == 2
+    assert job.scores == {}
+
+
+def test_a_stop_shortens_every_socket_timeout(broker, sleeps):
+    worker, _, _ = make_worker(broker, sleeps)
+    assert worker.broker.deadline is None
+    worker.request_stop("SIGTERM")
+    assert worker.broker.deadline is not None and STOP_TIMEOUT_S < worker.broker.timeout_s
+
+
+def test_an_undelivered_score_is_logged_at_once(broker, sleeps, caplog):
+    first, second = broker.add_job("kev", pair(1)), broker.add_job("kev", pair(2))
+    broker.fail("/results", times=1, status=422, body={"error": "invalid", "detail": "x"})
+    worker, fake, _ = make_worker(broker, sleeps)
+    seen = {}
+
+    def on(i):
+        if i == 2:  # scoring the second job: the first's refusal is already in the log
+            seen["n"] = sum("UNDELIVERED" in r.getMessage() for r in caplog.records)
+
+    fake.on_score = on
+    with caplog.at_level(logging.ERROR):
+        assert worker.run() == run.EXIT_UNDELIVERED
+    assert seen["n"] == 2
+    line = next(r.getMessage() for r in caplog.records if "UNDELIVERED" in r.getMessage())
+    assert f"job {first.job_id}" in line and first.requests[0]["request_sha256"] in line
+    assert "p=0.900000" in line
+    assert set(second.scores) == {"ab", "ba"}
+
+
+def test_an_unexpected_broker_answer_ends_the_session_cleanly(broker, sleeps, caplog):
+    # From the review's repro: a 413 on results, then a 400 on the next lease.
+    _, b = broker.add_job("kev", pair(1)), broker.add_job("kev", pair(2))
+    worker, fake, _ = make_worker(broker, sleeps, leases={"max_jobs": 1})
+    lease = worker.broker.lease
+    n = {"lease": 0}
+
+    def results(body):
+        raise BrokerError(413, {"error": "too large"}, "/results")
+
+    def lease_once(body):
+        n["lease"] += 1
+        if n["lease"] == 2:
+            raise BrokerError(400, {"error": "bad"}, "/lease")
+        return lease(body)
+
+    worker.broker.results, worker.broker.lease = results, lease_once
+    with caplog.at_level(logging.ERROR):
+        assert worker.run() == run.EXIT_ERROR  # no exception escapes run()
+    assert sum("UNDELIVERED" in r.getMessage() for r in caplog.records) == 2
+    assert b.status == "queued" and b.attempts == 0
+
+
+def test_an_unexpected_error_mid_lease_hands_the_jobs_back(broker, sleeps, caplog):
+    jobs = [broker.add_job("kev", pair(n)) for n in range(2)]
+    worker, fake, _ = make_worker(broker, sleeps)
+
+    def results(body):
+        raise RuntimeError("something nobody planned for")
+
+    worker.broker.results = results
+    with caplog.at_level(logging.ERROR):
+        assert worker.run() == run.EXIT_ERROR
+    assert sum("UNDELIVERED" in r.getMessage() for r in caplog.records) == 2
+    assert all(j.status == "queued" and j.attempts == 0 for j in jobs)
+
+
+def test_a_malformed_hello_is_an_error_not_a_crash(broker, sleeps):
+    broker.fail("/hello", status=200, body={"models": {}})
+    worker, fake, _ = make_worker(broker, sleeps)
+    assert worker.run() == run.EXIT_ERROR
+    assert fake.loads == []
+
+
+def test_heartbeats_never_name_a_finished_job(broker, sleeps, caplog):
+    # From the review's repro, with max_jobs = 2: the first job is posted and done while
+    # the second is being scored.
+    _, b = broker.add_job("kev", pair(1)), broker.add_job("kev", pair(2))
+    worker, fake, _ = make_worker(broker, sleeps)
+    fake.on_score = lambda i: i == 2 and worker.heartbeat_once()
+    with caplog.at_level(logging.WARNING):
+        assert worker.run() == run.EXIT_OK
+    beat = broker.bodies("/heartbeat")[-1]
+    assert beat["job_ids"] == [b.job_id]
+    assert worker.held.lost == set()
+    assert not any("heartbeat" in r.getMessage() for r in caplog.records)
+
+
+def test_a_model_this_image_cannot_load_stops_before_hello(broker, sleeps):
+    cfg = parse(config(broker.url, worker={"models": ["kev", "pplx"]}))
+    worker = run.Worker(cfg, Broker(cfg.broker_url, TOKEN), load_judge=FakeJudges(),
+                        importable=lambda k: k == "kev")  # fmt: skip
+    assert worker.run() == run.EXIT_CONFIG
+    assert broker.calls == []
+
+
+def test_threads_default_to_the_cpu_quota_not_the_host(broker, sleeps):
+    worker, _, _ = make_worker(broker, sleeps, compute={"threads": None})
+    assert worker.threads == judges.default_threads()
+    assert 1 <= worker.threads <= len(os.sched_getaffinity(0))
+
+
+def test_proxy_settings_in_the_environment_are_ignored(broker, sleeps, monkeypatch):
+    for k in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+        monkeypatch.setenv(k, "http://127.0.0.1:9")  # nothing listens there
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    broker.add_job("kev", pair(1))
+    worker, fake, _ = make_worker(broker, sleeps)
+    assert worker.run() == run.EXIT_OK
+    assert len(fake.scored) == 2 and sleeps == []
