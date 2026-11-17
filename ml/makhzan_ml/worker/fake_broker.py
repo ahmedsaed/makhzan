@@ -5,16 +5,20 @@ answers it (`app.broker.main` in apps/api):
 
 - bearer auth (401), model keys per worker (403), version checks at hello (`ok: false`)
   and at lease (409 version);
-- hello answers `lease_s` from the worker's `config.lease_s` (default 900) and
-  `heartbeat_s = min(60, lease_s / 3)`;
-- leases sized by `seconds_left` minus a 60 s margin, with lazy expiry and attempts;
+- hello answers `lease_s` from the worker's `config.lease_s` (an integer from 60 to 7200,
+  default 900), `heartbeat_s = min(60, lease_s / 3)`, and per model the `stages` (pipeline,
+  stage, prompt version) its leases will carry;
+- leases sized by `seconds_left` minus a 60 s margin, stopping at the first job that does
+  not fit; a repeated `lease_request_id` gives the session's last lease back (its jobs
+  still held); lazy expiry that charges an attempt only to the job in hand (the last
+  heartbeat's `progress.job_id`), or to every job of a lease with none in hand;
 - heartbeats that extend every live lease named and answer 409 lease_lost (with the lost
   `job_ids` and `lease_ids`) when a named lease or job is no longer held;
 - results that are idempotent on the request hash (a retry after the job is done is a
   200 counted duplicate), `job` "leased" until both orders are scored, then "done" with
   `next`; 422 request_mismatch for the leaseholder only, 422 invalid for a bad body;
-- releases that need the lease and at least one job, counting an attempt only for
-  reason "error";
+- releases counting an attempt only for reason "error"; a graceful release naming no
+  jobs (`{"session"}`) ends the session; an error release must name its jobs;
 - sessions that end "released" (a graceful release) or "empty" (an empty lease).
 
 It is not the broker: no database, no pipelines, no transitions (`next` is always
@@ -22,7 +26,9 @@ It is not the broker: no database, no pipelines, no transitions (`next` is alway
 
 Faults for tests: `fail(path, times, status=None, body=None, headers=None)` drops the
 connection (status None) or answers that status, body and headers the next `times` calls
-to `path`; `lose_lease(job_id)` makes the job no longer held by its worker.
+to `path`; `fail(path, times, after=True)` handles the call and then drops the connection
+(an answer lost on the way back); `lose_lease(job_id)` makes the job no longer held by its
+worker; `expire(lease_id)` expires a lease now.
 
 Binds 127.0.0.1 only, plain HTTP: the worker accepts http:// for a loopback address
 and nothing else.
@@ -62,6 +68,7 @@ class FakeJob:
     expires: float = 0.0
     attempts: int = 0
     last_error: str | None = None
+    in_hand: bool = False  # named by the last heartbeat's progress.job_id
     scores: dict[str, dict] = field(default_factory=dict)  # order -> score
 
     def unscored(self) -> list[dict]:
@@ -92,6 +99,12 @@ class FakeBroker:
         self._ids = itertools.count(1)
         self._faults: dict[str, list] = {}
         self._server: ThreadingHTTPServer | None = None
+        #: What hello announces per model, and the prompt version add_job uses.
+        self.stages = {
+            "kev": [{"pipeline": "match", "stage": "kev", "prompt_version": "K2-150@test"},
+                    {"pipeline": "audit", "stage": "kev", "prompt_version": "K2-150@test"}],
+            "pplx": [{"pipeline": "match", "stage": "pplx", "prompt_version": "K1-full@test"}],
+        }  # fmt: skip
 
     # -- set-up ----------------------------------------------------------------------------
 
@@ -101,6 +114,7 @@ class FakeBroker:
             {"order": o, "payload": p, "request_sha256": canonical_sha256(p)}
             for o, p in payloads.items()
         ]
+        kw.setdefault("prompt_version", self.stages[model][0]["prompt_version"])
         with self.lock:
             job = FakeJob(next(self._ids), model, reqs, **kw)
             self.jobs[job.job_id] = job
@@ -113,11 +127,22 @@ class FakeBroker:
         status: int | None = None,
         body: dict | None = None,
         headers: dict | None = None,
+        after: bool = False,
     ) -> None:
-        """The next `times` calls to `path` get no response (status None) or `status`."""
+        """The next `times` calls to `path` get no response (status None) or `status`; with
+        `after`, they are handled and then get no response."""
         with self.lock:
-            fault = None if status is None else (status, body or {"error": "injected"}, headers)
+            if after:
+                fault = "after"
+            else:
+                fault = None if status is None else (status, body or {"error": "injected"}, headers)
             self._faults.setdefault(path, []).extend([fault] * times)
+
+    def expire(self, lease_id: str) -> None:
+        with self.lock:
+            for j in self.jobs.values():
+                if j.lease_id == lease_id:
+                    j.expires = 0.0
 
     def lose_lease(self, job_id: int) -> None:
         """The job's lease expired and moved on: re-queued, no longer the worker's."""
@@ -163,7 +188,7 @@ class FakeBroker:
                     self.close_connection = True
                     self.connection.close()
                     return
-                if fault != "none":
+                if fault not in ("none", "after"):
                     return self._send(*fault)
                 auth = self.headers.get("Authorization", "")
                 token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else None
@@ -189,6 +214,10 @@ class FakeBroker:
                         code, out = 404, {"error": "not found"}
                     else:
                         code, out = handler(who, body)
+                if fault == "after":  # handled, but the answer never arrives
+                    self.close_connection = True
+                    self.connection.close()
+                    return
                 self._send(code, out)
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -228,7 +257,9 @@ class FakeBroker:
         for key in models:
             if key not in allowed:
                 return 403, {"error": "model_not_allowed", "model": key}
-        lease_s = int((body.get("config") or {}).get("lease_s") or 900)
+        lease_s = (body.get("config") or {}).get("lease_s", 900)
+        if type(lease_s) is not int or not 60 <= lease_s <= 7200:
+            return _invalid("config.lease_s: an integer from 60 to 7200")
         session = uuid.uuid4().hex
         answer = {}
         for key, m in models.items():
@@ -237,21 +268,31 @@ class FakeBroker:
                 PINS[key].weights_revision if key in PINS else None
             )
             answer[key] = {"model_version": current, "ok": ok,
-                           "queued_requests": self._queued_requests(key)}  # fmt: skip
+                           "queued_requests": self._queued_requests(key),
+                           "stages": [dict(st) for st in self.stages.get(key, [])]}  # fmt: skip
         self.sessions[session] = {"worker": name, "models": models, "lease_s": lease_s,
-                                  "end_reason": None}  # fmt: skip
+                                  "end_reason": None, "last_request": None,
+                                  "last_lease": None, "leases": 0}  # fmt: skip
         return 200, {"session": session, "models": answer, "lease_s": lease_s,
                      "heartbeat_s": min(60, lease_s / 3)}  # fmt: skip
 
     def _reap(self) -> None:
         now = self.clock()
-        for j in self.jobs.values():
-            if j.status == "leased" and j.expires <= now:
-                self._requeue(j, count=True, error="lease expired")
+        expired = [j for j in self.jobs.values() if j.status == "leased" and j.expires <= now]
+        by_lease: dict[str, list[FakeJob]] = {}
+        for j in expired:
+            by_lease.setdefault(j.lease_id, []).append(j)
+        for jobs in by_lease.values():
+            in_hand = [j for j in jobs if j.in_hand]
+            for j in jobs:
+                # Only the job in hand is charged; with none reported, every job is.
+                charge = j.in_hand or not in_hand
+                self._requeue(j, count=charge, error="lease expired" if charge else None)
 
     def _requeue(self, j: FakeJob, *, count: bool, error: str | None = None) -> None:
         j.lease_id = j.leased_by = None
         j.expires = 0.0
+        j.in_hand = False
         if count:
             j.attempts += 1
             j.last_error = error
@@ -269,6 +310,20 @@ class FakeBroker:
             or (session["models"].get(model) or {}).get("model_version") != self.versions[model]
         ):
             return 409, {"error": "version", "model": model, "current": self.versions.get(model)}
+        request_id = body.get("lease_request_id")
+        if request_id and request_id == session["last_request"]:
+            # A retry of the last lease: the same lease, its jobs still held, renewed.
+            held = [j for j in self.jobs.values()
+                    if j.lease_id == session["last_lease"] and j.leased_by == name
+                    and j.status == "leased"]  # fmt: skip
+            if held:
+                for j in held:
+                    j.expires = self.clock() + session["lease_s"]
+                jobs = [{"job_id": j.job_id, "prompt_version": j.prompt_version,
+                         "requests": [dict(r) for r in j.unscored()]} for j in held]  # fmt: skip
+                return 200, {"lease_id": session["last_lease"], "expires_at": "fake",
+                             "jobs": jobs}  # fmt: skip
+        session["last_request"] = request_id
         self._reap()
         n = int(body.get("max_jobs") or 1)
         spr, left = body.get("seconds_per_request"), body.get("seconds_left")
@@ -285,7 +340,7 @@ class FakeBroker:
                 continue
             cost = len(todo) * float(spr) if spr and left is not None else 0.0
             if cost and budget + cost > float(left) - 60:
-                continue  # does not fit: stays queued
+                break  # the first job that does not fit stops the lease (it stays queued)
             budget += cost
             j.status, j.lease_id, j.leased_by = "leased", lease_id, name
             j.expires = self.clock() + session["lease_s"]
@@ -294,6 +349,8 @@ class FakeBroker:
             session["end_reason"] = "empty"
             return 200, {"lease_id": None, "jobs": []}
         session["end_reason"] = None  # a lease with jobs reopens the session
+        session["last_lease"] = lease_id
+        session["leases"] += 1
         jobs = [{"job_id": j.job_id, "prompt_version": j.prompt_version,
                  "requests": [dict(r) for r in j.unscored()]} for j in picked]  # fmt: skip
         return 200, {"lease_id": lease_id, "expires_at": "fake", "jobs": jobs}
@@ -313,6 +370,12 @@ class FakeBroker:
                 if j.lease_id in lease_ids and j.leased_by == name and j.status == "leased"]  # fmt: skip
         for j in live:
             j.expires = now + session["lease_s"]
+        in_hand = (body.get("progress") or {}).get("job_id")
+        if any(j.job_id == in_hand for j in live):
+            lease_of = next(j.lease_id for j in live if j.job_id == in_hand)
+            for j in live:
+                if j.lease_id == lease_of:
+                    j.in_hand = j.job_id == in_hand
         lost_leases = sorted(lid for lid in lease_ids if not any(j.lease_id == lid for j in live))
         lost_jobs = sorted(i for i in job_ids if not any(j.job_id == i for j in live))
         expires = "fake" if live else None
@@ -367,13 +430,19 @@ class FakeBroker:
     def _release(self, who, body):
         name, _ = who
         session = self._session(name, body)
-        job_ids = body.get("job_ids")
-        if session is None or not body.get("lease_id") or not isinstance(job_ids, list):
-            return _invalid("session, lease_id and job_ids are required")
-        if not job_ids:
-            return _invalid("job_ids: at least one")
-        if body.get("reason", "graceful") not in ("graceful", "error"):
+        job_ids = body.get("job_ids") or []
+        reason = body.get("reason", "graceful")
+        if session is None or not isinstance(job_ids, list):
+            return _invalid("session")
+        if reason not in ("graceful", "error"):
             return _invalid("reason")
+        if not job_ids:
+            if reason == "error":
+                return _invalid("an error release names its jobs")
+            session["end_reason"] = "released"  # the session ends
+            return 200, {"released": 0}
+        if not body.get("lease_id"):
+            return _invalid("lease_id")
         for job_id in job_ids:
             if not self._holds(name, body["lease_id"], self.jobs.get(job_id)):
                 return 409, {"error": "lease_lost", "job_ids": [job_id]}

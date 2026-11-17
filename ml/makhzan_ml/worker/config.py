@@ -333,6 +333,8 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
 
     max_jobs = int(_positive("leases", "max_jobs", leases.get("max_jobs", 2), integer=True))
     lease_s = int(_positive("leases", "lease_s", leases.get("lease_s", 900), integer=True))
+    if not 60 <= lease_s <= 7200:  # the broker refuses any other at hello (422)
+        raise ConfigError(f"[leases] lease_s {lease_s}: from 60 to 7200 s")
     heartbeat_s = float(_positive("leases", "heartbeat_s", leases.get("heartbeat_s", 60)))
     if heartbeat_s < MIN_HEARTBEAT_S:
         raise ConfigError(f"[leases] heartbeat_s {heartbeat_s}: at least {MIN_HEARTBEAT_S:.0f} s")
