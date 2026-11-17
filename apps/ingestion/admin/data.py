@@ -444,6 +444,13 @@ async def overview(session, counts: dict) -> dict:
 UNCAT_LIMIT = 100
 
 
+def _web_url(url: str | None) -> str | None:
+    """`url` if it is http(s), else None: never a `javascript:` or `data:` link."""
+    if url and url.strip().lower().startswith(("https://", "http://")):
+        return url.strip()
+    return None
+
+
 def _shop_category(attributes: dict | None) -> str:
     """The shop's own category for a listing, where its adapter keeps one."""
     path = (attributes or {}).get("shop_category_path")
@@ -494,7 +501,8 @@ async def uncategorised(session, q: str, shop: str) -> dict:
                 "category": _shop_category(r.attributes),
                 "price": r.price,
                 "currency": r.currency,
-                "url": r.source_url,
+                # Linked only when it is a web address: the URL came from a shop.
+                "url": _web_url(r.source_url),
             }
             for r in rows
         ],

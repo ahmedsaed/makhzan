@@ -26,6 +26,7 @@ from makhzan_schemas.models import (
     AiFlag,
     AiWorker,
     GroupingOverride,
+    IngestionRun,
     Listing,
     Report,
     Source,
@@ -658,3 +659,54 @@ async def test_every_view_renders_with_data(queued):
             assert "default-src 'self'" in response.headers["content-security-policy"]
         lookup = await client.get("/catalog", params={"lookup": f"/listings/{listing}"})
         assert "No product or listing matches" in lookup.text  # a listing with no product yet
+
+
+#: What a shop or a visitor could put in a title, a note, a category name.
+HOSTILE = "<script>alert(1)</script>\"'><img src=x onerror=alert(2)>"
+
+
+def _assert_escaped(html: str) -> None:
+    assert "<script>alert(1)" not in html
+    assert "<img src=x" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+async def test_hostile_text_from_shops_and_visitors_is_escaped_everywhere(queued):
+    from makhzan_schemas.enums import IngestionStatus
+
+    (listing,) = await _listings(1)
+    async with SessionLocal() as session:
+        row = await session.get(Listing, listing)
+        row.title_en = HOSTILE
+        row.source_url = "javascript:alert(3)"
+        session.add(
+            Report(
+                product_id=uuid.uuid4(),
+                reason="other",
+                description=HOSTILE,
+                snapshot={"product": {"title": HOSTILE, "listings": []}},
+            )
+        )
+        session.add(AiFlag(kind="version_drift", subject=HOSTILE[:100], status="open", detail={}))
+        session.add(
+            IngestionRun(
+                source="shop-x",
+                source_type=SourceType.SCRAPED,
+                status=IngestionStatus.SUCCESS,
+                stats={"crosswalk": {"unmapped": {HOSTILE + " x' onclick='alert(4)": 3}}},
+            )
+        )
+        await session.commit()
+    async with _client() as client:
+        await _session(client)
+        catalog = await client.get("/catalog")  # the uncategorised browser lists it
+        _assert_escaped(catalog.text)
+        assert "javascript:alert(3)" not in catalog.text, "a shop's URL is linked only if http(s)"
+        _assert_escaped((await client.get("/reports")).text)
+        ai = await client.get("/ai")
+        assert "<script>alert(1)" not in ai.text and "&lt;script&gt;" in ai.text
+        crawl = await client.get("/crawl")
+        _assert_escaped(crawl.text)
+        # In the copy buttons' single-quoted attribute, a quote is JSON-escaped.
+        assert "onclick='alert(4)" not in crawl.text
+        assert "\\u0027 onclick=\\u0027alert(4)" in crawl.text
