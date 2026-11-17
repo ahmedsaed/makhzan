@@ -396,12 +396,16 @@ same model and prompt version share it.
   the latest `revoked_at` **and** is for a request no revoked decision
   recorded: a model looked, after the revocation, at text it did not see.
   Old scores (a revert to text scored earlier, a job queued before the
-  revocation) and fresh scores of the revoked text (a new model version)
+  revocation) and fresh scores of requests the revoked decision recorded (a
+  new model version, for the stages that decision used)
   write nothing, and the step reports `blocked` (`revoked_blocked` in the
   producers' counts). Every path that decides (a trigger's offer, a result,
   a lease finding a job scored, a replay) comes through here, so this is the
-  one guard. A revoked decision recorded before request hashes were kept in
-  the evidence counts as having seen every text: it is never undone by the
+  one guard. `./makhzan ai revoke` takes the same per-pair advisory lock
+  before marking the decision, so a decision being written at that moment
+  waits and is then refused. A revoked decision recorded before request
+  hashes were kept in the evidence, or with no evidence, counts as having
+  seen every text: it is never undone by the
   models (none exist in production, which had nothing deployed then);
 - takes a transaction-scoped advisory lock on the pair
   (`pg_advisory_xact_lock` over a hash of pipeline and pair), so two results

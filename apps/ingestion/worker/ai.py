@@ -45,14 +45,15 @@ from collections.abc import Sequence
 
 from makhzan_schemas.ai import broker as core
 from makhzan_schemas.ai import candidates as producers
-from makhzan_schemas.ai.decisions import REVOKED, STANDING
+from makhzan_schemas.ai import flow
+from makhzan_schemas.ai.decisions import STANDING
 from makhzan_schemas.ai.mode import LIVE, MODES, ai_mode, set_ai_mode
 from makhzan_schemas.ai.pipelines import DECIDE, PIPELINES, decide
 from makhzan_schemas.ai.policy import ACTIVE, MODELS, POLICIES
 from makhzan_schemas.ai.status import collect, format_text
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import AiDecision, AiFlag, AiJob, AiWorker
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 
 from worker.reports import printable, who
 
@@ -174,35 +175,14 @@ async def _redecide(policy: str) -> int:
 
 async def _revoke(decision_id: int, note: str, by: str) -> int:
     async with SessionLocal() as session:
-        decision = await session.get(AiDecision, decision_id, with_for_update=True)
-        if decision is None:
-            print(f"No decision #{decision_id}.", file=sys.stderr)
+        # Locks the pair as `write_decision` does, so no decision being written
+        # meanwhile can slip past the revocation.
+        decision, cancelled, refusal = await flow.revoke_decision(
+            session, decision_id, by=by, note=note
+        )
+        if refusal:
+            print(refusal, file=sys.stderr)
             return 1
-        if decision.state != STANDING:
-            print(
-                f"Decision #{decision_id} is {decision.state}; only a standing one is revoked.",
-                file=sys.stderr,
-            )
-            return 1
-        decision.state = REVOKED
-        decision.revoked_at = await session.scalar(select(func.now()))
-        decision.revoked_by = by
-        decision.revoke_note = note
-        # The pair's queued jobs would only re-ask what was just revoked. A
-        # leased one finishes; its result is stored but decides nothing
-        # (`flow.write_decision` refuses scores of text the revocation saw).
-        cancelled = (
-            await session.execute(
-                update(AiJob)
-                .where(
-                    AiJob.pipeline == decision.pipeline,
-                    AiJob.listing_a == decision.listing_a,
-                    AiJob.listing_b == decision.listing_b,
-                    AiJob.status == "queued",
-                )
-                .values(status="cancelled", last_error=f"decision #{decision_id} revoked")
-            )
-        ).rowcount
         await session.commit()
     print(
         printable(

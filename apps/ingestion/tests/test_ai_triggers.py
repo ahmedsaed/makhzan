@@ -747,3 +747,37 @@ async def test_revoking_cancels_the_pairs_queued_jobs(capsys):
     assert await ai.run(["revoke", str(decision.id), "--note", "wrong", "--by", "t"]) == 0
     assert "1 queued job(s) cancelled" in capsys.readouterr().out
     assert [j.status for j in await _jobs()] == ["cancelled"]
+
+
+async def test_a_decision_written_while_a_revoke_is_open_waits_and_is_refused():
+    """The race: a revoke holds its transaction open; a decision for the same
+    pair waits on the pair's advisory lock, then sees the revocation."""
+    import asyncio
+
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    await _daily()
+    await _score_all(x, y)
+    decision = await _decide(x, y)
+
+    revoker = SessionLocal()
+    try:
+        _, _, refusal = await flow.revoke_decision(revoker, decision.id, by="t", note="race")
+        assert refusal is None  # revoked, not yet committed
+
+        async def deciding():
+            async with SessionLocal() as session:
+                out = await flow.advance(session, [PairRequest(x, y, "match", 60, "candidates")])
+                await session.commit()
+                return out
+
+        task = asyncio.create_task(deciding())
+        await asyncio.sleep(0.5)
+        assert not task.done()  # waiting on the pair's lock
+        await revoker.commit()
+    finally:
+        await revoker.close()
+    out = await asyncio.wait_for(task, 10)
+    assert out["revoked_blocked"] == 1
+    assert await _standing() == []
