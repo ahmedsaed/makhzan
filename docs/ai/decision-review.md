@@ -331,7 +331,7 @@ Decisions:
 | P1 | K = 10 candidates per listing, one-directional for the daily run, mutual for the backlog. Revisit after 4 weeks of measured survival and pass rates. | approved |
 | P2 | The broker is a separate service built from the API image, with its own app object and its own reverse-proxy hostname, never under the public `/api` rewrite. | approved |
 | P3 | One bearer token per worker, stored as sha256 in `ai_workers`, issued and revoked by `./makhzan ai worker`. An address allowlist at the proxy is optional. | approved |
-| P4 | Shadow mode first: scores and decisions are recorded and nothing merges. Shadow ends when the owner has reviewed 20 fresh examples drawn from shadow "same" decisions, including the GPU backlog run, none from the 900 labelled pairs (proposed mix, a parameter: 10 at random, 5 near a threshold, 5 sharing no identifier); the dry-run counts; and a week of throughput. | owner |
+| P4 | ~~Shadow mode first.~~ **Changed by the owner the same day: no shadow mode.** The mode is `off` or `live` only, `off` by default; there is no per-decision shadow flag. The backlog run's decisions are reviewed locally: the owner reviews the resulting groupings on a local copy (`make regroup-dry-run ARGS=--ai`, which reads standing decisions while off), including the 20 fresh examples (none from the 900 labelled pairs; proposed mix, a parameter: 10 at random, 5 near a threshold, 5 sharing no identifier), and only then are they pushed to production and the mode set `live`. | owner |
 | P5 | A content hash per listing over every field that can reach a prompt: title (both languages), brand, part number, category, specs, description. Never price. A changed hash, or a new model or prompt version, triggers a re-score. The hash is stored with each score. | owner |
 | P6 | A decision stays in effect until it is re-scored; no timeout. A re-score that is expected but does not complete is flagged in status and handled by hand. | owner |
 | P7 | Named policy versions in code (`POLICIES`, `ACTIVE`); a change goes through a PR. `./makhzan ai redecide --dry-run` recomputes from stored scores. | approved |
@@ -341,16 +341,18 @@ Decisions:
 | P11 | Always score both reading orders. No skipping. | owner |
 | P12 | Record a Kev score for every pair the rules merged, and list the counts below 0.8 and below 0.05. No threshold is chosen yet (tracked in the private configuration's tracker). The "40%" figure was an inference from recall, not a measurement. | owner |
 | P13 | Option (a): merges must pass today's vetoes, and the candidates job filters with **today's** vetoes too, so pairs only the relaxed vetoes pass are skipped. The relaxed-vetoes branch stays parked and is not refactored. **Supersedes D17's "relaxed only in front of the AI".** | owner |
-| P14 | A Kev minimum below 0.05 between a listing and any existing member blocks a join that rests on an AI decision. It never splits what the rules merged. Only the best "same" match per other shop counts. | approved |
+| P14 | A Kev minimum below 0.05 between a listing and any existing member blocks a join that rests on an AI decision. It never splits what the rules merged. Only the best "same" match per other shop counts. **Owner decision (2026-11-17): "best per other shop" is option (a), best on both sides (mutual best)**: a pair counts only when it is each listing's strongest "same" decision in the other's shop. | approved |
 | P15 | Electronics only. The owner did not object to the recommendation; confirm at the 20-example review. | owner, to confirm |
 | P16 | Once live, the broker queues a rebuild through `request_rebuild` when a window closes with new "same" decisions. The backlog runs through the broker with a desktop GPU worker; desktop and CPU-server workers may run at the same time, which exercises leases and both queues. | approved |
 | P17 | `listings.matched_via` and `matched_ai_decision_id`, written only by the regroup; `matched_by` reads them. | approved |
 
 What phase 1 built on them (2026-11-17): the renderer ported verbatim with a
 byte-identity test on synthetic listings (P8's prompt version is pinned there);
-the content hash (P5); the policy `p1` and the pinned Kev and pplx revisions
-(P7, P8); the pipeline registry and transition rule; the tables, with no host
-slots (Global, P3); the regroup reading standing, non-shadow "same" decisions
-only in `live` mode, behind today's vetoes, with the P14 group check and the
-P17 columns; and the mode, shadow by default (P4). The broker, worker,
-triggers, CLI and status come in later phases.
+the content hash over what the renderer shows (P5); the policy `p1` and the
+pinned Kev and pplx revisions (P7, P8); the pipeline registry and transition
+rule; the tables, with no host slots (Global, P3); the regroup reading
+standing "same" decisions only in `live` mode (or a dry run's preview, P4),
+joining them in a final phase after the rules so the P14 group check does not
+depend on placement order, with every one of today's vetoes and the P17
+columns; and the mode, `off` by default (P4). The broker, worker, triggers,
+CLI and status come in later phases.
