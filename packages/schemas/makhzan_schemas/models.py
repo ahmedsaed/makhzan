@@ -1302,6 +1302,9 @@ class AiSession(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_reason: Mapped[str | None] = mapped_column(String(16))
+    #: The model key whose lease ended the session (an `empty` or `none_fit`
+    #: answer), so a `nothing_fits` flag counts per worker and model.
+    end_model: Mapped[str | None] = mapped_column(String(32))
     #: The worker's id for its last /lease and the lease it got: a retried
     #: /lease with the same id gets the same jobs back instead of orphaning them.
     last_lease_request: Mapped[str | None] = mapped_column(String(64))

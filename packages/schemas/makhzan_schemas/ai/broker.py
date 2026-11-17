@@ -554,25 +554,41 @@ async def _flag_if_never_fits(
     """A worker whose sessions keep ending with nothing fitting its time (a
     window too short for one job, or a wrong `seconds_per_request`) never
     scores anything; after `NONE_FIT_FLAG_AFTER` such sessions in a week a
-    person is told."""
+    person is told.
+
+    Counted per worker and model, over sessions that never got a lease (a
+    night that scored and then ran out of window is healthy), and only since
+    the subject's latest dismissed or actioned flag, so a dismissal is not
+    undone by the sessions it was about."""
+    subject = f"{worker.name}/{model}"[:100]
+    since = now - timedelta(days=7)
+    resolved = await session.scalar(
+        select(func.max(func.coalesce(AiFlag.resolved_at, AiFlag.created_at))).where(
+            AiFlag.kind == "nothing_fits", AiFlag.subject == subject, AiFlag.status != "open"
+        )
+    )
+    if resolved is not None and resolved > since:
+        since = resolved
     recent = await session.scalar(
         select(func.count())
         .select_from(AiSession)
         .where(
             AiSession.worker_id == worker.id,
+            AiSession.end_model == model,
             AiSession.end_reason == NONE_FIT,
-            AiSession.ended_at >= now - timedelta(days=7),
+            AiSession.last_lease_id.is_(None),
+            AiSession.ended_at >= since,
         )
     )
     if (recent or 0) >= NONE_FIT_FLAG_AFTER:
         await _open_flag(
             session,
             "nothing_fits",
-            subject=f"{worker.name}/{model}"[:100],
+            subject=subject,
             detail={
                 "worker": worker.name,
                 "model": model,
-                "sessions_7d": int(recent),
+                "sessions_counted": int(recent),
                 "seconds_left": body.get("seconds_left"),
                 "seconds_per_request": body.get("seconds_per_request"),
                 "head_job_owes": head_owed,
@@ -658,18 +674,24 @@ async def lease(
     await session.flush()
     if not taken and head_owed:
         # Work is queued, but its first job does not fit the time the worker
-        # has: not "empty". The session ends, but no window closed with the
-        # queue drained, so P16 is not considered.
-        row.ended_at, row.end_reason = now, NONE_FIT
+        # has: not "empty". The session ends (the worker sends nothing more).
+        # A session that leased before is a healthy night whose window ran
+        # out with a backlog left: it ends like a graceful release, and P16
+        # is considered for what it decided. Only a session that never got a
+        # lease skips P16, and only those count towards `nothing_fits`.
+        row.ended_at, row.end_reason, row.end_model = now, NONE_FIT, model
         await session.flush()
-        await _flag_if_never_fits(session, worker, model, body, head_owed, now)
+        if row.last_lease_id is not None:
+            await maybe_rebuild(session, on_session_end)
+        else:
+            await _flag_if_never_fits(session, worker, model, body, head_owed, now)
         return {"lease_id": None, "jobs": [], "reason": NONE_FIT}
     if not taken:
-        row.ended_at, row.end_reason = now, EMPTY
+        row.ended_at, row.end_reason, row.end_model = now, EMPTY, model
         await session.flush()
         await maybe_rebuild(session, on_session_end)
         return {"lease_id": None, "jobs": [], "reason": EMPTY}
-    row.ended_at = row.end_reason = None
+    row.ended_at = row.end_reason = row.end_model = None
     row.last_lease_request, row.last_lease_id = (
         (str(request_id)[:64] if request_id else None),
         (lease_id),
