@@ -329,6 +329,7 @@ async def test_a_pause_noticed_at_the_confirmation_holds_without_an_attempt(
     held = await run_source("woo", _woo_adapter())
     report = held.stats["archive_confirm"]
     assert report["paused"] == "shop paused by tester" and report["held"] == 1
+    assert held.stats["stopped"].startswith("shop paused by tester")
     assert "attempt" not in report and "failed" not in report
     assert len(woo.included()) == asked
     assert not held.stats.get("archived") and not held.stats.get("cycle")
@@ -340,6 +341,48 @@ async def test_a_pause_noticed_at_the_confirmation_holds_without_an_attempt(
     second = await run_source("woo", _woo_adapter())
     assert second.stats["archive_confirm"]["attempt"] == 2
     assert len(woo.included()) == asked + 1, "asked the fake shop, which answered 500"
+
+
+async def test_a_pause_between_include_batches_keeps_answers_and_holds_the_rest(
+    woo,  # noqa: F811
+    monkeypatch,
+):
+    """Paused while asking (the fixture's include batches hold two ids): what the
+    first batch answered stands, the unasked rest waits, and no attempt counts."""
+    from worker import pipeline
+
+    await _add(_source("woo"))
+    woo.catalogue = {i: "instock" for i in range(1, 6)}
+    await _run_until_cycle()
+    for gone in (3, 4, 5):
+        del woo.catalogue[gone]
+
+    async def paused_once_asked(session, source_id):
+        return "shop paused by tester" if woo.included() else None
+
+    monkeypatch.setattr(pipeline, "paused_reason", paused_once_asked)
+    runs = await _run_until_confirm()
+    closing = runs[-1]
+    report = closing.stats["archive_confirm"]
+    assert len(woo.included()) == 1, "the second batch was never asked"
+    assert report["paused"] == "shop paused by tester"
+    assert (report["absent"], report["held"]) == (2, 1)
+    assert "attempt" not in report
+    assert closing.stats["archived"] == 2 and not closing.stats.get("cycle")
+    statuses = sorted([(await _status_of(str(i))).status for i in (3, 4, 5)])
+    # The two asked are gone; the one unasked is held for when the shop is resumed.
+    assert statuses == sorted(
+        [ListingStatus.ARCHIVED, ListingStatus.ARCHIVED, ListingStatus.ACTIVE]
+    )
+
+
+async def _run_until_confirm():
+    runs = []
+    for _ in range(10):
+        runs.append(await run_source("woo", _woo_adapter()))
+        if runs[-1].stats.get("archive_confirm"):
+            return runs
+    raise AssertionError("no confirmation ran")
 
 
 async def test_a_pause_stops_the_details_stage_before_its_next_page(monkeypatch):
@@ -367,3 +410,4 @@ async def test_a_pause_stops_the_details_stage_before_its_next_page(monkeypatch)
     run = await run_source(shop.source_id, shop)
     assert len(shop.details_sent()) == 1, "the page in hand is kept; no next one"
     assert run.stats["details"]["stopped"] == "paused"
+    assert run.stats["stopped"].startswith("shop paused by tester")

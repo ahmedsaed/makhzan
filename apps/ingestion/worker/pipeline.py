@@ -1711,6 +1711,9 @@ async def _logged_run(
                 await session.rollback()
                 errors.append(f"details: {exc}")
 
+        if paused and stopped is None:
+            # First seen after the sweep: by the confirmation or the details stage.
+            stopped = f"{paused[0]}; stopped after the sweep, the rest waits for a resume"
         stats: dict = {}
         if errors:
             stats["errors"] = errors
