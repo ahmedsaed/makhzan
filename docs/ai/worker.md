@@ -13,6 +13,10 @@ decision, 2026-11-17).
 
 The code is `ml/makhzan_ml/worker/`, and its tests are `ml/tests/` (`make test-worker`).
 
+**Merge order: `feat/ml-improve` (PR #57) first.** The worker images build on the lean CPU
+images and the pplx shim that PR adds (`ml/kev/Dockerfile.cpu-lean`, `ml/pplx/`). This
+branch carries none of them.
+
 | Module | What it does |
 |---|---|
 | `config.py` | the TOML file: parsing, validation, windows |
@@ -47,9 +51,12 @@ The parity check below confirms it on stored GPU scores.
 
 1. **Window.** Outside every window, the worker exits 0 and sends nothing. Start it at the
    window's start, with a systemd timer or cron.
-2. **Pre-flight.** If the container's memory limit (cgroup `memory.max`) is below
-   `memory_gib`, the worker refuses to start, because it would be killed mid-job and the
-   broker would count an attempt. It then lowers its own priority by `nice`.
+2. **Pre-flight.** Every model key must be loadable in this image. Each model image holds
+   one model's code, so naming a key the image lacks is refused before anything is sent. If
+   the container's memory limit (cgroup v2 `memory.max`) is below `memory_gib`, the worker
+   refuses to start, because it would be killed mid-job and the broker would count an
+   attempt. When no limit is visible (no `--memory`, or cgroup v1), the check is skipped and
+   the log says so. The worker then lowers its own priority by `nice`.
 3. **`POST /hello`** sends the worker's name, its model keys with each model version and
    weights revision, the image, device, dtype, threads and its configuration. The broker
    answers `ok` per model key. A key answered `ok: false` (version drift) is never leased. If
@@ -78,12 +85,16 @@ The parity check below confirms it on stored GPU scores.
      queues a dropped job again, it is scored afresh whenever it comes back.
    - When the worker moves on to another model key, the first model is unloaded before the
      next one loads. Two 4B models do not fit side by side in 20 GB, or on a 12 GB card.
-5. **Graceful stop** happens at the window's end, on SIGTERM or on SIGINT:
+5. **Graceful stop** happens at the window's end, on SIGTERM or on SIGINT. A timer enforces
+   the window's end, and it is also checked between retries, with no backoff sleeping past
+   it. So a call retrying through a broker outage cannot keep the model loaded past the
+   window while the next worker on the machine loads its own:
    - no new request is started, and the one in flight finishes (a forward pass cannot be
      interrupted);
    - finished orders are submitted, so half a job is kept;
    - the rest of the lease goes back with `POST /release`, reason `graceful`, which counts no
-     attempt.
+     attempt;
+   - the model is unloaded.
 
    The worker also never starts a request it does not expect to finish before the window
    ends, using its measured seconds per request.
@@ -100,16 +111,27 @@ The parity check below confirms it on stored GPU scores.
 up to `retry_max_s` in all. A 4xx is the broker's answer and is not retried. Redirects are
 refused rather than followed, so the token is never sent anywhere else.
 
-Once the worker is stopping, a call in backoff wakes at once and retries for at most 30 s
-more (`STOP_RETRY_S`). Scores in hand then get their chance inside a `docker stop` grace
-period, and anything still undelivered is logged before the process exits.
+Proxy settings in the environment are ignored: the only peer is the broker.
 
-**Never drop a result silently.** A score that cannot be delivered within `retry_max_s`, or
-that the broker refuses (422), is logged at ERROR as `UNDELIVERED`, with its job, order,
-request hash and score, never the payload. This happens on every exit path. When the
-session would otherwise have exited 0, the exit code says so (6); otherwise the code names
-what ended the session (for example 4). A score for a
+**A stop sets one deadline for the rest of the session.** No retry starts more than 60 s
+after the stop (`STOP_GRACE_S`), each attempt then times out after 10 s (`STOP_TIMEOUT_S`),
+and a call in backoff wakes at once. Every call still makes one attempt. So after SIGTERM
+the worker needs at most the request in flight, plus 60 s, plus a 10 s attempt for each of
+its last two calls (results, release). Anything still undelivered is logged before the
+process exits.
+
+**Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its job,
+order, request hash and score (never the payload), the moment it is known not to have
+arrived: the broker unreachable past the retry budget or the stop deadline, the broker
+refusing it (422 or any other 4xx), or an unexpected error while posting. A summary is
+logged at exit on every path. When the session would otherwise have exited 0, the exit code
+says so (6); otherwise the code names what ended the session (for example 4). A score for a
 lease the broker reports lost is logged at WARNING: the job's new holder scores it again.
+
+**Unexpected errors** end the session with exit 1. These are a broker answer with no
+handling (400, 404, 413), a malformed reply, or a bug. The jobs still held go back
+gracefully first, unless the broker is unreachable; in that case they return when their
+leases expire.
 
 Payloads are never logged or written to disk. The token is sent only in the Authorization
 header.
@@ -130,7 +152,8 @@ header.
 
 The configuration is one TOML file, by default `/etc/makhzan-ai/worker.toml` inside the
 container. Unknown sections and keys are errors. Relative paths resolve against the file's
-directory. `python -m makhzan_ml.worker --config FILE --check` validates a file and exits.
+directory. `python -m makhzan_ml.worker --config FILE --check` validates a file, checks that
+this image can load each model key, and exits.
 
 ### `[worker]`
 
@@ -140,7 +163,7 @@ directory. `python -m makhzan_ml.worker --config FILE --check` validates a file 
 | `broker_url` | required | the broker's base URL, `https://<broker host>/ai/v1`. Plain `http://` is refused except to a loopback address (the tests, the parity check, or a local broker on the same machine) |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
 | `ca_file` | system CAs | a CA bundle to trust instead, for a privately signed broker certificate |
-| `models` | required | the model keys served, from `policy.MODELS`: `["kev"]`, `["pplx"]` or both (drained in this order) |
+| `models` | required | the model keys served, from `policy.MODELS`: `["kev"]` or `["pplx"]`. Each image holds one model's code, so today a worker serves one key; a key the image cannot load is refused at start and by `--check`. A list exists for an image that holds several (drained in order) |
 
 ### `[model.<key>]` (optional)
 
@@ -154,7 +177,7 @@ directory. `python -m makhzan_ml.worker --config FILE --check` validates a file 
 |---|---|---|
 | `device` | `"cpu"` | `"cpu"` or `"gpu"` |
 | `dtype` | `fp32` on CPU, `bf16` on GPU | only the validated pairing is accepted. GPU bf16 and CPU fp32 are one model version (P8), and each score records its device and dtype |
-| `threads` | all the container may use | the CPU cap: `torch.set_num_threads`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS` |
+| `threads` | the container's CPU quota | the CPU cap: `torch.set_num_threads` and `set_num_interop_threads`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`. Unset on CPU, it is the cgroup quota (`--cpus=6` gives 6), else the CPUs the process may run on, never the host's core count |
 | `nice` | 10 on CPU, 0 on GPU | how much the worker lowers its own priority (0 to 19) |
 | `memory_gib` | unset | the expected peak resident memory. The worker refuses to start under a smaller container limit and warns if a load peaks above it. Measured on CPU fp32: Kev 17.5 GiB, pplx 18.4 GiB |
 | `mmap` | `false` on CPU, `true` on GPU | `false` reads every weight file with pread(2) and fails the load if any weight file is still mapped afterwards |
@@ -165,9 +188,9 @@ directory. `python -m makhzan_ml.worker --config FILE --check` validates a file 
 | Key | Default | Meaning |
 |---|---|---|
 | `windows` | `"always"` | `"always"`, or one or more `"HH:MM-HH:MM"` in local time. A window may cross midnight (`"22:00-02:00"`). Windows that touch or overlap run on as one |
-| `timezone` | the machine's | an IANA zone such as `"Africa/Cairo"`. Set it: a container's local time is UTC unless told otherwise |
+| `timezone` | required with windows | an IANA zone such as `"Africa/Cairo"`. Required whenever `windows` is not `"always"`: a container's local time is UTC unless told otherwise, so a window without a zone would run at the wrong hours |
 | `on_empty` | `"exit"` | `"exit"` or `"wait"` |
-| `poll_s` | 600 | with `"wait"`, how often to ask for work again |
+| `poll_s` | 600 | with `"wait"`, how often to ask for work again; at least 5 |
 
 ### `[leases]`
 
@@ -175,7 +198,7 @@ directory. `python -m makhzan_ml.worker --config FILE --check` validates a file 
 |---|---|---|
 | `max_jobs` | 2 | jobs per lease (a job is one pair, up to two requests). "Batch" means this, never batched inference |
 | `lease_s` | 900 | the lease length the worker reports at hello |
-| `heartbeat_s` | 60 | at most half of `lease_s`. If the broker's hello answers a shorter interval, that one is used |
+| `heartbeat_s` | 60 | at least 5, and at most half of `lease_s`. If the broker's hello answers a shorter interval, that one is used |
 | `seconds_per_request` | 90 | the first estimate, replaced by the measured time after the first request. It sizes leases and decides whether a request still fits in the window |
 | `retry_max_s` | `lease_s` | how long to retry a call through network failures before giving up |
 
@@ -312,7 +335,8 @@ seconds_per_request = 1   # measured: about 2 requests a second
 ## Images
 
 `ml/worker.Dockerfile` adds the worker to a model image. Build the base images first
-(`ml/kev`, `ml/pplx`; see `ml/README.md`), then build from the `ml/` directory. Its
+(`ml/kev`, `ml/pplx`; see `ml/README.md`; the lean CPU images and `ml/pplx` come with
+PR #57), then build from the `ml/` directory. Its
 `.dockerignore` sends only the worker's code, never the weights cache or `ml/out/`.
 
 ```bash
@@ -362,8 +386,8 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
 ```
 
 - `--stop-timeout 240` lets the request in flight finish on `docker stop` (one CPU request
-  takes 86 to 104 s), with the 30 s left for submitting and releasing. Keep it above one
-  request plus 30 s.
+  takes 86 to 104 s), then up to 60 s plus two 10 s attempts for submitting and releasing.
+  Keep it above one request plus 80 s.
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
 
@@ -520,8 +544,13 @@ no model. CI runs it with the ingestion suite.
   - retries with backoff and `Retry-After`, a broker that stays down, and a refused result;
   - heartbeats that keep a lease alive past its length, that name their jobs, and that
     drop a lost lease; a lost job scored again when it comes back;
-  - undelivered scores logged when a fatal error ends the session; a stop that cuts retries
-    short; a redirect refused; seconds left counted in real time across a DST change;
+  - undelivered scores logged at once, and when a fatal error ends the session; one stop
+    deadline for the session, with short socket timeouts; the window's end stopping a session
+    that is retrying through an outage, and unloading the model; an unexpected broker answer,
+    a malformed hello, an unexpected error mid-lease, each handing the jobs back; heartbeats
+    that never name a finished job; a redirect refused; proxy settings ignored; a model the
+    image cannot load; threads from the CPU quota; seconds left counted in real time across
+    a DST change;
   - version drift at hello, on one key only, and at lease;
   - a tampered payload, a failing request, a model that keeps failing, and a model that
     will not load;
@@ -532,7 +561,9 @@ no model. CI runs it with the ingestion suite.
 
 ## Not done yet
 
-- **Open questions on the contract**, until it settles them:
+- **Open questions on the contract.** The first three, and fitting jobs to the worker's
+  time left, are being addressed in the broker's contract now. They are not implemented here
+  until it lands:
   - How does a session that stops between leases with nothing held tell the broker it
     ended? A release must name a lease and jobs, so today it cannot, and P16 waits for the
     next empty lease or release.
@@ -546,9 +577,10 @@ no model. CI runs it with the ingestion suite.
   only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
   Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
   `ml/kev/Dockerfile*`, passed on as `MAKHZAN_KEV_COMMIT`.
-- **One model per worker is the tested shape.** A worker may name both keys, and it unloads
-  one model before loading the other. Freeing Kev's memory on unload is coded (the atexit
-  hook that held it is removed) but has not been measured with real models.
+- **One model per worker.** Each image holds one model's code, so a worker names one key;
+  the start-up check refuses any other. The code still unloads one model before loading
+  another, for an image that someday holds both. Freeing Kev's memory on unload is coded (the
+  atexit hook that held it is removed) but has not been measured with real models.
 - **No systemd units or network rules are shipped**: only the examples above. Setting them up
   on the home server is a separate, supervised step.
 - **No registry or image digests.** The images are local builds.
