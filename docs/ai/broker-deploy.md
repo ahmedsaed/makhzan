@@ -66,7 +66,9 @@ does not fit a worker on a changing address.
 
 ## Configuration
 
-All from `.env.prod`, which the service reads like the others:
+Interpolated from `.env.prod` into the service's `environment:`. Only these
+reach the broker, not the whole env file: it faces the internet, so it holds
+no crawler signing key, search key or report salt.
 
 | Variable | What |
 |---|---|
@@ -75,6 +77,7 @@ All from `.env.prod`, which the service reads like the others:
 | `BROKER_PORT` | The loopback port the proxy forwards to (default 8100). |
 | `AI_BROKER_ADMIN_TOKEN_SHA256` | The sha256 of the admin token for `GET /ai/v1/status`. Written by `./makhzan ai admin-token`. Empty: `/status` refuses everyone. |
 | `AI_BROKER_MAX_BODY` | Optional; bytes, default 262144. |
+| `REBUILD_WINDOW_SECONDS` | Optional; must match the worker's (default 600), so both share one rebuild job id per window. |
 | `GIT_SHA` | Baked into the image at build; what `/health` reports. |
 
 ## Tokens
