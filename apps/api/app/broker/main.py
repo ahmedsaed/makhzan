@@ -1,13 +1,13 @@
 """The AI broker: the only thing AI workers talk to (docs/ai/broker-api.md).
 
-A separate service built from the API image, with its own app object, port
-and reverse-proxy hostname (P2), never under the public site's `/api`
-rewrite: run it as `uvicorn app.broker.main:app`. Workers authenticate with
+A separate service built from the API image, with its own app object and
+port (P2), never under the public site's `/api` rewrite, and reached only
+over Tailscale (owner, 2026-11-17): run it as `uvicorn app.broker.main:app`. Workers authenticate with
 their own bearer token, stored only as its sha256 (P3); `GET /status` takes
 the admin token, whose sha256 is `AI_BROKER_ADMIN_TOKEN_SHA256`.
 
 Production never runs a model. The broker renders requests from the current
-rows, hands them to authenticated workers over TLS, stores their scores and
+rows, hands them to authenticated workers over Tailscale, stores their scores and
 takes each pair one step on (`makhzan_schemas.ai.broker`, `flow`). Each
 request is one transaction.
 
@@ -104,8 +104,6 @@ class LeaseBody(BaseModel):
     model: str
     model_version: str
     max_jobs: int = Field(1, ge=1, le=1000)
-    seconds_left: float | None = Field(None, ge=0)
-    seconds_per_request: float | None = Field(None, gt=0)
     #: The worker's id for this request: a retry with the same id gets the
     #: same jobs back instead of a second lease.
     lease_request_id: str | None = Field(None, min_length=1, max_length=64)

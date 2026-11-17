@@ -334,29 +334,6 @@ async def test_a_hello_names_exactly_one_model(broker):
     assert r.json() == {"error": "wrong_model", "model": "pplx", "session_model": "kev"}
 
 
-async def test_a_release_after_none_fit_keeps_the_recorded_end(broker, db):
-    """The worker sends nothing after none_fit, but a release that comes
-    anyway must not turn the session into "released": none_fit is what the
-    nothing_fits flag counts."""
-    await _queue_many(await _grid(db, 1))
-    token = await _worker("cpu-kev", ["kev"])
-    for _ in range(core.NONE_FIT_FLAG_AFTER):
-        hello = await _hello(broker, token, "kev")
-        answer = await _lease(
-            broker, token, hello["session"], "kev", seconds_left=100, seconds_per_request=100
-        )
-        assert answer["reason"] == "none_fit"
-        r = await broker.post(
-            "/ai/v1/release", json={"session": hello["session"]}, headers=_auth(token)
-        )
-        assert r.status_code == 200
-        async with SessionLocal() as session:
-            row = await session.get(AiSession, uuid.UUID(hello["session"]))
-        assert row.end_reason == "none_fit"
-    [flag] = await _flag_rows()
-    assert (flag.kind, flag.subject) == ("nothing_fits", "cpu-kev/kev")
-
-
 async def _store_scores(job: dict, orders=("ab", "ba"), p: float = 0.1) -> None:
     """Scores for a leased job's requests, as if another worker posted them."""
     async with SessionLocal() as session:
@@ -421,84 +398,6 @@ async def test_a_replay_of_a_lease_no_longer_held_is_a_fresh_lease(broker, db, e
         assert again["jobs"][0]["job_id"] != job["job_id"]
 
 
-async def test_a_lease_stops_at_the_first_job_that_does_not_fit(broker, db):
-    """A head job owing two requests, behind it one owing one: with time for
-    one request, nothing is leased (the broker never skips ahead), and the
-    answer says none fit rather than empty."""
-    head, small = await _grid(db, 1), await _grid(db, 1)
-    await _queue_many(small, priority=60)
-    token = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, token, "kev")
-    # Make `small` owe one request only: lease it, score "ab", release it.
-    first = await _lease(broker, token, hello["session"], "kev", max_jobs=1)
-    await _store_scores(first["jobs"][0], orders=("ab",))
-    await broker.post(
-        "/ai/v1/release",
-        json={
-            "session": hello["session"],
-            "lease_id": first["lease_id"],
-            "job_ids": [first["jobs"][0]["job_id"]],
-        },
-        headers=_auth(token),
-    )
-    await _queue_many(head, priority=70)
-    tight = await _lease(
-        broker,
-        token,
-        hello["session"],
-        "kev",
-        max_jobs=2,
-        seconds_left=60 + 150,
-        seconds_per_request=100,
-    )
-    assert tight == {"lease_id": None, "jobs": [], "reason": "none_fit"}
-    roomy = await _lease(
-        broker,
-        token,
-        hello["session"],
-        "kev",
-        max_jobs=2,
-        seconds_left=60 + 250,
-        seconds_per_request=100,
-    )
-    assert [len(j["requests"]) for j in roomy["jobs"]] == [2]  # the head job, alone
-
-
-async def test_nothing_fitting_is_not_empty_queues_no_rebuild_and_is_flagged(broker, db):
-    a, b = (await _grid(db, 1))[0]
-    await _queue_many([(a, b)])
-    async with SessionLocal() as session:
-        session.add(
-            AiDecision(
-                pipeline="match",
-                listing_a=a,
-                listing_b=b,
-                outcome="same",
-                decided_by="pplx",
-                scores={},
-                policy_version="p1",
-                content_sha256_a=b"\0" * 32,
-                content_sha256_b=b"\0" * 32,
-            )
-        )
-        await set_ai_mode(session, "live")
-        await session.commit()
-    token = await _worker("cpu-kev", ["kev"])
-    for night in range(core.NONE_FIT_FLAG_AFTER):
-        hello = await _hello(broker, token, "kev")
-        answer = await _lease(
-            broker, token, hello["session"], "kev", seconds_left=100, seconds_per_request=100
-        )
-        assert answer["reason"] == "none_fit"
-        async with SessionLocal() as session:
-            row = await session.get(AiSession, uuid.UUID(hello["session"]))
-            flags = list(await session.scalars(select(AiFlag)))
-        assert row.end_reason == "none_fit"
-        assert bool(flags) == (night == core.NONE_FIT_FLAG_AFTER - 1)
-    assert broker.rebuilds == []
-    assert (flags[0].kind, flags[0].subject) == ("nothing_fits", "cpu-kev/kev")
-
-
 async def test_a_heartbeat_progress_job_id_must_be_an_integer(broker):
     token = await _worker("cpu-kev", ["kev"])
     hello = await _hello(broker, token, "kev")
@@ -510,92 +409,28 @@ async def test_a_heartbeat_progress_job_id_must_be_an_integer(broker):
     assert r.status_code == 422
 
 
-# --- final review: healthy nights, per model, after a dismissal ------------------------------
-
-
-async def _never_fits(broker, token: str, model: str) -> dict:
-    """A session that leases nothing: its first job does not fit."""
-    hello = await _hello(broker, token, model)
-    return await _lease(
-        broker, token, hello["session"], model, seconds_left=100, seconds_per_request=100
+async def test_a_release_after_an_empty_lease_keeps_the_recorded_end(broker):
+    """The broker ended the session at the empty lease; a release that comes
+    anyway does not turn it into "released"."""
+    token = await _worker("cpu-kev", ["kev"])
+    hello = await _hello(broker, token, "kev")
+    assert (await _lease(broker, token, hello["session"], "kev"))["reason"] == "empty"
+    r = await broker.post(
+        "/ai/v1/release", json={"session": hello["session"]}, headers=_auth(token)
     )
-
-
-async def _flag_rows() -> list[AiFlag]:
+    assert r.status_code == 200
     async with SessionLocal() as session:
-        return list(await session.scalars(select(AiFlag).order_by(AiFlag.id)))
+        row = await session.get(AiSession, uuid.UUID(hello["session"]))
+    assert row.end_reason == "empty"
 
 
-async def test_a_healthy_night_ending_in_none_fit_is_not_flagged_and_considers_p16(broker, db):
-    """Each night the worker scores a job, then its window runs low with a
-    backlog left: the normal end of a backlog night. No flag, and the night's
-    "same" decisions get their rebuild."""
-    await _queue_many(await _grid(db, 3))
-    a, b = (await _grid(db, 1))[0]
-    async with SessionLocal() as session:
-        await set_ai_mode(session, "live")
-        await session.commit()
+async def test_a_lease_takes_up_to_max_jobs_with_no_time_budget(broker, db):
+    """There is no time fit: a lease returns up to max_jobs in priority order,
+    and fields an older worker might still send are ignored."""
+    await _queue_many(await _grid(db, 2))
     token = await _worker("cpu-kev", ["kev"])
-    for night in range(core.NONE_FIT_FLAG_AFTER + 1):
-        hello = await _hello(broker, token, "kev")
-        lease = await _lease(broker, token, hello["session"], "kev", max_jobs=1)
-        [job] = lease["jobs"]
-        await _post(broker, token, hello["session"], lease, job, _scores(job, 0.1, 0.1))
-        if night == 0:  # a "same" decided that night
-            async with SessionLocal() as session:
-                session.add(
-                    AiDecision(
-                        pipeline="match",
-                        listing_a=a,
-                        listing_b=b,
-                        outcome="same",
-                        decided_by="pplx",
-                        scores={},
-                        policy_version="p1",
-                        content_sha256_a=b"\0" * 32,
-                        content_sha256_b=b"\0" * 32,
-                    )
-                )
-                await session.commit()
-        end = await _lease(
-            broker, token, hello["session"], "kev", seconds_left=100, seconds_per_request=100
-        )
-        assert end["reason"] == "none_fit"
-        if night == 0:
-            assert broker.rebuilds == ["rebuild"]
-    assert await _flag_rows() == []
-
-
-async def test_never_fit_sessions_are_counted_per_worker_and_model(broker, db):
-    await _queue_many(await _grid(db, 1))
-    x, y = (await _grid(db, 1))[0]
-    async with SessionLocal() as session:
-        await enqueue(session, [PairRequest(x, y, "match", 60, "x")], stage="pplx")
-        await session.commit()
-    token = await _worker("both", ["kev", "pplx"])
-    for model in ("kev", "kev", "pplx"):
-        assert (await _never_fits(broker, token, model))["reason"] == "none_fit"
-    assert await _flag_rows() == []
-    await _never_fits(broker, token, "kev")
-    [flag] = await _flag_rows()
-    assert (flag.subject, flag.detail["sessions_counted"]) == ("both/kev", 3)
-
-
-async def test_a_dismissed_nothing_fits_flag_does_not_reopen_from_old_sessions(broker, db):
-    await _queue_many(await _grid(db, 1))
-    token = await _worker("cpu-kev", ["kev"])
-    for _ in range(core.NONE_FIT_FLAG_AFTER):
-        await _never_fits(broker, token, "kev")
-    [flag] = await _flag_rows()
-    async with SessionLocal() as session:
-        await session.execute(
-            update(AiFlag)
-            .where(AiFlag.id == flag.id)
-            .values(status="dismissed", resolved_at=func.now())
-        )
-        await session.commit()
-    await _never_fits(broker, token, "kev")
-    assert [f.status for f in await _flag_rows()] == ["dismissed"]
-    for _ in range(core.NONE_FIT_FLAG_AFTER - 1):
-        await _never_fits(broker, token, "kev")
-    assert [f.status for f in await _flag_rows()] == ["dismissed", "open"]
+    hello = await _hello(broker, token, "kev")
+    lease = await _lease(
+        broker, token, hello["session"], "kev", max_jobs=3, seconds_left=1, seconds_per_request=99
+    )
+    assert len(lease["jobs"]) == 3

@@ -1208,10 +1208,6 @@ class AiFlag(Base):
       keep from taking effect.
     - `version_drift`: a worker reported a model that is not the one in use;
       `subject` is "<worker>/<model>".
-    - `nothing_fits`: a worker's sessions for one model keep ending "none_fit"
-      without ever getting a lease (`broker.NONE_FIT_FLAG_AFTER` in a week,
-      counted since that subject's last dismissed or actioned flag); `subject`
-      is "<worker>/<model>". Dismissing one by hand must set `resolved_at`.
 
     One open flag per (kind, pair, subject).
     """
@@ -1219,8 +1215,7 @@ class AiFlag(Base):
     __tablename__ = "ai_flags"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift',"
-            " 'nothing_fits')",
+            "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift')",
             name="ck_ai_flag_kind",
         ),
         CheckConstraint("status IN ('open', 'dismissed', 'actioned')", name="ck_ai_flag_status"),
@@ -1303,9 +1298,6 @@ class AiSession(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_reason: Mapped[str | None] = mapped_column(String(16))
-    #: The model key whose lease ended the session (an `empty` or `none_fit`
-    #: answer), so a `nothing_fits` flag counts per worker and model.
-    end_model: Mapped[str | None] = mapped_column(String(32))
     #: The worker's id for its last /lease and the lease it got: a retried
     #: /lease with the same id gets the same jobs back instead of orphaning them.
     last_lease_request: Mapped[str | None] = mapped_column(String(64))
