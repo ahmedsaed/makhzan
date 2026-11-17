@@ -938,6 +938,23 @@ async def index_drift(session) -> None:
     print(f"  products in db: {product_count}   indexed: {indexed}   {verdict}")
 
 
+async def ai_matching(session) -> None:
+    """AI matching: mode, queue, throughput, workers, decisions (makhzan_schemas.ai.status)."""
+    _header("AI MATCHING")
+    try:
+        from makhzan_schemas.ai.status import collect, format_text
+
+        data = await collect(session)
+    except Exception as exc:  # noqa: BLE001 - status must not fail on one section
+        await session.rollback()
+        print(f"  {DIM}unavailable ({type(exc).__name__}: {exc}){RESET}")
+        return
+    text = format_text(data)
+    if data["flags"] or data["rescore_due"]["no_job"] or data["rescore_due"]["dead_job"]:
+        text = text.replace("  flags ", f"  {YELLOW}flags{RESET} ", 1)
+    print(text)
+
+
 def queue_depth() -> None:
     _header("WORKER QUEUE")
     url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -971,6 +988,7 @@ async def main() -> None:
         await catalog(session, args.source)
         await review_queue(session)
         await index_drift(session)
+        await ai_matching(session)
     queue_depth()
     print()
 

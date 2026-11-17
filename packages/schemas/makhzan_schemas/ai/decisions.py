@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME, rank
-from makhzan_schemas.ai.policy import GROUP_CHECK_MODEL, KEV_BLOCK
+from makhzan_schemas.ai.policy import DOMAINS, GROUP_CHECK_MODEL, KEV_BLOCK
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import AiDecision, Listing
 from makhzan_schemas.overrides import Overrides, Pair, pair
@@ -74,7 +74,8 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     A pair counts when:
 
     - its decision is standing and its outcome is "same";
-    - both listings are active, and from different shops;
+    - both listings are active, from different shops, and in a department
+      AI matching serves (`policy.DOMAINS`);
     - no person has ruled on the pair (any standing override);
     - it is each listing's best "same" match in the other's shop (P14): for a
       listing and a shop, only the strongest decision counts (its stages'
@@ -84,12 +85,12 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
       P14, 2026-11-17: option (a), mutual best). A decision of a pipeline no
       longer in the registry is skipped, and logged.
 
-    `no` holds every standing decision's pair, between two active listings,
-    that the group-check model scored below `KEV_BLOCK`, whatever its outcome:
-    it can only block, never admit.
+    `no` holds every standing decision's pair, between two active listings in
+    any department, that the group-check model scored below `KEV_BLOCK`,
+    whatever its outcome: it can only block, never admit.
     """
     la, lb = aliased(Listing), aliased(Listing)
-    joined = (
+    active = (
         select(AiDecision)
         .join(la, la.id == AiDecision.listing_a)
         .join(lb, lb.id == AiDecision.listing_b)
@@ -101,6 +102,9 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             )
         )
     )
+    # Only while both listings are in a served department may a decision
+    # admit: one that moves out takes the AI merge apart (owner, 2026-11-17).
+    joined = active.where(la.domain.in_(DOMAINS), lb.domain.in_(DOMAINS))
     query = (
         joined.with_only_columns(
             AiDecision.id,
@@ -159,8 +163,9 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     below = literal_column(
         f"""'$.* ? (@.model == "{GROUP_CHECK_MODEL}" && @.min < {KEV_BLOCK!r})'::jsonpath"""
     )
+    # Unfiltered by department: a confident "no" blocks whatever the domain.
     no_rows = await session.execute(
-        joined.with_only_columns(AiDecision.listing_a, AiDecision.listing_b).where(
+        active.with_only_columns(AiDecision.listing_a, AiDecision.listing_b).where(
             func.jsonb_path_exists(AiDecision.scores, below)
         )
     )

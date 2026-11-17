@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.3,<3.0",
     "meilisearch>=0.31,<1.0",
     "makhzan-schemas",
+    "arq (>=0.26,<1.0)",
 ]
 
 [tool.poetry]
