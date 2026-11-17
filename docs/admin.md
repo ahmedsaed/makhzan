@@ -31,7 +31,11 @@ deploys, backups and `.env.prod` stay with `./makhzan` on the server.
   queue `admin_job` for it; the page polls the row and shows the result. The
   worker is the process that owns the per-source locks, the pace gate and the
   key, so nothing the page asks for can overlap a run of the same shop or
-  bypass the crawler's politeness.
+  bypass the crawler's politeness. A daily run that finds its shop busy with
+  one of these comes back 10 minutes later (up to an hour) instead of losing
+  its day. A job cut off by the worker's timeout or a restart is marked
+  failed; one the queue lost (still queued after 10 minutes with no arq job
+  behind it) is marked failed when a page next shows jobs.
 
 ## Exposing it over Tailscale
 
@@ -100,9 +104,13 @@ the audit log. `/activity` shows it after a login; if it is the gateway, set
 Content-Security-Policy (scripts from the page's own origin only),
 `X-Frame-Options: DENY` and `Cache-Control: no-store`.
 
-**Audit.** Every action, failed logins included, writes a row to
-`admin_actions`: who (`ADMIN_NAME`), from which address, what, the target, the
-details, when, and for jobs their status and result. `/activity` lists them.
+**Audit.** Every action, logins (failed ones included) and logouts too, writes
+a row to `admin_actions`: who (`ADMIN_NAME`), from which address, what, the
+target, the details, when, and for jobs their status and result. A refused
+action is recorded too, with the reason under `detail.refused`. Where the
+shared function allows it, the row is written in the action's own
+transaction (a report's verdict, rulings and audit row commit together).
+`/activity` lists them.
 Rulings, decisions and flags also keep their own `created_by`, `removed_by`,
 `revoked_by` and `resolved_by`.
 
