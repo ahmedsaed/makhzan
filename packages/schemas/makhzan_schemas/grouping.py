@@ -31,6 +31,15 @@ two listings to one group without title agreement or a shared identifier
 (joining their shared-identifier groups for the purpose), every veto still
 applying between them unless the ruling is forced. See `_Rulings`.
 
+AI "same" decisions (`makhzan_schemas.ai`) are read only in `live` mode (or a
+dry run's preview). They act last: once the rules and the rulings have formed
+every cluster, an AI pair may join two whole clusters, every one of today's
+vetoes checked between every member, and a Kev confident no between any two
+of them blocks it (P14, `_ai_phase`). So the outcome does not depend on
+placement order, and a rules merge is never split. With none read, grouping is
+exactly what it was. Each listing's `matched_via` says which put it in its
+product (`_attribute`).
+
 A group key says which listings form one product; it is not the product's
 identity. `plan_identity` matches each group to the product its listings already
 belong to, so a product's id (its URL) survives a second shop selling it, the
@@ -52,6 +61,8 @@ from decimal import Decimal
 
 from functools import lru_cache
 
+from makhzan_schemas.ai.decisions import AiSame, load_ai_same
+from makhzan_schemas.ai.mode import LIVE, ai_mode
 from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
 from makhzan_schemas.identifiers import Identifier, fold_identifier, identifier_pattern
 from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
@@ -214,7 +225,7 @@ _RULED = 2.0
 
 @dataclass(frozen=True)
 class _Rulings:
-    """The overrides that bear on one group's listings, indexed by listing.
+    """The overrides (and AI decisions) that bear on one group's listings.
 
     - `never`: a veto between the two listings, like the others: no cluster may
       hold both, and it counts as a conflict when an incumbent's members are
@@ -230,15 +241,23 @@ class _Rulings:
       shows each shop's offer once, so a ruling that two of one shop's listings
       are one product says the shop lists it twice, which is the shop's
       duplicate to show, not ours to fold.
-    - `base`: each listing's shared-identifier key, when a must_merge joined
-      several groups into one (empty otherwise). Title agreement admits only
-      within one key: the ruling joins its own two listings, not two codes'
-      worth of similar titles.
+    - `base`: each listing's shared-identifier key, when a must_merge or an AI
+      pair joined several groups into one (empty otherwise). Title agreement
+      admits only within one key: the ruling joins its own two listings, not
+      two codes' worth of similar titles.
+    - `ai`: AI "same" pairs (`ai.decisions.AiSame`) inside the group,
+      strongest decision first (`AiSame.rank`), then by the pair's listing ids. They take no part in passes 1 to 5: they act only in
+      the final AI phase (`_ai_phase`), once the rules and the rulings have
+      formed every cluster they would form anyway.
+    - `ai_no`: pairs the group-check model scored a confident no (P14),
+      checked in the AI phase only, so they never split a rules merge.
     """
 
     never: dict[uuid.UUID, frozenset[uuid.UUID]]
     must: dict[uuid.UUID, dict[uuid.UUID, bool]]
     base: dict[uuid.UUID, str]
+    ai: tuple[tuple[uuid.UUID, uuid.UUID], ...] = ()
+    ai_no: frozenset[tuple[uuid.UUID, uuid.UUID]] = frozenset()
 
     def never_with(self, listing_id: uuid.UUID, members: list[Listing]) -> bool:
         barred = self.never.get(listing_id)
@@ -273,10 +292,12 @@ def _rulings(
     items: list[Listing],
     by_listing: dict[uuid.UUID, list[tuple[uuid.UUID, str, bool]]],
     base: dict[uuid.UUID, str] | None = None,
+    ai: AiSame | None = None,
 ) -> _Rulings | None:
-    """The rulings between these listings, or None when there are none (and
-    the group is one key), so a group no ruling touches is grouped exactly as
-    it would be without the table."""
+    """The rulings and AI pairs between these listings, or None when there are
+    none (and the group is one key), so a group nothing touches is grouped
+    exactly as it would be without the tables. An AI "no" alone does not
+    count: with no AI pair in the group it can block nothing."""
     ids = {listing.id for listing in items}
     never: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
     must: dict[uuid.UUID, dict[uuid.UUID, bool]] = defaultdict(dict)
@@ -288,10 +309,31 @@ def _rulings(
                 never[listing.id].add(partner)
             else:
                 must[listing.id][partner] = forced
-    if not never and not must and not base:
+    inside = []
+    no: frozenset = frozenset()
+    if ai:
+        inside = sorted(
+            (p for p in ai.pairs if p[0] in ids and p[1] in ids),
+            # Strongest decision first, a pair with no known strength last;
+            # the pair's own listing ids break a tie, never the decision id,
+            # which a re-score renews.
+            key=lambda p: (
+                p not in ai.rank,
+                tuple(-x for x in ai.rank.get(p, ())),
+                str(p[0]),
+                str(p[1]),
+            ),
+        )
+        if inside:
+            no = frozenset(p for p in ai.no if p[0] in ids and p[1] in ids)
+    if not never and not must and not inside and not base:
         return None
     return _Rulings(
-        never={k: frozenset(v) for k, v in never.items()}, must=dict(must), base=base or {}
+        never={k: frozenset(v) for k, v in never.items()},
+        must=dict(must),
+        base=base or {},
+        ai=tuple(inside),
+        ai_no=no,
     )
 
 
@@ -514,6 +556,12 @@ def _subcluster(
 
     On a first build nobody has a product, so passes 3 to 5 only.
 
+    6. **AI pairs** (`rulings.ai`), only when an AI "same" decision falls in
+       the group: `_ai_phase` joins whole clusters, with every veto against
+       every member and the P14 group check. Passes 1 to 5 never see them, so
+       a product an AI pair joined is rebuilt by the rules alone first (its
+       AI-joined members evicted) and joined again here if still allowed.
+
     **Overrides** (`rulings`, see `_Rulings`) act in every pass: a never_merge
     pair is a veto like the others (and a conflict when an incumbent's members
     are ordered), a must_merge pair a match that needs no title agreement.
@@ -559,8 +607,16 @@ def _subcluster(
         product_id = current.get(listing.id) if current is not None else listing.product_id
         # A stated-only listing gets no incumbency: it always waits for pass 5,
         # or a product it joined early would keep it against titles that
-        # name the part outright.
-        if product_id is not None and not _stated_only(listing):
+        # name the part outright. Nor does a listing an AI pair put in its
+        # product (`matched_via == "ai"`, as the last regroup wrote it): the
+        # rules rebuild the product without it and only the AI phase places
+        # it again. Otherwise it could seed the incumbent (it contradicts
+        # nobody), evict the rules core, and flip the product every regroup.
+        if (
+            product_id is not None
+            and not _stated_only(listing)
+            and getattr(listing, "matched_via", None) != "ai"
+        ):
             by_product[product_id].append(listing)
     incumbents = sorted(
         (members for members in by_product.values() if len(members) > 1),
@@ -627,6 +683,11 @@ def _subcluster(
         _place(clusters, stated, evidence, threshold, max_ratio, strict, rulings)
         clusters = _merge_clusters(clusters, threshold, max_ratio, strict, rulings)
 
+    # The AI phase: only now, with every cluster the rules and the rulings
+    # make, may an AI "same" pair join two of them.
+    if rulings is not None and rulings.ai:
+        clusters = _ai_phase(clusters, max_ratio, strict, rulings)
+
     # Keys depend on membership alone: named after the member first in natural
     # order, whichever member happened to seed the cluster, and assigned in that
     # order too. So the same groups get the same keys however they were reached
@@ -657,6 +718,72 @@ def _subcluster(
             key += "~" + hashlib.sha1(natural.encode()).hexdigest()[:10]
         result[key] = members
     return result
+
+
+def _ai_phase(
+    clusters: list[_Cluster], ratio: float, strict: frozenset[str], rulings: _Rulings
+) -> list[_Cluster]:
+    """Join clusters on AI "same" pairs, after the rules have done all they would.
+
+    Each pair, strongest decision first (then by its listing ids, so a
+    re-score that renews a decision's id changes nothing), joins its two
+    listings' clusters when
+    every one of today's vetoes allows it between **every** member of one and
+    every member of the other (the same shop, a never_merge, values, form,
+    price; a forced must_merge lifts the last three for its own pair), and when
+    no confident AI no (P14, `rulings.ai_no`) stands between any two of them.
+
+    Run last and against whole clusters, so the outcome does not depend on the
+    order listings were placed in, nor on whether the product existed before:
+    a Kev no blocks the join whichever side sorts first, and arriving after an
+    AI merge it undoes that merge at the next regroup. The rules' own clusters
+    are never split here: the phase only joins. When two pairs compete for one
+    listing (X same as M, and as N, M and N apart), the stronger wins; a late
+    Kev no that blocks the winner can let the losing pair merge instead.
+    """
+    of: dict[uuid.UUID, int] = {}
+    live: dict[int, _Cluster] = {}
+    for i, cluster in enumerate(clusters):
+        live[i] = cluster
+        for member in cluster.members:
+            of[member.id] = i
+    for a, b in rulings.ai:
+        ia, ib = of.get(a), of.get(b)
+        if ia is None or ib is None or ia == ib:
+            continue
+        x, y = live[ia], live[ib]
+        if not _ai_compatible(x, y, ratio, strict, rulings):
+            continue
+        keep, gone = (ia, ib) if ia < ib else (ib, ia)
+        live[keep].absorb(live[gone])
+        for member in live[gone].members:
+            of[member.id] = keep
+        del live[gone]
+    return [live[i] for i in sorted(live)]
+
+
+def _ai_compatible(
+    x: _Cluster, y: _Cluster, ratio: float, strict: frozenset[str], rulings: _Rulings
+) -> bool:
+    """Whether today's vetoes and the P14 group check allow two whole clusters
+    to become one product on an AI pair."""
+    if x.suppliers & y.suppliers:
+        return False
+    for mx, ex in zip(x.members, x.evidence, strict=True):
+        if rulings.never_with(mx.id, y.members):
+            return False
+        for my, ey in zip(y.members, y.evidence, strict=True):
+            if pair(mx.id, my.id) in rulings.ai_no:
+                return False
+            if rulings.forced(mx.id, my.id):
+                continue
+            if values_conflict(ex.values, ey.values):
+                return False
+            if _forms_conflict(ex.form, ey.form, strict):
+                return False
+            if _prices_apart(mx.price, my.price, ratio):
+                return False
+    return True
 
 
 def _vetoed(
@@ -787,13 +914,16 @@ def _group_listings(
     listings: list[Listing],
     current: dict[uuid.UUID, uuid.UUID | None] | None = None,
     overrides: Overrides | None = None,
+    ai: AiSame | None = None,
 ) -> dict[str, list[Listing]]:
     """Two-phase grouping: base key, then sub-cluster ambiguous family groups.
 
     `overrides` are a person's rulings (`_Rulings`). A must_merge between two
     listings of different keys joins their groups into one, sub-clustered
     together, so the ruling can admit the pair; title agreement still admits
-    only within a key.
+    only within a key. `ai` are AI "same" pairs, joined and admitted the same
+    way at a lower rank, with the P14 group check. With neither, grouping is
+    exactly what it was before either existed.
     """
     base: dict[str, list[Listing]] = defaultdict(list)
     for listing in listings:
@@ -802,8 +932,8 @@ def _group_listings(
         )
         base[key].append(listing)
 
-    if overrides:
-        return _group_with_overrides(base, current, overrides)
+    if overrides or ai:
+        return _group_with_overrides(base, current, overrides or Overrides(), ai or AiSame())
 
     groups: dict[str, list[Listing]] = {}
     for key, items in base.items():
@@ -825,10 +955,12 @@ def _group_with_overrides(
     base: dict[str, list[Listing]],
     current: dict[uuid.UUID, uuid.UUID | None] | None,
     overrides: Overrides,
+    ai: AiSame | None = None,
 ) -> dict[str, list[Listing]]:
-    """`_group_listings` under rulings: keys joined by a must_merge are
-    sub-clustered as one group; every other group as before, with whatever
-    never_merge rulings fall inside it."""
+    """`_group_listings` under rulings and AI pairs: keys joined by a
+    must_merge or an AI "same" are sub-clustered as one group; every other
+    group as before, with whatever never_merge rulings fall inside it."""
+    ai = ai or AiSame()
     by_listing = _index_overrides(overrides)
     key_of = {listing.id: key for key, items in base.items() for listing in items}
     parent: dict[str, str] = {}
@@ -838,7 +970,7 @@ def _group_with_overrides(
             key = parent[key]
         return key
 
-    for a, b in sorted(overrides.must, key=lambda p: (str(p[0]), str(p[1]))):
+    for a, b in sorted(overrides.must | ai.pairs, key=lambda p: (str(p[0]), str(p[1]))):
         ka, kb = key_of.get(a), key_of.get(b)
         if ka is None or kb is None or ka == kb:
             continue  # a listing not active, or one key already
@@ -863,14 +995,70 @@ def _group_with_overrides(
             # (accessory) forms from the first listing's profile. Each
             # listing's evidence is still read by its own department.
             own = {listing.id: key_of[listing.id] for listing in items}
-            rulings = _rulings(items, by_listing, own)
+            rulings = _rulings(items, by_listing, own, ai)
             groups.update(_subcluster(key_of[first.id], items, first.domain, current, rulings))
         elif key.startswith("mpn:") and len(items) > 1:
             domain = items[0].domain if items else None
-            groups.update(_subcluster(key, items, domain, current, _rulings(items, by_listing)))
+            groups.update(
+                _subcluster(key, items, domain, current, _rulings(items, by_listing, None, ai))
+            )
         else:
             groups[key] = items
     return groups
+
+
+def _attribute(
+    groups: dict[str, list[Listing]],
+    rules_groups: dict[str, list[Listing]],
+    ai: AiSame,
+) -> dict[uuid.UUID, tuple[str, int | None]]:
+    """How each listing came to its group: ("rules", None) or ("ai", decision id).
+
+    "An AI decision the rules alone would not have made" (`matching`): each
+    final group's members are partitioned by the group the rules alone
+    (`rules_groups`, the same regroup without AI pairs) put them in. The
+    **core** is the largest part, a tie going to the part holding the
+    earliest-seen listing (as `plan_identity` breaks ties); its members are
+    "rules". Every other part is "ai", with the decision of the AI pair by
+    which it is reached from the core, walking AI pairs between parts in
+    decision-id order. A part no AI pair reaches (moved by AI's influence on
+    the greedy clustering rather than by a pair of its own) is "ai" with no
+    decision.
+    """
+    rule_of = {listing.id: key for key, items in rules_groups.items() for listing in items}
+    out: dict[uuid.UUID, tuple[str, int | None]] = {}
+    for items in groups.values():
+        parts: dict[str, list[Listing]] = defaultdict(list)
+        for listing in items:
+            parts[rule_of.get(listing.id, f"~{listing.id}")].append(listing)
+        if len(parts) == 1:
+            for listing in items:
+                out[listing.id] = ("rules", None)
+            continue
+        core = min(
+            parts,
+            key=lambda k: (-len(parts[k]), min(_listing_order(m) for m in parts[k]), k),
+        )
+        part_of = {listing.id: k for k, members in parts.items() for listing in members}
+        edges = sorted(
+            (decision_id, part_of[a], part_of[b])
+            for (a, b), decision_id in ai.ids.items()
+            if a in part_of and b in part_of and part_of[a] != part_of[b]
+        )
+        reached: dict[str, int | None] = {core: None}
+        grew = True
+        while grew:
+            grew = False
+            for decision_id, pa, pb in edges:
+                for here, there in ((pa, pb), (pb, pa)):
+                    if here in reached and there not in reached:
+                        reached[there] = decision_id
+                        grew = True
+        for key, members in parts.items():
+            via = ("rules", None) if key == core else ("ai", reached.get(key))
+            for listing in members:
+                out[listing.id] = via
+    return out
 
 
 #: What a shop's title under a code says once the code is taken out: its other
@@ -1171,7 +1359,11 @@ async def lock_products(session: AsyncSession) -> None:
 
 
 async def rebuild_products(
-    session: AsyncSession, *, dry_run: bool = False, reidentify: bool = False
+    session: AsyncSession,
+    *,
+    dry_run: bool = False,
+    reidentify: bool = False,
+    ai_preview: bool = False,
 ) -> dict:
     """Regroup active listings into products, keeping every product's id.
 
@@ -1189,9 +1381,22 @@ async def rebuild_products(
     current rules and the family guard (`assign_identifiers`): what makes a rule
     change, or a second shop selling a code, take effect without a re-crawl.
 
+    **AI decisions** (`makhzan_schemas.ai`) are read only when the AI matching
+    mode is `live` (`ai.mode`): standing "same" pairs (`load_ai_same`), joined
+    in a final phase after the rules and the rulings (`_ai_phase`), every one
+    of today's vetoes intact, plus the P14 group check. Each listing's
+    `matched_via` and `matched_ai_decision_id` are written here and only here
+    (`_attribute`); merges and splits an AI pair carries out cite its decision
+    under `ai_decisions`. With no AI pair read, groups are exactly what they
+    would be without AI matching. `ai_preview` (dry runs only) reads standing
+    decisions whatever the mode: what going live would do, which is how the
+    backlog's groupings are reviewed on a local copy (owner decision P4).
+
     `dry_run` applies everything inside the transaction and then rolls it back:
     the counts returned are what a real run would do, and nothing is kept.
     """
+    if ai_preview and not dry_run:
+        raise ValueError("ai_preview reads decisions whatever the mode: a dry run only")
     await lock_products(session)
     listings = (
         (
@@ -1229,7 +1434,29 @@ async def rebuild_products(
     standing = [row for row in ruling_rows if row.removed_at is None]
     removed = [row for row in ruling_rows if row.removed_at is not None]
     overrides = Overrides.of(standing)
-    groups = _group_listings(listings, current, overrides)
+    mode = await ai_mode(session)
+    ai = await load_ai_same(session, overrides) if ai_preview or mode == LIVE else AiSame()
+    # With no AI pair, the very call grouping always made.
+    groups = (
+        _group_listings(listings, current, overrides, ai)
+        if ai
+        else _group_listings(listings, current, overrides)
+    )
+    # Who put each listing in its group: the rules alone, or an AI pair. Only
+    # worth a second, rules-only grouping when an AI pair was read.
+    attribution = (
+        _attribute(groups, _group_listings(listings, current, overrides), ai) if ai else {}
+    )
+    for listing in listings:
+        via, decision_id = attribution.get(listing.id, ("rules", None))
+        # NULL already reads as "rules" (`matching.matched_by`): no need to
+        # write tens of thousands of rows to say so.
+        if listing.matched_via is None and via == "rules" and decision_id is None:
+            continue
+        if listing.matched_via != via:
+            listing.matched_via = via
+        if listing.matched_ai_decision_id != decision_id:
+            listing.matched_ai_decision_id = decision_id
     dormant: dict[str, list[tuple[uuid.UUID, uuid.UUID, datetime | None]]] = defaultdict(list)
     for p in products.values():
         if p.merged_into is not None:
@@ -1255,6 +1482,8 @@ async def rebuild_products(
         current,
         plan,
     )
+    if ai:
+        _cite_overrides(cited, "ai_decisions", {}, ai.ids, groups, current, plan)
 
     now = datetime.now(UTC)
     changed = created = 0
@@ -1416,7 +1645,21 @@ async def rebuild_products(
         "unmerged": len(plan.unmerged),
         "changed": changed,
         "reidentified": reidentified,
+        "ai_mode": "preview" if ai_preview else mode,
     }
+    if ai or ai_preview:
+        group_of = {listing.id: key for key, items in groups.items() for listing in items}
+        stats["ai_pairs"] = len(ai.pairs)
+        stats["ai_in_effect"] = sum(1 for a, b in ai.pairs if group_of.get(a) == group_of.get(b))
+        stats["ai_admitted"] = sum(1 for via, _ in attribution.values() if via == "ai")
+        stats["ai_largest"] = max(
+            (
+                len(items)
+                for items in groups.values()
+                if any(attribution.get(i.id, ("rules", None))[0] == "ai" for i in items)
+            ),
+            default=0,
+        )
     if dry_run:
         await session.rollback()
     else:
@@ -1618,6 +1861,13 @@ def describe(stats: dict) -> str:
         f"split {stats['split']}, emptied {stats['emptied']}, revived {stats['revived']}, "
         f"un-merged {stats['unmerged']}"
         + (f"; identifiers re-read on {n} listings" if (n := stats.get("reidentified")) else "")
+        + (
+            f"; AI ({stats['ai_mode']}): {stats['ai_pairs']} same pairs read, "
+            f"{stats['ai_in_effect']} in effect, {stats['ai_admitted']} listings admitted, "
+            f"largest product {stats['ai_largest']} offers"
+            if "ai_pairs" in stats
+            else ""
+        )
     )
 
 

@@ -73,9 +73,9 @@ async def test_offers_are_cheapest_first(client, db):
     assert [o["supplier"]["slug"] for o in body["offers"]] == ["shop-b", "shop-c", "shop-a"]
 
 
-async def test_every_offer_is_matched_by_the_rules_until_ai_matching_exists(client, db):
-    # PARTIAL by design: makhzan_schemas.matching answers "rules" for every
-    # listing until the AI decisions table feeds it, so no badge shows yet.
+async def test_an_offer_no_regroup_attributed_to_ai_is_matched_by_the_rules(client, db):
+    # `matched_via` is NULL until a regroup writes it, and "rules" unless an
+    # AI decision put the listing in its product (only in live mode).
     product = await make_product(db)
     shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
     shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
@@ -88,20 +88,18 @@ async def test_every_offer_is_matched_by_the_rules_until_ai_matching_exists(clie
     assert body["ai_matched_count"] == 0
 
 
-async def test_an_ai_matched_offer_is_marked_and_counted(client, db, monkeypatch):
+async def test_an_ai_matched_offer_is_marked_and_counted(client, db):
     product = await make_product(db)
     shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
     shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
     shop_c = await make_supplier(db, slug="shop-c", name="Shop C")
-    await make_listing(db, supplier=shop_a, product=product, price="14.00")
+    rules = await make_listing(db, supplier=shop_a, product=product, price="14.00")
     by_ai = await make_listing(db, supplier=shop_b, product=product, price="9.50")
     await make_listing(db, supplier=shop_c, product=product, price="12.00")
-    # What the AI decisions table will say once it exists: shop B's listing
-    # was merged here by AI matching.
-    monkeypatch.setattr(
-        "app.routers.products.matched_by",
-        lambda listings: {o.id: "ai" if o.id == by_ai.id else "rules" for o in listings},
-    )
+    # What the regroup writes when an AI decision put shop B's listing here.
+    rules.matched_via = "rules"
+    by_ai.matched_via = "ai"
+    await db.commit()
 
     body = (await client.get(f"/products/{product.id}")).json()
 
