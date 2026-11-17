@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.enums import ListingStatus, StockSignal
 from makhzan_schemas.models import Product, ProductRedirect
 from sqlalchemy import select
 
@@ -71,6 +71,175 @@ async def test_offers_are_cheapest_first(client, db):
 
     assert [o["price"] for o in body["offers"]] == [9.50, 12.00, 14.00]
     assert [o["supplier"]["slug"] for o in body["offers"]] == ["shop-b", "shop-c", "shop-a"]
+
+
+async def test_every_offer_is_matched_by_the_rules_until_ai_matching_exists(client, db):
+    # PARTIAL by design: makhzan_schemas.matching answers "rules" for every
+    # listing until the AI decisions table feeds it, so no badge shows yet.
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(db, supplier=shop_a, product=product, price="14.00")
+    await make_listing(db, supplier=shop_b, product=product, price="9.50")
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert [o["matched_by"] for o in body["offers"]] == ["rules", "rules"]
+    assert body["ai_matched_count"] == 0
+
+
+async def test_an_ai_matched_offer_is_marked_and_counted(client, db, monkeypatch):
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    shop_c = await make_supplier(db, slug="shop-c", name="Shop C")
+    await make_listing(db, supplier=shop_a, product=product, price="14.00")
+    by_ai = await make_listing(db, supplier=shop_b, product=product, price="9.50")
+    await make_listing(db, supplier=shop_c, product=product, price="12.00")
+    # What the AI decisions table will say once it exists: shop B's listing
+    # was merged here by AI matching.
+    monkeypatch.setattr(
+        "app.routers.products.matched_by",
+        lambda listings: {o.id: "ai" if o.id == by_ai.id else "rules" for o in listings},
+    )
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert [(o["supplier"]["slug"], o["matched_by"]) for o in body["offers"]] == [
+        ("shop-b", "ai"),
+        ("shop-c", "rules"),
+        ("shop-a", "rules"),
+    ]
+    assert body["ai_matched_count"] == 1
+
+
+async def test_the_representative_offer_is_the_one_the_rebuild_recorded(client, db):
+    # The page picks it on a plain load, so its h1 and <title> are one listing's.
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(db, supplier=shop_a, product=product, price="9.50", images=["a.jpg"])
+    recorded = await make_listing(db, supplier=shop_b, product=product, price="14.00")
+    product.representative_listing_id = recorded.id
+    await db.commit()
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    # The stored choice wins, though the rule over today's offers differs.
+    assert body["representative_offer_id"] == str(recorded.id)
+
+
+async def test_without_a_recorded_one_the_representative_is_found_by_the_same_rule(client, db):
+    # Not rebuilt since the column came (or the recorded offer archived since):
+    # grouping.representative over the offers there are. The cheapest has no
+    # photo, so the representative is the dearer one that has.
+    product = await make_product(db)
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(db, supplier=shop_a, product=product, price="9.50")
+    pictured = await make_listing(
+        db, supplier=shop_b, product=product, price="14.00", images=["b.jpg"]
+    )
+    gone = await make_listing(
+        db, supplier=shop_a, product=product, status=ListingStatus.ARCHIVED, images=["c.jpg"]
+    )
+    product.representative_listing_id = gone.id
+    await db.commit()
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(pictured.id)
+
+
+async def test_the_fallback_puts_an_in_stock_offer_ahead_of_an_out_of_stock_photo(client, db):
+    # Owner decision (November 2026): stock first, then photo, in the one rule
+    # (grouping.representative) the rebuild and this fallback share.
+    product = await make_product(db, title_en="Not any offer's title")
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_listing(
+        db,
+        supplier=shop_a,
+        product=product,
+        price="9.50",
+        images=["a.jpg"],
+        stock_signal=StockSignal.OUT_OF_STOCK,
+    )
+    stocked = await make_listing(db, supplier=shop_b, product=product, price="14.00")
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(stocked.id)
+
+
+async def test_the_fallback_never_lets_the_product_title_outrank_stock(client, db):
+    # The title only breaks a tie on the ranking's key: the offer carrying the
+    # product's title is out of stock, another is in stock, and stock wins.
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    product = await make_product(db, title_en="LM358 Dual Op-Amp DIP-8")
+    await make_listing(
+        db,
+        supplier=shop_a,
+        product=product,
+        title_en="LM358 Dual Op-Amp DIP-8",
+        images=["a.jpg"],
+        stock_signal=StockSignal.OUT_OF_STOCK,
+    )
+    stocked = await make_listing(
+        db, supplier=shop_b, product=product, title_en="LM358 Op-Amp IC", images=["b.jpg"]
+    )
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(stocked.id)
+
+
+async def test_the_fallback_ranks_a_photo_ahead_of_the_product_title(client, db):
+    # Both in stock and English: the photo is part of the ranking's key, so
+    # the offer with one wins, though the other carries the product's title.
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    product = await make_product(db, title_en="LM358 Dual Op-Amp DIP-8")
+    await make_listing(
+        db, supplier=shop_a, product=product, title_en="LM358 Dual Op-Amp DIP-8", price="9.00"
+    )
+    pictured = await make_listing(
+        db,
+        supplier=shop_b,
+        product=product,
+        title_en="LM358 Op-Amp IC",
+        price="12.00",
+        images=["b.jpg"],
+    )
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(pictured.id)
+
+
+@pytest.mark.parametrize("titled", [0, 1])
+async def test_on_a_tied_score_the_fallback_names_the_offer_with_the_products_title(
+    client, db, titled
+):
+    # Two listings the rule cannot tell apart (both pictured, English, in
+    # stock, one price) under different titles: the rule alone names whichever
+    # comes first, and the offers come in another order than the rebuild's.
+    # The fallback names the one whose title the product carries, either way.
+    shop_a = await make_supplier(db, slug="shop-a", name="Shop A")
+    shop_b = await make_supplier(db, slug="shop-b", name="Shop B")
+    titles = ["LM358 Dual Op-Amp DIP-8", "LM358 Op-Amp IC"]
+    product = await make_product(db, title_en=titles[titled])
+    tied = [
+        await make_listing(
+            db, supplier=shop, product=product, title_en=title, price="12.00", images=["x.jpg"]
+        )
+        for shop, title in zip([shop_a, shop_b], titles, strict=True)
+    ]
+
+    body = (await client.get(f"/products/{product.id}")).json()
+
+    assert body["representative_offer_id"] == str(tied[titled].id)
 
 
 async def test_offers_without_a_price_sort_last_not_first(client, db):

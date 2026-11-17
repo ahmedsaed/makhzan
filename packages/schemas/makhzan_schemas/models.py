@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     and_,
     func,
+    text,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -317,14 +319,15 @@ class Product(TimestampMixin, Base):
     #: is shown can credit that shop (it is hotlinked from the shop's own site,
     #: decision 0003). Recorded from the listing the photo was taken from rather
     #: than read off `supplier_name`, which is a display name only and names the
-    #: representative listing: the badge must stay right if that ranking ever
-    #: stops putting photos first. Set with `image` by
+    #: representative listing: the badge must stay right now that ranking no
+    #: longer puts photos first (grouping.representative_key). Set with `image` by
     #: grouping.rebuild_products; null when there is no photo, and on rows not
     #: rebuilt since the column was added.
     image_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL")
     )
-    # Representative (cheapest) offer's supplier name — for single-supplier cards.
+    # The representative listing's supplier name (grouping.representative) —
+    # for single-supplier cards.
     supplier_name: Mapped[str | None] = mapped_column(String(255))
 
     # Aggregates over the product's offers.
@@ -340,6 +343,11 @@ class Product(TimestampMixin, Base):
     # between the two tables would make every join between them ambiguous. It
     # is as current as the last rebuild, like the rest of the aggregates.
     min_price_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # The listing the product's title, brand, category and domain were copied
+    # from (grouping.representative): the product page's shop view picks it on
+    # a plain load, so the h1 and <title> name the same listing. Not a foreign
+    # key, for the reason above; as current as the last rebuild, like the title.
+    representative_listing_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     min_price_supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL")
     )
@@ -725,3 +733,112 @@ class Report(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class GroupingOverride(Base):
+    """A person's ruling on whether two listings are one product.
+
+    Read by the regroup (`grouping.rebuild_products`, the only writer of which
+    listings form a product) and, later, by AI matching
+    (`makhzan_schemas.overrides.load_overrides`):
+
+    - `never_merge`: no product may hold both listings. It acts as a veto
+      between those two, wherever the grouping checks vetoes.
+    - `must_merge`: evidence that the two are one product, admitting them to
+      one group without title agreement or a shared identifier. Every veto
+      still applies between them unless `forced`; the same shop never merges,
+      forced or not.
+
+    Keyed by listing ids, because they are permanent and a product's
+    membership is what the ruling is about (a product id would follow its
+    offers wherever a regroup took them). The pair is unordered, stored with
+    `listing_a < listing_b`, so a pair has one *standing* ruling: a new one
+    about the same pair must replace it, deliberately.
+
+    Removing a ruling keeps its row (`removed_at`, `removed_by`): the regroup
+    and `load_overrides` ignore it, the regroup that undoes its effect cites
+    it by id, and the pair may be ruled on again, as a new row (the unique
+    index covers standing rows only).
+
+    After every regroup, `status` says whether the ruling holds:
+    `in_effect`, `blocked` (a must_merge whose two listings are in different
+    products; `blocked_by` and `blocked_reason` say which listing and veto
+    kept them apart), `inactive` (a listing is not active, so the ruling acts
+    on nothing) or `removed`. It describes; it never feeds back into grouping.
+
+    `source` says who ruled: `report` (an accepted "Report a problem",
+    `report_id`; `./makhzan reports accept`) or `manual` (`./makhzan overrides
+    add`, which requires a `note`). Every product a ruling changes cites it,
+    by id, in its `product_events` row's detail.
+    """
+
+    __tablename__ = "grouping_overrides"
+    __table_args__ = (
+        Index(
+            "uq_grouping_override_standing_pair",
+            "listing_a",
+            "listing_b",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+        CheckConstraint(
+            "(removed_at IS NULL) = (removed_by IS NULL)",
+            name="ck_grouping_override_removed_by",
+        ),
+        CheckConstraint(
+            "status IS NULL OR status IN ('in_effect', 'blocked', 'inactive', 'removed')",
+            name="ck_grouping_override_status",
+        ),
+        CheckConstraint("listing_a < listing_b", name="ck_grouping_override_ordered"),
+        CheckConstraint("kind IN ('never_merge', 'must_merge')", name="ck_grouping_override_kind"),
+        CheckConstraint(
+            "NOT forced OR kind = 'must_merge'", name="ck_grouping_override_forced_must"
+        ),
+        CheckConstraint("source IN ('report', 'manual')", name="ck_grouping_override_source"),
+        CheckConstraint(
+            "(source = 'report') = (report_id IS NOT NULL)",
+            name="ck_grouping_override_report",
+        ),
+        CheckConstraint(
+            "source <> 'manual' OR length(trim(note)) > 0",
+            name="ck_grouping_override_manual_note",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    listing_a: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    listing_b: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("listings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    #: `never_merge` or `must_merge` (`makhzan_schemas.overrides.KINDS`).
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: A must_merge that overrides the value, form and price vetoes too.
+    forced: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    #: `report` or `manual`.
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    report_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), index=True
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    #: Who made it, as they gave it: free text.
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: When and by whom it was withdrawn; the row stays.
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_by: Mapped[str | None] = mapped_column(String(100))
+    #: What the last regroup found (`grouping.override_status`); NULL until one has run.
+    status: Mapped[str | None] = mapped_column(String(16))
+    #: For `blocked`: the listing whose veto kept the pair apart (one of the two
+    #: when they veto each other), and why, in words.
+    blocked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

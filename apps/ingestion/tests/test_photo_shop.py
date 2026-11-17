@@ -12,7 +12,7 @@ import uuid
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType, StockSignal
-from makhzan_schemas.grouping import rebuild_products
+from makhzan_schemas.grouping import rebuild_products, representative, representative_key
 from makhzan_schemas.models import Listing, Product, Supplier
 from sqlalchemy import select, update
 
@@ -117,3 +117,91 @@ async def test_no_photo_no_credit():
 
     assert product.image is None
     assert product.image_supplier_id is None
+
+
+async def test_the_representative_listing_is_recorded_with_the_title_it_gave():
+    """The product page picks the representative on a plain load, so its h1
+    and <title> are one listing's (owner decision, November 2026). The cheapest
+    in-stock offer has no photo, so the representative is the dearer one."""
+    cheap, pictured = _shop("shop-a"), _shop("shop-b")
+    other = _listing(cheap, 60, [])
+    other.title_en = "SG90 Servo, A"
+    rep = _listing(pictured, 90, ["https://shop-b.test/sg90.jpg"])
+    rep.title_en = "SG90 Servo, B"
+    await _seed(cheap, pictured, other, rep)
+
+    product = await _rebuild()
+
+    assert product.representative_listing_id == rep.id
+    assert product.title_en == "SG90 Servo, B"
+
+
+async def test_an_in_stock_listing_outranks_an_out_of_stock_one_with_the_only_photo():
+    """Owner decision (November 2026): stock first, then photo. The only listing
+    with a photo is out of stock, so the in-stock one gives the product its
+    title (and is the plain load's pick); the photo still comes from the
+    listing that has one."""
+    gone_shop, stocked_shop = _shop("shop-a"), _shop("shop-b")
+    gone = _listing(gone_shop, 80, ["https://shop-a.test/sg90.jpg"])
+    gone.title_en = "SG90 Servo, A"
+    gone.stock_signal = StockSignal.OUT_OF_STOCK
+    stocked = _listing(stocked_shop, 95, [])
+    stocked.title_en = "SG90 Servo, B"
+    await _seed(gone_shop, stocked_shop, gone, stocked)
+
+    product = await _rebuild()
+
+    assert product.representative_listing_id == stocked.id
+    assert product.title_en == "SG90 Servo, B"
+    assert product.image == "https://shop-a.test/sg90.jpg"
+    assert product.image_supplier_id == gone_shop.id
+
+
+def test_the_representative_ranks_stock_then_english_title_then_photo_then_price():
+    """Owner decisions (November 2026), on the one ranking (a pure function, so
+    the order is tested without the grouping deciding what shares a product)."""
+    shop = _shop("shop-a")
+
+    def listing(price: int, images: list[str], english: bool, stock=StockSignal.IN_STOCK):
+        item = _listing(shop, price, images)
+        item.title_en = "SG90 Servo" if english else None
+        item.stock_signal = stock
+        return item
+
+    english_bare = listing(95, [], english=True)
+    arabic_pictured = listing(80, ["x.jpg"], english=False)
+    gone_full = listing(60, ["y.jpg"], english=True, stock=StockSignal.OUT_OF_STOCK)
+    english_pictured_dear = listing(120, ["z.jpg"], english=True)
+
+    # Stock first: the cheapest, pictured, English listing is out of stock.
+    assert representative([gone_full, arabic_pictured]) is arabic_pictured
+    # Then the English title, ahead of the photo.
+    assert representative([arabic_pictured, english_bare]) is english_bare
+    # Then the photo, ahead of the price.
+    assert representative([english_bare, english_pictured_dear]) is english_pictured_dear
+    assert representative_key(english_pictured_dear) < representative_key(english_bare)
+
+
+async def test_the_photo_is_ranked_like_the_representative_among_pictured_listings():
+    """Owner decision (November 2026): the product's photo is chosen by the same
+    ranking, among the listings that have one. C (in stock, English, no photo)
+    names the product; of A (out of stock, photo) and B (in stock, photo,
+    titled only in the Arabic field), B's photo wins, though A is cheaper and
+    comes first."""
+    shop_a, shop_b, shop_c = _shop("shop-a"), _shop("shop-b"), _shop("shop-c")
+    a = _listing(shop_a, 60, ["https://shop-a.test/sg90.jpg"])
+    a.stock_signal = StockSignal.OUT_OF_STOCK
+    b = _listing(shop_b, 80, ["https://shop-b.test/sg90.jpg"])
+    # The same words in the Arabic field only, so the grouping (which reads
+    # title_en or title_ar) still puts it with the others.
+    b.title_ar, b.title_en = b.title_en, None
+    c = _listing(shop_c, 95, [])
+    c.title_en = "SG90 Micro Servo 9g, C"
+    await _seed(shop_a, shop_b, shop_c, a, b, c)
+
+    product = await _rebuild()
+
+    assert product.representative_listing_id == c.id
+    assert product.title_en == "SG90 Micro Servo 9g, C"
+    assert product.image == "https://shop-b.test/sg90.jpg"
+    assert product.image_supplier_id == shop_b.id

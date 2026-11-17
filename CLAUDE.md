@@ -602,6 +602,27 @@ id gets `merged_into` and redirects), splits (the core keeps the id), empties
 that lists products filters on `Product.is_listed()`. Before deploying a grouping
 change, `make regroup-dry-run` shows how many ids it merges and splits.
 
+**A person's ruling outranks the rules** (`grouping_overrides`,
+`makhzan_schemas.overrides`). Keyed by the unordered listing pair, because
+listing ids are permanent: `never_merge` is one more veto between those two
+listings, checked wherever the others are; `must_merge` admits the pair without
+title agreement or a shared identifier (their identifier groups are
+sub-clustered together, title agreement still admitting only within one), and
+the value, form and price vetoes still apply unless `forced`, which lifts them
+for that pair only. The same shop never merges, forced or not. The regroup is
+the only reader that acts on them; every merge or split one carries out cites
+its id under `overrides` in `product_events.detail`. An existing product wins
+over a ruling it contradicts, forced or not (owner, November 2026); after each
+regroup every ruling's `status` says in effect, BLOCKED (with the listing and
+veto), inactive or removed — `./makhzan overrides list` and `reports show`
+print it. Removal is soft (`removed_at`/`removed_by`; re-ruling makes a new
+row), and the regroup that undoes a removed ruling cites it under
+`removed_overrides`. `./makhzan reports accept` writes them (ticked × unticked
+offers → never; "same as another" → one must between listings of two shops),
+`reject` withdraws them, `./makhzan overrides` lists, adds (note required) and
+removes. AI matching must read the same set
+(`load_overrides`), never re-ask a model about a ruled pair.
+
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
 under exactly "Services". Narrow on purpose — a false positive deletes real stock.
@@ -611,6 +632,33 @@ checked for services.
 Suppliers do publish SKUs, but they are **private catalogue codes, not MPNs**
 (one shop uses numeric ids, another descriptive ones). Across ~10k SKUs only 15
 are shared by two suppliers, and those are coincidences. Do not group on them.
+
+## AI and model work
+
+Matching with local models (`ml/`, `docs/ai/`) is design work the owner decides.
+An agent or a session recommends; it does not choose.
+
+- **Show before running.** Before any experiment, put the full prompt in front of
+  the owner as options with real snippets: the instructions and rules, how to
+  compare, what counts as the same product, the question, how each listing's
+  data is injected (labelled fields, how a missing field is shown, what is left
+  out, e.g. price), the label policy, thresholds, the sample design and how
+  candidates are found.
+- **A judge's prompt carries the owner's policy.** The labelling rulings
+  (`ml/out/labels/README.md`, mirrored in `docs/ai/decision-review.md`) apply to
+  the judges, not only to labellers: a brand alone never makes a different
+  product; a missing or unmentioned field is compatible, never a difference;
+  drop-in revisions are the same; a stated contradiction in value, size,
+  rating, form or pack size is different. Listings are injected as clearly
+  labelled fields with missing ones marked as not stated.
+- **No silent defaults.** A choice an earlier experiment made ("simplest within
+  noise", an agent's prompt, a threshold) does not carry into later work
+  unreviewed. When a finding changes its premise (new rulings, new data),
+  revisit it with the owner. Every AI decision, and who made it, is recorded in
+  `docs/ai/decision-review.md`.
+- **Labels are hard-won.** Pairs, keys and answers live in git-ignored
+  `ml/out/labels/` with the listing ids beside each label, never only in a
+  session's scratch folder: a reboot erased the Phase C labels that way.
 
 ## Conventions
 
