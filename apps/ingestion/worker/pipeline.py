@@ -1602,8 +1602,12 @@ async def _logged_run(
             stopped = f"{paused[0]}; the cursors resume once it is resumed"
         archived, cycle = 0, {}
         confirm: Confirmer | None = None
-        if limit is None:
+        if limit is None and not paused:
             # Never on a `limit=` run: it archives nothing, so has nothing to ask.
+            # Nor on a paused one: its refusal to ask would count as a failed
+            # confirmation (`_held_runs`), and after CONFIRM_MAX_FAILED_RUNS of
+            # those the candidates archive unconfirmed, while the shop is the
+            # very one a person paused. The cycle simply stays held, unattempted.
             if type(adapter).confirm_listed is not SourceAdapter.confirm_listed:
                 confirm = Confirmer(
                     session,

@@ -11,12 +11,15 @@ from types import SimpleNamespace
 
 from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import IngestionRun, Source
 from sqlalchemy import select
+from test_crawl_phase1 import _run_until_cycle, _status_of, _woo_adapter
+from test_crawl_phase1 import allow_robots, woo  # noqa: F401 — fixtures
 from test_pipeline import SRC, StubAdapter, _cursors, _listings
 from test_worker_jobs import FakeRedis
 from worker import main, pause
-from worker.pipeline import run_source
+from worker.pipeline import CONFIRM_MAX_FAILED_RUNS, run_source
 from worker.sources.sync import sync_sources
 
 
@@ -197,3 +200,35 @@ async def test_make_status_shows_both_pauses(capsys):
     assert "the whole crawl is paused by tester" in out
     assert "paused by tester" in out and "blocked by its host" in out
     assert "the daily run skips it" in out
+
+
+async def test_a_pause_holds_a_held_cycle_without_counting_confirmation_attempts(woo):
+    """A paused run must not reach the archive confirmation: its refusal to ask
+    would count as a failed attempt, and after CONFIRM_MAX_FAILED_RUNS the
+    candidates archive unconfirmed, on the very shop a person paused."""
+    await _add(_source("woo"))
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    for _ in range(5):
+        first = await run_source("woo", _woo_adapter())
+        if first.stats.get("archive_confirm"):
+            break
+    assert first.stats["archive_confirm"]["attempt"] == 1  # held after one failed attempt
+
+    await _pause_shop("woo")
+    asked = len(woo.included())
+    for _ in range(CONFIRM_MAX_FAILED_RUNS + 2):
+        paused_run = await run_source("woo", _woo_adapter())
+        assert "archive_confirm" not in paused_run.stats
+        assert not paused_run.stats.get("archived") and not paused_run.stats.get("cycle")
+    assert len(woo.included()) == asked, "nothing asked while paused"
+    assert (await _status_of("2")).status == ListingStatus.ACTIVE
+
+    # Resumed: the next failed attempt is the second, not the fifth.
+    async with SessionLocal() as session:
+        await pause.resume_source(session, "woo")
+        await session.commit()
+    second = await run_source("woo", _woo_adapter())
+    assert second.stats["archive_confirm"]["attempt"] == 2
