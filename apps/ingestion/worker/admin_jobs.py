@@ -130,8 +130,14 @@ async def _probe(source_id: str) -> dict:
     lock = main._SOURCE_LOCKS.setdefault(source_id, asyncio.Lock())
     if lock.locked():
         raise RuntimeError("a run of it is in progress; probe it once that ends")
+    # Its requests go to no run, so no run's `stats.pacing` (nor /how-we-crawl)
+    # shows them: they are logged here instead, measured at the same gate, and
+    # kept on the job's row as `result.pacing`.
+    from worker.http import logging_requests
+
     async with lock:
-        rows, notes = await probing.probe([target])
+        with logging_requests() as requests_log:
+            rows, notes = await probing.probe([target])
     cells = {
         name: {
             "text": cell.text(),
@@ -142,7 +148,13 @@ async def _probe(source_id: str) -> dict:
         }
         for name, cell in rows[0].cells.items()
     }
-    return {"url": target.url, "identity": target.identity, "cells": cells, "notes": notes}
+    return {
+        "url": target.url,
+        "identity": target.identity,
+        "cells": cells,
+        "notes": notes,
+        "pacing": requests_log.pacing(),
+    }
 
 
 async def _regroup_dry_run() -> dict:

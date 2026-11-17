@@ -99,6 +99,7 @@ async def test_the_probe_asks_one_shop_disabled_or_not_and_records_each_cell(mon
 
     async def fake_probe(targets, **kw):
         asked.extend(t.url for t in targets)
+        await probing.take_turn("https://shop.test")  # one request through the gate
         row = probing.Row(targets[0])
         row.cells = {
             "robots": probing.Cell(status=200, http_version="HTTP/1.1"),
@@ -116,6 +117,8 @@ async def test_the_probe_asks_one_shop_disabled_or_not_and_records_each_cell(mon
     assert result["cells"]["browser"]["status"] == 403
     assert result["cells"]["makhzanbot"]["text"] == "200 h1.1"
     assert result["notes"] == ["signed skipped: no key"]
+    # Its requests, measured at the crawl's gate, kept on the row (no run carries them).
+    assert result["pacing"]["requests"] == 1
 
 
 async def test_a_recorded_retry_after_refuses_the_probe(monkeypatch):

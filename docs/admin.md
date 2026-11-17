@@ -133,14 +133,22 @@ is root on the host.
   shop has **Run now (limit N)**: an ephemeral `limit=` run (1-200 items),
   cursors untouched, nothing archived, no price history, refused while a run
   of the shop is going. **Probe** queues `worker.probe` for that one shop,
-  paused or disabled included, with the crawler's own client: robots.txt first
-  and obeyed, then browser, makhzanbot and signed, at least 15 s apart. Each
-  request also passes the worker's own per-host gate (`worker.http.take_turn`:
-  the shop's pace, a pending `Retry-After`, the slowdown after errors), and
-  what the shop answers binds the crawl in turn (a 429's `Retry-After` holds
-  the next run too). A shop with a `Retry-After` pending, or slowed down after
-  recent errors, is not probed: the job fails and says why. The cells show
-  under the shop. **Pause / Resume** the shop. Run now and Probe work on a
+  paused or disabled included, with the crawler's own client. robots.txt is
+  read through the crawler's own cache (`worker.robots.ROBOTS`): a fresh or
+  cached read, a stored copy standing in for an unreadable file, or
+  `RobotsUnavailable` (then nothing else is asked), and its Crawl-delay paces
+  the probe. Then browser, makhzanbot and signed, at least 15 s apart. Each
+  request passes the worker's own per-host gate (`worker.http.take_turn`: the
+  shop's pace, a pending `Retry-After`, the slowdown after errors), and what
+  the shop answers binds the crawl in turn: an error slows the host, and a
+  429 or 503 with a `Retry-After` holds it for the next run too. The probe
+  stops asking columns only when a `Retry-After` is pending or the host is
+  slowed down, not on a bare 429. A shop in either state is not probed at all:
+  the job fails and says why. The cells show under the shop.
+  The probe's requests belong to no run, so no run's `stats.pacing` (and so
+  not /how-we-crawl) shows them; the job logs them at the same gate and keeps
+  their count and gaps on its row (`admin_actions.result.pacing`), shown with
+  the result. The command-line probe (`./makhzan probe`) records them nowhere. **Pause / Resume** the shop. Run now and Probe work on a
   paused shop: they are how a blocked shop is looked at.
 - Recent runs (errors expandable), cycle history with the most frequent
   errors, cycle targets, T1 short-page shadow tallies, T4/T12 confirmation,

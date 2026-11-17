@@ -7,6 +7,7 @@
       <span class="chip plain {{ 'c-ok' if cell.status and cell.status < 300 else ('c-neutral' if not cell.status and not cell.error else 'c-crit') }} mono">{{ col }} {{ cell.text }}</span>
     {% endif %}{% endfor %}
     <span class="muted mono">{{ row.result.url }}</span>
+    {% if row.result.pacing %}<span class="muted">· {{ row.result.pacing.requests }} request{{ "" if row.result.pacing.requests == 1 else "s" }}{% if row.result.pacing.min_gap_s is not none %}, at least {{ row.result.pacing.min_gap_s }} s apart{% endif %}</span>{% endif %}
     {% for note in row.result.notes %}<div class="muted">({{ note }})</div>{% endfor %}
   {% elif row.status == "failed" %}<span class="err">{{ row.error }}</span>{% endif %}
 </div>
