@@ -185,9 +185,10 @@ alive without re-pricing it, and the site shows `last_verified_at` as "checked".
 **A re-check a person asked for is read first** (`worker/recheck.py`): an
 accepted wrong price or stock report sets `listings.recheck_requested_at`; the
 next full run reads the listing by id first where the adapter can
-(`rechecks_by_id`, WooCommerce's `include`, `stats.requests.recheck`), else in
-the details stage first, else at its partition's turn. Any full read clears it
-(`_upsert_listing`, a details page). Paused shops and `limit=` runs ask nothing.
+(`rechecks_by_id`, WooCommerce's `include`, `stats.requests.recheck`), else at
+its partition's turn. Only a read that writes price and stock clears it
+(`_upsert_listing`); the details stage never does, since `fetch_details` writes
+neither (owner). Paused shops and `limit=` runs ask nothing.
 
 **Archive candidates are asked about first** (`pipeline.Confirmer`, T4/T12 in
 `docs/crawler-scheduling.md`). A multi-day offset sweep skips listings (48 of

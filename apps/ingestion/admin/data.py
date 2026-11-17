@@ -622,8 +622,8 @@ def accept_preview(report: Report) -> str:
     if report.reason == "wrong_price_stock":
         return (
             "Marks the ticked offer(s) to be re-read first by their shop's next run: by id "
-            "where the shop allows it, else through its product pages, else at its "
-            "partition's turn (see Re-checks pending below)."
+            "where the shop allows it, else at its partition's turn (see Re-checks pending "
+            "below)."
         )
     return "Closes it; no ruling is recorded for this kind of report."
 

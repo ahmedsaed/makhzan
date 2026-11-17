@@ -185,9 +185,10 @@ accept`) marks the offers the visitor ticked to be **re-checked first**
 turn, within its pace, robots.txt and page ceiling, in the one way the shop
 allows: by id at the start of the run where the adapter can (WooCommerce's
 Store API `include`, counted as `stats.requests.recheck` and reported as
-`stats.recheck`); else its product page first in the details stage, if on;
-else it waits for its partition in the cycle. Any full read clears the
-marker, and a re-read that finds it gone from the shop clears it too (the
+`stats.recheck`); else it waits for its partition in the cycle. A shop's
+details stage is no answer (owner, 2026-11-17): a product page read never
+writes price or stock, so it neither puts a marked listing first nor clears
+it. Only a read that writes price and stock clears the marker, and a re-read that finds it gone from the shop clears it too (the
 cycle's archiving decides the rest). A paused shop and a `limit=` run ask
 nothing. The Reports view lists the re-checks pending per shop and how each
 will be honoured; so does `make status` (RE-CHECKS).

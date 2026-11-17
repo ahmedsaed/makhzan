@@ -100,10 +100,11 @@ async def test_a_shop_without_a_reader_clears_the_marker_when_its_partition_come
     assert await _marker(listing) is None  # the sweep read it
 
 
-async def test_a_details_shop_reads_the_marked_page_first(monkeypatch):
-    """Where the listing's partition is not swept this run, the details stage
-    reads its page before any other, and that read clears the marker. (When the
-    sweep does reach it, its card's price and stock answer the report first.)"""
+async def test_a_details_shop_waits_for_its_sweep_which_reads_the_price(monkeypatch):
+    """A product page never writes price or stock (owner, 2026-11-17): a shop
+    whose details stage is on is honoured at its partition's turn, the stage
+    neither puts the marked listing first nor clears it, and the sweep that does
+    clear it really re-reads the price."""
     import test_details as td
 
     from worker import details
@@ -114,25 +115,46 @@ async def test_a_details_shop_reads_the_marked_page_first(monkeypatch):
     monkeypatch.setattr(robots_mod, "ROBOTS", td._AllowAll())
     monkeypatch.setattr(http_mod.asyncio, "sleep", clock.sleep)
     monkeypatch.setattr(http_mod, "_now", clock)
-    shop = td._Shop({"a": "t1", "b": "t1", "c": "t1"}, per_run=1)
+
+    class PricedShop(td._Shop):
+        prices = {"a": "10 EGP", "b": "10 EGP", "c": "10 EGP"}
+
+        async def fetch_page(self, partition, page):
+            result = await super().fetch_page(partition, page)
+            for raw in result.items:
+                raw.price_text = self.prices[raw.external_id]
+            return result
+
+    shop = PricedShop({"a": "t1", "b": "t1", "c": "t1"}, per_run=1)
     monkeypatch.setattr(
         http_mod, "make_client", lambda **kw: httpx.AsyncClient(transport=shop.transport(), **kw)
     )
-    assert recheck.how(shop) == recheck.DETAILS
-    await run_source(shop.source_id, shop)  # the listings, and one page read
+    assert recheck.how(shop) == recheck.PARTITION
+    await run_source(shop.source_id, shop)
     read = {p.rsplit("/", 1)[-1] for p in shop.details_sent()}
     marked = sorted({"a", "b", "c"} - read)[-1]
     listing = await _mark(marked)
 
-    async def no_pace():
-        return 0.0
-
     async with SessionLocal() as session:
         due = await details.due_listings(session, shop.source_id, shop.details)
-        assert [(row.external_id, why) for row, why in due] == [(marked, "recheck")]
+        assert all(why != "recheck" for _, why in due)
+
+        # The details stage alone reads the page but answers nothing.
+        async def no_pace():
+            return 0.0
+
+        import dataclasses
+
+        shop.details = dataclasses.replace(shop.details, per_run=3)
         await details.run_details(session, shop, errors=[], pace=no_pace, already_sent=False)
-    assert shop.details_sent()[-1] == f"/p/{marked}"
-    assert await _marker(listing) is None
+    assert f"/p/{marked}" in shop.details_sent()
+    assert await _marker(listing) is not None, "a product page is no answer to a price report"
+
+    shop.prices[marked] = "25 EGP"  # what the visitor said, true in the shop
+    await run_source(shop.source_id, shop)
+    async with SessionLocal() as session:
+        row = await session.get(Listing, listing)
+    assert str(row.price) == "25.00" and row.recheck_requested_at is None
 
 
 async def test_the_cli_accept_marks_too_and_make_status_says_what_waits(capsys):

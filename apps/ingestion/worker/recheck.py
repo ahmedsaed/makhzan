@@ -3,22 +3,22 @@
 Accepting a "wrong price or stock" report (admin dashboard, or `./makhzan
 reports accept`) sets `listings.recheck_requested_at` on the offers the visitor
 ticked (owner decision, 2026-11-17). The next full run of that listing's source
-reads it first, within the run's pace, robots.txt and page ceiling, in the one
-way its adapter can (`how`):
+reads it first, within the run's pace, robots.txt and page ceiling, where its
+adapter can (`how`):
 
 - `by_id`: an adapter that can re-read listings by id (`rechecks_by_id`, the
   WooCommerce Store API's `include`, which the archive confirmation already
   uses) re-reads them at the start of the run, before the sweep
   (`pipeline._recheck_first`), counted as `stats.requests.recheck` and
   reported as `stats.recheck`;
-- `details`: an adapter with its details stage on reads their product pages
-  first in that stage (`details.due_listings`, reason "recheck"). When that
-  run's sweep reaches the listing's card first, the card's price and stock
-  answer the report and clear the marker before the stage runs;
-- `partition`: otherwise it waits for its partition's turn in the cycle.
+- `partition`: otherwise it waits for its partition's turn in the cycle. A
+  shop's details stage does not count (owner decision, 2026-11-17): a
+  product page read (`fetch_details`) never writes price or stock, so it
+  could not answer a price or stock report, and it neither puts a marked
+  listing first nor clears its marker.
 
-Any full read of the listing clears the marker: a sweep's or a re-read's
-upsert (`pipeline._upsert_listing`), or its product page read (details). A
+Only a read that writes price and stock clears the marker: a sweep's or a
+re-read's upsert (`pipeline._upsert_listing`). A
 re-read that finds the listing gone from the shop clears it too: it was asked,
 and the cycle's own archiving decides the rest. A `limit=` run never reads a
 marked listing first, and a paused shop is not asked.
@@ -39,25 +39,21 @@ LABEL = "recheck"
 #: The most marked listings one run re-reads first (a WooCommerce request holds 100).
 MAX_PER_RUN = 100
 
-BY_ID, DETAILS, PARTITION = "by_id", "details", "partition"
+BY_ID, PARTITION = "by_id", "partition"
 
 
 def how(adapter: SourceAdapter) -> str:
-    """How `adapter`'s next run honours a re-check: by id, through details, or not early."""
+    """How `adapter`'s next run honours a re-check: by id first, or at its partition's turn."""
     if (
         getattr(adapter, "rechecks_by_id", False)
         and type(adapter).confirm_listed is not SourceAdapter.confirm_listed
     ):
         return BY_ID
-    reads_pages = type(adapter).fetch_details is not SourceAdapter.fetch_details
-    if reads_pages and adapter.details is not None and adapter.details.enabled:
-        return DETAILS
     return PARTITION
 
 
 WORDS = {
     BY_ID: "re-read by id at the start of its next run",
-    DETAILS: "its product page read first by the next run's details stage",
     PARTITION: "no early read for this shop: it waits for its partition in the cycle",
 }
 
