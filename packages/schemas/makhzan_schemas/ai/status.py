@@ -5,8 +5,9 @@
 - the queue by pipeline and stage: queued, leased and dead jobs, the oldest
   queued, and requests owed (two a job, an upper bound);
 - throughput over the last 24 hours, per model: scores and the median
-  seconds a request;
-- workers: models, last seen, the last hello's device and window, revoked;
+  seconds a request; and scores per day over the last 7 (`daily`);
+- workers: models, last seen, the last hello's device, window and model
+  versions, scores in the last 24 hours, revoked;
 - projected nights to drain each model's queue, at the median seconds a
   request and the windows its workers reported (none reported: unknown);
 - open flags by kind;
@@ -132,6 +133,27 @@ async def collect(session: AsyncSession) -> dict:
         for model in MODELS
     }
 
+    # Scores per UTC day over the last 7, for the dashboard's nightly trend.
+    day = func.date_trunc("day", AiScore.scored_at)
+    daily = {
+        d.date().isoformat(): n
+        for d, n in await session.execute(
+            select(day, func.count())
+            .where(AiScore.scored_at >= now - timedelta(days=7))
+            .group_by(day)
+            .order_by(day)
+        )
+    }
+    by_worker = dict(
+        (
+            await session.execute(
+                select(AiScore.worker_id, func.count())
+                .where(AiScore.scored_at >= since, AiScore.worker_id.is_not(None))
+                .group_by(AiScore.worker_id)
+            )
+        ).all()
+    )
+
     workers = []
     window_by_model: dict[str, int] = {}
     for w in await session.scalars(select(AiWorker).order_by(AiWorker.name)):
@@ -148,6 +170,13 @@ async def collect(session: AsyncSession) -> dict:
                 "dtype": hello.get("dtype"),
                 "threads": hello.get("threads"),
                 "window": window,
+                "scores_24h": by_worker.get(w.id, 0),
+                # What the last hello reported, by model key.
+                "versions": {
+                    key: (entry or {}).get("model_version")
+                    for key, entry in (hello.get("models") or {}).items()
+                    if isinstance(entry, dict)
+                },
             }
         )
         seconds = _window_seconds(window)
@@ -232,6 +261,7 @@ async def collect(session: AsyncSession) -> dict:
         },
         "queue": queue,
         "throughput": throughput,
+        "daily": daily,
         "workers": workers,
         "nights": nights,
         "flags": flags,
