@@ -41,6 +41,8 @@ make reindex                    # rebuild products + search index
 make status                     # crawler progress, recent runs, catalog health
 make freshness                  # requests, staleness, changes found, false archivals (read-only)
 ./makhzan status                # the same report, plus containers/health/crawl flag, from production
+make ai ARGS="status"           # AI matching: workers, mode, backlog, decisions (./makhzan ai ...)
+make broker                     # the AI broker on :8100
 ```
 
 Completing a cycle resets the cursors, which would otherwise erase the evidence
@@ -637,6 +639,21 @@ ARGS=--ai` previews standing decisions while off, which is how the backlog's
 groupings are reviewed on a local copy before production.
 Pipelines, models and prompts are data (`ai/pipelines.py`, `ai/policy.py`,
 `ai/prompt.py`): a new one is a registry entry, not a migration.
+
+**Workers talk only to the broker** (`app.broker.main:app`, its own service
+and hostname, never under `/api`; `docs/ai/broker-deploy.md`). Its logic is
+`makhzan_schemas.ai.broker`; what follows a score is `ai.flow.advance`, the
+one generic step (current scores by request hash, `transition()`, next stage
+or `write_decision`), which triggers use too, so an already-scored pair
+settles with no lease. After each rebuild `ai_candidates` runs the producers
+(`ai/candidates.py`): new or changed electronics listings' top 10 by title
+Jaccard, filtered by today's vetoes; re-scores of standing decisions whose
+text or judge changed ("same" first); the rules-merged audit. The first run
+records a baseline and queues nothing: the existing catalogue is
+`./makhzan ai backlog`. A dead job is never re-queued by a trigger; a person
+retries it (`./makhzan ai jobs retry`). `ON CONFLICT` on a partial index
+needs its predicate as literal SQL: bound, it stops matching once asyncpg's
+prepared statement goes generic (the sixth run on a connection).
 
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files

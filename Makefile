@@ -32,7 +32,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides ai broker db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -124,6 +124,14 @@ reports:  ## Review visitors' reports: make reports [ARGS="show 12" | "accept 12
 
 overrides:  ## Grouping rulings: make overrides [ARGS="add A B --kind never --note why" | "remove 3"]
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.overrides $(ARGS)
+
+ai:  ## AI matching: make ai ARGS="status" | "worker add NAME --models kev" | "backlog" | "mode off"
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.ai $(ARGS)
+
+# The AI broker on :8100, its own app object (docs/ai/broker-api.md). Workers point
+# at http://localhost:8100/ai/v1 locally; in production it has its own hostname.
+broker:  ## Run the AI broker on :8100
+	cd apps/api && DATABASE_URL="$(DB_URL)" poetry run uvicorn app.broker.main:app --reload --port 8100
 
 # Working against real data locally. db-pull is read-only against production;
 # db-load only ever touches localhost. Set DEPLOY_HOST/DEPLOY_USER/DEPLOY_PATH
