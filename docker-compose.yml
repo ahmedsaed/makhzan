@@ -58,6 +58,25 @@ services:
       search:
         condition: service_started
 
+  # The AI broker (docs/ai/broker-api.md): the API image, its own app object.
+  broker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: dev
+    env_file: .env
+    command: ["uvicorn", "app.broker.main:app", "--host", "0.0.0.0", "--port", "8100", "--reload"]
+    ports:
+      - "127.0.0.1:8100:8100"
+    volumes:
+      - ./apps/api:/workspace/apps/api
+      - ./packages/schemas:/workspace/packages/schemas
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   ingestion:
     build:
       context: .

@@ -25,12 +25,21 @@ GUARDED = {("POST", "/reports")}
 
 
 class BodyLimit:
-    def __init__(self, app: ASGIApp, limit: int = MAX_BODY_BYTES) -> None:
+    """`guards` says which (method, path) it caps; by default the public API's
+    one write. The AI broker passes its own limit and every POST."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        limit: int = MAX_BODY_BYTES,
+        guards: Callable[[str, str], bool] | None = None,
+    ) -> None:
         self.app = app
         self.limit = limit
+        self.guards = guards or (lambda method, path: (method, path) in GUARDED)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or (scope["method"], scope["path"]) not in GUARDED:
+        if scope["type"] != "http" or not self.guards(scope["method"], scope["path"]):
             await self.app(scope, receive, send)
             return
         for name, value in scope.get("headers", []):

@@ -111,3 +111,20 @@ async def client():
 @pytest.fixture
 def session_factory():
     return SessionLocal
+
+
+@pytest_asyncio.fixture
+async def broker():
+    """The AI broker app, in-process; a session end's rebuild is recorded in
+    `.rebuilds` instead of queued (tests/test_broker*.py)."""
+    from app.broker.main import app
+
+    calls: list[str] = []
+
+    async def fake_rebuild() -> None:
+        calls.append("rebuild")
+
+    app.state.queue_rebuild = fake_rebuild
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://broker") as http:
+        http.rebuilds = calls
+        yield http

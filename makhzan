@@ -13,6 +13,8 @@
 #   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
 #   ./makhzan reports [list|show ID|accept ID..|reject ID..]  # review "Report a problem"
 #   ./makhzan overrides [list|add A B --kind never|must --note ..|remove ID..]  # grouping rulings
+#   ./makhzan ai [status|worker add|list|revoke|admin-token|mode|redecide|revoke|backlog|jobs|flags]
+#                            # AI matching (worker/ai.py, docs/ai/broker-api.md)
 #
 # Run it on the server, or from a laptop: without a .env.prod here it re-runs
 # itself on DEPLOY_HOST over SSH, using the same .env.local variables as
@@ -23,7 +25,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -81,6 +83,12 @@ cmd_status() {
   fi
   echo
   echo "==> Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"
+  local broker="${BROKER_BIND:-127.0.0.1:8100}"
+  if curl -fsS --max-time 5 "http://${broker}/ai/v1/health" >/dev/null 2>&1; then
+    echo "==> AI broker: /ai/v1/health answers on ${broker}"
+  else
+    echo "==> AI broker: /ai/v1/health on ${broker} is NOT answering"
+  fi
   echo
 
   # status.py is not baked into the image; stream it in from the checkout. The
@@ -92,6 +100,33 @@ cmd_status() {
 # transaction and rolls it back, so it can change nothing.
 cmd_freshness() {
   "${COMPOSE[@]}" exec -T ingestion python - "$@" < scripts/freshness.py
+}
+
+# AI matching by hand (apps/ingestion/worker/ai.py). `admin-token` is the one
+# that needs the host: the broker keeps only the token's sha256, in .env.prod,
+# and reads it when its container is created, so a new token replaces the old
+# one by rewriting that line and recreating the broker. The token is shown once.
+cmd_ai() {
+  if [ "${1:-}" != "admin-token" ]; then
+    "${COMPOSE[@]}" exec -T ingestion python -m worker.ai "$@"
+    return
+  fi
+  local out token hash
+  out="$("${COMPOSE[@]}" exec -T ingestion python -m worker.ai admin-token)"
+  token="$(sed -n 's/^token=//p' <<<"$out")"
+  hash="$(sed -n 's/^sha256=//p' <<<"$out")"
+  if [ -z "$token" ] || [ -z "$hash" ]; then
+    echo "could not make an admin token" >&2
+    exit 1
+  fi
+  if grep -q '^AI_BROKER_ADMIN_TOKEN_SHA256=' .env.prod; then
+    sed -i "s/^AI_BROKER_ADMIN_TOKEN_SHA256=.*/AI_BROKER_ADMIN_TOKEN_SHA256=${hash}/" .env.prod
+  else
+    printf '\nAI_BROKER_ADMIN_TOKEN_SHA256=%s\n' "$hash" >> .env.prod
+  fi
+  "${COMPOSE[@]}" up -d --force-recreate --no-deps broker
+  echo "==> New admin token for GET /ai/v1/status (shown once; the previous one no longer works):"
+  echo "$token"
 }
 
 cmd_crawl() {
@@ -140,5 +175,7 @@ case "$cmd" in
   # Grouping rulings: two listings never, or always, one product (worker/overrides.py).
   # Accepting a grouping report writes them too; a regroup applies them.
   overrides) "${COMPOSE[@]}" exec -T ingestion python -m worker.overrides "$@" ;;
+  # AI matching: workers' tokens, the admin token, the mode, decisions, the backlog.
+  ai) cmd_ai "$@" ;;
   *) echo "unknown command: $cmd" >&2; usage 1 ;;
 esac
