@@ -203,6 +203,33 @@ async def test_a_cancelled_job_is_marked_failed_not_left_running(monkeypatch):
     assert row.status == "failed" and row.error.startswith("cancelled")
 
 
+async def test_a_cancel_during_the_done_write_does_not_turn_it_into_failed(monkeypatch):
+    real_set = admin_jobs._set
+    writing = asyncio.Event()
+
+    async def slow_set(action_id, **values):
+        if values.get("status") == "done":
+            writing.set()
+            await asyncio.sleep(0.05)
+        await real_set(action_id, **values)
+
+    async def quick():
+        return {"stats": {}, "line": "would regroup"}
+
+    monkeypatch.setattr(admin_jobs, "_set", slow_set)
+    monkeypatch.setattr(admin_jobs, "_regroup_dry_run", quick)
+    action_id = await _job(admin_jobs.REGROUP_DRY_RUN)
+    task = asyncio.create_task(admin_jobs.admin_job({}, action_id))
+    await writing.wait()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    await asyncio.sleep(0.1)  # the shielded write finishes
+    assert (await _row(action_id)).status == "done"
+
+
 async def test_a_queued_job_the_queue_lost_is_marked_failed():
     from datetime import UTC, datetime
 

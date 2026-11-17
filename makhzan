@@ -161,7 +161,8 @@ cmd_crawl() {
   # Every value the worker reads as off (makhzan_schemas.crawl.crawl_enabled:
   # 0, false, no, off, any case, spaces around) counts.
   if [ "$1" = on ] && grep -qiE '^CRAWL_ENABLED=[[:space:]]*(0|false|no|off)[[:space:]]*$' .env.prod; then
-    sed -i "s/^CRAWL_ENABLED=.*/CRAWL_ENABLED=true/" .env.prod
+    # I: the key was matched case-insensitively above; rewrite it the same way.
+    sed -i "s/^CRAWL_ENABLED=.*/CRAWL_ENABLED=true/I" .env.prod
     echo "==> .env.prod had CRAWL_ENABLED off; set it true and recreating the ingestion worker"
     "${COMPOSE[@]}" up -d --force-recreate --no-deps ingestion
     echo "==> Worker now says: $(crawl_effective)"

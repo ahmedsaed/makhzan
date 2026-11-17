@@ -205,22 +205,28 @@ async def admin_job(ctx: dict, action_id: int) -> str:
             raise ValueError(f"not a dashboard job: {action}")
     except Exception as exc:  # noqa: BLE001 — recorded on the row for the page to show
         log.exception("admin job %s (%s) failed", action_id, action)
-        await _set(
-            action_id,
-            status="failed",
-            error=f"{type(exc).__name__}: {exc}"[:2000],
-            finished_at=datetime.now(timezone.utc),
+        finished = True  # before the write: a cancel during it must not overwrite it
+        await asyncio.shield(
+            _set(
+                action_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}"[:2000],
+                finished_at=datetime.now(timezone.utc),
+            )
         )
-        finished = True
         return "failed"
     else:
-        await _set(
-            action_id,
-            status="done",
-            result=_jsonable(result),
-            finished_at=datetime.now(timezone.utc),
-        )
+        # Shielded, and marked finished first: a cancel arriving during this
+        # write must neither interrupt it nor overwrite `done` with `failed`.
         finished = True
+        await asyncio.shield(
+            _set(
+                action_id,
+                status="done",
+                result=_jsonable(result),
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
         return "done"
     finally:
         if not finished:

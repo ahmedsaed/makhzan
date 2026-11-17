@@ -62,10 +62,11 @@
           return s && s.status !== "queued" && s.status !== "running";
         });
         polls += 1;
-        // Done or failed: reload to show it. Still queued after 5 minutes: stop
-        // asking (a lost job is marked failed on the next page load).
+        // Done or failed: reload to show it. Still queued or running after 30
+        // minutes, longer than a limit=200 run takes: stop asking (a lost job is
+        // marked failed on the next page load).
         if (ended) window.location.reload();
-        else if (polls < 120) setTimeout(poll, 2500);
+        else if (polls < 720) setTimeout(poll, 2500);
       });
     };
     setTimeout(poll, 2500);
