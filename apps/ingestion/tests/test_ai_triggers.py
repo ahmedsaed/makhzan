@@ -513,3 +513,113 @@ async def test_a_not_same_decision_also_queues_the_rebuild_after_a_window():
         assert not await core.maybe_rebuild(session, queue)  # nothing newer
         await session.commit()
     assert queued == [1]
+
+
+# --- revoked pairs: re-offered only when what the models see changes ------------------------
+
+
+async def _revoked_pair(**listing_b) -> tuple:
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    if listing_b:
+        async with SessionLocal() as session:
+            await session.execute(update(Listing).where(Listing.id == y).values(**listing_b))
+            await session.commit()
+    await _daily()  # baseline
+    await _score_all(x, y)
+    decision = await _decide(x, y)
+    await _revoke(decision.id)
+    return x, y
+
+
+async def _standing() -> list[AiDecision]:
+    async with SessionLocal() as session:
+        return list(await session.scalars(select(AiDecision).where(AiDecision.state == "standing")))
+
+
+async def test_an_arabic_title_change_under_an_english_one_does_not_reoffer():
+    """The content hash moves (P5 names both languages) but no judge sees the
+    Arabic title: the revoked pair stays out, and nothing is settled."""
+    x, y = await _revoked_pair()
+    async with SessionLocal() as session:
+        await session.execute(update(Listing).where(Listing.id == y).values(title_ar="مقاومة"))
+        await session.commit()
+    _, candidates, *_ = await _daily()
+    assert candidates["queries"] == 1  # the listing is due: its hash moved
+    assert candidates.get("revoked_reoffered", 0) == 0
+    assert await _jobs() == [] and await _standing() == []
+
+
+async def test_a_hash_version_bump_does_not_reoffer(monkeypatch):
+    from makhzan_schemas.ai import hashing
+
+    await _revoked_pair()
+    monkeypatch.setattr(hashing, "HASH_VERSION", hashing.HASH_VERSION + 1)
+    _, candidates, *_ = await _daily()
+    assert candidates["queries"] == 2  # every hash moved
+    assert candidates.get("revoked_reoffered", 0) == 0
+    assert await _jobs() == [] and await _standing() == []
+
+
+async def test_a_visible_change_reoffers_with_fresh_scoring_and_a_second_revocation_holds():
+    x, y = await _revoked_pair()
+    async with SessionLocal() as session:
+        await session.execute(
+            update(Listing).where(Listing.id == y).values(title_en="carbon resistor 10k ohm 1/4w")
+        )
+        await session.commit()
+    _, candidates, *_ = await _daily()
+    assert candidates["revoked_reoffered"] == 1
+    [job] = await _jobs()
+    assert (job.stage, job.status) == ("kev", "queued")  # the models are asked again
+    assert await _standing() == []
+    # Scored on the new text, decided, revoked again: out until the next change.
+    await _score_all(x, y)
+    await _revoke((await _decide(x, y)).id)
+    async with SessionLocal() as session:
+        await session.execute(update(AiJob).values(status="cancelled"))
+        await session.commit()
+    async with SessionLocal() as session:
+        again = await producers.backlog(session)
+        await session.commit()
+    assert again.get("revoked_reoffered", 0) == 0 and again["kept"] == 0
+    assert await _standing() == []
+
+
+async def test_a_reoffered_pair_is_never_settled_from_scores_the_revocation_saw():
+    """An edit past Kev's 150-word cap changes pplx's view only. If Kev's old
+    score alone would decide the pair, it is not offered: no model would look."""
+    description = " ".join(f"word{i}" for i in range(200))
+    x, y = await _revoked_pair(description_en=description)
+    async with SessionLocal() as session:
+        await session.execute(update(AiDecision).values(outcome="not_same"))
+        await session.commit()
+    # Kev said no on the old text (its view is unchanged by the edit below).
+    async with SessionLocal() as session:
+        await session.execute(update(AiScore).values(p=0.1))
+        await session.commit()
+    edited = description.replace("word180", "changed180")
+    async with SessionLocal() as session:
+        await session.execute(update(Listing).where(Listing.id == y).values(description_en=edited))
+        await session.commit()
+    _, candidates, *_ = await _daily()
+    assert candidates["revoked_reoffered"] == 1
+    assert candidates["revoked_stale_scores"] == 1
+    assert await _jobs() == [] and await _standing() == []
+
+
+async def test_a_kev_confident_no_blocks_whatever_the_department():
+    from makhzan_schemas.ai.decisions import load_ai_same
+    from makhzan_schemas.overrides import load_overrides
+
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    await _score_all(x, y, kev=0.01)
+    assert (await _decide(x, y)).outcome == "not_same"
+    async with SessionLocal() as session:
+        await session.execute(update(Listing).where(Listing.id == y).values(domain="tools"))
+        await session.commit()
+        ai = await load_ai_same(session, await load_overrides(session))
+    assert ai.no == {pair(x, y)}

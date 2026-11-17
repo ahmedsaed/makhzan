@@ -61,7 +61,8 @@ class PairScores:
     `scores` is what `transition` reads: {stage: {"ab": p, "ba": p}}, an order
     missing when it has no score under the stage's current judge for the
     request as it would be rendered now. `evidence` is what a decision stores
-    for each stage: model, judge id and both orders.
+    for each stage: model, judge id, both orders' scores, and both orders'
+    request hashes (`requests`).
     """
 
     scores: dict[str, dict[str, float]]
@@ -116,7 +117,14 @@ async def scores_for(
             }
             if orders:
                 scores[stage.name] = orders
-                evidence[stage.name] = {"model": stage.model, "model_version_id": judge, **orders}
+                evidence[stage.name] = {
+                    "model": stage.model,
+                    "model_version_id": judge,
+                    **orders,
+                    # What the judge was shown, per order: a revoked decision
+                    # is offered again only when these change (candidates).
+                    "requests": {o: d.hex() for o, d in per_stage[stage.name].items()},
+                }
         out[key] = PairScores(scores, evidence)
     return out
 

@@ -66,8 +66,8 @@ from makhzan_schemas import grouping as g
 from makhzan_schemas.ai import flow, policy, triggers
 from makhzan_schemas.ai.broker import sweep_judges
 from makhzan_schemas.ai.decisions import REVOKED, STANDING
-from makhzan_schemas.ai.pipelines import PIPELINES, SAME
-from makhzan_schemas.ai.render import Shown, shown
+from makhzan_schemas.ai.pipelines import PIPELINES, SAME, SCORE, transition
+from makhzan_schemas.ai.render import Shown, render, shown
 from makhzan_schemas.domains import get_profile
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import AiDecision, AiJob, AiListingState, Category, Listing
@@ -89,8 +89,11 @@ MATCH, AUDIT = "match", "audit"
 BASELINE_FIRST_RUN = True
 #: A pair with a standing decision is never a candidate (it is the
 #: re-score's). A pair whose decision a person revoked is offered again only
-#: when a listing's text has changed since (its content hash): option (b).
-#: False would keep revoked pairs out for good.
+#: when what the models would be shown has changed since: the requests it
+#: renders now differ from those its revoked decision recorded, so the models
+#: are asked again (option (b)). Not the content hash, which also moves on
+#: an Arabic title under an English one, or a `HASH_VERSION` bump. False
+#: would keep revoked pairs out for good.
 REOFFER_REVOKED_ON_TEXT_CHANGE = True
 
 _TOKEN = re.compile(r"[a-z0-9]+")
@@ -194,36 +197,95 @@ async def load_catalogue(session: AsyncSession, domains: Iterable[str] = DOMAINS
     return Catalogue(listings, views)
 
 
+def _requests_now(pipeline_name: str, a: Shown, b: Shown) -> dict[str, dict[str, str]]:
+    """Each stage's two request hashes for the pair as it would render now."""
+    return {s.name: render(s, a, b).hex() for s in PIPELINES[pipeline_name].stages}
+
+
+def _shows_what_was_revoked(evidence: dict, now: dict[str, dict[str, str]]) -> bool:
+    """Whether every stage a revoked decision holds evidence for would be
+    shown exactly the same requests now. A decision recorded before request
+    hashes were kept, or with no evidence, counts as unchanged: it stays out."""
+    stages = {n: e for n, e in (evidence or {}).items() if isinstance(e, dict)}
+    if not stages:
+        return True
+    for name, entry in stages.items():
+        recorded = entry.get("requests")
+        if not recorded:
+            return True
+        if now.get(name) != recorded:
+            return False
+    return True
+
+
+@dataclass
+class Decided:
+    """Pairs not to offer, and the revoked decisions of pairs offered again."""
+
+    skip: set[tuple]
+    reoffered: dict[tuple, list[dict]]
+
+
 async def _decided_pairs(
     session: AsyncSession, pipeline_name: str, catalogue: Catalogue
-) -> set[tuple]:
+) -> Decided:
     """Pairs not to offer in `pipeline_name`: every pair with a standing
-    decision, and every pair with a revoked one whose two listings still
-    show the text it was revoked on (`REOFFER_REVOKED_ON_TEXT_CHANGE`)."""
+    decision, and every pair with a revoked one whose rendered requests have
+    not changed since it was revoked (`REOFFER_REVOKED_ON_TEXT_CHANGE`). Any
+    one revocation matching what would be shown now keeps the pair out."""
     rows = await session.execute(
-        select(
-            AiDecision.listing_a,
-            AiDecision.listing_b,
-            AiDecision.state,
-            AiDecision.content_sha256_a,
-            AiDecision.content_sha256_b,
-        ).where(AiDecision.pipeline == pipeline_name, AiDecision.state.in_((STANDING, REVOKED)))
+        select(AiDecision.listing_a, AiDecision.listing_b, AiDecision.state, AiDecision.scores)
+        .where(AiDecision.pipeline == pipeline_name, AiDecision.state.in_((STANDING, REVOKED)))
+        .order_by(AiDecision.id)
     )
-    skip = set()
-    for a, b, state, hash_a, hash_b in rows:
+    standing: set[tuple] = set()
+    revoked: dict[tuple, list[dict]] = {}
+    for a, b, state, evidence in rows:
         if state == STANDING or not REOFFER_REVOKED_ON_TEXT_CHANGE:
-            skip.add((a, b))
+            standing.add((a, b))
+        else:
+            revoked.setdefault((a, b), []).append(evidence or {})
+    skip, reoffered = set(standing), {}
+    for (a, b), decisions in revoked.items():
+        if (a, b) in standing:
             continue
         now_a, now_b = catalogue.shown.get(a), catalogue.shown.get(b)
-        unchanged = (
-            now_a is not None
-            and now_b is not None
-            and now_a.content_sha256 == hash_a
-            and now_b.content_sha256 == hash_b
-        )
-        if unchanged:
+        if now_a is None or now_b is None:
             skip.add((a, b))
-    return skip
+            continue
+        now = _requests_now(pipeline_name, now_a, now_b)
+        if any(_shows_what_was_revoked(e, now) for e in decisions):
+            skip.add((a, b))
+        else:
+            reoffered[(a, b)] = decisions
+    return Decided(skip, reoffered)
+
+
+async def _settled_by_revoked_scores(
+    session: AsyncSession, pipeline_name: str, catalogue: Catalogue, key: tuple, decisions
+) -> bool:
+    """Belt and braces for a re-offered revoked pair: True when the pair would
+    be decided now purely from scores for requests a revoked decision already
+    recorded (a stage whose view did not change can still settle it, e.g. a
+    description edit past Kev's cap that Kev never saw). Such a pair is not
+    offered: a revocation is never undone with no model looking."""
+    a, b = key
+    judges = await flow.current_judges(session)
+    current = await flow.scores_for(session, [(pipeline_name, a, b)], catalogue.shown, judges)
+    if (pipeline_name, a, b) not in current:
+        return True
+    step = transition(pipeline_name, current[(pipeline_name, a, b)].scores)
+    if step.action == SCORE:
+        return False
+    now = _requests_now(pipeline_name, catalogue.shown[a], catalogue.shown[b])
+    used = [name for name, _ in step.mins]
+    return any(
+        all(
+            isinstance(e.get(name), dict) and e[name].get("requests") == now.get(name)
+            for name in used
+        )
+        for e in decisions
+    )
 
 
 def find_pairs(
@@ -413,16 +475,21 @@ class CandidatesTrigger(_MatchTrigger):
             requests = []
         else:
             found = find_pairs(catalogue, queries, mutual=self.mutual)
-            filtered = filter_pairs(
-                catalogue,
-                found,
-                await load_overrides(session),
-                await _decided_pairs(session, MATCH, catalogue),
-            )
+            decided = await _decided_pairs(session, MATCH, catalogue)
+            filtered = filter_pairs(catalogue, found, await load_overrides(session), decided.skip)
             self.counts.update(filtered.counts)
+            kept = []
+            for key in filtered.kept:
+                if key in decided.reoffered:
+                    self.counts["revoked_reoffered"] += 1
+                    if await _settled_by_revoked_scores(
+                        session, MATCH, catalogue, key, decided.reoffered[key]
+                    ):
+                        self.counts["revoked_stale_scores"] += 1
+                        continue
+                kept.append(key)
             requests = [
-                triggers.PairRequest(a, b, MATCH, self.priority, self.name)
-                for a, b in filtered.kept
+                triggers.PairRequest(a, b, MATCH, self.priority, self.name) for a, b in kept
             ]
         for i in queries:
             state = states[catalogue.listings[i].id]
