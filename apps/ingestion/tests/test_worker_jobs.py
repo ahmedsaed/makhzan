@@ -285,6 +285,8 @@ async def test_a_daily_run_finding_its_source_busy_comes_back_later(worker):
         assert args == ("shop-a", 1)
         assert kwargs["_defer_by"] == worker.BUSY_RETRY_AFTER
         assert job_id.endswith(":busy1")
+        # It changed nothing: no rebuild until the re-queued job runs.
+        assert redis.named("rebuild_and_reindex") == []
 
         last = await worker.crawl_source({"redis": redis}, "shop-a", worker.BUSY_RETRIES)
         assert last == {"source": "shop-a", "status": "skipped", "reason": "busy all day"}
@@ -293,3 +295,4 @@ async def test_a_daily_run_finding_its_source_busy_comes_back_later(worker):
     # Free again: the re-queued job runs the source.
     again = await worker.crawl_source({"redis": redis}, "shop-a", 1)
     assert again["status"] == "success"
+    assert len(redis.named("rebuild_and_reindex")) == 1

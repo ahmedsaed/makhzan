@@ -214,8 +214,10 @@ async def crawl_source(ctx: dict, source_id: str, busy_retry: int = 0) -> dict:
     itself again `BUSY_RETRY_AFTER` later rather than skipping: the day's job
     id is deduplicated, so a skip would cost the shop its day. Re-queued, not
     waited for, so a busy source holds no worker slot and no job timeout while
-    the other run finishes.
+    the other run finishes. A deferred job asks for no rebuild: it changed
+    nothing, and the job it queued will ask when it runs.
     """
+    deferred = False
     try:
         if not CRAWL_ENABLED:
             # A job queued before `./makhzan crawl off` and still waiting for a
@@ -237,12 +239,14 @@ async def crawl_source(ctx: dict, source_id: str, busy_retry: int = 0) -> dict:
                 _job_id=f"{crawl_job_id(source_id, today)}:busy{busy_retry + 1}",
                 _defer_by=BUSY_RETRY_AFTER,
             )
+            deferred = True
             return {"source": source_id, "status": "deferred", "reason": "a run of it is going"}
         return await _exclusive(
             source_id, source_id, lambda: _run_source(source_id, get(source_id))
         )
     finally:
-        await request_rebuild(ctx)
+        if not deferred:
+            await request_rebuild(ctx)
 
 
 async def run_source(ctx: dict, source_id: str, limit: int | None = None) -> dict:
