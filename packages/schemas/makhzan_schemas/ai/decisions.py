@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME, rank
-from makhzan_schemas.ai.policy import GROUP_CHECK_MODEL, KEV_BLOCK
+from makhzan_schemas.ai.policy import DOMAINS, GROUP_CHECK_MODEL, KEV_BLOCK
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import AiDecision, Listing
 from makhzan_schemas.overrides import Overrides, Pair, pair
@@ -74,7 +74,8 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     A pair counts when:
 
     - its decision is standing and its outcome is "same";
-    - both listings are active, and from different shops;
+    - both listings are active, from different shops, and in a department
+      AI matching serves (`policy.DOMAINS`);
     - no person has ruled on the pair (any standing override);
     - it is each listing's best "same" match in the other's shop (P14): for a
       listing and a shop, only the strongest decision counts (its stages'
@@ -97,6 +98,10 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             and_(
                 la.status == ListingStatus.ACTIVE,
                 lb.status == ListingStatus.ACTIVE,
+                # Only while both listings are in a served department: one
+                # that moves out takes the AI merge apart (owner, 2026-11-17).
+                la.domain.in_(DOMAINS),
+                lb.domain.in_(DOMAINS),
                 AiDecision.state == STANDING,
             )
         )

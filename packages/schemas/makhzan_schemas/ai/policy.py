@@ -31,6 +31,12 @@ from dataclasses import dataclass, field
 POLICIES: dict[str, dict[str, float]] = {"p1": {"kev": 0.80, "pplx": 0.95}}
 ACTIVE = "p1"
 
+#: P15: the departments AI matching serves. Triggers offer pairs only from
+#: these, and the regroup reads a decision only while both of its listings are
+#: still in one of them (owner, 2026-11-17): a listing that moves out takes
+#: the AI merge apart at the next regroup.
+DOMAINS: tuple[str, ...] = ("electronics",)
+
 #: P14: the model whose "confident no" blocks an AI-dependent join, and below what.
 GROUP_CHECK_MODEL = "kev"
 KEV_BLOCK = 0.05

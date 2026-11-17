@@ -436,3 +436,80 @@ async def test_a_listing_that_leaves_electronics_loses_its_state():
     async with SessionLocal() as session:
         ids = set(await session.scalars(select(AiListingState.listing_id)))
     assert ids == {x}
+
+
+# --- owner decisions, 2026-11-17 ------------------------------------------------------------
+
+
+async def _revoke(decision_id: int) -> None:
+    async with SessionLocal() as session:
+        row = await session.get(AiDecision, decision_id)
+        row.state, row.revoked_at, row.revoked_by, row.revoke_note = (
+            "revoked",
+            func.now(),
+            "test",
+            "test",
+        )
+        await session.commit()
+
+
+async def test_a_revoked_pair_is_offered_again_only_after_a_text_change():
+    """Option (b): with unchanged text a revoked pair stays out; once a
+    listing's content hash moves it is a candidate again."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    await _daily()  # baseline
+    await _score_all(x, y)
+    await _revoke((await _decide(x, y)).id)
+    async with SessionLocal() as session:
+        unchanged = await producers.backlog(session)
+        await session.commit()
+    assert unchanged["kept"] == 0 and await _jobs() == []
+    async with SessionLocal() as session:
+        await session.execute(
+            update(Listing).where(Listing.id == y).values(title_en="carbon resistor 10k ohm 1/4w")
+        )
+        await session.commit()
+    _, candidates, *_ = await _daily()
+    assert candidates["kept"] == 1
+    assert _pairs(await _jobs(pipeline="match")) == {pair(x, y)}
+
+
+async def test_a_decision_stops_acting_when_a_listing_leaves_electronics():
+    from makhzan_schemas.ai.decisions import load_ai_same
+    from makhzan_schemas.overrides import load_overrides
+
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    await _score_all(x, y)
+    assert (await _decide(x, y)).outcome == SAME
+    async with SessionLocal() as session:
+        assert (await load_ai_same(session, await load_overrides(session))).pairs == {pair(x, y)}
+        await session.execute(update(Listing).where(Listing.id == y).values(domain="tools"))
+        await session.commit()
+        assert not (await load_ai_same(session, await load_overrides(session))).pairs
+
+
+async def test_a_not_same_decision_also_queues_the_rebuild_after_a_window():
+    """REBUILD_ON_UNMERGE: any new standing decision, so an AI merge to undo
+    is applied at the window's end."""
+    from makhzan_schemas.ai.mode import set_ai_mode
+
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    await _score_all(x, y, kev=0.2)
+    assert (await _decide(x, y)).outcome == "not_same"
+    queued: list[int] = []
+
+    async def queue() -> None:
+        queued.append(1)
+
+    async with SessionLocal() as session:
+        await set_ai_mode(session, "live")
+        assert await core.maybe_rebuild(session, queue)
+        assert not await core.maybe_rebuild(session, queue)  # nothing newer
+        await session.commit()
+    assert queued == [1]

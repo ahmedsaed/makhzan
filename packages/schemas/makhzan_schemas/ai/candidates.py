@@ -63,7 +63,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from makhzan_schemas import grouping as g
-from makhzan_schemas.ai import flow, triggers
+from makhzan_schemas.ai import flow, policy, triggers
 from makhzan_schemas.ai.broker import sweep_judges
 from makhzan_schemas.ai.decisions import REVOKED, STANDING
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME
@@ -78,17 +78,20 @@ log = logging.getLogger(__name__)
 
 #: P1: candidates per listing.
 K = 10
-#: P15: electronics only (the approved prompt says "electronics shops").
-DOMAINS = ("electronics",)
+#: P15: electronics only (`policy.DOMAINS`; the approved prompt says
+#: "electronics shops").
+DOMAINS = policy.DOMAINS
 MATCH, AUDIT = "match", "audit"
 
-# Owner decisions pending (2026-11-17): today's behaviour, one line each.
+# Owner decisions (2026-11-17), one line each.
 #: The daily run's first pass records a baseline and queues nothing (the
 #: existing catalogue is the backlog's, scored locally, P4).
 BASELINE_FIRST_RUN = True
-#: Decisions that keep a pair from being offered as a candidate: a standing
-#: one is the re-score's; a revoked one was withdrawn by a person and stays out.
-SKIP_DECISION_STATES = (STANDING, REVOKED)
+#: A pair with a standing decision is never a candidate (it is the
+#: re-score's). A pair whose decision a person revoked is offered again only
+#: when a listing's text has changed since (its content hash): option (b).
+#: False would keep revoked pairs out for good.
+REOFFER_REVOKED_ON_TEXT_CHANGE = True
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -191,14 +194,36 @@ async def load_catalogue(session: AsyncSession, domains: Iterable[str] = DOMAINS
     return Catalogue(listings, views)
 
 
-async def _decided_pairs(session: AsyncSession, pipeline_name: str) -> set[tuple]:
-    """Pairs with a standing or revoked decision in `pipeline_name`."""
+async def _decided_pairs(
+    session: AsyncSession, pipeline_name: str, catalogue: Catalogue
+) -> set[tuple]:
+    """Pairs not to offer in `pipeline_name`: every pair with a standing
+    decision, and every pair with a revoked one whose two listings still
+    show the text it was revoked on (`REOFFER_REVOKED_ON_TEXT_CHANGE`)."""
     rows = await session.execute(
-        select(AiDecision.listing_a, AiDecision.listing_b).where(
-            AiDecision.pipeline == pipeline_name, AiDecision.state.in_(SKIP_DECISION_STATES)
-        )
+        select(
+            AiDecision.listing_a,
+            AiDecision.listing_b,
+            AiDecision.state,
+            AiDecision.content_sha256_a,
+            AiDecision.content_sha256_b,
+        ).where(AiDecision.pipeline == pipeline_name, AiDecision.state.in_((STANDING, REVOKED)))
     )
-    return {(a, b) for a, b in rows}
+    skip = set()
+    for a, b, state, hash_a, hash_b in rows:
+        if state == STANDING or not REOFFER_REVOKED_ON_TEXT_CHANGE:
+            skip.add((a, b))
+            continue
+        now_a, now_b = catalogue.shown.get(a), catalogue.shown.get(b)
+        unchanged = (
+            now_a is not None
+            and now_b is not None
+            and now_a.content_sha256 == hash_a
+            and now_b.content_sha256 == hash_b
+        )
+        if unchanged:
+            skip.add((a, b))
+    return skip
 
 
 def find_pairs(
@@ -392,7 +417,7 @@ class CandidatesTrigger(_MatchTrigger):
                 catalogue,
                 found,
                 await load_overrides(session),
-                await _decided_pairs(session, MATCH),
+                await _decided_pairs(session, MATCH, catalogue),
             )
             self.counts.update(filtered.counts)
             requests = [
