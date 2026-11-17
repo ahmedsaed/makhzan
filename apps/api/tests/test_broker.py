@@ -254,19 +254,6 @@ async def test_an_empty_queue_answers_no_lease(broker):
     }
 
 
-async def test_a_lease_fits_the_time_left(broker, db):
-    for n in range(3):
-        a, b = await _pair(db, f"Example part {n} sensor", f"Example part {n} module")
-        await _queue(a, b)
-    kev = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, kev, "kev")
-    # Four requests of 100 s fit in 460 s less the 60 s margin; six do not.
-    lease = await _lease(
-        broker, kev, hello["session"], "kev", seconds_left=460, seconds_per_request=100
-    )
-    assert len(lease["jobs"]) == 2
-
-
 # --- idempotency ------------------------------------------------------------------------------
 
 

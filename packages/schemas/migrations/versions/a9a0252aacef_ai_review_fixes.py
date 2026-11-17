@@ -5,19 +5,14 @@ What the broker's reviews asked of the schema, expand-only:
 - `ai_jobs.in_hand_at`: the job a worker's heartbeat said it was scoring.
   When a lease expires only that job is charged an attempt; its co-leased
   jobs go back to the queue free, so one poison job no longer kills others.
-- `ai_flags.subject`, part of `uq_ai_flag_open`: a version drift (and a
-  `nothing_fits`) is one open flag per worker and model ("<worker>/<model>"),
-  not one global row. The index is rebuilt with the column; existing open
-  flags keep a NULL subject and stay unique.
-- `ai_flags` kind `nothing_fits`: a worker whose sessions keep ending with
-  work queued but no job fitting its time.
+- `ai_flags.subject`, part of `uq_ai_flag_open`: a version drift is one
+  open flag per worker and model ("<worker>/<model>"), not one global row.
+  The index is rebuilt with the column; existing open flags keep a NULL
+  subject and stay unique.
 - `ai_sessions.last_lease_request` / `last_lease_id`: a retried /lease with
   the same `lease_request_id` gets the same jobs back.
-- `ai_sessions.end_model`: the model whose lease ended the session, so a
-  `nothing_fits` flag counts per worker and model.
 
-The downgrade first deletes every `nothing_fits` flag (the old kind check
-refuses the kind), then dismisses all but the oldest open flag per (kind,
+The downgrade first dismisses all but the oldest open flag per (kind,
 listing_a, listing_b), which the old unique index cannot hold (two workers'
 drift flags differ only by subject).
 
@@ -38,11 +33,6 @@ down_revision: str | Sequence[str] | None = "895dafa67c0d"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_KINDS_BEFORE = "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift')"
-_KINDS_AFTER = (
-    "kind IN ('rules_low_kev', 'poison_job', 'blocked_same', 'version_drift', 'nothing_fits')"
-)
-
 
 def upgrade() -> None:
     """Upgrade schema."""
@@ -61,28 +51,19 @@ def upgrade() -> None:
         postgresql_where=sa.text("status = 'open'"),
         postgresql_nulls_not_distinct=True,
     )
-    op.drop_constraint("ck_ai_flag_kind", "ai_flags", type_="check")
-    op.create_check_constraint("ck_ai_flag_kind", "ai_flags", _KINDS_AFTER)
     op.add_column("ai_jobs", sa.Column("in_hand_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column(
         "ai_sessions", sa.Column("last_lease_request", sa.String(length=64), nullable=True)
     )
     op.add_column("ai_sessions", sa.Column("last_lease_id", sa.UUID(), nullable=True))
-    op.add_column("ai_sessions", sa.Column("end_model", sa.String(length=32), nullable=True))
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_column("ai_sessions", "end_model")
     op.drop_column("ai_sessions", "last_lease_id")
     op.drop_column("ai_sessions", "last_lease_request")
     op.drop_column("ai_jobs", "in_hand_at")
-    # The old index and kind check cannot hold what the new ones allow.
-    op.execute(
-        """
-        DELETE FROM ai_flags WHERE kind = 'nothing_fits'
-        """
-    )
+    # The old index cannot hold what the new one allows.
     op.execute(
         """
         UPDATE ai_flags
@@ -95,8 +76,6 @@ def downgrade() -> None:
            )
         """
     )
-    op.drop_constraint("ck_ai_flag_kind", "ai_flags", type_="check")
-    op.create_check_constraint("ck_ai_flag_kind", "ai_flags", _KINDS_BEFORE)
     op.drop_index(
         "uq_ai_flag_open",
         table_name="ai_flags",

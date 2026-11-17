@@ -55,23 +55,15 @@ DEFAULT_LEASE_S = 900
 #: Bounds on the lease length a hello may ask for.
 LEASE_S_MIN, LEASE_S_MAX = 60, 7200
 HEARTBEAT_S = 60
-#: Why a lease came back with no job, in its `reason` and the session's
-#: `end_reason`: nothing queued for the model, or work queued but the first
-#: job does not fit the time the worker said it has.
-EMPTY, NONE_FIT = "empty", "none_fit"
-#: Sessions of one worker and model that never got a lease and ended
-#: "none_fit", in a week and since that subject's last dismissed or actioned
-#: flag, before a `nothing_fits` flag opens.
-NONE_FIT_FLAG_AFTER = 3
-#: Kept free at the end of a worker's `seconds_left` when sizing a lease.
-LEASE_MARGIN_S = 60
+#: A lease with no job: its `reason`, and the session's `end_reason`.
+EMPTY = "empty"
 #: `worker_state` key: the newest decision id a rebuild was queued for (P16).
 REBUILD_STATE_KEY = "ai_rebuild"
-#: P16 queues a rebuild for new standing "same" decisions. True queues one for
-#: any new standing decision, so a "same" replaced by "not same" (an AI merge
-#: to undo) is applied at the window's end, not the next daily rebuild. An
-#: owner decision pending; off until then.
-REBUILD_ON_UNMERGE = False
+#: P16 queues a rebuild for new standing decisions of any outcome, so a "same"
+#: replaced by "not same" (an AI merge to undo) is applied at the window's
+#: end, not the next daily rebuild (owner, 2026-11-17). False would queue one
+#: for new "same" decisions only.
+REBUILD_ON_UNMERGE = True
 
 
 class BrokerError(Exception):
@@ -243,8 +235,8 @@ async def hello(session: AsyncSession, worker: AiWorker, body: dict, now: dateti
     registry's version, and whether there is work for them."""
     reported = body.get("models") or {}
     if len(reported) != 1:
-        # One model per session: "never leased" and `end_model` are then per
-        # model by construction. A worker serving two keys opens two sessions.
+        # One model per session (a protocol rule): a worker serving two keys
+        # opens two sessions.
         raise BrokerError(422, {"error": "invalid", "detail": "a hello names exactly one model"})
     allowed = set(worker.models)
     for key in reported:
@@ -549,54 +541,6 @@ async def _replay(
     return _lease_answer(row.last_lease_id, expires, taken) if taken else None
 
 
-async def _flag_if_never_fits(
-    session: AsyncSession, worker: AiWorker, model: str, body: dict, head_owed: int, now: datetime
-) -> None:
-    """A worker whose sessions keep ending with nothing fitting its time (a
-    window too short for one job, or a wrong `seconds_per_request`) never
-    scores anything; after `NONE_FIT_FLAG_AFTER` such sessions in a week a
-    person is told.
-
-    Counted per worker and model, over sessions that never got a lease (a
-    night that scored and then ran out of window is healthy), and only since
-    the subject's latest dismissed or actioned flag, so a dismissal is not
-    undone by the sessions it was about."""
-    subject = f"{worker.name}/{model}"[:100]
-    since = now - timedelta(days=7)
-    resolved = await session.scalar(
-        select(func.max(func.coalesce(AiFlag.resolved_at, AiFlag.created_at))).where(
-            AiFlag.kind == "nothing_fits", AiFlag.subject == subject, AiFlag.status != "open"
-        )
-    )
-    if resolved is not None and resolved > since:
-        since = resolved
-    recent = await session.scalar(
-        select(func.count())
-        .select_from(AiSession)
-        .where(
-            AiSession.worker_id == worker.id,
-            AiSession.end_model == model,
-            AiSession.end_reason == NONE_FIT,
-            AiSession.last_lease_id.is_(None),
-            AiSession.ended_at >= since,
-        )
-    )
-    if (recent or 0) >= NONE_FIT_FLAG_AFTER:
-        await _open_flag(
-            session,
-            "nothing_fits",
-            subject=subject,
-            detail={
-                "worker": worker.name,
-                "model": model,
-                "sessions_counted": int(recent),
-                "seconds_left": body.get("seconds_left"),
-                "seconds_per_request": body.get("seconds_per_request"),
-                "head_job_owes": head_owed,
-            },
-        )
-
-
 async def lease(
     session: AsyncSession,
     worker: AiWorker,
@@ -635,18 +579,11 @@ async def lease(
     mine = sorted({judges[key] for key in judges if PIPELINES[key[0]].stage(key[1]).model == model})
 
     max_jobs = int(body.get("max_jobs") or 1)
-    per_request = body.get("seconds_per_request")
-    budget = None
-    if per_request and body.get("seconds_left") is not None:
-        budget = float(body["seconds_left"]) - LEASE_MARGIN_S
     lease_id = uuid.uuid4()
     expires = now + timedelta(seconds=row.lease_s)
     taken: list[_Ready] = []
     seen: list[int] = []
-    owed = 0
-    head_owed = 0  # requests the first job that did not fit still owed
-    full = False
-    while not full and len(taken) < max_jobs:
+    while len(taken) < max_jobs:
         # Lock only as many rows as are still wanted: a concurrent lease must
         # not find the queue empty because this one holds a wide scan.
         query = (
@@ -668,37 +605,16 @@ async def lease(
             ready = await _prepare(session, job, judges, now)
             if ready is None:
                 continue
-            if budget is not None and (owed + len(ready.requests)) * float(per_request) > budget:
-                # It does not fit: stop here, so priority order holds. It
-                # stays queued for the next lease.
-                full = True
-                head_owed = head_owed or len(ready.requests)
-                break
             job.status, job.lease_id, job.leased_by = LEASED, lease_id, worker.id
             job.leased_at, job.lease_expires_at, job.in_hand_at = now, expires, None
-            owed += len(ready.requests)
             taken.append(ready)
     await session.flush()
-    if not taken and head_owed:
-        # Work is queued, but its first job does not fit the time the worker
-        # has: not "empty". The session ends (the worker sends nothing more).
-        # A session that leased before is a healthy night whose window ran
-        # out with a backlog left: it ends like a graceful release, and P16
-        # is considered for what it decided. Only a session that never got a
-        # lease skips P16, and only those count towards `nothing_fits`.
-        row.ended_at, row.end_reason, row.end_model = now, NONE_FIT, model
-        await session.flush()
-        if row.last_lease_id is not None:
-            await maybe_rebuild(session, on_session_end)
-        else:
-            await _flag_if_never_fits(session, worker, model, body, head_owed, now)
-        return {"lease_id": None, "jobs": [], "reason": NONE_FIT}
     if not taken:
-        row.ended_at, row.end_reason, row.end_model = now, EMPTY, model
+        row.ended_at, row.end_reason = now, EMPTY
         await session.flush()
         await maybe_rebuild(session, on_session_end)
         return {"lease_id": None, "jobs": [], "reason": EMPTY}
-    row.ended_at = row.end_reason = row.end_model = None
+    row.ended_at = row.end_reason = None
     row.last_lease_request, row.last_lease_id = (
         (str(request_id)[:64] if request_id else None),
         (lease_id),
@@ -903,9 +819,8 @@ async def release(
         await _fail(session, jobs, str(body.get("error") or "released with an error")[:2000])
     await session.flush()
     if graceful:
-        # A session already ended by the broker (empty, none_fit) keeps that
-        # end: it is what `nothing_fits` counts. P16 still applies.
-        if row.end_reason not in (EMPTY, NONE_FIT):
+        # A session the broker already ended (an empty lease) keeps that end.
+        if row.end_reason != EMPTY:
             row.ended_at, row.end_reason = now, "released"
         await session.flush()
         await maybe_rebuild(session, on_session_end)
@@ -916,11 +831,10 @@ async def release(
 
 
 async def maybe_rebuild(session: AsyncSession, queue: Callable[[], Awaitable[None]] | None) -> bool:
-    """When a worker's session ends (a graceful release, an empty lease, a
-    none_fit after a lease) and
-    standing "same" decisions were written since the last rebuild this
-    queued, queue `rebuild_and_reindex` through the window job id
-    (`makhzan_schemas.rebuild`). Only when the mode is live: off, the regroup
+    """When a worker's session ends (a graceful release, an empty lease) and
+    new standing decisions were written since the last rebuild this queued
+    (`REBUILD_ON_UNMERGE`; "same" ones only when it is False), queue
+    `rebuild_and_reindex` through the window job id (`makhzan_schemas.rebuild`). Only when the mode is live: off, the regroup
     reads nothing. Records the highest decision id covered, so the next
     session end queues again only for newer ones.
 

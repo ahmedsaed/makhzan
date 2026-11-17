@@ -58,10 +58,6 @@ async def test_the_downgrade_closes_flags_the_old_unique_index_cannot_hold():
                     "VALUES ('version_drift', $1, '{}', 'open')",
                     subject,
                 )
-            await conn.execute(
-                "INSERT INTO ai_flags (kind, subject, detail, status) "
-                "VALUES ('nothing_fits', 'w1/kev', '{}', 'open')"
-            )
         finally:
             await conn.close()
 
