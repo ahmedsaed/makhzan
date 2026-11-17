@@ -150,14 +150,14 @@ writes decisions, so the backlog can be scored while the mode is off.
   per key. So "never leased" and `end_model` are per model by construction.
   The key must be one of the worker's `ai_workers.models`, else
   `403 {"error": "model_not_allowed", "model": "…"}`.
-- For each model key the broker answers the model version the registry uses
-  now (`policy.MODELS[key].model_version`). A worker whose `model_version`
-  or `weights_revision` differs gets `"ok": false` for that key (and a
-  `version_drift` flag is opened, one per worker and model, `subject =
-  "<worker>/<model>"`); it must not lease that key, and §3.2 enforces it.
-- `stages` lists, per model, every (pipeline, stage) that uses it and the
-  prompt version the broker renders for it now: what that model's leases
-  will carry. The broker renders, so the worker only compares or logs these.
+- The broker answers the model version the registry uses now
+  (`policy.MODELS[key].model_version`). A worker whose `model_version` or
+  `weights_revision` differs gets `"ok": false` (and a `version_drift` flag
+  is opened, one per worker and model, `subject = "<worker>/<model>"`); it
+  must not lease, and §3.2 enforces it.
+- `stages` lists every (pipeline, stage) that uses the model and the prompt
+  version the broker renders for it now: what the session's leases will
+  carry. The broker renders, so the worker only compares or logs these.
 - `queued_requests` counts queued requests across every (pipeline, stage)
   that uses that model (`pipelines.stages_for_models`), in either mode: two
   per queued job, whichever judge it was queued at, so it is an upper bound
@@ -179,9 +179,10 @@ writes decisions, so the backlog can be scored while the mode is off.
   hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, end_model, and the
   last lease's request id and lease id) and `ai_workers.last_hello` for
   status. `ended_at` / `end_reason` record how a session last stopped:
-  `released` (a graceful `/release`, with or without jobs), `empty` (a
-  lease came back empty) or `none_fit` (work queued, none fitting the time
-  left); `end_model` is the model whose lease ended it. A later lease that
+  `released` (a graceful `/release`, with or without jobs, of a session not
+  already ended), `empty` (a lease came back empty) or `none_fit` (work
+  queued, none fitting the time left); a release after `empty` or `none_fit`
+  keeps that end; `end_model` is the model whose lease ended it. A later lease that
   returns jobs reopens it.
 
 ### 3.2 `POST /lease`
@@ -203,6 +204,9 @@ writes decisions, so the backlog can be scored while the mode is off.
                  {"order": "ba", "request_sha256": "41…", "payload": {"…": "…"}}]}]}
 ```
 
+- **The session's own model only**: a lease for a model the session did
+  not say hello for is `409 {"error": "wrong_model", "model": "…",
+  "session_model": "…"}` (a session serves one model; open another).
 - **Version drift is enforced here**: `model_version` must equal the
   registry's for `model`, and the session must have reported it at hello;
   otherwise `409 {"error": "version", "model": "kev", "current": "…"}` and no
@@ -247,8 +251,9 @@ writes decisions, so the backlog can be scored while the mode is off.
 - **"Nothing fits" is not "empty".** When work is queued but the first job
   does not fit, the answer is `200 {"lease_id": null, "jobs": [], "reason":
   "none_fit"}`. **The broker ends the session** (`end_reason = "none_fit"`,
-  `end_model` the model asked): the worker sends nothing more, no release,
-  and says hello again next window.
+  `end_model` the model asked): the worker sends no release. It says hello
+  again next window, or (`on_empty = "wait"`) leases again in the same
+  session, which reopens it.
   - A session that **had** leased before (a healthy night: it scored, then its
     window ran low with a backlog left) ends like a graceful release, and the
     P16 rebuild is considered for what it decided.
@@ -299,8 +304,9 @@ writes decisions, so the backlog can be scored while the mode is off.
   `dead` and a `poison_job` flag is opened. No cron is needed.
 - Empty queue: `200 {"lease_id": null, "jobs": [], "reason": "empty"}`. A worker with
   `on_empty = "exit"` exits; with `"wait"` it polls until its window ends.
-  An empty lease marks the session ended (`end_reason = "empty"`) and is one
-  of the two moments the P16 rebuild is considered (§3.4).
+  An empty lease marks the session ended (`end_reason = "empty"`); the
+  worker sends no release, and a `"wait"` worker's next lease in the same
+  session reopens it. P16 is considered at three moments, all session ends: a graceful `/release`, an `empty` lease, and a `none_fit` after a lease (§3.4).
 
 ### 3.3 `POST /heartbeat`
 
@@ -467,7 +473,8 @@ session: window over, a stop signal between leases, or done after its last
 results. It marks the session ended and considers the P16 rebuild, as a
 release with jobs does. A worker that stops between leases should always send
 it. **After an `empty` or `none_fit` answer the broker has already ended the
-session, and the worker sends nothing more** (§3.2). A release that comes
+session, and the worker sends no release** (§3.2; an `on_empty = "wait"`
+worker leases again in the same session). A release that comes
 anyway keeps the recorded end (`empty` or `none_fit`, what `nothing_fits`
 counts) and only considers P16. An `error` release must name its jobs (422
 otherwise).
@@ -478,8 +485,9 @@ re-queues with `attempts + 1` and stores `last_error`; at `max_attempts`, the
 job is `dead` and a `poison_job` flag is opened. Lease fields are cleared.
 Scores already submitted are kept: half a job is not lost, and the next
 lease carries only the order still owed. A graceful release marks the
-session ended (`end_reason = "released"`) and is the other moment the P16
-rebuild is considered.
+session ended (`end_reason = "released"`), except one that comes after the
+broker already ended it with `empty` or `none_fit`, which keeps that end.
+P16 is considered at three moments, all session ends: a graceful `/release`, an `empty` lease, and a `none_fit` after a lease (§3.4).
 
 ### 3.6 Errors
 
@@ -487,6 +495,7 @@ rebuild is considered.
 |---|---|---|
 | 401 | `{"error": "unauthorized"}` | missing, unknown or revoked token |
 | 403 | `{"error": "model_not_allowed", "model": "…"}` | not in `ai_workers.models` |
+| 409 | `{"error": "wrong_model", "model": "…", "session_model": "…"}` | a lease for a model the session did not say hello for (one model per session) |
 | 409 | `{"error": "version", "model": "kev", "current": "…"}` | the worker's model version is not the registry's |
 | 409 | `{"error": "lease_lost", "job_ids": […]}` | the caller does not hold the lease (expired, moved on, or never its own) |
 | 422 | `{"error": "request_mismatch"}` / `{"error": "invalid", "detail": …}` | integrity or validation |
@@ -508,10 +517,10 @@ rebuild is considered.
   judge where its job is dead (`triggers.enqueue`): that is the "handled by
   hand" of P6, rather than three more attempts every day.
 - Flags are listed and closed by hand with `./makhzan ai flags list` and
-  `./makhzan ai flags dismiss ID --note "why"`, which always sets
-  `resolved_at`. A flag closed by hand in SQL must set `resolved_at` too: a
-  `nothing_fits` flag's count starts from its subject's last dismissal or
-  action, and without it old sessions reopen the flag at once.
+  `./makhzan ai flags dismiss ID [ID ...] --note "why"`. Given several ids
+  it dismisses the open ones, commits them, and exits 1 if any was missing
+  or already closed. It always sets `resolved_at`, which a `nothing_fits`
+  count starts from; a flag closed by hand in SQL must set it too.
 - Any number of workers, on any machines, may lease at once; `SKIP LOCKED`
   and the request-hash idempotency make overlap harmless.
 

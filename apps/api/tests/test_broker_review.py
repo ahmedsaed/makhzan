@@ -331,6 +331,7 @@ async def test_a_hello_names_exactly_one_model(broker):
         headers=_auth(token),
     )
     assert r.status_code == 409
+    assert r.json() == {"error": "wrong_model", "model": "pplx", "session_model": "kev"}
 
 
 async def test_a_release_after_none_fit_keeps_the_recorded_end(broker, db):
