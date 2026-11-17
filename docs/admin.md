@@ -247,8 +247,10 @@ counts as no attempt. Resuming stamps `resumed_at` (`sources.resumed_at`, or
 `resumed_at` in `crawl_pause`), and the hold's one-cycle window is measured
 from the later of that and the sweep's end, so the first run after a long
 pause is not "overdue" (owner, 2026-11-17). Failed attempts are still bounded
-by `CONFIRM_MAX_FAILED_RUNS`. A cycle held only by pauses reports its
-`cycle_seconds` up to the end of its sweep, not the time it waited.
+by `CONFIRM_MAX_FAILED_RUNS`. `cycle_seconds` leaves out time a pause held
+the cycle **after its sweep had finished** (it is measured to the sweep's
+end); a pause **during** the sweep is still counted, since the cycle's pages
+were not yet all read and the clock runs from its first page to its last.
 
 `CRAWL_ENABLED` in `.env.prod` remains as the older, harder switch, read when
 the worker's container is created; the crawl runs only when it is on *and*

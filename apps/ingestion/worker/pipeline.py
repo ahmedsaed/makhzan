@@ -1305,9 +1305,10 @@ async def _finish_cycle_if_swept(
     # otherwise you can only ever see the cycle in flight and never judge whether
     # it is behaving normally.
     finished = datetime.now(timezone.utc)
-    # A cycle held open for confirmation ended, as a sweep, when its pages did:
-    # `cycle_seconds` is the public cycle length, and waiting on a shop's
-    # answer is not sweeping it.
+    # A cycle held open after its sweep (for confirmation, or by a pause)
+    # ended, as a sweep, when its pages did: `cycle_seconds` is the public
+    # cycle length, and waiting is not sweeping it. A pause *during* the sweep
+    # is not taken out: the clock runs from the first page to the last.
     swept = min(swept_at, finished) if held_before else finished
     cycle = {
         "cycle_started_at": cycle_started.isoformat(),
