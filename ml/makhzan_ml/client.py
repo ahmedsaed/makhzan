@@ -202,6 +202,8 @@ class Client:
         return [d["score"] for d in data]
 
     def _kev_one(self, pair: Pair, question: str) -> float:
+        # Same caveat as decide_noul: the early unlabelled state, not the approved payload
+        # (ml/models/grid_payloads.py). prompt_grid.py posts the approved payloads itself.
         a, b = pair
         out = _post(
             f"{self.base}/v1/systemone",
@@ -216,7 +218,13 @@ class Client:
 
     def decide_noul(self, pairs: Sequence[Pair], question: str) -> list[tuple[float, float]]:
         """pplx-decider: (P(true) at the checkpoint's saved temperature, raw logit margin
-        true - false) per pair, the state spelled as Kev's. `batch_size` pairs per call."""
+        true - false) per pair, the state spelled as Kev's. `batch_size` pairs per call.
+
+        Not the approved payload; production must use the approved renderer
+        (ml/models/grid_payloads.py). The state here is the unlabelled "Listing A: ... /
+        Listing B: ..." of the early experiments, with no "not stated" for a missing field and
+        no rules (docs/ai/decision-review.md, D7/D8), and several requests per call where the
+        owner's protocol is one."""
         if self.svc.kind != "decider":
             raise ModelError(f"{self.name} is not a decider service")
 

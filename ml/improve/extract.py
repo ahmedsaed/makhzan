@@ -1,6 +1,13 @@
 """Experiment 2: extract a small attribute schema per listing with a local generative model,
 then compare two listings by code. A stated contradiction is a veto; silence is compatible.
 
+SUPERSEDED, kept as the record of what was run (2026-11-14). It predates the owner's labelling
+rulings 4 and 8 (2026-11-16, docs/ai/decision-review.md section 4) and contradicts both: an
+unstated pack size is read as 1, so "10pcs" against a listing silent on pack size is vetoed
+(ruling 8: an unstated pack size is compatible), and values must agree within 2% (ruling 4:
+sizes within about 5% are the same). Its results do not hold under the rulings in force; do not
+reuse `contradictions` without bringing it in line with them.
+
     python3 ml/improve/extract.py run --improve ml/out/improve      # needs gen-qwen3-4b up
     python3 ml/improve/extract.py compare --improve ml/out/improve
 
@@ -12,13 +19,15 @@ derived from titles, so it stays in git-ignored ml/out).
 `compare` applies `contradictions(a, b)` to every labelled pair and writes
 <improve>/attr_veto.json = {pair_id: [reason, ...]} (empty list = no contradiction).
 
-The comparison is deliberately narrow, from the owner's labelling rulings: different part
-numbers (neither a prefix of the other), different forms (bare component / module-or-board /
-kit / accessory / cable), different pack quantities (unstated = 1), NO vs NC, different USB
-connector, different package (or SMD vs through-hole), a different pin count, and a different
-key value of one dimension (resistance, capacitance, voltage, current, power, temperature,
-length, angle, frequency, charge) with no value in common within 2%. Product type is not
-compared: free text differs in wording far more often than in meaning.
+The comparison is deliberately narrow, from the labelling policy as it stood then (before
+rulings 4 and 8; the pack-size and 2% choices below were the session's, not the owner's):
+different part numbers (neither a prefix of the other), different forms (bare component /
+module-or-board / kit / accessory / cable), different pack quantities (unstated = 1, against
+ruling 8), NO vs NC, different USB connector, different package (or SMD vs through-hole), a
+different pin count, and a different key value of one dimension (resistance, capacitance,
+voltage, current, power, temperature, length, angle, frequency, charge) with no value in common
+within 2% (ruling 4 says about 5%). Product type is not compared: free text differs in wording
+far more often than in meaning.
 """
 
 from __future__ import annotations
