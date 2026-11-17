@@ -26,8 +26,10 @@ reads decisions: run `make regroup-dry-run ARGS=--ai` before `mode live`, and
 before going back to `off`, which undoes every AI merge at the next regroup.
 `redecide` recomputes standing decisions from their stored scores under a
 policy (P7) and changes nothing: only `--dry-run` exists. `revoke` withdraws
-one decision; the next regroup undoes what it joined, and the triggers do not
-offer that pair again (to rule on it for good, use `./makhzan overrides`).
+one decision and cancels the pair's queued jobs; the next regroup undoes what
+it joined. The pair is offered again only when the text the models see
+changes, and no decision is written for it from scores the revocation already
+saw (to rule on it for good, use `./makhzan overrides`).
 `flags dismiss` sets `resolved_at` (a hand-closed flag must too). Given
 several ids it dismisses the open ones and exits 1 if any was not open.
 """
@@ -50,7 +52,7 @@ from makhzan_schemas.ai.policy import ACTIVE, MODELS, POLICIES
 from makhzan_schemas.ai.status import collect, format_text
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import AiDecision, AiFlag, AiJob, AiWorker
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from worker.reports import printable, who
 
@@ -186,12 +188,27 @@ async def _revoke(decision_id: int, note: str, by: str) -> int:
         decision.revoked_at = await session.scalar(select(func.now()))
         decision.revoked_by = by
         decision.revoke_note = note
+        # The pair's queued jobs would only re-ask what was just revoked. A
+        # leased one finishes; its result is stored but decides nothing
+        # (`flow.write_decision` refuses scores of text the revocation saw).
+        cancelled = (
+            await session.execute(
+                update(AiJob)
+                .where(
+                    AiJob.pipeline == decision.pipeline,
+                    AiJob.listing_a == decision.listing_a,
+                    AiJob.listing_b == decision.listing_b,
+                    AiJob.status == "queued",
+                )
+                .values(status="cancelled", last_error=f"decision #{decision_id} revoked")
+            )
+        ).rowcount
         await session.commit()
     print(
         printable(
             f"Revoked #{decision_id} ({decision.pipeline} {decision.outcome}, "
-            f"{decision.listing_a} / {decision.listing_b}) by {by}. "
-            "The next regroup undoes what it joined."
+            f"{decision.listing_a} / {decision.listing_b}) by {by}; {cancelled} queued "
+            "job(s) cancelled. The next regroup undoes what it joined."
         )
     )
     return 0

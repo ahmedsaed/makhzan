@@ -330,7 +330,9 @@ worker drops the lost jobs after finishing its current request.
 `job` is `leased` while the job still owes an order (then `next` is null),
 `done` once both orders are scored. `next` is what the transition did:
 `{"action": "score", "stage": …}`, `{"action": "decide", "outcome": "same" |
-"not_same"}` or `{"action": "record"}`.
+"not_same"}`, `{"action": "record"}`, or `{"action": "blocked"}` when a
+person's revocation keeps the decision from being written (below). The job
+is done either way.
 
 **Who may post.** The caller must be the worker that holds the job's lease
 (`ai_jobs.lease_id` = `lease_id` and `leased_by` = the caller) and must serve
@@ -389,6 +391,18 @@ same model and prompt version share it.
 
 `write_decision`:
 
+- **a revocation holds.** If the pair has a revoked decision, nothing is
+  written unless at least one score the new decision uses was scored after
+  the latest `revoked_at` **and** is for a request no revoked decision
+  recorded: a model looked, after the revocation, at text it did not see.
+  Old scores (a revert to text scored earlier, a job queued before the
+  revocation) and fresh scores of the revoked text (a new model version)
+  write nothing, and the step reports `blocked` (`revoked_blocked` in the
+  producers' counts). Every path that decides (a trigger's offer, a result,
+  a lease finding a job scored, a replay) comes through here, so this is the
+  one guard. A revoked decision recorded before request hashes were kept in
+  the evidence counts as having seen every text: it is never undone by the
+  models (none exist in production, which had nothing deployed then);
 - takes a transaction-scoped advisory lock on the pair
   (`pg_advisory_xact_lock` over a hash of pipeline and pair), so two results
   for the same pair arriving at once (two workers, two stages) serialise;
@@ -549,9 +563,11 @@ both listings are in electronics; `decisions.load_ai_same`).
   (each stage's two request hashes, kept in its evidence). A change the
   models would see offers the pair again, so they are asked again (owner,
   option (b)); a change they would not (an Arabic title under an English
-  one, a `HASH_VERSION` bump) does not. A re-offered pair that its old scores
-  alone would decide (a stage whose view did not change) is not offered:
-  a revocation is never undone with no model looking. One-directional; `./makhzan ai candidates
+  one, a `HASH_VERSION` bump) does not. A re-offered pair still cannot be
+  decided from scores its revocation already saw (`write_decision`'s guard,
+  §3.4). A revoked decision with no request hashes in its evidence keeps its
+  pair out for good. `./makhzan ai revoke` cancels the pair's queued jobs; a
+  leased one finishes and decides nothing the guard refuses. One-directional; `./makhzan ai candidates
   --mutual` also takes listings whose own top K now holds a changed one. **The
   first run on a database with no `ai_listing_state` records a baseline and
   queues nothing**: the existing catalogue is the backlog's.
