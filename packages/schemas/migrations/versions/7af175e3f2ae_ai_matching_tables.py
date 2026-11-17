@@ -20,8 +20,9 @@ regroup. Expand-only and nullable: existing rows stay null (read as "rules")
 until the next regroup. `matched_ai_decision_id` is not a foreign key, like
 `products.min_price_listing_id`: `ai_decisions` already points at listings.
 
-`worker_state['ai_matching']` starts at shadow (P4): nothing merges on an AI
-decision until the owner sets it live.
+`worker_state['ai_matching']` starts at off (P4): nothing merges on an AI
+decision until the owner sets it live. There is no shadow mode and no
+per-decision shadow flag (owner, 2026-11-17).
 
 Revision ID: 7af175e3f2ae
 Revises: 96d1051aab62
@@ -98,7 +99,6 @@ def upgrade() -> None:
         sa.Column("policy_version", sa.String(length=16), nullable=False),
         sa.Column("content_sha256_a", sa.LargeBinary(length=32), nullable=False),
         sa.Column("content_sha256_b", sa.LargeBinary(length=32), nullable=False),
-        sa.Column("shadow", sa.Boolean(), nullable=False),
         sa.Column("state", sa.String(length=16), server_default="standing", nullable=False),
         sa.Column("effect", sa.String(length=16), nullable=True),
         sa.Column("blocked_reason", sa.Text(), nullable=True),
@@ -128,6 +128,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["listing_b"], ["listings.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.create_index("ix_ai_decision_listing_a", "ai_decisions", ["listing_a"], unique=False)
     op.create_index("ix_ai_decision_listing_b", "ai_decisions", ["listing_b"], unique=False)
     op.create_index(
         "uq_ai_decision_standing_pair",
@@ -153,6 +154,8 @@ def upgrade() -> None:
         sa.Column("leased_by", sa.SmallInteger(), nullable=True),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("request_sha256", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("content_sha256_a", sa.LargeBinary(length=32), nullable=True),
+        sa.Column("content_sha256_b", sa.LargeBinary(length=32), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
@@ -184,8 +187,16 @@ def upgrade() -> None:
     op.create_index(
         "ix_ai_job_lease",
         "ai_jobs",
-        ["model_version_id", "status", sa.literal_column("priority DESC"), "created_at"],
+        ["model_version_id", sa.literal_column("priority DESC"), "created_at"],
         unique=False,
+        postgresql_where=sa.text("status = 'queued'"),
+    )
+    op.create_index(
+        "ix_ai_job_lease_expiry",
+        "ai_jobs",
+        ["lease_expires_at"],
+        unique=False,
+        postgresql_where=sa.text("status = 'leased'"),
     )
     op.create_index("ix_ai_job_pair", "ai_jobs", ["listing_a", "listing_b"], unique=False)
     op.create_index(
@@ -250,6 +261,7 @@ def upgrade() -> None:
         ["kind", "listing_a", "listing_b"],
         unique=True,
         postgresql_where=sa.text("status = 'open'"),
+        postgresql_nulls_not_distinct=True,
     )
     op.create_table(
         "ai_scores",
@@ -302,9 +314,9 @@ def upgrade() -> None:
         "listings",
         "matched_ai_decision_id IS NULL OR matched_via = 'ai'",
     )
-    # Shadow until the owner says live (P4). A missing row reads as shadow too.
+    # Off until the owner says live (P4). A missing row reads as off too.
     op.execute(
-        "INSERT INTO worker_state (key, value) VALUES ('ai_matching', '{\"mode\": \"shadow\"}') "
+        "INSERT INTO worker_state (key, value) VALUES ('ai_matching', '{\"mode\": \"off\"}') "
         "ON CONFLICT (key) DO NOTHING"
     )
 
@@ -329,7 +341,14 @@ def downgrade() -> None:
         postgresql_where=sa.text("status IN ('queued', 'leased')"),
     )
     op.drop_index("ix_ai_job_pair", table_name="ai_jobs")
-    op.drop_index("ix_ai_job_lease", table_name="ai_jobs")
+    op.drop_index(
+        "ix_ai_job_lease_expiry",
+        table_name="ai_jobs",
+        postgresql_where=sa.text("status = 'leased'"),
+    )
+    op.drop_index(
+        "ix_ai_job_lease", table_name="ai_jobs", postgresql_where=sa.text("status = 'queued'")
+    )
     op.drop_table("ai_jobs")
     op.drop_index(
         "uq_ai_decision_standing_pair",
@@ -337,6 +356,7 @@ def downgrade() -> None:
         postgresql_where=sa.text("state = 'standing'"),
     )
     op.drop_index("ix_ai_decision_listing_b", table_name="ai_decisions")
+    op.drop_index("ix_ai_decision_listing_a", table_name="ai_decisions")
     op.drop_table("ai_decisions")
     op.drop_table("ai_workers")
     op.drop_table("ai_model_versions")

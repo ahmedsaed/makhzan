@@ -1,11 +1,12 @@
 """The regroup and AI "same" decisions.
 
-An AI "same" pair admits its two listings like a non-forced must_merge, below a
-person's ruling; every one of today's vetoes still applies, an existing
-product wins over a pair that contradicts it, and a Kev confident no blocks a
-join that rests on an AI pair (P14) but never splits what the rules merged.
-Decisions are read only in `live` mode; with none, grouping is exactly what it
-was. The shops and listings here are fictional.
+An AI "same" pair acts last: once the rules and the rulings have formed every
+cluster, it may join two whole clusters. Every one of today's vetoes still
+applies against every member, a person's ruling wins, and a Kev confident no
+between any two members blocks the join (P14) but never splits what the rules
+merged; the outcome does not depend on placement order. Decisions are read
+only in `live` mode, or in a dry run's preview; with none, grouping is exactly
+what it was. The shops and listings here are fictional.
 """
 
 from __future__ import annotations
@@ -34,13 +35,13 @@ T0 = datetime(2026, 1, 1, tzinfo=UTC)
 _SHOPS: dict[str, uuid.UUID] = {}
 
 
-def _mem(title, source, part_number=None, price=180, product=None):
+def _mem(title, source, part_number=None, price=180, product=None, external_id=None):
     return Listing(
         id=uuid.uuid4(),
         supplier_id=_SHOPS.setdefault(source, uuid.uuid4()),
         source=source,
         source_type=SourceType.SCRAPED,
-        external_id=str(uuid.uuid4()),
+        external_id=external_id or str(uuid.uuid4()),
         domain="electronics",
         title_en=title,
         part_number=part_number,
@@ -141,6 +142,57 @@ def test_a_kev_no_never_splits_what_the_rules_merged():
     assert _together(groups, a, b, c)
 
 
+@pytest.mark.parametrize("x_shop", ["shop-0", "shop-z"])
+def test_the_group_check_does_not_depend_on_which_shop_sorts_first(x_shop):
+    # X's AI pair is with M; its Kev no is with N, M's rules partner. Whether
+    # X sorts before or after them, from scratch, X stays out.
+    m = _mem("HCSR04 Ultrasonic Sensor Module", "shop-m", "HCSR04")
+    n = _mem("HCSR04 Ultrasonic Sensor Module", "shop-n", "HCSR04")
+    x = _mem("Distance ranging board", x_shop)
+    groups = _group_listings([m, n, x], None, None, _ai((x, m), no=[(x, n)]))
+    assert _together(groups, m, n) and not _together(groups, m, x)
+
+
+@pytest.mark.parametrize("x_shop", ["shop-0", "shop-z"])
+def test_from_scratch_and_incremental_agree(x_shop):
+    m = _mem("HCSR04 Ultrasonic Sensor Module", "shop-m", "HCSR04")
+    n = _mem("HCSR04 Ultrasonic Sensor Module", "shop-n", "HCSR04")
+    x = _mem("Distance ranging board", x_shop)
+    y = _mem("Sonar distance board", "shop-y")
+    listings = [m, n, x, y]
+    for ai in (_ai((x, m), (y, x)), _ai((x, m), (y, x), no=[(x, n)]), _ai((y, n), no=[(y, m)])):
+        scratch = _group_listings(listings, None, None, ai)
+        # Store what the first regroup decided, then regroup again from it.
+        for key, members in scratch.items():
+            product = uuid.uuid5(uuid.NAMESPACE_URL, key)
+            for member in members:
+                member.product_id = product
+        incremental = _group_listings(listings, None, None, ai)
+        assert _shape(incremental) == _shape(scratch)
+        # And from products the rules alone made.
+        for member in listings:
+            member.product_id = None
+        rules_first = {k: v for k, v in _group_listings(listings).items()}
+        for key, members in rules_first.items():
+            for member in members:
+                member.product_id = uuid.uuid5(uuid.NAMESPACE_URL, "rules" + key)
+        assert _shape(_group_listings(listings, None, None, ai)) == _shape(scratch)
+        for member in listings:
+            member.product_id = None
+
+
+@pytest.mark.parametrize("x_shop", ["shop-0", "shop-z"])
+def test_a_kev_no_that_arrives_after_an_ai_merge_undoes_only_that_merge(x_shop):
+    product = uuid.uuid4()
+    m = _mem("HCSR04 Ultrasonic Sensor Module", "shop-m", "HCSR04", product=product)
+    n = _mem("HCSR04 Ultrasonic Sensor Module", "shop-n", "HCSR04", product=product)
+    x = _mem("Distance ranging board", x_shop, product=product)  # joined by AI earlier
+    groups = _group_listings([m, n, x], None, None, _ai((x, m), no=[(x, n)]))
+    assert _together(groups, m, n) and not _together(groups, m, x)
+    # Without the no, the AI-joined product stands.
+    assert _together(_group_listings([m, n, x], None, None, _ai((x, m))), m, n, x)
+
+
 def test_an_existing_product_wins_over_an_ai_pair_that_contradicts_it():
     product = uuid.uuid4()
     a = _mem("HCSR04 Ultrasonic Sensor Module", "shop-a", "HCSR04", product=product)
@@ -213,7 +265,7 @@ async def _listing(supplier, title, part_number=None, *, price=180, seen=T0) -> 
     return listing.id
 
 
-async def _same(x, y, *, shadow=False) -> int:
+async def _same(x, y) -> int:
     a, b = pair(x, y)
     row = AiDecision(
         pipeline="match",
@@ -228,7 +280,6 @@ async def _same(x, y, *, shadow=False) -> int:
         policy_version="p1",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,
-        shadow=shadow,
     )
     async with SessionLocal() as session:
         session.add(row)
@@ -271,7 +322,9 @@ async def test_a_live_same_decision_merges_cites_itself_and_marks_the_listing_ai
     a, b = await _two_products()
     ra, rb = await _rows(a, b)
     assert ra.product_id != rb.product_id
-    assert (ra.matched_via, rb.matched_via) == ("rules", "rules")
+    # NULL reads as "rules": the regroup does not write it to say so.
+    assert (ra.matched_via, rb.matched_via) == (None, None)
+    assert matched_by([ra, rb]) == {a: "rules", b: "rules"}
     decision = await _same(a, b)
     await _mode("live")
     stats = await _rebuild()
@@ -279,7 +332,7 @@ async def test_a_live_same_decision_merges_cites_itself_and_marks_the_listing_ai
     ra2, rb2 = await _rows(a, b)
     assert ra2.product_id == rb2.product_id
     assert ra2.product_id in {ra.product_id, rb.product_id}  # an existing id survives
-    assert (ra2.matched_via, ra2.matched_ai_decision_id) == ("rules", None)
+    assert (ra2.matched_via, ra2.matched_ai_decision_id) == (None, None)  # reads as rules
     assert (rb2.matched_via, rb2.matched_ai_decision_id) == ("ai", decision)
     assert matched_by([ra2, rb2]) == {a: "rules", b: "ai"}
     (merge,) = [e for e in await _events() if e.kind == ProductEventKind.MERGE]
@@ -291,37 +344,30 @@ async def test_a_live_same_decision_merges_cites_itself_and_marks_the_listing_ai
     assert len(await _events()) == before
 
 
-async def test_going_back_to_shadow_undoes_every_ai_merge():
+async def test_going_back_to_off_undoes_every_ai_merge():
     a, b = await _two_products()
     await _same(a, b)
     await _mode("live")
     await _rebuild()
-    await _mode("shadow")
+    await _mode("off")
     stats = await _rebuild()
     ra, rb = await _rows(a, b)
     assert ra.product_id != rb.product_id and stats["split"] == 1
     assert (rb.matched_via, rb.matched_ai_decision_id) == ("rules", None)
 
 
-async def test_decisions_are_ignored_unless_live_and_shadow_ones_even_then():
+async def test_decisions_are_ignored_unless_live():
     a, b = await _two_products()
     await _same(a, b)
-    stats = await _rebuild()  # mode: shadow by default
+    stats = await _rebuild()  # mode: off by default
     assert stats["merged"] == 0 and "ai_pairs" not in stats
-    await _mode("off")
-    assert (await _rebuild())["merged"] == 0
-    c = await _listing(await _supplier("shop-c"), "Another example sensor")
-    d = await _listing(await _supplier("shop-d"), "Yet another sonar board")
-    await _rebuild()
-    await _same(c, d, shadow=True)
     await _mode("live")
-    stats = await _rebuild()
-    assert stats["merged"] == 1  # a-b, not the shadow c-d
+    assert (await _rebuild())["merged"] == 1
 
 
-async def test_the_preview_reads_shadow_decisions_in_a_dry_run_only():
+async def test_the_preview_reads_decisions_while_off_in_a_dry_run_only():
     a, b = await _two_products()
-    await _same(a, b, shadow=True)
+    await _same(a, b)
     stats = await _rebuild(dry_run=True, ai_preview=True)
     assert (stats["merged"], stats["ai_mode"], stats["ai_admitted"]) == (1, "preview", 1)
     ra, rb = await _rows(a, b)
@@ -351,12 +397,12 @@ async def test_a_rebuild_with_no_decisions_is_identical_in_every_mode(monkeypatc
 
     monkeypatch.setattr(grouping, "plan_identity", spy)
     results = []
-    for mode in ("shadow", "live", "off"):
+    for mode in ("off", "live"):
         await _mode(mode)
         stats = await _rebuild(dry_run=True)
         results.append({k: v for k, v in stats.items() if k != "ai_mode"})
-    assert seen[0] == seen[1] == seen[2]
-    assert results[0] == results[1] == results[2]
+    assert seen[0] == seen[1]
+    assert results[0] == results[1]
 
 
 async def test_the_api_offer_answer_follows_the_column():
@@ -365,3 +411,14 @@ async def test_the_api_offer_answer_follows_the_column():
     await _mode("live")
     await _rebuild()
     assert matched_by(await _rows(a, b)) == {a: "rules", b: "ai"}
+
+
+async def test_the_largest_ai_product_counts_only_products_ai_joined():
+    a, b = await _two_products()
+    big = [await _supplier(f"shop-{c}") for c in "pqrs"]
+    for shop in big:  # a four-offer product the rules alone made
+        await _listing(shop, "HCSR04 Ultrasonic Sensor Module", "HCSR04")
+    await _rebuild()
+    await _same(a, b)
+    stats = await _rebuild(dry_run=True, ai_preview=True)
+    assert stats["ai_largest"] == 2

@@ -179,9 +179,10 @@ def transition(name: str, scores: Scores, policy: str = ACTIVE) -> Step:
     return Step(DECIDE, outcome=SAME, decided_by=p.stages[-1].name, mins=tuple(mins))
 
 
-def decide(scores: Scores, pipeline_name: str = "match", policy: str = ACTIVE) -> Step:
-    """The decision stored scores make (`transition` by its other name): the
-    entry point for recomputing decisions under a new policy (P7)."""
+def decide(pipeline_name: str, scores: Scores, policy: str = ACTIVE) -> Step:
+    """The decision stored scores make in pipeline `pipeline_name` (named
+    explicitly, never assumed): `transition` by its other name, the entry
+    point for recomputing decisions under a new policy (P7)."""
     return transition(pipeline_name, scores, policy)
 
 

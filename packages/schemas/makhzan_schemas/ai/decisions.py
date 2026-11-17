@@ -14,6 +14,7 @@ about a ruled pair).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 
@@ -21,13 +22,15 @@ from sqlalchemy import and_, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from makhzan_schemas.ai.pipelines import SAME, rank
+from makhzan_schemas.ai.pipelines import PIPELINES, SAME, rank
 from makhzan_schemas.ai.policy import GROUP_CHECK_MODEL, KEV_BLOCK
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import AiDecision, Listing
 from makhzan_schemas.overrides import Overrides, Pair, pair
 
 STANDING, STALE, REVOKED = "standing", "stale", "revoked"
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,26 +64,24 @@ def stage_mins(scores: dict) -> dict[str, float]:
     }
 
 
-async def load_ai_same(
-    session: AsyncSession, overrides: Overrides, *, include_shadow: bool = False
-) -> AiSame:
+async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     """The AI "same" pairs the regroup may act on.
 
     A pair counts when:
 
-    - its decision is standing, its outcome is "same", and it is not shadow
-      (`include_shadow` lifts that, for a dry run's preview only);
+    - its decision is standing and its outcome is "same";
     - both listings are active, and from different shops;
     - no person has ruled on the pair (any standing override);
     - it is each listing's best "same" match in the other's shop (P14): for a
       listing and a shop, only the strongest decision counts (its stages'
       lower scores, last stage first, then the newest id; `pipelines.rank`),
-      and the pair must be the best on **both** sides.
+      and the pair must be the best on **both** sides (owner decision under
+      P14, 2026-11-17: option (a), mutual best). A decision of a pipeline no
+      longer in the registry is skipped, and logged.
 
     `no` holds every standing decision's pair, between two active listings,
-    that the group-check model scored below `KEV_BLOCK`, shadow or not: a score
-    measures the current text whichever mode wrote it, and it can only block,
-    never admit.
+    that the group-check model scored below `KEV_BLOCK`, whatever its outcome:
+    it can only block, never admit.
     """
     la, lb = aliased(Listing), aliased(Listing)
     joined = (
@@ -108,15 +109,20 @@ async def load_ai_same(
         .where(AiDecision.outcome == SAME)
         .order_by(AiDecision.id)
     )
-    if not include_shadow:
-        query = query.where(AiDecision.shadow.is_(False))
     rows = []
+    unknown: set[str] = set()
     for decision_id, pipeline_name, a, b, scores, shop_a, shop_b in await session.execute(query):
         # One shop's two listings never merge, so such a decision cannot act.
         if shop_a == shop_b or overrides.kind(a, b) is not None:
             continue
+        if pipeline_name not in PIPELINES:
+            unknown.add(pipeline_name)
+            continue
         strength = (*rank(stage_mins(scores), pipeline_name), decision_id)
         rows.append((decision_id, a, b, strength, shop_a, shop_b))
+
+    if unknown:
+        log.warning("AI decisions of unregistered pipelines skipped: %s", sorted(unknown))
 
     # P14: each listing's best match per other shop; a pair counts only when it
     # is the best on both sides.
