@@ -1,0 +1,39 @@
+# Kev-4B on CPU, lean: the same kev-1.0 source and the same pinned versions as kev/Dockerfile
+# (requirements-cpu.txt is that image's `uv pip freeze`), but torch 2.8.0's CPU-only wheel instead of
+# the CUDA one, and without nvidia-*, triton and flash-linear-attention. About 2.6 GB instead of 26 GB,
+# for a worker with no GPU and little room on its Docker root. Without fla, transformers' Qwen3.5
+# layers use their PyTorch reference (see Dockerfile.cpu); kev.serve picks the CPU itself.
+# Offline: the weights must already be in the mounted cache. The checkpoint is pinned to a Hub
+# revision (KEV_REVISION), and its head.pt pins the base (Qwen/Qwen3.5-4B-Base@1001bb4d...).
+# The wheels are version-pinned, not hash-pinned (ml/README.md, "Lean CPU images").
+FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
+
+FROM python:3.13.9-slim-bookworm@sha256:b685a4fa58bb19d1814d78a1ec0f0208f351452724f78b20212c984d6e124a34
+COPY --from=uv /uv /usr/local/bin/uv
+ARG KEV_COMMIT=6b719c3c3f367295f6ef336f4f751cf5ff970abc
+# the jaredpalmer/kev-4b Hub revision served (documentation; CMD spells it out)
+ARG KEV_REVISION=6cfce5c2fa4b4bd64026336ab649c5ca78857d52
+LABEL org.opencontainers.image.description="Kev-4B CPU lean, jaredpalmer/kev-4b@${KEV_REVISION}"
+ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1 \
+    VIRTUAL_ENV=/opt/kev/.venv PATH=/opt/kev/.venv/bin:$PATH
+WORKDIR /opt/kev
+ADD --checksum=sha256:94176d4f2fb7942a491f8a2134bf92b93ef27632c3ba169e79704e68ae3c2934 \
+    https://codeload.github.com/jaredpalmer/kev/tar.gz/${KEV_COMMIT} /tmp/kev.tar.gz
+COPY requirements-cpu.txt /tmp/requirements-cpu.txt
+RUN tar -xzf /tmp/kev.tar.gz --strip-components=1 -C /opt/kev && rm /tmp/kev.tar.gz \
+ # runs/ and evals/ are the author's training and eval records (~800 MB); serving reads neither.
+ && rm -rf /opt/kev/runs /opt/kev/evals /opt/kev/experiments /opt/kev/playground /opt/kev/space \
+ && uv venv /opt/kev/.venv \
+ && uv pip install --no-deps --index-url https://download.pytorch.org/whl/cpu torch==2.8.0+cpu \
+ && uv pip install --no-deps -r /tmp/requirements-cpu.txt \
+ && uv pip install --no-deps -e /opt/kev \
+ && python -c "import importlib.util as u, torch, transformers; assert u.find_spec('fla') is None; assert not torch.cuda.is_available(); print(torch.__version__, transformers.__version__)"
+RUN useradd --uid 1000 --create-home kev
+USER kev
+ENV HOME=/home/kev HF_HOME=/home/kev/.cache/huggingface \
+    HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 TRANSFORMERS_OFFLINE=1
+EXPOSE 8000
+ENTRYPOINT ["python", "-m", "kev.serve", "--host", "0.0.0.0", "--port", "8000"]
+# jaredpalmer/kev-4b@KEV_REVISION (exec form cannot expand an ARG; keep the two in step with
+# ml/models/bench_cpu.py)
+CMD ["--run", "jaredpalmer/kev-4b@6cfce5c2fa4b4bd64026336ab649c5ca78857d52"]
