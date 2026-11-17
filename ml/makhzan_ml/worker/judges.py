@@ -109,6 +109,33 @@ def cgroup_memory_max() -> int | None:
     return None if text == "max" else int(text)
 
 
+def default_threads() -> int:
+    """The CPU threads this process may really use: the container's CPU quota (cgroup v2
+    `cpu.max`, so `--cpus=6` gives 6), else the CPUs it may run on. Never the host's core
+    count, which torch would otherwise take and oversubscribe a capped container with."""
+    cpus = len(os.sched_getaffinity(0))
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota != "max":
+            cpus = min(cpus, max(1, math.ceil(int(quota) / int(period))))
+    except (OSError, ValueError):
+        pass
+    return cpus
+
+
+def importable(key: str) -> bool:
+    """Whether this image can load `key` at all. Each model image holds one model's code:
+    the Kev images have `kev`, the pplx images the card's `pplx_decider` and the shim."""
+    import importlib.util
+
+    if key == "kev":
+        return importlib.util.find_spec("kev") is not None
+    if key == "pplx":
+        shim = Path(PPLX_SHIM_DIR) / "serve.py"
+        return importlib.util.find_spec("pplx_decider") is not None and shim.is_file()
+    return False
+
+
 def hub_cache_dirs() -> list[Path]:
     """The Hub cache this process loads from, resolved as huggingface_hub does."""
     env = os.environ
@@ -372,6 +399,12 @@ def load(key: str, rt: Runtime) -> Judge:
 
     if rt.threads:
         torch.set_num_threads(rt.threads)
+        try:
+            # Inter-op parallelism too, or torch sizes that pool to the host's cores. It can
+            # be set once per process, before any parallel work: a second load keeps it.
+            torch.set_num_interop_threads(rt.threads)
+        except RuntimeError:
+            pass
     t0 = time.monotonic()
     judge = _LOADERS[key](rt, pin)
     if rt.threads:
@@ -379,6 +412,7 @@ def load(key: str, rt: Runtime) -> Judge:
     judge.info["load_seconds"] = round(time.monotonic() - t0, 1)
     judge.info["peak_rss_bytes"] = proc_status("VmHWM")
     judge.info["threads"] = torch.get_num_threads()
+    judge.info["interop_threads"] = torch.get_num_interop_threads()
     if not rt.mmap:
         mapped = mapped_weights()
         judge.info["mapped_weight_files"] = mapped
