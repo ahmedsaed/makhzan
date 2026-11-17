@@ -196,12 +196,25 @@ async def source_paused(source_id: str) -> str | None:
         return await paused_reason(session, source_id)
 
 
-async def crawl_source(ctx: dict, source_id: str) -> dict:
+#: When the daily run finds its source busy (a run by hand, the dashboard's
+#: "Run now" or "Probe"), it queues itself again this much later, at most
+#: `BUSY_RETRIES` times, instead of losing the day: the day's job id is taken.
+BUSY_RETRY_AFTER = timedelta(minutes=10)
+BUSY_RETRIES = 6
+
+
+async def crawl_source(ctx: dict, source_id: str, busy_retry: int = 0) -> dict:
     """Arq task: one source's daily run, enqueued by `refresh_all`.
 
     Its own job, with its own timeout: one slow host no longer holds the others
     or the rebuild. However it ends — done, failed, or cancelled at the timeout
     — it asks for the rebuild, so search catches up with whatever it committed.
+
+    If a run of the source is already going (`_SOURCE_LOCKS`), the job queues
+    itself again `BUSY_RETRY_AFTER` later rather than skipping: the day's job
+    id is deduplicated, so a skip would cost the shop its day. Re-queued, not
+    waited for, so a busy source holds no worker slot and no job timeout while
+    the other run finishes.
     """
     try:
         if not CRAWL_ENABLED:
@@ -212,6 +225,19 @@ async def crawl_source(ctx: dict, source_id: str) -> dict:
             return {"source": source_id, "status": "skipped", "reason": "retired or disabled"}
         if paused := await source_paused(source_id):
             return {"source": source_id, "status": "skipped", "reason": paused}
+        lock = _SOURCE_LOCKS.get(source_id)
+        if lock is not None and lock.locked():
+            if busy_retry >= BUSY_RETRIES:
+                return {"source": source_id, "status": "skipped", "reason": "busy all day"}
+            today = datetime.now(timezone.utc).date()
+            await ctx["redis"].enqueue_job(
+                "crawl_source",
+                source_id,
+                busy_retry + 1,
+                _job_id=f"{crawl_job_id(source_id, today)}:busy{busy_retry + 1}",
+                _defer_by=BUSY_RETRY_AFTER,
+            )
+            return {"source": source_id, "status": "deferred", "reason": "a run of it is going"}
         return await _exclusive(
             source_id, source_id, lambda: _run_source(source_id, get(source_id))
         )
