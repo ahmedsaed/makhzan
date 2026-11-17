@@ -1,7 +1,7 @@
 # AI matching: the worker
 
 Status: **built, tested against a contract-following fake broker, and checked against the
-phase 2 broker app** (two end-to-end sessions, below). Nothing has run on the home server yet.
+phase 2 broker app on its final contract** (five end-to-end sessions, below). Nothing has run on the home server yet.
 What is not here yet is listed at the end.
 
 A worker is one process that serves the model key(s) its configuration names. It talks only
@@ -59,11 +59,21 @@ The parity check below confirms it on stored GPU scores.
    the log says so. The worker then lowers its own priority by `nice`.
 3. **`POST /hello`** sends the worker's name, its model keys with each model version and
    weights revision, the image, device, dtype, threads and its configuration. The broker
-   answers `ok` per model key. A key answered `ok: false` (version drift) is never leased. If
-   no key is `ok`, the worker exits 3.
+   answers `ok` per model key, and the `stages` that use it: each (pipeline, stage) and the
+   prompt version its leases will carry, which the worker logs. A key answered `ok: false`
+   (version drift) is never leased. If no key is `ok`, the worker exits 3.
 4. **Lease, load, score, submit.** The worker drains each model key in the configured order:
-   - `POST /lease` carries the seconds left in the window and the measured seconds per
-     request.
+   - `POST /lease` carries a fresh `lease_request_id` per lease. The client's retries of
+     that call send the same id, so a lease whose answer was lost on the way comes back as
+     the same lease instead of being orphaned until it expires.
+   - It also carries honest time: the seconds left in the window, less an estimate of a
+     model load still to come (`LOAD_ESTIMATE_S`: 150 s on CPU, 30 s on GPU), and the
+     measured seconds per request (the configured estimate until the first is measured).
+     The broker returns only jobs that fit, keeping a 60 s margin, and stops at the first
+     that does not. A job the worker cannot start after all goes back gracefully. A worker
+     that runs "always" sends no time, and only `max_jobs` limits its leases.
+   - Each job's `prompt_version` is compared with the ones hello announced. A mismatch is
+     logged, not refused: the broker renders, so it means the registry moved since hello.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
      Once loaded, it is checked against its pins: the snapshot revision, the temperature it
      scores at, and the prefix cache off. Then every weight file is checked to be unmapped
@@ -78,7 +88,10 @@ The parity check below confirms it on stored GPU scores.
      the worker carries on. If the model fails on 3 different jobs in a row, it is broken: the
      worker stops, and the jobs it never started go back without costing an attempt.
    - The worker sends `POST /results` once per job.
-   - While a lease is held, a background thread sends `POST /heartbeat` every `heartbeat_s`
+   - As each job starts, a heartbeat names it in `progress.job_id`, the job in hand. If the
+     worker then dies (a crash, a kill for memory), the expired lease charges an attempt to
+     that job alone; the lease's other jobs never started and go back free.
+   - While a lease is held, a background thread also sends `POST /heartbeat` every `heartbeat_s`
      with the lease ids, the job ids it still holds, the resident memory and the request in
      progress. A `409 lease_lost` names the jobs and leases that moved on. The worker drops
      those after its current request, without posting them, and keeps the rest. If the broker
@@ -100,11 +113,10 @@ The parity check below confirms it on stored GPU scores.
    ends, using its measured seconds per request.
 6. **Empty queue.** With `on_empty = "exit"`, the worker exits. With `"wait"`, it polls every
    `poll_s` until the window ends.
-7. **Session end.** The broker records a session's end (P16) at a graceful `/release` of
-   held jobs, or at a lease that comes back empty (broker-api.md §3.1). A release must name
-   a lease and its jobs. So a session that stops between leases with nothing held, for
-   example at the window's end right after its last job, is not seen to end; the worker logs
-   that. This is an open question on the contract.
+7. **Session end.** Every session that said hello ends with `POST /release {"session"}`, a
+   graceful release naming no jobs (broker-api.md §3.5), however it stopped: the window's
+   end, a signal, an empty queue, or an error. So the broker records the end and can consider
+   the P16 rebuild. It is not sent to a broker that is unreachable or refused the token.
 
 **Retries.** A network failure, a 5xx or a 429 is retried with exponential backoff: 1 s, 2 s,
 4 s and so on, capped at 60 s, and never shorter than a `Retry-After`. Retries continue for
@@ -197,7 +209,7 @@ this image can load each model key, and exits.
 | Key | Default | Meaning |
 |---|---|---|
 | `max_jobs` | 2 | jobs per lease (a job is one pair, up to two requests). "Batch" means this, never batched inference |
-| `lease_s` | 900 | the lease length the worker reports at hello |
+| `lease_s` | 900 | the lease length the worker reports at hello, an integer from 60 to 7200 (the broker refuses any other) |
 | `heartbeat_s` | 60 | at least 5, and at most half of `lease_s`. If the broker's hello answers a shorter interval, that one is used |
 | `seconds_per_request` | 90 | the first estimate, replaced by the measured time after the first request. It sizes leases and decides whether a request still fits in the window |
 | `retry_max_s` | `lease_s` | how long to retry a call through network failures before giving up |
@@ -515,15 +527,27 @@ read-only cache, `--network none`. The first 4 requests (2 pairs) of each file w
 The worker was also run against the real broker app (`app.broker.main`, branch
 `feat/ai-broker`), on a test database seeded with fictional listings. The broker was served
 by uvicorn on the test's event loop, and the real worker ran with a fake judge in a thread,
-over HTTP. Two sessions:
+over HTTP. Run last against the final contract (`feat/ai-broker`, commit `fcbc5a2`); five
+sessions:
 
 - **Kev, then pplx, then a decision.** Two match pairs were leased, scored and posted for
   Kev. The broker queued their pplx stage, the worker unloaded Kev, loaded pplx and drained
   it. The result was two standing "same" decisions and 8 score rows carrying the device,
-  dtype and threads. The session ended "empty".
+  dtype and threads. Hello announced the stages (`match/kev`, `audit/kev`, `match/pplx`),
+  the broker recorded the lease request id, and the session ended with its release
+  ("released").
 - **A graceful stop.** A heartbeat with `job_ids` was sent mid-job. SIGTERM on the third
   request kept the finished order, and the two jobs not finished went back with no attempt
   counted. The session ended "released".
+- **Session end between leases.** SIGTERM right after a job's results, with nothing held:
+  the session release ended the session.
+- **A lease whose answer is lost.** The broker leased two jobs and the answer was dropped.
+  The client's retry, with the same `lease_request_id`, got the same lease back. Both jobs
+  were scored once, none charged an attempt.
+- **Time fit.** With 30 minutes left, 300 s a request and Kev not yet loaded, the worker
+  sent `seconds_left` 1650. The broker leased the two jobs that fit (1590 s after its
+  margin) and stopped at the third. Twenty minutes later, with 600 s left, nothing fit. Two
+  jobs stayed queued, none charged.
 
 That test lives outside this branch: it uses the broker suite's fixtures, so it belongs with
 them once both branches are merged.
@@ -554,25 +578,21 @@ no model. CI runs it with the ingestion suite.
   - version drift at hello, on one key only, and at lease;
   - a tampered payload, a failing request, a model that keeps failing, and a model that
     will not load;
-  - a wrong token, a key not granted, a memory limit too small, and two models in turn.
+  - a wrong token, a key not granted, a memory limit too small, and two models in turn;
+  - every session ending with its session release (window end, SIGTERM, empty queue, a
+    fatal error) and none sent to a broker that is down; a lost lease answer retried into
+    the same lease; leases carrying honest time and holding only jobs that fit; a heartbeat
+    naming each job as it starts, before its results; a crash charged to the job in hand
+    alone; an unannounced prompt version logged.
 - **Pins**: `pins.PINS` equals `policy.MODELS`, the worker's request hash equals
   `prompt.request_sha256` on rendered requests, the mapped-weights check can fire, and scores
   outside [0, 1] are refused.
 
 ## Not done yet
 
-- **Open questions on the contract.** The first three, and fitting jobs to the worker's
-  time left, are being addressed in the broker's contract now. They are not implemented here
-  until it lands:
-  - How does a session that stops between leases with nothing held tell the broker it
-    ended? A release must name a lease and jobs, so today it cannot, and P16 waits for the
-    next empty lease or release.
-  - Should hello carry prompt versions? The owner asked for them at hello, but the broker
-    renders, so the worker has none of its own. It logs each job's `prompt_version`.
-  - `/lease` has no idempotency key. If a lease's response is lost and the call is retried,
-    the first set of jobs is orphaned until it expires, and each is charged an attempt.
-  - broker-api.md §6's example TOML is not this worker's format (`[compute]` and
-    `[schedule]`, strict parsing); it should point here.
+- **The model load estimate is a constant** (`LOAD_ESTIMATE_S`), taken from the measured
+  loads, not measured per run. A first lease whose load took longer than the estimate can
+  hold a job the worker cannot finish. That job goes back gracefully, with no attempt.
 - **The Kev code commit is not verified.** The base images keep `KEV_COMMIT` as a build ARG
   only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
   Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
