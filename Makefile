@@ -32,7 +32,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api test-worker lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -53,7 +53,7 @@ deps:  ## Install Python and web dependencies
 migrate:  ## Apply database migrations
 	cd packages/schemas && DATABASE_URL="$(DB_URL)" poetry run alembic upgrade head
 
-test: test-ingestion test-api  ## Run every Python test suite
+test: test-ingestion test-api test-worker  ## Run every Python test suite
 
 # The private configuration's tests check what each crosswalk maps and refuses
 # to map, so they travel with it; they run here whenever the checkout is present.
@@ -64,6 +64,12 @@ test-ingestion:  ## Run the ingestion test suite, and the private configuration'
 # so the suites, and several checkouts at once, can run side by side.
 test-api:  ## Run the API test suite
 	cd apps/api && poetry run pytest
+
+# The AI-matching worker (ml/makhzan_ml/worker): no database and no model. The
+# ingestion environment runs it because it has makhzan_schemas, which the tests
+# hold the worker's pins and request hashing to.
+test-worker:  ## Run the AI worker's tests (ml/tests)
+	cd apps/ingestion && poetry run pytest -c pyproject.toml ../../ml/tests
 
 lint:  ## Lint and format-check exactly what CI checks
 	$(RUFF) check $(LINT_PATHS)
