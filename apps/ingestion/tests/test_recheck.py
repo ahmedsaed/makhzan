@@ -212,3 +212,25 @@ async def test_the_cli_accept_marks_too_and_make_status_says_what_waits(capsys):
         await status.rechecks(session)
     out = capsys.readouterr().out
     assert "RE-CHECKS" in out and SRC in out and "1 waiting" in out
+
+
+async def test_an_archived_listing_is_never_left_waiting():
+    """Archived, nothing would read it: archiving clears its marker, and it is
+    neither marked again nor listed as pending."""
+    from sqlalchemy import func, update
+
+    await run_source(SRC, StubAdapter())  # a1 a2 b1 b2 c1: one whole cycle
+    listing = await _mark("b1")
+    # The next cycle no longer lists b1: the cycle's end archives it.
+    await run_source(SRC, StubAdapter(pages={1: ["a1", "a2"], 2: ["b2"], 3: ["c1"]}))
+    async with SessionLocal() as session:
+        row = await session.get(Listing, listing)
+        assert row.status == ListingStatus.ARCHIVED and row.recheck_requested_at is None
+        assert await recheck.request(session, [listing]) == 0
+        # Even a marker left on an archived row (set before this rule) is not pending.
+        await session.execute(
+            update(Listing).where(Listing.id == listing).values(recheck_requested_at=func.now())
+        )
+        await session.commit()
+        assert await recheck.pending(session) == []
+        assert await recheck.due(session, SRC) == []

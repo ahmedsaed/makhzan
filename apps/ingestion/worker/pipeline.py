@@ -1323,7 +1323,8 @@ async def _archive(session: AsyncSession, where: list) -> int:
         await session.execute(
             update(Listing)
             .where(*where)
-            .values(status=ListingStatus.ARCHIVED)
+            # Archived, it can never be read first: any re-check asked for goes.
+            .values(status=ListingStatus.ARCHIVED, recheck_requested_at=None)
             .returning(Listing.id, Listing.price, Listing.currency, Listing.stock_signal)
         )
     ).all()

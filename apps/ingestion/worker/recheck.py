@@ -26,13 +26,16 @@ a shop whose Store API hides out-of-stock products (`hides_out_of_stock`):
 report, and the marker stays (`stats.recheck.hidden_kept`) for the unlisted
 pass, which reads the stock by id (`pipeline._mark_out_of_stock` clears it),
 or the sweep. A `limit=` run never reads a
-marked listing first, and a paused shop is not asked.
+marked listing first, and a paused shop is not asked. Only an active listing
+is marked, waits or is listed as pending: archiving clears the marker
+(`pipeline._archive`), since nothing would ever read an archived listing.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Listing
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +77,12 @@ async def request(session: AsyncSession, listing_ids) -> int:
         return 0
     await session.execute(
         update(Listing)
-        .where(Listing.id.in_(ids), Listing.recheck_requested_at.is_(None))
+        .where(
+            Listing.id.in_(ids),
+            Listing.recheck_requested_at.is_(None),
+            # An archived listing is not swept or asked about: nothing would read it.
+            Listing.status == ListingStatus.ACTIVE,
+        )
         .values(recheck_requested_at=datetime.now(timezone.utc))
         .execution_options(synchronize_session=False)
     )
@@ -92,7 +100,11 @@ async def due(session: AsyncSession, source_id: str, limit: int = MAX_PER_RUN) -
     return list(
         await session.scalars(
             select(Listing)
-            .where(Listing.source == source_id, Listing.recheck_requested_at.is_not(None))
+            .where(
+                Listing.source == source_id,
+                Listing.recheck_requested_at.is_not(None),
+                Listing.status == ListingStatus.ACTIVE,
+            )
             .order_by(Listing.recheck_requested_at, Listing.id)
             .limit(limit)
         )
@@ -119,7 +131,10 @@ async def pending(session: AsyncSession) -> list[dict]:
     rows = (
         await session.execute(
             select(Listing.source, func.count(), func.min(Listing.recheck_requested_at))
-            .where(Listing.recheck_requested_at.is_not(None))
+            .where(
+                Listing.recheck_requested_at.is_not(None),
+                Listing.status == ListingStatus.ACTIVE,
+            )
             .group_by(Listing.source)
             .order_by(Listing.source)
         )
