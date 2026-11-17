@@ -385,6 +385,11 @@ async def main_async(args: argparse.Namespace) -> int:
     sites_path = Path(args.sites) if args.sites else default_sites_file()
     sites = read_sites(sites_path) if sites_path and sites_path.exists() else {}
     if args.no_db:
+        # No database at all: robots.txt copies are kept in memory for this
+        # probe, never written to `robots_copies`.
+        from worker import robots as robots_mod
+
+        robots_mod.ROBOTS = robots_mod.RobotsCache(store=robots_mod.RobotsStore())
         targets = [Target(label, url) for label, url in sites.items()]
         if args.source:
             targets = [t for t in targets if t.source_id == args.source]

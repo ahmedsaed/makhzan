@@ -230,6 +230,26 @@ async def test_a_cancel_during_the_done_write_does_not_turn_it_into_failed(monke
     assert (await _row(action_id)).status == "done"
 
 
+async def test_a_result_that_cannot_be_recorded_still_marks_the_job_failed(monkeypatch):
+    real_set = admin_jobs._set
+
+    async def broken_done(action_id, **values):
+        if values.get("status") == "done":
+            raise RuntimeError("result too odd to store")
+        await real_set(action_id, **values)
+
+    async def quick():
+        return {"stats": {}, "line": "would regroup"}
+
+    monkeypatch.setattr(admin_jobs, "_set", broken_done)
+    monkeypatch.setattr(admin_jobs, "_regroup_dry_run", quick)
+    action_id = await _job(admin_jobs.REGROUP_DRY_RUN)
+    assert await admin_jobs.admin_job({}, action_id) == "failed"
+    row = await _row(action_id)
+    assert row.status == "failed"
+    assert row.error.startswith("could not record the result: RuntimeError")
+
+
 async def test_a_queued_job_the_queue_lost_is_marked_failed():
     from datetime import UTC, datetime
 

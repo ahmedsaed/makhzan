@@ -194,6 +194,8 @@ async def admin_job(ctx: dict, action_id: int) -> str:
         row.status, row.started_at = "running", datetime.now(timezone.utc)
         await session.commit()
     finished = False
+    #: What the fallback in `finally` records, if nothing else was recorded.
+    fallback = "cancelled: the job timed out or the worker stopped"
     try:
         if action == RUN_LIMIT:
             result = await _run_limit(ctx, target, int(detail.get("limit") or 0))
@@ -205,38 +207,52 @@ async def admin_job(ctx: dict, action_id: int) -> str:
             raise ValueError(f"not a dashboard job: {action}")
     except Exception as exc:  # noqa: BLE001 — recorded on the row for the page to show
         log.exception("admin job %s (%s) failed", action_id, action)
+        error = f"{type(exc).__name__}: {exc}"[:2000]
         finished = True  # before the write: a cancel during it must not overwrite it
-        await asyncio.shield(
-            _set(
-                action_id,
-                status="failed",
-                error=f"{type(exc).__name__}: {exc}"[:2000],
-                finished_at=datetime.now(timezone.utc),
+        try:
+            await asyncio.shield(
+                _set(
+                    action_id,
+                    status="failed",
+                    error=error,
+                    finished_at=datetime.now(timezone.utc),
+                )
             )
-        )
+        except Exception:  # noqa: BLE001 — try once more in `finally`
+            log.exception("admin job %s: recording the failure failed", action_id)
+            finished, fallback = False, error
         return "failed"
     else:
         # Shielded, and marked finished first: a cancel arriving during this
         # write must neither interrupt it nor overwrite `done` with `failed`.
         finished = True
-        await asyncio.shield(
-            _set(
-                action_id,
-                status="done",
-                result=_jsonable(result),
-                finished_at=datetime.now(timezone.utc),
+        try:
+            await asyncio.shield(
+                _set(
+                    action_id,
+                    status="done",
+                    result=_jsonable(result),
+                    finished_at=datetime.now(timezone.utc),
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001 — the row must not stay `running`
+            log.exception("admin job %s: recording the result failed", action_id)
+            finished = False
+            fallback = f"could not record the result: {type(exc).__name__}: {exc}"[:2000]
+            return "failed"
         return "done"
     finally:
         if not finished:
             # Cancelled: arq's job timeout, or the worker stopping. Shielded, so
             # the row is not left `running` for the page to poll forever.
-            await asyncio.shield(
-                _set(
-                    action_id,
-                    status="failed",
-                    error="cancelled: the job timed out or the worker stopped",
-                    finished_at=datetime.now(timezone.utc),
+            try:
+                await asyncio.shield(
+                    _set(
+                        action_id,
+                        status="failed",
+                        error=fallback,
+                        finished_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
+            except Exception:  # noqa: BLE001 — nothing more to try; startup closes it
+                log.exception("admin job %s: could not mark it failed", action_id)

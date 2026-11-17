@@ -259,6 +259,33 @@ async def test_every_probe_request_takes_the_crawls_turn_and_a_429_binds_it(wire
     assert probe_mod.refusal(target.url) is not None
 
 
+async def test_the_no_db_probe_keeps_no_robots_copy_in_the_database(wire, monkeypatch, tmp_path):
+    import argparse
+
+    from makhzan_schemas.db import SessionLocal
+    from makhzan_schemas.models import RobotsCopy
+    from sqlalchemy import func, select
+
+    # As in a fresh process: the cache stores copies in the database.
+    monkeypatch.setattr(
+        robots_mod, "ROBOTS", robots_mod.RobotsCache(store=robots_mod.DatabaseRobotsStore())
+    )
+    clock = wire["clock"]
+    real_gate = probe_mod._Gate
+    monkeypatch.setattr(
+        probe_mod, "_Gate", lambda gap: real_gate(gap, clock=clock, sleep=clock.sleep)
+    )
+    sites = tmp_path / "probe-sites.txt"
+    sites.write_text("shop|https://shop.test/a\n")
+    args = argparse.Namespace(
+        sites=str(sites), no_db=True, source=None, no_ip=True, delay=15.0, no_sign=True
+    )
+    assert await probe_mod.main_async(args) == 0
+    assert any(r.url.path == "/robots.txt" for _, r in wire["sent"])
+    async with SessionLocal() as session:
+        assert await session.scalar(select(func.count()).select_from(RobotsCopy)) == 0
+
+
 def test_the_sites_list_is_read_as_label_and_url(tmp_path):
     path = tmp_path / "probe-sites.txt"
     path.write_text("# comment\nshop-a|https://a.test/x?y=1\n\nshop-b | https://b.test/\n")
