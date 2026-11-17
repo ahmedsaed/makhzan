@@ -155,6 +155,18 @@ services:
       --chat-template /templates/qwen3_reranker.jinja
     ports: ["127.0.0.1:8105:8000"]
 
+  # Generative model for attribute extraction (ml/improve/extract.py). Not a judge: it reads one
+  # listing and returns a small JSON schema, which code compares. bf16 in about 8 GB of weights;
+  # 4,096 tokens is ample for one title. Run it alone, like the other 4B models.
+  gen-qwen3-4b:
+    <<: *vllm-gpu
+    profiles: [gen-qwen3-4b, big]
+    command: >-
+      Qwen/Qwen3-4B-Instruct-2507 --served-model-name qwen3-4b-instruct
+      --dtype bfloat16 --max-model-len 4096 --gpu-memory-utilization ${GPU_UTIL_BIG:-0.85}
+      ${QUANT_ARGS:-} ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8107:8000"]
+
   kev-4b:
     <<: [*common, *gpu]
     profiles: [kev-4b, big]
@@ -193,6 +205,46 @@ services:
       retries: 3
       start_period: 1200s
 
+  # Phase E judge candidates (ml/models/). Each needs most of the card: run ONE, alone.
+  #
+  # perplexity-ai/pplx-decider-flash-v1.3 at a pinned revision, on its own pplx_decider package
+  # (pplx/Dockerfile: no general engine runs its noncausal attention and separate readout).
+  pplx-decider:
+    <<: [*common, *gpu]
+    profiles: [pplx-decider, big]
+    build: ./pplx
+    image: makhzan-ml/pplx-decider:1.3
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      <<: *env
+      HF_HOME: /home/pplx/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /home/pplx/.cache/huggingface/hub
+      # Padded tokens per forward pass. Titles are short; 8,192 keeps the peak well inside 12 GB.
+      BATCH_TOKENS: ${PPLX_BATCH_TOKENS:-8192}
+    volumes:
+      - ${ML_CACHE_DIR:-./.cache}/huggingface:/home/pplx/.cache/huggingface:z
+      - ${ML_CACHE_DIR:-./.cache}/triton:/home/pplx/.triton:z
+    ports: ["127.0.0.1:8108:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 1200s
+
+  # Qwen/Qwen3.5-4B (the instruct model; Kev and pplx-decider are both built on it), text only
+  # (--language-model-only skips the vision tower), scored as a judge from the logprobs of "yes"
+  # and "no" at the first answer token with thinking off (models/judge.py). Pinned revision.
+  gen-qwen3.5-4b:
+    <<: *vllm-gpu
+    profiles: [gen-qwen3.5-4b, big]
+    command: >-
+      Qwen/Qwen3.5-4B --revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+      --served-model-name qwen3.5-4b --language-model-only
+      --dtype bfloat16 --max-model-len ${QWEN35_MAX_LEN:-1024} --max-num-seqs 32
+      --gpu-memory-utilization ${GPU_UTIL_BIG:-0.85} --max-logprobs 20 ${VLLM_EXTRA_ARGS:-}
+    ports: ["127.0.0.1:8109:8000"]
+
   # ======================= CPU (no GPU reservation) =======================
   # vLLM's CPU backend (bf16 on this Zen 4's AVX-512) measured 5.1-7.8x TEI's CPU build on all three
   # models TEI could serve (README, "Engines").
@@ -230,6 +282,66 @@ services:
       --hf-overrides '{"architectures":["Qwen3ForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}'
       --chat-template /templates/qwen3_reranker.jinja
     ports: ["127.0.0.1:8114:8000"]
+
+  # The two merge judges on CPU (README, "CPU serving"): each image is its GPU image minus
+  # flash-linear-attention, whose Triton kernels transformers would otherwise pick on CPU too.
+  # Build the GPU image first (`docker compose build kev-4b pplx-decider`); these derive from it.
+  # No GPU reservation and CUDA_VISIBLE_DEVICES empty, so neither can find the card. fp32 by
+  # default: the target worker (i7-3770, AVX only) has no bf16 fast path, and bf16 measured 6.5x
+  # slower there; JUDGE_CPU_DTYPE=bf16 on a CPU with AVX-512. CPU_SET and CPU_THREADS emulate a server
+  # size (e.g. CPU_SET=0-1,6-7 CPU_THREADS=4); run one judge at a time to measure either.
+  kev-4b-cpu:
+    <<: *common
+    profiles: [kev-4b-cpu, judges-cpu]
+    build: {context: ./kev, dockerfile: Dockerfile.cpu}
+    image: makhzan-ml/kev-cpu:1.0
+    cpuset: ${CPU_SET:-0-11}
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      <<: *env
+      CUDA_VISIBLE_DEVICES: ""
+      KEV_DTYPE: ${JUDGE_CPU_DTYPE:-fp32}
+      KEV_PREFIX_CACHE: "0"
+      KEV_TEMPERATURE: ${KEV_TEMPERATURE:-1.0}
+      OMP_NUM_THREADS: ${CPU_THREADS:-12}
+      HF_HOME: /home/kev/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /home/kev/.cache/huggingface/hub
+    volumes:
+      - ${ML_CACHE_DIR:-./.cache}/huggingface:/home/kev/.cache/huggingface:z
+    command: --run jaredpalmer/kev-4b
+    ports: ["127.0.0.1:8116:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
+
+  pplx-decider-cpu:
+    <<: *common
+    profiles: [pplx-decider-cpu, judges-cpu]
+    build: {context: ./pplx, dockerfile: Dockerfile.cpu}
+    image: makhzan-ml/pplx-decider-cpu:1.3
+    cpuset: ${CPU_SET:-0-11}
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      <<: *env
+      CUDA_VISIBLE_DEVICES: ""
+      DEVICE: cpu
+      DTYPE: ${JUDGE_CPU_DTYPE:-auto}   # auto = the card's choice, fp32 on CPU
+      OMP_NUM_THREADS: ${CPU_THREADS:-12}
+      BATCH_TOKENS: ${PPLX_BATCH_TOKENS:-8192}
+      HF_HOME: /home/pplx/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /home/pplx/.cache/huggingface/hub
+    volumes:
+      - ${ML_CACHE_DIR:-./.cache}/huggingface:/home/pplx/.cache/huggingface:z
+    ports: ["127.0.0.1:8118:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
 
   # ======================= engine comparison (`compare` profile) =======================
   # The engine that lost for each model, kept so the comparison can be re-run.
