@@ -76,11 +76,25 @@ secret. With either unset nobody can sign in. At least 12 characters.
 | `ADMIN_NAME` | Who actions are recorded as (default `admin`): overrides' `created_by`, the audit log. |
 | `ADMIN_COOKIE_SECURE` | `true` only when served over TLS. |
 | `ADMIN_SESSION_HOURS` | Optional; default 12. |
+| `ADMIN_ALLOWED_HOSTS` | Optional; the `Host` values answered (`<tailscale ip>:8200`, a MagicDNS name), comma-separated. Empty: any. Others get 400, which shuts out DNS-rebinding pages. |
 
 **Login security.** The session is an HttpOnly, SameSite=Strict cookie signed
 with `ADMIN_SECRET`. Every POST carries a CSRF token from the session (the login
-form a token of its own) and is refused from another origin. Failed logins are
-limited to 5 per address and 20 in total per 15 minutes. Pages send a strict
+form a token of its own) and is refused from another origin. Request bodies
+over 64 KB are refused before anything parses them. The password is checked
+with scrypt at N=2^17 (about half a second, 128 MiB); a stored hash that is
+malformed or asks for more memory than allowed says so on the login page
+instead of "wrong password".
+
+Failed logins are limited to 5 per address and **20 in total** per 15 minutes.
+The total is a global lockout: anyone who can reach the page can spend it and
+keep you out for up to 15 minutes, which is the price of a cap that holds
+whatever addresses an attacker uses (and why the page belongs on the tailnet
+only). **Check on the server what address the page sees**: behind Docker's
+userland proxy every client can appear as the bridge gateway (172.x), which
+makes the per-address limit act as the global one and puts that address in
+the audit log. `/activity` shows it after a login; if it is the gateway, set
+`"userland-proxy": false` in Docker's daemon.json or accept it. Pages send a strict
 Content-Security-Policy (scripts from the page's own origin only),
 `X-Frame-Options: DENY` and `Cache-Control: no-store`.
 

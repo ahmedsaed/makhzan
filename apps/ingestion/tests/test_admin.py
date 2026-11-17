@@ -111,7 +111,7 @@ async def test_the_right_password_signs_in_and_logout_signs_out(queued):
         csrf = _csrf((await client.get("/activity")).text)
         assert (await client.post("/logout", data={"csrf": csrf})).status_code == 303
         assert (await client.get("/")).status_code == 303
-    assert [a.action for a in await _actions()] == ["login"]
+    assert [a.action for a in await _actions()] == ["login", "logout"]
 
 
 async def test_a_wrong_password_is_refused_and_audited(queued):
@@ -171,7 +171,10 @@ async def test_changing_the_password_ends_every_session(queued, monkeypatch):
 def test_password_hashes_verify_and_tampered_sessions_do_not():
     assert auth.verify_password(PASSWORD, HASH)
     assert not auth.verify_password("nope", HASH)
-    assert not auth.verify_password(PASSWORD, "scrypt:broken")
+    with pytest.raises(auth.HashUnusable):
+        auth.verify_password(PASSWORD, "scrypt:broken")
+    with pytest.raises(auth.HashUnusable):  # asks for more memory than allowed
+        auth.verify_password(PASSWORD, "scrypt:1073741824:8:1:00:00")
     assert ":" in HASH and "$" not in HASH  # safe in .env and compose interpolation
     value, session = auth.new_session(HASH, "s", 1)
     assert auth.read_session(value, HASH, "s").csrf == session.csrf
@@ -202,6 +205,40 @@ async def test_a_cross_origin_post_is_refused_even_with_the_token(queued):
             "/crawl/pause", data={"csrf": csrf}, headers={"origin": "http://evil.test"}
         )
         assert response.status_code == 403
+
+
+async def test_an_unusable_hash_says_so_instead_of_wrong_password(queued, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "scrypt:1073741824:8:1:00:00")
+    async with _client() as client:
+        response = await _login(client)
+        assert response.status_code == 503
+        assert "cannot be checked" in response.text and "Wrong password" not in response.text
+
+
+async def test_large_bodies_are_refused_before_parsing(queued):
+    big = "x" * (admin_app.MAX_BODY + 1)
+    async with _client() as client:
+        declared = await client.post("/login", content=f"password={big}")
+        assert declared.status_code == 413
+
+        async def chunks():
+            for _ in range(3):
+                yield b"x" * (admin_app.MAX_BODY // 2)
+
+        # No Content-Length: the streamed read stops at the cap.
+        streamed = await client.post("/login", content=chunks())
+        assert streamed.status_code == 413
+    assert not await _actions("login.failed")
+
+
+async def test_the_host_allowlist(queued, monkeypatch):
+    monkeypatch.setenv("ADMIN_ALLOWED_HOSTS", "100.64.0.1:8200, admin.tailnet")
+    async with _client() as client:
+        assert (await client.get("/login")).status_code == 400  # admin.test
+        ok = await client.get("/login", headers={"host": "100.64.0.1:8200"})
+        assert ok.status_code == 200
+        named = await client.get("/login", headers={"host": "admin.tailnet:8200"})
+        assert named.status_code == 200
 
 
 async def test_a_post_without_a_session_is_refused(queued):

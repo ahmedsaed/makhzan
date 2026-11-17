@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from makhzan_schemas import crawl
 from makhzan_schemas import overrides as rulings
 from makhzan_schemas.ai import flow
@@ -125,8 +126,31 @@ CSP = (
 )
 
 
+#: The largest request body read, checked on Content-Length and again while
+#: reading: every form here is a few fields.
+MAX_BODY = 64 * 1024
+
+
+def allowed_hosts() -> set[str]:
+    """`ADMIN_ALLOWED_HOSTS`, comma-separated (`100.x.y.z:8200,admin.tailnet`); empty: any."""
+    return {h.strip().lower() for h in os.getenv("ADMIN_ALLOWED_HOSTS", "").split(",") if h.strip()}
+
+
+def _host_allowed(host: str) -> bool:
+    hosts = allowed_hosts()
+    if not hosts:
+        return True
+    host = host.lower()
+    return host in hosts or host.rsplit(":", 1)[0] in hosts
+
+
 @app.middleware("http")
 async def headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]):
+    if not _host_allowed(request.headers.get("host", "")):
+        return HTMLResponse("Unknown host.", status_code=400)
+    length = request.headers.get("content-length")
+    if length is not None and (not length.isdigit() or int(length) > MAX_BODY):
+        return HTMLResponse("Request body too large.", status_code=413)
     response = await call_next(request)
     response.headers.setdefault("Content-Security-Policy", CSP)
     response.headers["X-Frame-Options"] = "DENY"
@@ -143,8 +167,18 @@ def current_session(request: Request) -> auth.Session | None:
 
 
 async def form_of(request: Request) -> dict[str, str]:
-    """An urlencoded form's fields, first value each (no multipart: nothing here uploads)."""
-    body = (await request.body()).decode("utf-8", errors="replace")
+    """An urlencoded form's fields, first value each (no multipart: nothing here uploads).
+
+    Read in chunks and refused past `MAX_BODY`, whatever Content-Length said
+    (a chunked body has none).
+    """
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BODY:
+            raise HTTPException(413, "Request body too large.")
+        chunks.append(chunk)
+    body = b"".join(chunks).decode("utf-8", errors="replace")
     return {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
 
 
@@ -311,7 +345,14 @@ async def login(request: Request):
         )
         response.headers["Retry-After"] = str(wait)
         return response
-    if not auth.verify_password(fields.get("password", ""), password_hash()):
+    try:
+        # Half a second of scrypt: off the event loop, so the page stays responsive.
+        right = await run_in_threadpool(
+            auth.verify_password, fields.get("password", ""), password_hash()
+        )
+    except auth.HashUnusable as exc:
+        return _login_page(request, f"The stored password hash cannot be checked: {exc}", 503)
+    if not right:
         limiter.failed(client)
         async with SessionLocal() as db:
             await audit(db, request, "login.failed")
@@ -338,6 +379,9 @@ async def login(request: Request):
 @app.post("/logout")
 async def logout(request: Request):
     await checked_form(request)
+    async with SessionLocal() as db:
+        await audit(db, request, "logout")
+        await db.commit()
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(auth.SESSION_COOKIE)
     return response

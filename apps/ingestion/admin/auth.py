@@ -29,12 +29,24 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-#: scrypt cost: 2**15 * 8 * 128 bytes = 32 MiB of memory a check, about 0.1 s.
-SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**15, 8, 1
-_MAXMEM = 64 * 1024 * 1024
+#: scrypt cost: 2**17 * 8 * 128 bytes = 128 MiB of memory a check, about half a
+#: second. The login limit (LoginLimiter) bounds how often anyone can make us pay it.
+SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**17, 8, 1
+#: The most memory a stored hash may ask a check for: a hash asking more is refused
+#: with `HashUnusable`, not taken for a wrong password.
+MAX_SCRYPT_MEMORY = 1024 * 1024 * 1024
 
 SESSION_COOKIE = "mk_admin"
 PRE_COOKIE = "mk_admin_pre"
+
+
+class HashUnusable(ValueError):
+    """The stored hash cannot be checked here (malformed, or costs more than allowed)."""
+
+
+def _maxmem(n: int, r: int, p: int) -> int:
+    """What OpenSSL needs for these parameters (128*r*(n+p) bytes), with room to spare."""
+    return 128 * r * (n + p) + 16 * 1024 * 1024
 
 
 def hash_password(password: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R, p: int = SCRYPT_P) -> str:
@@ -42,30 +54,46 @@ def hash_password(password: str, *, n: int = SCRYPT_N, r: int = SCRYPT_R, p: int
     if not password:
         raise ValueError("an empty password is not a password")
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, maxmem=_MAXMEM, dklen=32)
+    digest = hashlib.scrypt(
+        password.encode(), salt=salt, n=n, r=r, p=p, maxmem=_maxmem(n, r, p), dklen=32
+    )
     return f"scrypt:{n}:{r}:{p}:{salt.hex()}:{digest.hex()}"
 
 
 def verify_password(password: str, stored: str | None) -> bool:
-    """Whether `password` matches `stored`; False for a missing or malformed hash."""
+    """Whether `password` matches `stored`.
+
+    False for an empty password or no hash. A hash that is malformed, or whose
+    parameters cost more than `MAX_SCRYPT_MEMORY`, raises `HashUnusable`: that
+    is a configuration problem to say so, never "wrong password". The memory
+    limit is derived from the stored parameters, so raising SCRYPT_N later does
+    not break hashes made with it.
+    """
     if not stored or not password:
         return False
     try:
-        scheme, n, r, p, salt, digest = stored.strip().split(":")
-        if scheme != "scrypt":
-            return False
+        scheme, n_text, r_text, p_text, salt, digest = stored.strip().split(":")
+        n, r, p = int(n_text), int(r_text), int(p_text)
+        salt_bytes, digest_bytes = bytes.fromhex(salt), bytes.fromhex(digest)
+    except ValueError as exc:
+        raise HashUnusable("ADMIN_PASSWORD_HASH is not an scrypt:N:r:p:salt:hash value") from exc
+    if scheme != "scrypt":
+        raise HashUnusable(f"ADMIN_PASSWORD_HASH uses {scheme!r}, not scrypt")
+    if _maxmem(n, r, p) > MAX_SCRYPT_MEMORY:
+        raise HashUnusable(f"ADMIN_PASSWORD_HASH asks for more memory than allowed (N={n}, r={r})")
+    try:
         computed = hashlib.scrypt(
             password.encode(),
-            salt=bytes.fromhex(salt),
-            n=int(n),
-            r=int(r),
-            p=int(p),
-            maxmem=_MAXMEM,
-            dklen=len(bytes.fromhex(digest)),
+            salt=salt_bytes,
+            n=n,
+            r=r,
+            p=p,
+            maxmem=_maxmem(n, r, p),
+            dklen=len(digest_bytes),
         )
-    except (ValueError, TypeError):
-        return False
-    return hmac.compare_digest(computed, bytes.fromhex(digest))
+    except ValueError as exc:
+        raise HashUnusable(f"ADMIN_PASSWORD_HASH cannot be checked: {exc}") from exc
+    return hmac.compare_digest(computed, digest_bytes)
 
 
 def _b64(data: bytes) -> str:
