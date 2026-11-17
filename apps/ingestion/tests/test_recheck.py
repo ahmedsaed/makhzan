@@ -97,6 +97,28 @@ async def test_a_shop_hiding_out_of_stock_keeps_the_marker_for_its_unlisted_pass
     assert await _marker(listing) is None
 
 
+async def test_a_host_refusing_the_re_check_stops_the_run(woo):  # noqa: F811
+    """A Retry-After longer than the crawler waits, met on the re-check's request,
+    stops the run there with that reason: no partition is tried after it."""
+    import time
+
+    from worker import http as http_mod
+
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    listing = await _mark("2")
+    pages_before = sum(1 for p in woo.requests if "stock_status" in p)
+    http_mod._NOT_BEFORE["https://woo.test"] = time.monotonic() + http_mod.RETRY_AFTER_CAP * 2
+
+    run = await run_source("woo", _woo_adapter())
+    assert run.stats["stopped"].startswith("refused by its host")
+    assert "failed" in run.stats["recheck"]
+    # One error, the re-check's: no partition was tried after the refusal.
+    assert [e.split(":")[0] for e in run.stats["errors"]] == ["re-check first"]
+    assert sum(1 for p in woo.requests if "stock_status" in p) == pages_before
+    assert await _marker(listing) is not None
+
+
 async def test_a_paused_shop_and_a_limit_run_ask_nothing(woo):  # noqa: F811
     async with SessionLocal() as session:
         session.add(

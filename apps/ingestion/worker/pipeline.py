@@ -1090,8 +1090,13 @@ async def _recheck_first(
     may_send: Callable[[], str | None],
     poll_pause: Callable[[], Awaitable[bool]],
     already_sent: bool,
+    halt: list[str],
 ) -> tuple[dict, Counter]:
     """Re-read the listings a person asked to be read first, by id, before the sweep.
+
+    Its own host refusing it (robots.txt unreadable, a Retry-After longer than
+    the crawler waits) goes into `halt`, as it would from a page, so the run
+    stops there with that reason instead of trying every partition.
 
     Only for an adapter that can re-read by id (`recheck.how` is `by_id`):
     through `confirm_listed` and a `ConfirmFetcher`, so the host's pace,
@@ -1117,6 +1122,8 @@ async def _recheck_first(
     except Exception as exc:  # noqa: BLE001 — a failed re-check must not stop the sweep
         message = f"{type(exc).__name__}: {exc}"
         errors.append(f"re-check first: {message}"[:300])
+        if _refused_by_own_host(exc, adapter):
+            halt.append(str(exc))
         sent = Counter({recheck.LABEL: fetcher.requests.total()}) if fetcher.requests else Counter()
         return {"asked": len(listings), "failed": message[:200]}, sent
     sent = Counter({recheck.LABEL: fetcher.requests.total()}) if fetcher.requests else Counter()
@@ -1737,7 +1744,12 @@ async def _logged_run(
                 ),
                 poll_pause=pause_check,
                 already_sent=bool(cycle_requests),
+                halt=halt,
             )
+            if halt:
+                # The host refused the re-check: every page would be refused too.
+                fetch_failed, stopped = True, f"refused by its host: {halt[0]}"
+                partitions = []
             if recheck_sent:
                 sent_extra.update(recheck_sent)
                 if run_page_budget is not None:
