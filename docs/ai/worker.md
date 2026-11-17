@@ -1,8 +1,8 @@
 # AI matching: the worker
 
-Status: **built and tested against a fake broker; not yet run against the real broker**
-(phase 2, built in parallel against `docs/ai/broker-api.md`). What is not here yet is listed
-at the end.
+Status: **built, tested against a contract-following fake broker, and checked against the
+phase 2 broker app** (two end-to-end sessions, below). Nothing has run on the home server yet.
+What is not here yet is listed at the end.
 
 A worker is one process that serves the model key(s) its configuration names. It talks only
 to the broker, over HTTPS with its own bearer token. It loads its model once, scores the
@@ -59,15 +59,23 @@ The parity check below confirms it on stored GPU scores.
      request.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
      Once loaded, it is checked against its pins: the snapshot revision, the temperature it
-     scores at, the Kev code commit and the prefix cache off. Then every weight file is
-     checked to be unmapped (CPU).
+     scores at, and the prefix cache off. Then every weight file is checked to be unmapped
+     (CPU). The Kev code commit is checked only where the image records it, and today's base
+     images do not (see "Not done yet").
    - Each job's requests are scored **in the order the broker sent them, one per call: no
      batching, no reordering** (owner decision, 2026-11-17). Before scoring a request, the
      worker recomputes `request_sha256` over its payload. A mismatch is never scored; the job
      goes back as an error.
+   - A request that fails goes back as an error, which costs the job one attempt. A job that
+     fails on every lease reaches the broker's `max_attempts` and is dead (a poison job), and
+     the worker carries on. If the model fails on 3 different jobs in a row, it is broken: the
+     worker stops, and the jobs it never started go back without costing an attempt.
    - The worker sends `POST /results` once per job.
    - While a lease is held, a background thread sends `POST /heartbeat` every `heartbeat_s`
-     with the lease ids, the resident memory and the request in progress.
+     with the lease ids, the job ids it still holds, the resident memory and the request in
+     progress. A `409 lease_lost` names the jobs and leases that moved on. The worker drops
+     those after its current request, without posting them, and keeps the rest. If the broker
+     queues a dropped job again, it is scored afresh whenever it comes back.
    - When the worker moves on to another model key, the first model is unloaded before the
      next one loads. Two 4B models do not fit side by side in 20 GB, or on a 12 GB card.
 5. **Graceful stop** happens at the window's end, on SIGTERM or on SIGINT:
@@ -81,16 +89,26 @@ The parity check below confirms it on stored GPU scores.
    ends, using its measured seconds per request.
 6. **Empty queue.** With `on_empty = "exit"`, the worker exits. With `"wait"`, it polls every
    `poll_s` until the window ends.
-7. **Session end.** Every session ends with a graceful `POST /release`, so the broker sees the
-   session end and can queue the rebuild (P16). That last release names no jobs.
+7. **Session end.** The broker records a session's end (P16) at a graceful `/release` of
+   held jobs, or at a lease that comes back empty (broker-api.md §3.1). A release must name
+   a lease and its jobs. So a session that stops between leases with nothing held, for
+   example at the window's end right after its last job, is not seen to end; the worker logs
+   that. This is an open question on the contract.
 
 **Retries.** A network failure, a 5xx or a 429 is retried with exponential backoff: 1 s, 2 s,
 4 s and so on, capped at 60 s, and never shorter than a `Retry-After`. Retries continue for
-up to `retry_max_s` in all. A 4xx is the broker's answer and is not retried.
+up to `retry_max_s` in all. A 4xx is the broker's answer and is not retried. Redirects are
+refused rather than followed, so the token is never sent anywhere else.
+
+Once the worker is stopping, a call in backoff wakes at once and retries for at most 30 s
+more (`STOP_RETRY_S`). Scores in hand then get their chance inside a `docker stop` grace
+period, and anything still undelivered is logged before the process exits.
 
 **Never drop a result silently.** A score that cannot be delivered within `retry_max_s`, or
 that the broker refuses (422), is logged at ERROR as `UNDELIVERED`, with its job, order,
-request hash and score, never the payload. The exit code then says so (4 or 6). A score for a
+request hash and score, never the payload. This happens on every exit path. When the
+session would otherwise have exited 0, the exit code says so (6); otherwise the code names
+what ended the session (for example 4). A score for a
 lease the broker reports lost is logged at WARNING: the job's new holder scores it again.
 
 Payloads are never logged or written to disk. The token is sent only in the Authorization
@@ -101,8 +119,8 @@ header.
 | Code | Meaning |
 |---|---|
 | 0 | the window ended, the queue was empty (`on_empty = "exit"`), or the worker started outside its window |
-| 1 | the model failed 3 requests in a row, or an unexpected error |
-| 2 | configuration error, memory limit below `memory_gib`, or a model that will not load as pinned (its lease goes back as an error) |
+| 1 | the model failed on 3 different jobs in a row, or an unexpected error |
+| 2 | configuration error, memory limit below `memory_gib`, or a model that will not load as pinned. Its lease goes back gracefully: the fault is the worker's, so the jobs are charged no attempt |
 | 3 | version drift: the broker's registry runs another model version (at hello, or 409 at lease) |
 | 4 | the broker could not be reached for `retry_max_s`; undelivered scores are logged |
 | 5 | 401 or 403: the token is wrong or revoked, or the worker is not registered for a model key |
@@ -343,8 +361,9 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   "$IMAGE"
 ```
 
-- `--stop-timeout 240` lets the request in flight finish on `docker stop`. One CPU request
-  takes 86 to 104 s.
+- `--stop-timeout 240` lets the request in flight finish on `docker stop` (one CPU request
+  takes 86 to 104 s), with the 30 s left for submitting and releasing. Keep it above one
+  request plus 30 s.
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
 
@@ -442,32 +461,67 @@ Those scores were made by the compose services over HTTP when the prompt grid wa
 
 All 40 scores are bit-identical to the stored ones. Both loads checked out against the pins:
 
-- Kev: snapshot `6cfce5c…`, code `6b719c3`, temperature 1.0, fused kernels on, prefix cache
-  off.
+- Kev: snapshot `6cfce5c…`, temperature 1.0, fused kernels on, prefix cache off. (The first run
+  also reported code `6b719c3`, but that came from the worker image's own default and proved
+  nothing; the default is gone, see "Not done yet".)
 - pplx: snapshot `d06fb3f…`, temperature 1.3303.
 
-Both loaded offline from the read-only cache. Each session ended with its graceful release
-and exit 0. The GPU time was under a minute in all.
+Both loaded offline from the read-only cache, and each session ended with exit 0. The GPU
+time was under a minute in all. These runs came before the review fixes (a later commit),
+which do not touch the scoring calls; Kev was run again on the GPU after them, with the same
+result.
 
-This proves the GPU path. The CPU path (fp32, no mmap) uses the same calls. The CPU
-benchmark has already measured those against these GPU scores (`ml/README.md` on the
-ml-improve branch, PR #57). It has not
-yet been run through the worker itself (see "Not done yet").
+**On CPU, through the worker.** Run the same day on the desktop's CPU under the home
+server's caps: `--cpus=6 --memory=20g --memory-swap=20g`, 6 threads, fp32, no mmap,
+read-only cache, `--network none`. The first 4 requests (2 pairs) of each file were scored.
+
+| Model | Against the CPU benchmark's CPU scores | Against the GPU scores | Peak RSS | Seconds a request |
+|---|---|---|---|---|
+| Kev | equal to the stored digit (desktop runs; the home server's run where it overlaps) | max 0.024, no flips | 16.8 GiB | 17 to 20 |
+| pplx | within 6e-7 (desktop runs) | max 0.0022, no flips | 17.6 GiB | 21 to 30 |
+
+- No weight file was mapped after either load.
+- The differences from the GPU scores are the known fp32/bf16 difference, which P8 counts as
+  one model version.
+- pplx's 6e-7 against its own earlier CPU run is fp32 rounding noise. It is not
+  bit-identical, as Kev is; why is not known, and it changes no decision.
+
+## Against the phase 2 broker
+
+The worker was also run against the real broker app (`app.broker.main`, branch
+`feat/ai-broker`), on a test database seeded with fictional listings. The broker was served
+by uvicorn on the test's event loop, and the real worker ran with a fake judge in a thread,
+over HTTP. Two sessions:
+
+- **Kev, then pplx, then a decision.** Two match pairs were leased, scored and posted for
+  Kev. The broker queued their pplx stage, the worker unloaded Kev, loaded pplx and drained
+  it. The result was two standing "same" decisions and 8 score rows carrying the device,
+  dtype and threads. The session ended "empty".
+- **A graceful stop.** A heartbeat with `job_ids` was sent mid-job. SIGTERM on the third
+  request kept the finished order, and the two jobs not finished went back with no attempt
+  counted. The session ended "released".
+
+That test lives outside this branch: it uses the broker suite's fixtures, so it belongs with
+them once both branches are merged.
 
 ## Tests
 
 `make test-worker` runs `ml/tests/` with the ingestion environment. It needs no database and
 no model. CI runs it with the ingestion suite.
 
-- **Configuration**: defaults, every refusal, windows (crossing midnight, touching windows,
-  boundaries), and every example in this document.
+- **Configuration**: defaults, every refusal (empty strings included), windows (crossing
+  midnight, touching windows, boundaries, UTC and no time zone), and every example in this
+  document.
 - **Lifecycle**, against the fake broker with a fake judge and clock:
   - a full session, and the payloads scored exactly as sent, in order;
   - an empty queue with `exit` and with `wait`, and starting outside the window;
   - a window closing across midnight, a half-scored job, SIGTERM, and a request that would
     overrun;
   - retries with backoff and `Retry-After`, a broker that stays down, and a refused result;
-  - heartbeats during a long job, and a lease lost at heartbeat or at results;
+  - heartbeats that keep a lease alive past its length, that name their jobs, and that
+    drop a lost lease; a lost job scored again when it comes back;
+  - undelivered scores logged when a fatal error ends the session; a stop that cuts retries
+    short; a redirect refused; seconds left counted in real time across a DST change;
   - version drift at hello, on one key only, and at lease;
   - a tampered payload, a failing request, a model that keeps failing, and a model that
     will not load;
@@ -478,19 +532,28 @@ no model. CI runs it with the ingestion suite.
 
 ## Not done yet
 
-- **Not run against the real broker.** Phase 2 is being built in parallel. The open
-  questions on the contract are listed in the phase 3 report and repeated here until the
-  contract settles them:
-  - Is a session-ending `/release` that names no lease and no jobs valid? The worker sends
-    one and tolerates a 4xx.
-  - Should hello carry prompt versions? The broker renders, so the worker has none of its
-    own. It logs each job's `prompt_version`.
-  - Does a heartbeat that answers `lease_lost` for some jobs still extend the others?
+- **Open questions on the contract**, until it settles them:
+  - How does a session that stops between leases with nothing held tell the broker it
+    ended? A release must name a lease and jobs, so today it cannot, and P16 waits for the
+    next empty lease or release.
+  - Should hello carry prompt versions? The owner asked for them at hello, but the broker
+    renders, so the worker has none of its own. It logs each job's `prompt_version`.
+  - `/lease` has no idempotency key. If a lease's response is lost and the call is retried,
+    the first set of jobs is orphaned until it expires, and each is charged an attempt.
+  - broker-api.md §6's example TOML is not this worker's format (`[compute]` and
+    `[schedule]`, strict parsing); it should point here.
+- **The Kev code commit is not verified.** The base images keep `KEV_COMMIT` as a build ARG
+  only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
+  Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
+  `ml/kev/Dockerfile*`, passed on as `MAKHZAN_KEV_COMMIT`.
+- **One model per worker is the tested shape.** A worker may name both keys, and it unloads
+  one model before loading the other. Freeing Kev's memory on unload is coded (the atexit
+  hook that held it is removed) but has not been measured with real models.
 - **No systemd units or network rules are shipped**: only the examples above. Setting them up
   on the home server is a separate, supervised step.
 - **No registry or image digests.** The images are local builds.
-- **The CPU path has not been run through the worker itself.** It uses the same calls,
-  settings and no-mmap loader as the CPU benchmark, and the parity check above covers the GPU
-  path. A CPU parity run on the home server is the next check.
+- **Nothing has run on the home server through the worker.** Both models were checked on
+  CPU on the desktop, under the same caps (above). The next check is one supervised run of
+  each worker on the home server, against the real broker.
 - **Pushing a locally reviewed backlog to production** (P4) is separate tooling, not part of
   the worker.
