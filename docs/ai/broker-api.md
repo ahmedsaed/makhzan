@@ -65,8 +65,10 @@ triggers (producers)           broker (generic)                 workers (generic
   behind a shop's stated code) re-uses the stored score instead of looping.
 - **The content hash** (`hashing.listing_hash`) is provenance and the
   re-score trigger only: it is stored on the job at lease time and on each
-  score and decision, saying which text they were about, and a changed one is
-  what makes the re-score trigger queue a pair (P5). A re-queued pair whose
+  score (the text that was sent), and on each decision as computed at
+  decision time (the text the decision stands for, §3.4). A listing whose
+  current hash differs from its standing decision's is what makes the
+  re-score trigger queue a pair (P5). A re-queued pair whose
   requests are byte-identical to scored ones goes straight to the transition
   with no lease (§3.2).
 
@@ -91,13 +93,14 @@ triggers (producers)           broker (generic)                 workers (generic
 ### 2.1 Modes
 
 `worker_state['ai_matching']` (`ai.mode`) is `off` or `live`; there is no
-shadow mode.
+shadow mode. **The mode governs only whether the regroup reads decisions.**
+The broker behaves the same in both: it leases jobs, accepts results and
+writes decisions, so the backlog can be scored while the mode is off.
 
-- `off` (the default): `/hello` answers no work and `/lease` returns no jobs,
-  so no worker loads a model; `/results` and `/release` are still accepted,
-  so a worker caught mid-lease by the switch loses nothing, and the
-  transition still writes decisions. The regroup reads none of them.
-- `live`: leasing works, and the regroup reads standing "same" decisions.
+- `off` (the default): the regroup reads no decision; `make regroup-dry-run
+  ARGS=--ai` previews what reading them would do. Nothing merges.
+- `live`: the regroup reads standing "same" decisions, and the broker's
+  rebuild after a window (P16, §3.4) fires.
 - The backlog is scored on the owner's machines against a local copy, its
   groupings reviewed there with `make regroup-dry-run ARGS=--ai` (which reads
   standing decisions whatever the mode), and its scores and decisions then
@@ -140,7 +143,7 @@ shadow mode.
   `version_drift` flag is opened); it must not lease that key, and §3.2
   enforces it.
 - `queued_requests` counts queued requests across every (pipeline, stage)
-  that uses that model (`pipelines.stages_for_models`); 0 in mode `off`. **A
+  that uses that model (`pipelines.stages_for_models`), in either mode. **A
   worker loads its model only when some `ok` model has work**, which avoids a
   long load and a large memory footprint on an empty night.
 - The broker stores a session row (worker, session id, the model versions it
@@ -170,7 +173,6 @@ shadow mode.
   otherwise `409 {"error": "version", "model": "kev", "current": "…"}` and no
   job is leased. The worker exits and logs it.
 - The worker must serve `model` (`ai_workers.models`), else `403`.
-- Mode `off`: `200 {"lease_id": null, "jobs": [], "mode": "off"}`.
 - One model per lease. The broker selects queued jobs whose
   `model_version_id` is the current judge of any stage that uses `model`,
   highest `priority` first, then oldest:
@@ -286,12 +288,27 @@ same model and prompt version share it.
 - takes a transaction-scoped advisory lock on the pair
   (`pg_advisory_xact_lock` over a hash of pipeline and pair), so two results
   for the same pair arriving at once (two workers, two stages) serialise;
-- marks any `standing` decision for (pipeline, pair) `stale`;
-- inserts a new `standing` row: `outcome`, `decided_by = step.decided_by`,
+- computes both listings' **current** `hashing.listing_hash` at decision
+  time and stores them as the decision's `content_sha256_a` / `_b`. Not the
+  hashes on the scores: a stage may reuse a byte-identical score that was
+  labelled with an older content hash (§1.1), and a decision labelled with an
+  old hash would make the re-score trigger queue the pair forever;
+- if a `standing` decision for (pipeline, pair) has the **same outcome**, it
+  is kept, same id: its `scores`, `decided_by`, `policy_version` and content
+  hashes are updated in place. A re-score that changes nothing therefore
+  changes nothing the regroup or the citations see;
+- otherwise marks it `stale` and inserts a new `standing` row: `outcome`,
+  `decided_by = step.decided_by`,
   `scores = {stage: {"model", "model_version_id", "ab", "ba", "min"}}`,
-  `policy_version = policy.ACTIVE`, and both content hashes from the scores;
+  `policy_version = policy.ACTIVE`, the current content hashes;
 - the partial unique index `uq_ai_decision_standing_pair` is the backstop:
   on a unique violation the transaction is retried once.
+
+**Competing pairs.** When two standing "same" decisions compete for one
+listing (X same as M and as N, M and N kept apart by a veto), the regroup
+lets the stronger win (`AiSame.rank`: the stages' lower scores, last stage
+first; ties by the pair's listing ids, never by decision id). A late Kev "no"
+that blocks the winning pair can therefore let the losing pair merge instead.
 
 The regroup reads standing "same" decisions (`decisions.load_ai_same`) at the
 next rebuild, only when the mode is `live`.
@@ -301,7 +318,8 @@ uses what it can see: when a worker ends a session, by a graceful `/release`
 or by a lease that came back empty, and new standing "same" decisions were
 written since the last rebuild the broker queued, it queues
 `rebuild_and_reindex` through the existing `request_rebuild` job-id scheme
-(deduplicated by window). Only in mode `live`.
+(deduplicated by window). Only in mode `live`; in `off` nothing is queued,
+since the regroup would read nothing.
 
 ### 3.5 `POST /release`
 
