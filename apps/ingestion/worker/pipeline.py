@@ -859,12 +859,24 @@ class ConfirmFetcher(CycleFetcher):
     it has not asked about unasked.
     """
 
-    def __init__(self, pace, *, limit: int | None, may_send: Callable[[], str | None]) -> None:
+    def __init__(
+        self,
+        pace,
+        *,
+        limit: int | None,
+        may_send: Callable[[], str | None],
+        poll_pause: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
         super().__init__(pace, retries=1)
         self.limit = limit
         self._may_send = may_send
+        self._poll_pause = poll_pause
 
     async def get(self, label: str, url: str, params: dict | None = None):
+        if self._poll_pause is not None:
+            # Re-read the pause: a person may have paused the shop meanwhile,
+            # and `may_send` then says so.
+            await self._poll_pause()
         if (why := self._may_send()) is not None:
             raise ConfirmStopped(why)
         if self.limit is not None and self.requests.total() >= self.limit:
@@ -914,8 +926,11 @@ class Confirmer:
         already_sent: Callable[[], bool],
         may_send: Callable[[], str | None],
         budget_left: Callable[[], int | None] = lambda: None,
+        poll_pause: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         self.session, self.run, self.adapter = session, run, adapter
+        #: Re-reads the pause and returns why, if the shop or crawl was paused.
+        self._poll_pause = poll_pause
         self.supplier_id, self.cat_index, self.errors = supplier_id, cat_index, errors
         self._already_sent = already_sent
         #: Why no request may go out now (the host refused the run, its time
@@ -925,6 +940,15 @@ class Confirmer:
         self._budget_left = budget_left
         self.requests: Counter = Counter()
         self.report: dict = {}
+
+    def _paused(self, why: str, offered: list[Listing]) -> tuple[list[uuid.UUID], bool]:
+        """Hold the cycle for a paused shop: nothing asked, nothing archived, no attempt counted.
+
+        `_held_runs` skips a report marked `paused`, so a pause never brings the
+        candidates nearer to archiving unconfirmed.
+        """
+        self.report.update(paused=why[:200], held=len(offered))
+        return [], True
 
     def _limit(self) -> int | None:
         limits = [n for n in (self.adapter.max_pages_per_run, self._budget_left()) if n is not None]
@@ -960,11 +984,19 @@ class Confirmer:
             report["held"] = len(offered)
             return [], True
 
+        if self._poll_pause is not None and (why := await self._poll_pause()):
+            return self._paused(why, offered)
         if refused := self._may_send():
             return failed(refused)
 
+        async def poll() -> bool:
+            return bool(self._poll_pause and await self._poll_pause())
+
         fetcher = ConfirmFetcher(
-            lambda: _pace(self.adapter), limit=self._limit(), may_send=self._may_send
+            lambda: _pace(self.adapter),
+            limit=self._limit(),
+            may_send=self._may_send,
+            poll_pause=poll if self._poll_pause is not None else None,
         )
         if self._already_sent():
             await asyncio.sleep(await _pace(self.adapter))
@@ -1024,6 +1056,12 @@ class Confirmer:
         report.update(kept=len(kept), absent=len(absent))
         if not_kept := (returned - upserted) & set(by_external):
             report["returned_not_kept"] = len(not_kept)
+        if unasked and self._poll_pause is not None and (why := await self._poll_pause()):
+            # Paused while asking: what was answered stands, the rest waits for
+            # the shop to be resumed, and the hold counts as no attempt.
+            report["paused"] = why[:200]
+            report["held"] = len(unasked)
+            return absent, True
         if unasked:
             report["attempt"] = held_runs + 1
             if not overdue and held_runs + 1 < CONFIRM_MAX_HELD_RUNS:
@@ -1054,6 +1092,8 @@ async def _held_runs(session: AsyncSession, source_id: str, swept_at: datetime) 
     for report in rows:
         if not isinstance(report, dict) or not report.get("held"):
             continue
+        if report.get("paused"):
+            continue  # held because a person paused the shop: no attempt
         if report.get("failed"):
             failed += 1
         else:
@@ -1516,6 +1556,10 @@ async def _logged_run(
                     paused.append(reason)
             return bool(paused)
 
+        async def pause_reason() -> str | None:
+            """`pause_check`, as the reason (for the confirmation's report)."""
+            return paused[0] if await pause_check() else None
+
         def checkpoint(more: Counter | None = None) -> None:
             """Put what the run has sent so far on its row, for the next commit.
 
@@ -1629,6 +1673,7 @@ async def _logged_run(
                     budget_left=lambda: (
                         None if run_page_budget is None else run_page_budget - tally["pages"]
                     ),
+                    poll_pause=pause_reason,
                 )
             archived, cycle = await _finish_cycle_if_swept(
                 session,
@@ -1658,6 +1703,7 @@ async def _logged_run(
                     pace=lambda: _pace(adapter),
                     already_sent=bool(tally["pages"] or cycle_requests or sent_extra),
                     checkpoint=checkpoint,
+                    stop=pause_check,
                 )
             except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
                 # Whatever went wrong reading details, the run's own record

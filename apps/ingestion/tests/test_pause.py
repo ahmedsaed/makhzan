@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
+
 from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus
@@ -293,3 +295,75 @@ async def test_a_pause_holds_a_held_cycle_without_counting_confirmation_attempts
         await session.commit()
     second = await run_source("woo", _woo_adapter())
     assert second.stats["archive_confirm"]["attempt"] == 2
+
+
+async def test_a_pause_noticed_at_the_confirmation_holds_without_an_attempt(
+    woo,  # noqa: F811
+    monkeypatch,
+):
+    """The run began unpaused, then the shop was paused before its cycle's
+    candidates were asked about: nothing is asked, nothing archived, and the
+    hold is not counted against the confirmation's limits."""
+    from worker import pipeline
+
+    await _add(_source("woo"))
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    for _ in range(5):
+        first = await run_source("woo", _woo_adapter())
+        if first.stats.get("archive_confirm"):
+            break
+    assert first.stats["archive_confirm"]["attempt"] == 1
+
+    # Unpaused as the next run starts (its first check), paused from then on.
+    calls: list[int] = []
+
+    async def paused_after_start(session, source_id):
+        calls.append(1)
+        return None if len(calls) == 1 else "shop paused by tester"
+
+    monkeypatch.setattr(pipeline, "paused_reason", paused_after_start)
+    asked = len(woo.included())
+    held = await run_source("woo", _woo_adapter())
+    report = held.stats["archive_confirm"]
+    assert report["paused"] == "shop paused by tester" and report["held"] == 1
+    assert "attempt" not in report and "failed" not in report
+    assert len(woo.included()) == asked
+    assert not held.stats.get("archived") and not held.stats.get("cycle")
+    assert (await _status_of("2")).status == ListingStatus.ACTIVE
+
+    monkeypatch.setattr(pipeline, "paused_reason", pause.paused_reason)
+    # The next real attempt is the second, so it gives up and archives as before.
+    asked = len(woo.included())
+    second = await run_source("woo", _woo_adapter())
+    assert second.stats["archive_confirm"]["attempt"] == 2
+    assert len(woo.included()) == asked + 1, "asked the fake shop, which answered 500"
+
+
+async def test_a_pause_stops_the_details_stage_before_its_next_page(monkeypatch):
+    import test_details as td
+
+    from worker import http as http_mod
+    from worker import robots as robots_mod
+
+    clock = td._Clock()
+    monkeypatch.setattr(robots_mod, "ROBOTS", td._AllowAll())
+    monkeypatch.setattr(http_mod.asyncio, "sleep", clock.sleep)
+    monkeypatch.setattr(http_mod, "_now", clock)
+
+    class PausingShop(td._Shop):
+        async def fetch_details(self, listing, fetcher):
+            details = await super().fetch_details(listing, fetcher)
+            await _pause_shop(self.source_id, note="paused while reading pages")
+            return details
+
+    shop = PausingShop({"a": "t1", "b": "t1", "c": "t1"})
+    monkeypatch.setattr(
+        http_mod, "make_client", lambda **kw: httpx.AsyncClient(transport=shop.transport(), **kw)
+    )
+    await _add(_source(shop.source_id))
+    run = await run_source(shop.source_id, shop)
+    assert len(shop.details_sent()) == 1, "the page in hand is kept; no next one"
+    assert run.stats["details"]["stopped"] == "paused"
