@@ -163,7 +163,11 @@ def test_token_or_token_file_exactly_one(tmp_path):
     [
         ("https://broker.example.test/ai/v1", True),
         ("http://127.0.0.1:8123/ai/v1", True),
-        ("http://localhost:8123/ai/v1", True),
+        ("http://127.8.9.10:8123/ai/v1", True),  # all of 127.0.0.0/8
+        ("http://localhost:8123/ai/v1", False),  # a name, even this one: addresses only
+        ("http://100.64.0.1:notaport/ai/v1", False),  # a malformed port fails at load
+        ("http://100.64.0.1:99999/ai/v1", False),
+        ("http://[fd7a:115c:a1e0::1%25eth0]:8080/ai/v1", False),  # a zone id
         ("http://[::1]:8123/ai/v1", True),
         # Tailscale: the broker over the tailnet, plain http (owner decision 2026-11-17)
         ("http://100.64.0.1:8080/ai/v1", True),

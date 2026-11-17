@@ -194,11 +194,10 @@ TAILSCALE_NETS = (
 
 
 def _plain_http_ok(host: str) -> bool:
-    """Where plain http:// may go: a loopback address (the tests, the parity check, a broker
-    on the same machine) or a Tailscale address (the broker, reached over the tailnet: owner
-    decision 2026-11-17). Addresses only, never names, so DNS cannot redirect it."""
-    if host == "localhost":
-        return True
+    """Where plain http:// may go: a loopback address (127.0.0.0/8 or ::1: the tests, the
+    parity check, a broker on the same machine) or a Tailscale address (the broker, reached
+    over the tailnet: owner decision 2026-11-17). Addresses only, never names, not even
+    "localhost", so name resolution cannot redirect it."""
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
@@ -211,6 +210,12 @@ def _broker_url(url: Any) -> str:
     parts = urlsplit(url)
     if not parts.hostname:
         raise ConfigError(f"[worker] broker_url {url!r} has no host")
+    if "%" in parts.netloc:  # an IPv6 zone id (or an escape) in the host: never wanted
+        raise ConfigError(f"[worker] broker_url {url!r}: no '%' (zone ids) in the host")
+    try:
+        parts.port  # a malformed port fails here, at load, not at the first call
+    except ValueError as e:
+        raise ConfigError(f"[worker] broker_url {url!r}: {e}") from None
     # The broker is reached over Tailscale, http://<tailscale-ip>:<port>: the tailnet's
     # WireGuard tunnel encrypts it. Plain HTTP is accepted for a Tailscale or loopback
     # address only; anything else must be https://.

@@ -196,7 +196,7 @@ this image can load the model key, and exits.
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | required | the worker's name, as registered (`ai_workers.name`) |
-| `broker_url` | required | the broker's base URL over Tailscale, `http://<tailscale-ip>:<port>/ai/v1`. Plain `http://` is accepted only to a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one (the tests, the parity check, a broker on the same machine), and only as an address, never a name; anything else must be `https://` |
+| `broker_url` | required | the broker's base URL over Tailscale, `http://<tailscale-ip>:<port>/ai/v1`. Plain `http://` is accepted only to a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one (127.0.0.0/8, ::1: the tests, the parity check, a broker on the same machine), and only as an address, never a name (not even `localhost`) and with no zone id; a malformed port is refused at load; anything else must be `https://` |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
 | `ca_file` | system CAs | for an `https://` broker only: a CA bundle to trust instead, for a privately signed certificate |
 | `model` | required | the one model key served, from `policy.MODELS`: `"kev"` or `"pplx"`. The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
@@ -623,6 +623,12 @@ no model. CI runs it with the ingestion suite.
 
 ## Not done yet
 
+- **A lease taken just before the window ends can still start a model load.** The window
+  is checked before loading: if it has already ended (or a stop has come), the lease goes
+  back gracefully with nothing loaded. But a lease taken seconds before the end starts the
+  load (about 150 s on CPU), which runs past the window; the window is checked again
+  right after the load, so nothing is scored, and the lease goes back gracefully, but the
+  model was loaded for nothing and the worker overstays its window by the load's length.
 - **The Kev code commit is not verified.** The base images keep `KEV_COMMIT` as a build ARG
   only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
   Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
