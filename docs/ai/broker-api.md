@@ -137,7 +137,11 @@ writes decisions, so the backlog can be scored while the mode is off.
 ```json
 200 {"session": "6f1c…",
      "models": {"kev": {"model_version": "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0",
-                        "ok": true, "queued_requests": 824}},
+                        "ok": true, "queued_requests": 824,
+                        "stages": [{"pipeline": "match", "stage": "kev",
+                                    "prompt_version": "K2-150@6aef2c6c"},
+                                   {"pipeline": "audit", "stage": "kev",
+                                    "prompt_version": "K2-150@6aef2c6c"}]}},
      "lease_s": 900, "heartbeat_s": 60}
 ```
 
@@ -146,8 +150,11 @@ writes decisions, so the backlog can be scored while the mode is off.
 - For each model key the broker answers the model version the registry uses
   now (`policy.MODELS[key].model_version`). A worker whose `model_version`
   or `weights_revision` differs gets `"ok": false` for that key (and a
-  `version_drift` flag is opened); it must not lease that key, and §3.2
-  enforces it.
+  `version_drift` flag is opened, one per worker and model, `subject =
+  "<worker>/<model>"`); it must not lease that key, and §3.2 enforces it.
+- `stages` lists, per model, every (pipeline, stage) that uses it and the
+  prompt version the broker renders for it now: what that model's leases
+  will carry. The broker renders, so the worker only compares or logs these.
 - `queued_requests` counts queued requests across every (pipeline, stage)
   that uses that model (`pipelines.stages_for_models`), in either mode: two
   per queued job, whichever judge it was queued at, so it is an upper bound
@@ -156,11 +163,16 @@ writes decisions, so the backlog can be scored while the mode is off.
   footprint on an empty night.
 - `lease_s` is the worker's `config.lease_s` (default 900), used for every
   lease and heartbeat of the session; `heartbeat_s` is `min(60, lease_s / 3)`.
+  It must be an integer from 60 to 7200, else `422 {"error": "invalid"}`.
+- Hello also moves any job queued at an old judge to its stage's current
+  judge (the judge sweep, §3.2), before counting, so the worker's own leases
+  see that work.
 - The broker stores a session row (`ai_sessions`: worker, session id, the
   model versions it reported and whether each was `ok`, the rest of the
-  hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason) and
-  `ai_workers.last_hello` for status. `ended_at` / `end_reason` record how a
-  session last stopped: `released` (a graceful `/release`) or `empty` (a
+  hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, and the
+  last lease's request id and lease id) and `ai_workers.last_hello` for
+  status. `ended_at` / `end_reason` record how a session last stopped:
+  `released` (a graceful `/release`, with or without jobs) or `empty` (a
   lease came back empty); a later lease that returns jobs reopens it.
 
 ### 3.2 `POST /lease`
@@ -168,7 +180,8 @@ writes decisions, so the backlog can be scored while the mode is off.
 ```json
 {"session": "6f1c…", "model": "kev",
  "model_version": "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0",
- "max_jobs": 2, "seconds_left": 10450, "seconds_per_request": 86}
+ "max_jobs": 2, "seconds_left": 10450, "seconds_per_request": 86,
+ "lease_request_id": "3f2a…"}
 ```
 
 ```json
@@ -194,10 +207,26 @@ writes decisions, so the backlog can be scored while the mode is off.
   (index `ix_ai_job_lease`, partial on `status = 'queued'`), then sets
   `status = 'leased'`, `lease_id`, `leased_by`, `leased_at` and
   `lease_expires_at = now() + lease_s`. `SKIP LOCKED` keeps concurrent
-  workers, on any machines, from leasing the same job.
-- **Batch size:** jobs are added while `requests × seconds_per_request` fits
-  in `seconds_left` minus a 60 s margin; at most `max_jobs`. Without both
-  fields, only `max_jobs` limits it. A job that does not fit stays queued.
+  workers, on any machines, from leasing the same job. A lease locks only as
+  many rows as it still wants (`LIMIT max_jobs - taken`, a job already
+  looked at in this lease excluded by id), so a concurrent lease never finds
+  the queue empty because this one holds a wide scan.
+- **Retrying a lease**: `lease_request_id` (optional, the worker's own id
+  for this request, at most 64 characters). A /lease whose id equals the
+  session's last one gets that lease back: the same `lease_id`, the jobs of
+  it still held, re-rendered (only orders still owed), their expiry renewed.
+  So a lease whose answer was lost on the way is not orphaned until it
+  expires. If none of them is still held, a fresh lease is made. A new id,
+  or none, is always a fresh lease.
+- **Batch size, and a job that does not fit.** Jobs are added in priority
+  order while `owed requests × seconds_per_request` fits in `seconds_left`
+  minus a 60 s margin; at most `max_jobs`. The first job that does not fit
+  **stops** the lease (it stays queued): the broker never skips ahead to a
+  smaller job, which would invert priority. So every job returned fits the
+  time the worker said it has, and the worker needs no rule of its own for
+  "does not fit" beyond sending honest `seconds_left` and
+  `seconds_per_request`; a job it cannot start after all it releases
+  gracefully. Without both fields, only `max_jobs` limits the lease.
 - **Rendering at lease time**, from the current database rows: the stage's
   prompt variant (`pipelines.PIPELINES[p].stage(s).prompt`) through
   `prompt.requests(variant, record(a), record(b))`, where `record` is
@@ -215,21 +244,28 @@ writes decisions, so the backlog can be scored while the mode is off.
   job is set `cancelled` (with `last_error` saying why) and skipped: both
   listings active; no standing override on the pair; the pipeline and stage
   still exist in the registry and the stage still uses this judge (otherwise
-  it is re-queued at the current judge, `reason = "rescore"`). Trigger-specific
+  it is queued again at the current judge, keeping its reason). Trigger-specific
   conditions (for example, "not merged by the rules") are the trigger's to
   re-check: the broker asks `TRIGGERS[job.reason].still_wanted(session, job)`
   when the trigger defines it (`triggers.still_wanted`), and otherwise keeps
   the job. A later stage's job keeps the reason, so it is asked too.
-- **Judge changes are swept at every lease**, before jobs are selected: every
-  queued job whose (pipeline, stage, judge) is not its stage's current judge
-  is cancelled and queued again at the current one as a re-score. Compared
-  per job, not by "is this id current anywhere": a judge id can be current
-  for one stage and stale for another.
-- **Lazy expiry reaper**, at the start of every `/lease`: leases past
+- **The judge sweep** (`broker.sweep_judges`) moves every queued job whose
+  (pipeline, stage, judge) is not its stage's current judge (a new model or
+  prompt version) to the current one, keeping its reason and priority; a job
+  whose stage left the registry is only cancelled. Compared per job, not by
+  "is this id current anywhere": a judge id can be current for one stage and
+  stale for another. Set-based (one UPDATE, batched inserts), and run at
+  `/hello` and by the daily producers, **never inside a lease**, so a version
+  bump over a large queue neither slows a lease nor holds its rows.
+- **Lazy expiry reaper**, at the start of every fresh `/lease`: leases past
   `lease_expires_at` (index `ix_ai_job_lease_expiry`, partial on
-  `status = 'leased'`) go back to `queued` with `attempts + 1` and their
-  lease fields cleared; at `max_attempts` the job becomes `dead` and a
-  `poison_job` flag is opened. No cron is needed.
+  `status = 'leased'`) go back to `queued` with their lease fields cleared.
+  **Only the job in hand is charged an attempt**: the one the worker's last
+  heartbeat named in `progress.job_id` (§3.3). Its co-leased jobs never
+  started and go back free, so one poison job does not take innocent jobs
+  down with it. A lease with no job reported in hand (the worker died before
+  any heartbeat said) charges every job. At `max_attempts` a job becomes
+  `dead` and a `poison_job` flag is opened. No cron is needed.
 - Empty queue: `200 {"lease_id": null, "jobs": []}`. A worker with
   `on_empty = "exit"` exits; with `"wait"` it polls until its window ends.
   An empty lease marks the session ended (`end_reason = "empty"`) and is one
@@ -245,7 +281,10 @@ writes decisions, so the backlog can be scored while the mode is off.
 ```
 
 Sets `lease_expires_at` to now + `lease_s` for every live job of those
-leases held by this worker. A lease that already expired and was re-leased
+leases held by this worker. `progress.job_id`, when it is one of those jobs,
+marks it the job in hand (and no other job of its lease): the one an expiry
+is charged to (§3.2). The worker should send a heartbeat as it starts each
+job, so a crash is blamed on the right one. A lease that already expired and was re-leased
 elsewhere is not extended. `job_ids` (optional) names the jobs the worker
 still holds: an expired lease's fields are cleared when it is reaped, so
 only the worker can say which jobs it thought it had. The answer is 409 when
@@ -366,10 +405,16 @@ written since the last rebuild the broker queued, it queues
 (deduplicated by window; the scheme is `makhzan_schemas.rebuild`, shared
 with the worker). Only in mode `live`; in `off` nothing is queued, since the
 regroup would read nothing. "Since the last rebuild the broker queued" is
-`worker_state['ai_rebuild']`: the `created_at` of the newest standing "same"
-decision a rebuild was queued for. A same-outcome re-score updates its row in
+`worker_state['ai_rebuild']`: `{"through_id": N}`, the highest decision id a
+rebuild was queued for. The id, not `created_at`: that is the writing
+transaction's start, which can lag well behind a long lease's commit. (An
+id is allocated at the insert, so a transaction that inserts and commits
+much later than a higher id's could in principle still be passed over; the
+next daily rebuild applies it.) A same-outcome re-score updates its row in
 place and so queues nothing; a "same" turned "not same" does not queue one
-either (the next daily rebuild applies it).
+either (the next daily rebuild applies it). That is `broker.REBUILD_ON_UNMERGE
+= False`, an owner decision pending; True queues one for any new standing
+decision.
 
 ### 3.5 `POST /release`
 
@@ -377,7 +422,18 @@ either (the next daily rebuild applies it).
 {"session": "6f1c…", "lease_id": "0b7e…", "job_ids": [81235],
  "reason": "graceful" | "error", "error": "CUDA out of memory"}
 200 {"released": 1}
+
+{"session": "6f1c…"}
+200 {"released": 0}
 ```
+
+**Ending a session.** A graceful release with no jobs (`job_ids` empty or
+absent, `lease_id` optional) is how a worker that holds nothing ends its
+session: window over, a stop signal between leases, or done after its last
+results. It marks the session ended and considers the P16 rebuild, as a
+release with jobs does. A worker that stops between leases should always send
+it; otherwise only an empty lease ends its session. An `error` release must
+name its jobs (422 otherwise).
 
 The caller must hold the lease and serve the jobs' model (as for `/results`).
 `graceful` (window end, SIGTERM) re-queues with no attempt counted; `error`
@@ -406,8 +462,9 @@ rebuild is considered.
 - A job is leased only if at least one of its requests is unscored.
 - A lease is held until `lease_expires_at`; heartbeats extend it. Only its
   holder may post results for it or release it. An expired lease counts an
-  attempt (the worker died, for example killed for memory); a graceful release
-  does not.
+  attempt against the job in hand (the worker died, for example killed for
+  memory), or against every job of it when none was reported in hand; a
+  graceful release does not.
 - `max_attempts` (3) explicit failures or expiries make a job `dead`; it shows
   in status and is retried by hand (`./makhzan ai jobs retry ID`, which also
   closes its poison flag). A trigger never queues a pair again at a stage and
@@ -439,7 +496,14 @@ rebuild is considered.
 ## 5.1 The triggers (phase 2)
 
 `ai_candidates` runs after every `rebuild_and_reindex` (job id per rebuild
-window): candidates, then re-scores, then the audit (`candidates.daily`).
+window): the judge sweep, then candidates, re-scores and the audit
+(`candidates.daily`). One producer run at a time (a transaction-scoped
+advisory lock): a second run, daily or by hand, is skipped and says so.
+`ai_listing_state` is written with upserts, and a listing that leaves the
+scope (archived, or out of electronics) loses its row. The owner decisions
+still pending are named constants: `candidates.BASELINE_FIRST_RUN`,
+`candidates.SKIP_DECISION_STATES` (revoked pairs stay out), the
+`triggers.*` priorities and `broker.REBUILD_ON_UNMERGE`.
 
 - **candidates** (`match`, priority 60): electronics only (P15). A listing
   whose content hash differs from the one its candidates were last found for
@@ -460,6 +524,11 @@ window): candidates, then re-scores, then the audit (`candidates.daily`).
 - **rescore**: above.
 
 ## 6. Worker configuration (phase 3)
+
+**The worker's own documentation is `docs/ai/worker.md`, and its TOML format
+(`[compute]`, `[schedule]`, ...) is defined there.** The sketch below shows
+only what the broker relies on: a worker serves model keys, has a token, and
+decides its own window and lease size.
 
 Each worker's TOML decides everything the broker does not: which model keys it
 serves, its window, threads, memory, `max_jobs` per lease, `lease_s`, device
