@@ -184,6 +184,13 @@ export type Offer = {
   supplier: Supplier | null;
   /** The brand the shop names, when it names one. */
   brand?: string | null;
+  /**
+   * How it came to be an offer of this product: by makhzan's grouping rules,
+   * or by AI matching ("Matched by AI" on its row). The API says "rules" for
+   * every offer until AI matching exists (makhzan_schemas/matching.py).
+   * Optional: an API older than it means "rules".
+   */
+  matched_by?: "rules" | "ai";
 } & ShopDetailsFields;
 
 /** A file a shop links from its listing: a datasheet, a manual. */
@@ -253,6 +260,13 @@ type ShopTermsFields = {
  */
 export type Product = ProductSummary & {
   offers: Offer[];
+  /** How many of `offers` AI matching put here (`matched_by: "ai"`). */
+  ai_matched_count?: number;
+  /** The offer whose listing the product's title, brand and category come
+   *  from (the representative the regroup chose): the shop view's pick on a
+   *  plain load, so the h1 and <title> name the same listing. Optional: an
+   *  API older than it falls back to the cheapest. */
+  representative_offer_id?: string | null;
   status?: "listed" | "delisted";
   /** When its last offer went. */
   delisted_at?: string | null;

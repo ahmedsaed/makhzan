@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 
+import { AiPill } from "@/components/ai-badge";
 import { Link } from "@/components/link";
 import { formatPriceRange } from "@/lib/format";
 import {
@@ -30,7 +31,9 @@ import {
   type OpenedToken,
   limitedTitle,
   MAX_DESCRIPTION,
+  offersToList,
   PRICE_FIELDS,
+  REPORT_OFFERS_EVENT,
   type PickedProduct,
   productIdFromLink,
   reasonOf,
@@ -132,6 +135,24 @@ export function ReportProblem({ context }: { context: ReportContext }) {
     setLimited(null);
     setReference(null);
   };
+
+  // The AI note's "tell us" (shop-view.tsx): a fresh report on "These offers
+  // aren't the same product", straight at step two, the AI-matched offers
+  // listed first and none ticked.
+  useEffect(() => {
+    const openOnOffers = () => {
+      openedToken.current = openToken();
+      attempt.current += 1;
+      setForm({ ...blankForm(), step: 2, reason: "offers_not_same", aiFirst: true });
+      setErrors({});
+      setStatus("idle");
+      setLimited(null);
+      setReference(null);
+      setOpen(true);
+    };
+    window.addEventListener(REPORT_OFFERS_EVENT, openOnOffers);
+    return () => window.removeEventListener(REPORT_OFFERS_EVENT, openOnOffers);
+  }, []);
 
   const onOpenChange = (next: boolean, details: Dialog.Root.ChangeEventDetails) => {
     if (!next && details.reason === "escape-key" && listOpen.current) return;
@@ -465,6 +486,12 @@ function OfferLabel({ offer }: { offer: ReportOffer }) {
         <span className="figure text-sm text-ink">{offer.price}</span>
         {offer.outOfStock && " · out of stock"}
         {offer.stale && " · out of date"}
+        {offer.ai && (
+          <>
+            <span className="sr-only"> · matched by AI</span>
+            <AiPill className="ms-1.5 align-[-3px]" />
+          </>
+        )}
       </span>
     </span>
   );
@@ -542,9 +569,12 @@ function StepTwo({
           <p className={HINT}>
             Tick each one that doesn’t match. All {context.offers.length} offers are here, out of
             stock and out of date included.
+            {form.aiFirst && context.offers.some((offer) => offer.ai) && (
+              <> The ones matched by AI come first.</>
+            )}
           </p>
           <div className="flex flex-col gap-2">
-            {context.offers.map((offer) => (
+            {offersToList(context, form).map((offer) => (
               <label key={offer.id} className={cn(CARD, "min-h-11 py-2")}>
                 <input
                   type="checkbox"

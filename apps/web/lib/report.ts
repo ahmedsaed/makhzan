@@ -104,6 +104,8 @@ export type ReportOffer = {
   outOfStock: boolean;
   /** Not checked in over 45 days (C2b). */
   stale: boolean;
+  /** AI matching, not makhzan's rules, made it an offer of this product. */
+  ai?: boolean;
 };
 
 /** What the page knows that the form needs. Built on the server. */
@@ -157,6 +159,7 @@ export function reportContextOf({
             : NO_PRICE,
       outOfStock: isOutOfStock(offer),
       stale: isStaleOffer(offer, now),
+      ai: offer.matched_by === "ai",
     })),
   };
 }
@@ -182,6 +185,8 @@ export type FormState = {
   email: string;
   /** The honeypot. Filled only by something that is not a person. */
   website: string;
+  /** Opened from the AI note: the AI-matched offers are listed first. */
+  aiFirst: boolean;
 };
 
 export function blankForm(): FormState {
@@ -202,7 +207,29 @@ export function blankForm(): FormState {
     description: "",
     email: "",
     website: "",
+    aiFirst: false,
   };
+}
+
+/**
+ * The offers as step two lists them: the page's order, or, opened from the
+ * AI note, the AI-matched ones first (in the page's order among themselves).
+ * None is ticked for the visitor: which one is different is theirs to say.
+ */
+export function offersToList(context: ReportContext, form: FormState): ReportOffer[] {
+  if (!form.aiFirst) return context.offers;
+  return [
+    ...context.offers.filter((offer) => offer.ai),
+    ...context.offers.filter((offer) => !offer.ai),
+  ];
+}
+
+/** The window event that opens Report a problem on "These offers aren't the
+ *  same product" with the AI-matched offers first: the AI note's "tell us". */
+export const REPORT_OFFERS_EVENT = "makhzan:report-offers";
+
+export function openOffersReport(): void {
+  window.dispatchEvent(new Event(REPORT_OFFERS_EVENT));
 }
 
 export function several(context: ReportContext): boolean {
