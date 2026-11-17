@@ -20,7 +20,12 @@ adapter can (`how`):
 Only a read that writes price and stock clears the marker: a sweep's or a
 re-read's upsert (`pipeline._upsert_listing`). A
 re-read that finds the listing gone from the shop clears it too: it was asked,
-and the cycle's own archiving decides the rest. A `limit=` run never reads a
+and the cycle's own archiving decides the rest (`stats.recheck.absent`). Not on
+a shop whose Store API hides out-of-stock products (`hides_out_of_stock`):
+`include` omits those too, so "not returned" may mean "out of stock", the very
+report, and the marker stays (`stats.recheck.hidden_kept`) for the unlisted
+pass, which reads the stock by id (`pipeline._mark_out_of_stock` clears it),
+or the sweep. A `limit=` run never reads a
 marked listing first, and a paused shop is not asked.
 """
 

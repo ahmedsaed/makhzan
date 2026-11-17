@@ -188,7 +188,12 @@ Store API `include`, counted as `stats.requests.recheck` and reported as
 `stats.recheck`); else it waits for its partition in the cycle. A shop's
 details stage is no answer (owner, 2026-11-17): a product page read never
 writes price or stock, so it neither puts a marked listing first nor clears
-it. Only a read that writes price and stock clears the marker, and a re-read that finds it gone from the shop clears it too (the
+it. On a WooCommerce shop that hides out-of-stock products from its Store
+API, a listing `include` does not return may be out of stock, the very
+report: its marker stays (`stats.recheck.hidden_kept`, against
+`stats.recheck.absent` elsewhere) for the shop's unlisted out-of-stock pass,
+which reads stock by id and clears it, or the sweep. Only a read that writes
+price or stock clears the marker, and a re-read that finds it gone from the shop clears it too (the
 cycle's archiving decides the rest). A paused shop and a `limit=` run ask
 nothing. The Reports view lists the re-checks pending per shop and how each
 will be honoured; so does `make status` (RE-CHECKS).

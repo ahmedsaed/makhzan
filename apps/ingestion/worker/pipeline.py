@@ -547,6 +547,8 @@ async def _mark_out_of_stock(
         listing.status = ListingStatus.ACTIVE
         listing.last_seen_at = now
         listing.attributes = _without_stock_counts(listing.attributes)
+        # Its stock was read (none): that answers a re-check a person asked for.
+        listing.recheck_requested_at = None
     if record_history and listings:
         await _record_changes(session, list(listings), now)
     return len(listings)
@@ -1136,14 +1138,22 @@ async def _recheck_first(
         if (row := by_external.get(external_id)) is not None:
             row.last_seen_at = now
     returned = {str(raw.external_id) for raw in answer.items}
-    answered = (returned | answer.absent | answer.seen) & set(by_external)
+    absent = answer.absent & set(by_external)
+    report = {"asked": len(listings), "read": read}
+    if getattr(adapter, "hides_out_of_stock", False):
+        # A shop whose Store API hides out-of-stock products omits them from
+        # `include` too: not returned may well mean out of stock, which is the
+        # very report. That is no answer, so the marker stays for the
+        # unlisted pass or the sweep to read.
+        not_answered = absent
+        report["absent"] = 0
+        report["hidden_kept"] = len(absent)
+    else:
+        not_answered = set()
+        report["absent"] = len(absent)
+    answered = (returned | absent | answer.seen) & set(by_external) - not_answered
     await recheck.clear(session, [by_external[e].id for e in answered])
-    report = {
-        "asked": len(listings),
-        "read": read,
-        "absent": len(answer.absent & set(by_external)),
-        "unasked": len(by_external) - len(answered),
-    }
+    report["unasked"] = len(by_external) - len(answered) - len(not_answered)
     if answer.notes.get("stopped"):
         report["stopped"] = answer.notes["stopped"]
     return report, sent

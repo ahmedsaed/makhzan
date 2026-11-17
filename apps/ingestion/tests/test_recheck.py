@@ -64,6 +64,39 @@ async def test_a_marked_listing_the_shop_no_longer_lists_is_cleared_not_archived
     assert (await _status_of("2")).status == ListingStatus.ACTIVE  # the cycle decides
 
 
+async def test_a_shop_hiding_out_of_stock_keeps_the_marker_for_its_unlisted_pass(woo):  # noqa: F811
+    """`include` omits a hidden out-of-stock product: "not returned" is no answer
+    there, so the marker stays until the unlisted pass reads its stock."""
+    from makhzan_schemas.models import Supplier
+    from worker import pipeline
+
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    listing = await _mark("2")
+    del woo.catalogue[2]  # out of stock, and hidden by the shop
+
+    adapter = _woo_adapter()
+    partitions = adapter.partitions()
+    adapter.hides_out_of_stock = True
+    adapter.partitions = lambda: partitions  # the fake shop has no unlisted route
+    run = await run_source("woo", adapter)
+    assert run.stats["recheck"] == {
+        "asked": 1,
+        "read": 0,
+        "absent": 0,
+        "hidden_kept": 1,
+        "unasked": 0,
+    }
+    assert await _marker(listing) is not None
+
+    # The unlisted pass reads it by id, out of stock: that answers it.
+    async with SessionLocal() as session:
+        supplier_id = await session.scalar(select(Supplier.id).where(Supplier.slug == "woo"))
+        assert await pipeline._mark_out_of_stock(session, supplier_id, ["2"]) == 1
+        await session.commit()
+    assert await _marker(listing) is None
+
+
 async def test_a_paused_shop_and_a_limit_run_ask_nothing(woo):  # noqa: F811
     async with SessionLocal() as session:
         session.add(
