@@ -30,14 +30,19 @@ BROKER_BIND=<server tailscale ip>:8100
 then `./makhzan deploy` (or `docker compose ... up -d broker`). Workers
 connect to `http://<server tailscale ip>:8100/ai/v1`.
 
+**`BROKER_BIND` must include an address.** A bare port (`BROKER_BIND=8100`)
+makes Docker publish on every interface, the public one included.
+
 - **Recommended: bind the Tailscale IP.** Docker publishes the port on that
   address only, so the broker is reachable from the tailnet and nowhere
   else. The catch: the `tailscale0` interface must be up, with its address,
   **before the container starts**, or Docker cannot bind it and the service
-  fails to start. On a host where Docker can start first, order the units
-  (for example a systemd drop-in giving `docker.service`
-  `After=tailscaled.service` and `Wants=tailscaled.service`), or restart the
-  broker once Tailscale is up.
+  fails to start. The robust fix is to let the kernel bind an address not
+  yet assigned: `sysctl net.ipv4.ip_nonlocal_bind=1`, kept in
+  `/etc/sysctl.d/`; the bind then succeeds at boot and serves as soon as
+  `tailscale0` comes up. Otherwise order the units (a systemd drop-in giving
+  `docker.service` `After=tailscaled.service` and
+  `Wants=tailscaled.service`), or restart the broker once Tailscale is up.
 - **Alternative: `BROKER_BIND=0.0.0.0:8100` with a host firewall** that
   allows the port only on `tailscale0` and drops it on every other
   interface. Docker's own iptables rules bypass a plain INPUT rule, so the

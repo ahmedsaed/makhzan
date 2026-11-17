@@ -85,12 +85,12 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
       P14, 2026-11-17: option (a), mutual best). A decision of a pipeline no
       longer in the registry is skipped, and logged.
 
-    `no` holds every standing decision's pair, between two active listings,
-    that the group-check model scored below `KEV_BLOCK`, whatever its outcome:
-    it can only block, never admit.
+    `no` holds every standing decision's pair, between two active listings in
+    any department, that the group-check model scored below `KEV_BLOCK`,
+    whatever its outcome: it can only block, never admit.
     """
     la, lb = aliased(Listing), aliased(Listing)
-    joined = (
+    active = (
         select(AiDecision)
         .join(la, la.id == AiDecision.listing_a)
         .join(lb, lb.id == AiDecision.listing_b)
@@ -98,14 +98,13 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             and_(
                 la.status == ListingStatus.ACTIVE,
                 lb.status == ListingStatus.ACTIVE,
-                # Only while both listings are in a served department: one
-                # that moves out takes the AI merge apart (owner, 2026-11-17).
-                la.domain.in_(DOMAINS),
-                lb.domain.in_(DOMAINS),
                 AiDecision.state == STANDING,
             )
         )
     )
+    # Only while both listings are in a served department may a decision
+    # admit: one that moves out takes the AI merge apart (owner, 2026-11-17).
+    joined = active.where(la.domain.in_(DOMAINS), lb.domain.in_(DOMAINS))
     query = (
         joined.with_only_columns(
             AiDecision.id,
@@ -164,8 +163,9 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     below = literal_column(
         f"""'$.* ? (@.model == "{GROUP_CHECK_MODEL}" && @.min < {KEV_BLOCK!r})'::jsonpath"""
     )
+    # Unfiltered by department: a confident "no" blocks whatever the domain.
     no_rows = await session.execute(
-        joined.with_only_columns(AiDecision.listing_a, AiDecision.listing_b).where(
+        active.with_only_columns(AiDecision.listing_a, AiDecision.listing_b).where(
             func.jsonb_path_exists(AiDecision.scores, below)
         )
     )

@@ -544,9 +544,14 @@ both listings are in electronics; `decisions.load_ai_same`).
   title-token Jaccard (the experiments' method), plus the identifier-key
   pairs the rules split. Dropped: today's vetoes (P13), pairs the rules
   merged, pairs with an override, pairs with a standing decision in `match`
-  (the re-score's), and pairs whose decision a person revoked while both
-  listings still show the text it was revoked on (a text change offers it
-  again: owner, option (b)). One-directional; `./makhzan ai candidates
+  (the re-score's), and pairs whose decision a person revoked while the
+  requests they would render now are those the revoked decision recorded
+  (each stage's two request hashes, kept in its evidence). A change the
+  models would see offers the pair again, so they are asked again (owner,
+  option (b)); a change they would not (an Arabic title under an English
+  one, a `HASH_VERSION` bump) does not. A re-offered pair that its old scores
+  alone would decide (a stage whose view did not change) is not offered:
+  a revocation is never undone with no model looking. One-directional; `./makhzan ai candidates
   --mutual` also takes listings whose own top K now holds a changed one. **The
   first run on a database with no `ai_listing_state` records a baseline and
   queues nothing**: the existing catalogue is the backlog's.
