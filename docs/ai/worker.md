@@ -1,13 +1,15 @@
 # AI matching: the worker
 
 Status: **built, tested against a contract-following fake broker, and checked against the
-phase 2 broker app on its final contract** (five end-to-end sessions, below). Nothing has
-run on the home server yet. What is not here yet is listed at the end.
+phase 2 broker app** (six end-to-end sessions, below, run while the broker's time-fit
+removal was in progress). Nothing has run on the home server yet. What is not here yet is
+listed at the end.
 
 A worker is one process that serves the one model key its configuration names: the broker
 takes exactly one model per session, so two models are two workers (for example `home-kev`
-and `home-pplx`, each with its own window). It talks only
-to the broker, over HTTPS with its own bearer token. It loads its model once, scores the
+and `home-pplx`, each with its own window). It talks only to the broker, with its own
+bearer token, over Tailscale (`http://<tailscale-ip>:<port>`, inside the tailnet's encrypted
+WireGuard tunnel; there is no public HTTPS endpoint). It loads its model once, scores the
 requests the broker renders, one request per forward call, and posts the scores back. The
 broker treats every worker the same. Each worker's TOML file decides what it runs, on what
 hardware, and when, so two workers on one machine overlap only if their windows say so (owner
@@ -15,14 +17,13 @@ decision, 2026-11-17).
 
 The code is `ml/makhzan_ml/worker/`, and its tests are `ml/tests/` (`make test-worker`).
 
-**Merge order: `feat/ml-improve` (PR #57) first.** The worker images build on the lean CPU
-images and the pplx shim that PR adds (`ml/kev/Dockerfile.cpu-lean`, `ml/pplx/`). This
-branch carries none of them.
+The worker images build on the lean CPU images and the pplx shim from PR #57
+(`ml/kev/Dockerfile.cpu-lean`, `ml/pplx/`), now on main.
 
 | Module | What it does |
 |---|---|
 | `config.py` | the TOML file: parsing, validation, windows |
-| `broker.py` | the HTTPS client: bearer token, typed errors, retry with backoff |
+| `broker.py` | the HTTP client: bearer token, typed errors, retry with backoff |
 | `judges.py` | loads a model in-process on the validated scoring path; no mmap; pin checks |
 | `pins.py` | what each model key is pinned to (a copy of `makhzan_schemas.ai.policy.MODELS`, held equal by a test) |
 | `run.py` | one session, from hello to the last release |
@@ -67,20 +68,10 @@ The parity check below confirms it on stored GPU scores.
 4. **Lease, load, score, submit.** The worker drains its model's queue:
    - `POST /lease` carries a fresh `lease_request_id` per lease. The client's retries of
      that call send the same id, so a lease whose answer was lost on the way comes back as
-     the same lease instead of being orphaned until it expires. The body is rebuilt for
-     each retry, so after a backoff it says how much time is left now; the broker replays
-     by id, so a fresh time value is harmless.
-   - It also carries honest time: the seconds left in the window, less an estimate of a
-     model load still to come (`LOAD_ESTIMATE_S`: 150 s on CPU, 30 s on GPU), and the
-     measured seconds per request (the configured estimate until the first is measured).
-     The broker returns only jobs that fit, keeping a 60 s margin, and stops at the first
-     that does not. A job the worker cannot start after all goes back gracefully. A worker
-     that runs "always" sends no time, and only `max_jobs` limits its leases.
-   - An empty lease that says `"reason": "none_fit"` means jobs are queued but none fits
-     the time left. The worker logs "no job fits the time left" and stops for the window,
-     whatever `on_empty` says: polling would only find the same. The broker ends the session
-     on this answer (`end_reason` "none_fit", with no P16 rebuild), so no session release
-     follows it. An empty lease without the field is an empty queue.
+     the same lease instead of being orphaned until it expires.
+   - A lease asks for up to `max_jobs` jobs and sends no time (owner decision, 2026-11-17):
+     the worker takes what it is given and works until its window ends. What the window's
+     end interrupts goes back gracefully (step 5) for another worker or a later window.
    - Each job's `prompt_version` is compared with the ones hello announced. A mismatch is
      logged, not refused: the broker renders, so it means the registry moved since hello.
    - The model is **loaded on the first lease that brings jobs**, never on an empty night.
@@ -105,27 +96,25 @@ The parity check below confirms it on stored GPU scores.
      progress. A `409 lease_lost` names the jobs and leases that moved on. The worker drops
      those after its current request, without posting them, and keeps the rest. If the broker
      queues a dropped job again, it is scored afresh whenever it comes back.
-5. **Graceful stop** happens at the window's end, on SIGTERM or on SIGINT. A timer enforces
+5. **Graceful stop** happens at the window's end, on SIGTERM or on SIGINT: the current job
+   is dropped. A timer enforces
    the window's end, and it is also checked between retries, with no backoff sleeping past
    it. So a call retrying through a broker outage cannot keep the model loaded past the
    window while the next worker on the machine loads its own:
    - no new request is started, and the one in flight finishes (a forward pass cannot be
      interrupted);
    - finished orders are submitted, so half a job is kept;
-   - the rest of the lease goes back with `POST /release`, reason `graceful`, which counts no
-     attempt;
+   - the rest of the lease, the current job's unscored orders included, goes back with
+     `POST /release`, reason `graceful`, which counts no attempt; another worker or a later
+     window picks it up;
    - the model is unloaded.
-
-   The worker also never starts a request it does not expect to finish before the window
-   ends, using its measured seconds per request.
 6. **Empty queue.** With `on_empty = "exit"`, the worker exits. With `"wait"`, it polls every
    `poll_s` until the window ends.
 7. **Session end, exactly once.** The broker records a session's end at an empty lease
-   ("empty"), at a lease answering `none_fit` ("none_fit", no P16 rebuild), or at a graceful
-   release, with jobs or without ("released"). The worker ends every session it opened
-   exactly once:
+   ("empty") or at a graceful release, with jobs or without ("released"). The worker ends
+   every session it opened exactly once:
    - when one of those already ended it, nothing more is sent (a session release would
-     overwrite "empty" or "none_fit" with "released");
+     overwrite "empty" with "released");
    - otherwise (stopped between leases with nothing held: the window's end, a signal, an
      error, a 403 for a model key) it sends `POST /release {"session"}`, a
      graceful release naming no jobs (broker-api.md §3.5);
@@ -207,9 +196,9 @@ this image can load the model key, and exits.
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | required | the worker's name, as registered (`ai_workers.name`) |
-| `broker_url` | required | the broker's base URL, `https://<broker host>/ai/v1`. Plain `http://` is refused except to a loopback address (the tests, the parity check, or a local broker on the same machine) |
+| `broker_url` | required | the broker's base URL over Tailscale, `http://<tailscale-ip>:<port>/ai/v1`. Plain `http://` is accepted only to a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one (the tests, the parity check, a broker on the same machine), and only as an address, never a name; anything else must be `https://` |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
-| `ca_file` | system CAs | a CA bundle to trust instead, for a privately signed broker certificate |
+| `ca_file` | system CAs | for an `https://` broker only: a CA bundle to trust instead, for a privately signed certificate |
 | `model` | required | the one model key served, from `policy.MODELS`: `"kev"` or `"pplx"`. The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
 
 ### `[model.<key>]` (optional)
@@ -246,7 +235,6 @@ this image can load the model key, and exits.
 | `max_jobs` | 2 | jobs per lease (a job is one pair, up to two requests). "Batch" means this, never batched inference |
 | `lease_s` | 900 | the lease length the worker reports at hello, an integer from 60 to 7200 (the broker refuses any other) |
 | `heartbeat_s` | 60 | at least 5, and at most half of `lease_s`. If the broker's hello answers a shorter interval, that one is used |
-| `seconds_per_request` | 90 | the first estimate, replaced by the measured time after the first request. It sizes leases and decides whether a request still fits in the window |
 | `retry_max_s` | `lease_s` | how long to retry a call through network failures before giving up |
 
 ## Example configurations
@@ -260,7 +248,7 @@ The home server's Kev worker:
 # home-kev.toml
 [worker]
 name = "home-kev"
-broker_url = "https://<broker host>/ai/v1"
+broker_url = "http://<tailscale-ip>:<port>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
 model = "kev"
 
@@ -282,10 +270,9 @@ timezone = "Africa/Cairo"
 on_empty = "exit"
 
 [leases]
-max_jobs = 2              # 4 requests, about 6 minutes on this CPU
+max_jobs = 2   # 4 requests, about 6 minutes on this CPU (about 86 s a request)
 lease_s = 900
 heartbeat_s = 60
-seconds_per_request = 90  # measured: about 86 s a request
 ```
 
 The home server's pplx worker. Its window follows Kev's, so the two never share the memory:
@@ -294,7 +281,7 @@ The home server's pplx worker. Its window follows Kev's, so the two never share 
 # home-pplx.toml
 [worker]
 name = "home-pplx"
-broker_url = "https://<broker host>/ai/v1"
+broker_url = "http://<tailscale-ip>:<port>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
 model = "pplx"
 
@@ -319,7 +306,6 @@ on_empty = "exit"
 max_jobs = 2
 lease_s = 900
 heartbeat_s = 60
-seconds_per_request = 105  # measured: about 104 s a request
 ```
 
 The desktop's GPU workers, for a backlog. They run until the queue is empty. Run one at a
@@ -329,7 +315,7 @@ time: each 4B model needs most of the 12 GB card.
 # desk-kev.toml
 [worker]
 name = "desk-kev"
-broker_url = "https://<broker host>/ai/v1"
+broker_url = "http://<tailscale-ip>:<port>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
 model = "kev"
 
@@ -349,14 +335,13 @@ on_empty = "exit"
 max_jobs = 32
 lease_s = 600
 heartbeat_s = 60
-seconds_per_request = 1   # measured: about 3 requests a second
 ```
 
 ```toml
 # desk-pplx.toml
 [worker]
 name = "desk-pplx"
-broker_url = "https://<broker host>/ai/v1"
+broker_url = "http://<tailscale-ip>:<port>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
 model = "pplx"
 
@@ -376,14 +361,12 @@ on_empty = "exit"
 max_jobs = 32
 lease_s = 600
 heartbeat_s = 60
-seconds_per_request = 1   # measured: about 2 requests a second
 ```
 
 ## Images
 
 `ml/worker.Dockerfile` adds the worker to a model image. Build the base images first
-(`ml/kev`, `ml/pplx`; see `ml/README.md`; the lean CPU images and `ml/pplx` come with
-PR #57), then build from the `ml/` directory. Its
+(`ml/kev`, `ml/pplx`; see `ml/README.md`), then build from the `ml/` directory. Its
 `.dockerignore` sends only the worker's code, never the weights cache or `ml/out/`.
 
 ```bash
@@ -424,7 +407,7 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   --cpus=6 --cpu-shares=256 --memory=20g --memory-swap=20g \
   --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
   --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
-  --network makhzan-ai --add-host "<broker host>:<broker address>" \
+  --network makhzan-ai \
   -e MAKHZAN_IMAGE="$(docker image inspect -f '{{.Id}}' "$IMAGE")" \
   -v "<weights dir>:/models:ro" \
   -v "<config dir>/$NAME.toml:/etc/makhzan-ai/worker.toml:ro" \
@@ -439,21 +422,23 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
 
-**Egress to the broker only.** `makhzan-ai` is a user-defined bridge network whose subnet may
-reach only the broker, on port 443. The rules go in Docker's `DOCKER-USER` chain. Each `-I`
-inserts at the top, so add the DROP first:
+**Egress to the broker only.** The broker is reached over Tailscale at
+`http://<tailscale-ip>:<port>`; the host's Tailscale client carries the traffic, encrypted.
+`makhzan-ai` is a user-defined bridge network whose subnet may reach only that address and
+port. The rules go in Docker's `DOCKER-USER` chain. Each `-I` inserts at the top, so add the
+DROP first:
 
 ```bash
 docker network create --driver bridge --subnet <subnet> makhzan-ai
 iptables -I DOCKER-USER -s <subnet> -j DROP
-iptables -I DOCKER-USER -s <subnet> -d <broker address> -p tcp --dport 443 -j ACCEPT
+iptables -I DOCKER-USER -s <subnet> -d <tailscale-ip> -p tcp --dport <port> -j ACCEPT
 iptables -I DOCKER-USER -s <subnet> -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ```
 
-`--add-host` pins the broker's name, so the worker needs no DNS lookup. The rules must be
-restored at boot, for example with `iptables-save` and the distribution's restore service. The
-worker enforces what it can on its side: `https://` only, offline model loading, and no other
-peer.
+The broker URL is an address, so the worker needs no DNS lookup. The rules must be restored
+at boot, for example with `iptables-save` and the distribution's restore service. The worker
+enforces what it can on its side: plain `http://` only to a Tailscale or loopback address,
+offline model loading, proxy settings ignored, and no other peer.
 
 **Starting at the window.** One timer per worker, at its window's start:
 
@@ -563,29 +548,32 @@ read-only cache, `--network none`. The first 4 requests (2 pairs) of each file w
 ## Against the phase 2 broker
 
 The worker was also run against the real broker app (`app.broker.main`, branch
-`feat/ai-broker`), on a test database seeded with fictional listings. The broker was served
-by uvicorn on the test's event loop, and the real worker ran with a fake judge in a thread,
-over HTTP. Run last against the final contract (`feat/ai-broker`, commit `fcbc5a2`); five
+`feat/ai-broker`, PR #59), on a test database seeded with fictional listings. The broker was
+served by uvicorn on the test's event loop, and the real worker ran with a fake judge in a
+thread, over HTTP. Run last on 2026-11-17 against the broker worktree's state while its
+time-fit removal was in progress (its committed tip, `91f1f99`, still had time fit); six
 sessions:
 
-- **Kev, then pplx, then a decision.** Two match pairs were leased, scored and posted for
-  Kev. The broker queued their pplx stage, the worker unloaded Kev, loaded pplx and drained
-  it. The result was two standing "same" decisions and 8 score rows carrying the device,
-  dtype and threads. Hello announced the stages (`match/kev`, `audit/kev`, `match/pplx`),
-  the broker recorded the lease request id, and the empty lease ended the session
-  ("empty"), with no session release after it.
-- **A graceful stop.** A heartbeat with `job_ids` was sent mid-job. SIGTERM on the third
-  request kept the finished order, and the two jobs not finished went back with no attempt
-  counted. The session ended "released".
+- **Kev, then pplx, as two workers.** A Kev worker leased, scored and posted two match
+  pairs; the broker queued their pplx stage, and a pplx worker drained it. The result was
+  two standing "same" decisions and 8 score rows carrying the device, dtype and threads.
+  Each hello named one model and got its stages back; each session ended at its empty lease
+  ("empty"), with no release after it.
+- **The broker refuses a hello naming two models** (422).
+- **A graceful stop.** A heartbeat with `job_ids` and an integer `progress.job_id` was sent
+  mid-job. SIGTERM on the third request kept the finished order, and the two jobs not
+  finished went back with no attempt counted. The session ended "released".
 - **Session end between leases.** SIGTERM right after a job's results, with nothing held:
   the session release ended the session.
 - **A lease whose answer is lost.** The broker leased two jobs and the answer was dropped.
   The client's retry, with the same `lease_request_id`, got the same lease back. Both jobs
   were scored once, none charged an attempt.
-- **Time fit.** With 30 minutes left, 300 s a request and Kev not yet loaded, the worker
-  sent `seconds_left` 1650. The broker leased the two jobs that fit (1590 s after its
-  margin) and stopped at the third. Twenty minutes later, with 600 s left, nothing fit. Two
-  jobs stayed queued, none charged.
+- **The window's end drops the current job.** A lease with no time fields got both queued
+  jobs. A 90 s request started a minute before the window's end; when it finished, its
+  order was posted, both jobs went back gracefully (no attempt), and the session ended
+  "released".
+
+No heartbeat was refused in any session.
 
 That test lives outside this branch: it uses the broker suite's fixtures, so it belongs with
 them once both branches are merged.
@@ -620,23 +608,21 @@ no model. CI runs it with the ingestion suite.
     workers (one session each);
   - every session ending exactly once (window end, SIGTERM, empty queue, a fatal error,
     SIGTERM mid-lease, a 403 at lease), none sent to a broker that is down or refused the
-    token, and none opened by a stop before hello; a lost lease answer retried into the
-    same lease, and a lease retry carrying the time left now under the same id; `none_fit`
-    ending the window whatever `on_empty`, with no session release after it; heartbeats that keep naming a job whose
-    final results are retrying; results refused with a 409 logged as undelivered; no
-    release naming a job found lost; no
-    lost warning for a job being settled; leases carrying honest time and holding only jobs
-    that fit; a heartbeat naming each job as it starts, before its results, with an integer
-    job id; a crash charged to the job in hand alone; an unannounced prompt version logged.
+    token, and none opened by a stop before hello;
+  - the window's end dropping the current job (its finished order posted, the rest released
+    gracefully); leases asking for `max_jobs` only, with no time fields; a lost lease
+    answer retried into the same lease, and a retry keeping its request id;
+  - heartbeats that keep naming a job whose final results are retrying; results refused
+    with a 409 logged as undelivered; no release naming a job found lost; no lost warning
+    for a job being settled; a heartbeat naming each job as it starts, before its results,
+    with an integer job id; a crash charged to the job in hand alone; an unannounced prompt
+    version logged.
 - **Pins**: `pins.PINS` equals `policy.MODELS`, the worker's request hash equals
   `prompt.request_sha256` on rendered requests, the mapped-weights check can fire, and scores
   outside [0, 1] are refused.
 
 ## Not done yet
 
-- **The model load estimate is a constant** (`LOAD_ESTIMATE_S`), taken from the measured
-  loads, not measured per run. A first lease whose load took longer than the estimate can
-  hold a job the worker cannot finish. That job goes back gracefully, with no attempt.
 - **The Kev code commit is not verified.** The base images keep `KEV_COMMIT` as a build ARG
   only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
   Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
