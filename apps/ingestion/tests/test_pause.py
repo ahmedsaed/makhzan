@@ -197,9 +197,70 @@ async def test_make_status_shows_both_pauses(capsys):
     async with SessionLocal() as session:
         await status.sweep_progress(session, None)
     out = capsys.readouterr().out
-    assert "the whole crawl is paused by tester" in out
+    assert "the whole crawl is paused by tester (0m ago)" in out
     assert "paused by tester" in out and "blocked by its host" in out
     assert "the daily run skips it" in out
+
+
+async def test_identity_and_details_mark_a_shop_a_person_paused(capsys, monkeypatch):
+    from worker import status
+    from worker.sources import registry
+
+    await _add(_source(SRC))
+    await _pause_shop(SRC)
+    monkeypatch.setattr(registry, "_REGISTRY", {SRC: StubAdapter()})
+    async with SessionLocal() as session:
+        await status.crawler_identity(session, None)
+        await status.product_details(session, None)
+    out = capsys.readouterr().out
+    identity, details = out.split("PRODUCT DETAILS")
+    assert "(paused by tester)" in identity
+    assert "[paused by tester]" in details
+
+
+async def test_the_dashboard_joins_a_paused_source_to_its_shop_not_its_id():
+    """A source's id need not be its shop's slug: the overview's catalogue line
+    for a paused source is found through the source's supplier slug."""
+    from admin import data
+    from makhzan_schemas.enums import SourceType
+    from makhzan_schemas.models import Listing, Supplier
+
+    await _add(
+        Source(
+            source_id="feed-1",
+            adapter="fixture",
+            supplier={"slug": "the-shop", "name": "The Shop"},
+            config={},
+            enabled=False,
+        )
+    )
+    async with SessionLocal() as session:
+        shop = Supplier(slug="the-shop", name="The Shop", source_type=SourceType.SCRAPED)
+        session.add(shop)
+        await session.flush()
+        session.add(
+            Listing(
+                supplier_id=shop.id,
+                source="feed-1",
+                source_type=SourceType.SCRAPED,
+                external_id="1",
+                title_en="a relay",
+                images=[],
+                attributes={},
+            )
+        )
+        await session.commit()
+    async with SessionLocal() as session:
+        view = await data.overview(session, {"overrides": 0, "reports": 0})
+    (item,) = [i for i in view["attention"] if i["title"] == "feed-1 is paused"]
+    assert "1 listings" in item["detail"] and "enabled = false" in item["detail"]
+
+
+async def test_dismissing_a_flag_with_a_blank_note_exits_cleanly(capsys):
+    from worker import ai
+
+    assert await ai._flags_dismiss([1], "  ", "tester") == 1
+    assert "note must say why" in capsys.readouterr().err
 
 
 async def test_a_pause_holds_a_held_cycle_without_counting_confirmation_attempts(woo):  # noqa: F811

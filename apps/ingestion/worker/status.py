@@ -66,6 +66,13 @@ def _age(moment: datetime | None) -> str:
     return f"{hours / 24:.0f}d ago"
 
 
+def _iso(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
 def _bar(done: int, total: int, width: int = 24) -> str:
     if not total:
         return "-" * width
@@ -144,7 +151,7 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
         for row in (
             await session.execute(
                 select(Source.source_id, Source.enabled, Source.paused_at, Source.paused_by)
-                .add_columns(Source.pause_note)
+                .add_columns(Source.pause_note, Source.supplier)
                 .order_by(Source.source_id)
             )
         ).all()
@@ -174,7 +181,7 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
             else None
         )
         last = finished.get(source)
-        if disabled or pause:
+        if row is not None and is_paused(row.enabled, row.paused_at):
             # The daily run skips it on purpose, so an open cycle here is not
             # a stalled one.
             state = "paused"
@@ -196,6 +203,8 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
         out.append(
             {
                 "source": source,
+                # The shop it reads (a shop may have several sources).
+                "shop": ((row.supplier or {}).get("slug") if row is not None else None) or source,
                 "done": done,
                 "total": total,
                 "state": state,
@@ -215,7 +224,13 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
     return {"declared": declared, "sources": out, "crawl_pause": await crawl.crawl_pause(session)}
 
 
-def _pause_text(entry: dict) -> str:
+def is_paused(enabled: bool, paused_at) -> bool:
+    """The one rule for "the daily run skips it": disabled in sources.toml, or paused by a person."""
+    return not enabled or paused_at is not None
+
+
+def pause_text(entry: dict) -> str:
+    """Why a paused source is paused, in words: `entry` has `disabled` and `paused`."""
     reasons = []
     if entry["disabled"]:
         reasons.append("enabled = false in sources.toml")
@@ -242,8 +257,8 @@ async def sweep_progress(session, source_filter: str | None) -> None:
     if pause := data["crawl_pause"]:
         why = f": {pause['note']}" if pause.get("note") else ""
         print(
-            f"  {YELLOW}the whole crawl is paused by {pause.get('by')} since"
-            f" {pause.get('at')}{why} (`./makhzan crawl on` resumes it){RESET}"
+            f"  {YELLOW}the whole crawl is paused by {pause.get('by')}"
+            f" ({_age(_iso(pause.get('at')))}){why} (`./makhzan crawl on` resumes it){RESET}"
         )
     if not data["sources"]:
         print(f"  {DIM}no cursors yet — nothing has been swept{RESET}")
@@ -254,7 +269,7 @@ async def sweep_progress(session, source_filter: str | None) -> None:
         started = entry["cycle_started_at"]
         if entry["state"] == "paused":
             state = f"{DIM}paused{RESET}"
-            cycle = f"paused: {_pause_text(entry)}; the daily run skips it"
+            cycle = f"paused: {pause_text(entry)}; the daily run skips it"
             if started:
                 cycle += f" (cycle started {_age(started)})"
         elif entry["state"] == "running":
@@ -650,7 +665,9 @@ async def collect_crawler_identity(session, source_filter: str | None) -> dict:
     """
     from makhzan_schemas import botauth
 
-    query = select(Source.source_id, Source.config, Source.enabled).order_by(Source.source_id)
+    query = select(
+        Source.source_id, Source.config, Source.enabled, Source.paused_by, Source.paused_at
+    ).order_by(Source.source_id)
     if source_filter:
         query = query.where(Source.source_id == source_filter)
     sources = (await session.execute(query)).all()
@@ -670,7 +687,7 @@ async def collect_crawler_identity(session, source_filter: str | None) -> dict:
     except Exception as exc:  # noqa: BLE001 — a bad key must not hide the rest
         key_error = str(exc)
     rows = []
-    for source_id, config, enabled in sources:
+    for source_id, config, enabled, paused_by, paused_at in sources:
         configured = (config or {}).get("identity", "browser")
         seen = last.get(source_id)
         rows.append(
@@ -678,6 +695,7 @@ async def collect_crawler_identity(session, source_filter: str | None) -> dict:
                 "source": source_id,
                 "configured": configured,
                 "enabled": enabled,
+                "paused_by": (paused_by or "?") if paused_at is not None else None,
                 "seen": seen,
                 "unverifiable": configured == "makhzanbot"
                 and seen is not None
@@ -713,6 +731,8 @@ async def crawler_identity(session, source_filter: str | None) -> None:
             line += f"  {YELLOW}unverifiable: no key on the worker{RESET}"
         if row["changed"]:
             line += f"  {YELLOW}changed since the last run{RESET}"
+        if row["paused_by"]:
+            line += f"  {DIM}(paused by {row['paused_by']}){RESET}"
         if not row["enabled"]:
             line += f"  {DIM}(disabled){RESET}"
         print(line)
@@ -1010,6 +1030,14 @@ async def collect_product_details(session, source_filter: str | None) -> dict:
         return {"unavailable": type(exc).__name__, "sources": []}
     sources = {sid: a for sid, a in _REGISTRY.items() if not source_filter or sid == source_filter}
     coverage = await content_coverage(session) if sources else {}
+    paused_by = {
+        source_id: by or "?"
+        for source_id, by in (
+            await session.execute(
+                select(Source.source_id, Source.paused_by).where(Source.paused_at.is_not(None))
+            )
+        ).all()
+    }
     out = []
     for source_id, adapter in sorted(sources.items(), key=lambda kv: (not kv[1].enabled, kv[0])):
         settings = adapter.details
@@ -1025,6 +1053,7 @@ async def collect_product_details(session, source_filter: str | None) -> dict:
         entry = {
             "source": source_id,
             "enabled": adapter.enabled,
+            "paused_by": paused_by.get(source_id),
             "reader": reader,
             "per_run": settings.per_run if settings is not None else None,
             "coverage": coverage.get(source_id),
@@ -1084,6 +1113,8 @@ async def product_details(session, source_filter: str | None) -> None:
         }[e["reader"]]
         if not e["enabled"]:
             state += f" {DIM}[source paused]{RESET}"
+        if e["paused_by"]:
+            state += f" {DIM}[paused by {e['paused_by']}]{RESET}"
         print(f"  {source_id:22s} {state}")
         c = e["coverage"]
         if c is None or not c["active"]:

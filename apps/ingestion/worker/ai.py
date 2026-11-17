@@ -328,7 +328,11 @@ async def dismiss_flags(session, ids: Sequence[int], *, note: str, by: str) -> l
 
 async def _flags_dismiss(ids: Sequence[int], note: str, by: str) -> int:
     async with SessionLocal() as session:
-        missing = await dismiss_flags(session, ids, note=note, by=by)
+        try:
+            missing = await dismiss_flags(session, ids, note=note, by=by)
+        except Refused as refused:
+            print(str(refused), file=sys.stderr)
+            return 1
         await session.commit()
     for flag_id in ids:
         if flag_id in missing:

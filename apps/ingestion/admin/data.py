@@ -89,14 +89,13 @@ async def nav_counts(session) -> dict[str, int]:
 
 async def crawl_switch(session) -> dict:
     """The crawl-wide switches: the worker's `CRAWL_ENABLED`, and the database pause."""
-    env = await crawl.worker_crawl_enabled(session)
-    pause = await crawl.crawl_pause(session)
     configured = os.getenv("CRAWL_ENABLED")
     return {
-        "env": env,
+        "env": await crawl.worker_crawl_enabled(session),
         "configured": configured if configured is not None else "true (unset)",
-        "pause": pause,
-        "on": env and pause is None,
+        "pause": await crawl.crawl_pause(session),
+        # What the worker and /how-we-crawl go by: both switches.
+        "on": await crawl.crawl_enabled_in(session),
     }
 
 
@@ -166,7 +165,8 @@ async def _sweeps(session) -> tuple[dict, list[dict]]:
                 "source": row.source_id,
                 "done": 0,
                 "total": progress["declared"]["partitions"].get(row.source_id, 0),
-                "state": "paused" if (not row.enabled or row.paused_at) else "never",
+                "shop": (row.supplier or {}).get("slug") or row.source_id,
+                "state": "paused" if status.is_paused(row.enabled, row.paused_at) else "never",
                 "disabled": not row.enabled,
                 "paused": (
                     {"at": row.paused_at, "by": row.paused_by, "note": row.pause_note}
@@ -260,22 +260,19 @@ def attention(view: dict) -> list[dict]:
                 _item(
                     "crit",
                     f"{s['source']}: sweep stalled",
-                    "An open cycle and no run finished in 36 h: the cron, a crash or a "
-                    "blocking host is holding it.",
+                    f"An open cycle and no run finished in "
+                    f"{status.STALLED_AFTER.total_seconds() / 3600:.0f} h: the cron, a crash "
+                    "or a blocking host is holding it.",
                     "/crawl",
                     [("probe", s["source"])],
                 )
             )
         elif s["state"] == "paused":
-            why = []
-            if s["disabled"]:
-                why.append("enabled = false in sources.toml")
-            if s["paused"]:
-                why.append(f"paused by {s['paused']['by']}")
-            shop = catalog.get(s["source"]) or {}
+            # The catalogue is by shop (supplier slug), which need not be the source id.
+            shop = catalog.get(s.get("shop") or s["source"]) or {}
             verified = shop.get("verified")
             days = (now - verified).days if verified else None
-            detail = "; ".join(why)
+            detail = status.pause_text(s)
             if shop.get("total"):
                 detail += f". {shop['total']:,} listings"
                 if days is not None:
