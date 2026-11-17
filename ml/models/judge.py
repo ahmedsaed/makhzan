@@ -1,5 +1,13 @@
 """Phase E judge bake-off: score pairs with one candidate judge, both orders.
 
+SUPERSEDED, kept as the record of what was run (2026-11-14); see docs/ai/decision-review.md.
+RULES_QUESTION was written by a session from the error classes it saw, not by the owner, and was
+never put to the owner. It contradicts ruling 7 (2026-11-16: 7476 = 74LS76 when no family is
+named) by saying 74HC164 vs 74164 is the same "only if the family matches", and it carries none
+of the silence, brand or drop-in rulings. The pplx judge here sent 32 requests per call; the
+owner's protocol is one request per call (pplx is bit-stable only that way). The approved
+prompts are ml/models/grid_payloads.py, run by prompt_grid.py.
+
     python3 ml/models/judge.py --improve ml/out/improve --judge kev-rules --out ml/out/models
     python3 ml/models/judge.py --improve ml/out/improve --judge pplx --out ml/out/models \
         --edges ml/out/models/edges1.jsonl --texts ml/out/models/edge-texts.json --tag edges1 \
