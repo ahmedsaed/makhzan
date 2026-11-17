@@ -407,6 +407,10 @@ class WooCommerceAdapter(SourceAdapter):
             out.absent.update(set(batch) - returned)
         return out
 
+    #: The Store API reads listings back by id (`confirm_listed`): a re-check a
+    #: person asked for is read that way at the start of the next run.
+    rechecks_by_id = True
+
     def knows_category(self, raw: RawItem) -> bool:
         """False for a product re-read by id at cycle end: it never clears a category."""
         return not (raw.raw or {}).get("confirmed")

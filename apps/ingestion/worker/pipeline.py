@@ -62,6 +62,7 @@ from worker.http import (
 )
 from worker.identity import Identity, identity_for, using_identity
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
+from worker import recheck
 from worker.pause import paused_reason
 from worker.sources.base import CONTACT_PART, ConfirmStopped, SourceAdapter, SupplierInfo
 
@@ -165,6 +166,8 @@ async def _upsert_listing(
         status=ListingStatus.ACTIVE,
         last_verified_at=now,
         last_seen_at=now,
+        # Read in full: whatever re-check a person asked for is answered.
+        recheck_requested_at=None,
     )
     fields = apply_details(fields)
     if existing is not None and not (attributes or {}).get("adapter_part_number"):
@@ -1074,6 +1077,78 @@ class Confirmer:
         return absent + unasked + beyond, False
 
 
+async def _recheck_first(
+    session: AsyncSession,
+    run: IngestionRun,
+    adapter: SourceAdapter,
+    supplier_id: uuid.UUID,
+    cat_index: dict,
+    *,
+    errors: list[str],
+    may_send: Callable[[], str | None],
+    poll_pause: Callable[[], Awaitable[bool]],
+    already_sent: bool,
+) -> tuple[dict, Counter]:
+    """Re-read the listings a person asked to be read first, by id, before the sweep.
+
+    Only for an adapter that can re-read by id (`recheck.how` is `by_id`):
+    through `confirm_listed` and a `ConfirmFetcher`, so the host's pace,
+    robots.txt, the run's time budget, a pause and the run's page ceiling
+    (`max_pages_per_run`) all bind it. What comes back is upserted (which
+    clears its marker); one asked and not returned is cleared too, the
+    cycle's archiving deciding the rest; one never asked stays marked.
+    Returns `stats.recheck` and the requests sent, under `recheck`.
+    """
+    listings = await recheck.due(session, adapter.source_id)
+    if not listings:
+        return {}, Counter()
+    fetcher = ConfirmFetcher(
+        lambda: _pace(adapter),
+        limit=adapter.max_pages_per_run,
+        may_send=may_send,
+        poll_pause=poll_pause,
+    )
+    if already_sent:
+        await asyncio.sleep(await _pace(adapter))
+    try:
+        answer = await adapter.confirm_listed(listings, fetcher)
+    except Exception as exc:  # noqa: BLE001 — a failed re-check must not stop the sweep
+        message = f"{type(exc).__name__}: {exc}"
+        errors.append(f"re-check first: {message}"[:300])
+        sent = Counter({recheck.LABEL: fetcher.requests.total()}) if fetcher.requests else Counter()
+        return {"asked": len(listings), "failed": message[:200]}, sent
+    sent = Counter({recheck.LABEL: fetcher.requests.total()}) if fetcher.requests else Counter()
+    if answer is None:
+        return {}, sent
+    read = 0
+    for raw in answer.items:
+        try:
+            await _ingest_item(
+                session, run, adapter, supplier_id, cat_index, raw, via=recheck.LABEL
+            )
+            read += 1
+        except Exception as exc:  # noqa: BLE001 — one bad item must not stop the rest
+            run.items_failed += 1
+            errors.append(f"re-check {raw.external_id}: {exc}"[:300])
+    by_external = {str(row.external_id): row for row in listings}
+    now = datetime.now(timezone.utc)
+    for external_id in answer.seen:
+        if (row := by_external.get(external_id)) is not None:
+            row.last_seen_at = now
+    returned = {str(raw.external_id) for raw in answer.items}
+    answered = (returned | answer.absent | answer.seen) & set(by_external)
+    await recheck.clear(session, [by_external[e].id for e in answered])
+    report = {
+        "asked": len(listings),
+        "read": read,
+        "absent": len(answer.absent & set(by_external)),
+        "unasked": len(by_external) - len(answered),
+    }
+    if answer.notes.get("stopped"):
+        report["stopped"] = answer.notes["stopped"]
+    return report, sent
+
+
 async def _held_runs(
     session: AsyncSession, source_id: str, swept_at: datetime
 ) -> tuple[int, int, int]:
@@ -1622,6 +1697,43 @@ async def _logged_run(
         if halt:
             fetch_failed, stopped = True, f"refused by its host: {halt[0]}"
             partitions = []
+
+        # Listings a person asked to be read first, where the adapter can read
+        # them by id: before the sweep, within the run's pace and ceiling.
+        recheck_report: dict = {}
+        if (
+            limit is None
+            and not halt
+            and not paused
+            and recheck.how(adapter) == recheck.BY_ID
+            and _clock() < deadline
+        ):
+            recheck_report, recheck_sent = await _recheck_first(
+                session,
+                run,
+                adapter,
+                supplier_id,
+                cat_index,
+                errors=errors,
+                may_send=lambda: (
+                    f"refused by its host: {halt[0]}"
+                    if halt
+                    else (
+                        "time budget spent"
+                        if _clock() >= deadline
+                        else (paused[0] if paused else None)
+                    )
+                ),
+                poll_pause=pause_check,
+                already_sent=bool(cycle_requests),
+            )
+            if recheck_sent:
+                sent_extra.update(recheck_sent)
+                if run_page_budget is not None:
+                    # Within the run's ceiling: the sweep gets what is left.
+                    run_page_budget = max(0, run_page_budget - recheck_sent.total())
+            checkpoint()
+            await session.commit()
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
                 break
@@ -1754,6 +1866,8 @@ async def _logged_run(
             stats["budget"] = budget
         if archived:
             stats["archived"] = archived
+        if recheck_report:
+            stats["recheck"] = recheck_report
         if cycle:
             stats["cycle"] = cycle
         if not_products:

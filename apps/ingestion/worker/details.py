@@ -270,23 +270,27 @@ async def due_listings(
         "never_fetched": (importance().desc(), Listing.first_seen_at.desc(), Listing.id),
         "stale": (c["fetched_order"], Listing.id),
     }
-    picked: list[tuple[Listing, str]] = []
+    # A re-check a person asked for comes first, oldest request first
+    # (worker/recheck.py): its product page is the read this shop allows.
+    picked: list[tuple[Listing, str]] = [
+        (row, "recheck")
+        for row in (
+            await session.scalars(
+                select(Listing)
+                .where(c["eligible"], Listing.recheck_requested_at.is_not(None))
+                .order_by(Listing.recheck_requested_at, Listing.id)
+                .limit(settings.per_run)
+            )
+        ).all()
+    ]
     for reason in REASONS:
         room = settings.per_run - len(picked)
         if room <= 0:
             break
-        rows = (
-            (
-                await session.execute(
-                    select(Listing)
-                    .where(c["eligible"], c[reason])
-                    .order_by(*orders[reason])
-                    .limit(room)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        query = select(Listing).where(c["eligible"], c[reason])
+        if picked:
+            query = query.where(Listing.id.notin_([row.id for row, _ in picked]))
+        rows = (await session.execute(query.order_by(*orders[reason]).limit(room))).scalars().all()
         picked.extend((row, reason) for row in rows)
     return picked
 
@@ -445,6 +449,7 @@ async def run_details(
                 next_interval(attributes, details, settings.max_age_days) if adaptive else None
             )
             _apply_to_listing(listing, _fetched(attributes, details, now, interval=interval))
+            listing.recheck_requested_at = None  # its page was read: the re-check is done
         if checkpoint is not None:
             # The run's request count so far, on its row with this commit.
             checkpoint(Counter({LABEL: fetcher.requests.total()}))

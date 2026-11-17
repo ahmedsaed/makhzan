@@ -176,8 +176,21 @@ snapshot), with what Accept will do. Accept and Reject call
 accept|reject`: accepting "these offers aren't the same" records never_merge
 rulings, "same as another" one must_merge, a report no ruling could act on is
 refused; rejecting withdraws a report's rulings. Recently closed reports can
-be reviewed again. Accepting a wrong price or stock report **only closes it**
-for now: see the open question below.
+be reviewed again.
+
+Accepting a **wrong price or stock** report (here or with `./makhzan reports
+accept`) marks the offers the visitor ticked to be **re-checked first**
+(`listings.recheck_requested_at`, owner decision 2026-11-17,
+`worker/recheck.py`). The next full run of each one's shop reads it before its
+turn, within its pace, robots.txt and page ceiling, in the one way the shop
+allows: by id at the start of the run where the adapter can (WooCommerce's
+Store API `include`, counted as `stats.requests.recheck` and reported as
+`stats.recheck`); else its product page first in the details stage, if on;
+else it waits for its partition in the cycle. Any full read clears the
+marker, and a re-read that finds it gone from the shop clears it too (the
+cycle's archiving decides the rest). A paused shop and a `limit=` run ask
+nothing. The Reports view lists the re-checks pending per shop and how each
+will be honoured; so does `make status` (RE-CHECKS).
 
 **Overrides.** Every ruling, removed ones too, with what the last regroup found
 (in effect, BLOCKED and why, inactive, not yet checked). **Add** requires a
@@ -247,13 +260,11 @@ make worker           # in another terminal, for Run now, Probe and the dry run
 
 Run now and Probe send real requests to the shop: use them deliberately.
 
-## Open questions
+## Owner decisions (2026-11-17)
 
-- **"Accept marks the listing for an early re-check" has no mechanism behind
-  it yet.** The crawler re-reads a listing only when its partition comes round
-  in the cycle (or its product page, for the details stage); there is no
-  per-listing re-check queue for price and stock. Options: a `recheck_at`
-  that the details stage or the archive confirmer (WooCommerce's
-  re-read-by-id) picks up first, per adapter; or a small re-read job per
-  listing through the adapter's own client. Until decided, Accept on a wrong
-  price or stock report closes it and says that nothing was queued.
+- Accept on a wrong price or stock report marks the listing to be re-checked
+  first (above).
+- Health checks in place of a containers panel, as built.
+- Revoking an AI decision on the page needs a note.
+- The regroup dry run shows counts only, as built.
+- Resuming restarts the archive check's window (`resumed_at`).

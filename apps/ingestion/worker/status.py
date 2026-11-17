@@ -1381,6 +1381,35 @@ def queue_depth() -> None:
         print(f"  arq jobs queued: {data['queued']}")
 
 
+async def collect_rechecks(session) -> list[dict]:
+    """Listings waiting for a re-check a person asked for, by source, and how each is honoured.
+
+    `how` is `worker.recheck.how` for the source's adapter (the adapters must
+    be loaded, `collect_declared_partitions`), or None when it is not loaded.
+    """
+    from worker import recheck
+    from worker.sources.registry import _REGISTRY
+
+    out = []
+    for entry in await recheck.pending(session):
+        adapter = _REGISTRY.get(entry["source"])
+        way = recheck.how(adapter) if adapter is not None else None
+        out.append({**entry, "how": way, "words": recheck.WORDS.get(way, "source not loaded")})
+    return out
+
+
+async def rechecks(session) -> None:
+    """RE-CHECKS: printed only when a person has asked for one."""
+    pending = await collect_rechecks(session)
+    if not pending:
+        return
+    _header("RE-CHECKS (asked for by a person)")
+    for p in pending:
+        print(
+            f"  {p['source']:22s} {p['count']:>4} waiting, oldest {_age(p['oldest'])}: {p['words']}"
+        )
+
+
 async def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="makhzan crawler status")
     parser.add_argument("--source", help="limit to one source id")
@@ -1396,6 +1425,7 @@ async def main(argv: list[str] | None = None) -> None:
         await crawler_identity(session, args.source)
         await robots_health(session, args.source)
         await recent_runs(session, args.source, args.runs)
+        await rechecks(session)
         await crosswalk_drift(session, args.source)
         await product_details(session, args.source)
         await catalog(session, args.source)

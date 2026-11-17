@@ -37,6 +37,18 @@
   {% else %}<p class="muted">No open reports.</p>{% endfor %}
 </div>
 
+<section class="panel" id="rechecks">
+  <header><div><h2>Re-checks pending</h2><p>Listings an accepted wrong price or stock report asked to be read first. The shop's next full run reads them within its pace and robots.txt; any full read clears them.</p></div></header>
+  {% if r.rechecks %}
+  <div class="tw"><table><thead><tr><th>Shop</th><th class="n">Waiting</th><th>Oldest</th><th>How</th></tr></thead><tbody>
+    {% for p in r.rechecks %}
+    <tr><td class="mono">{{ p.source }}</td><td class="n">{{ p.count|num }}</td><td>{{ p.oldest|age }}</td>
+      <td class="wrap">{% if p.how == "partition" %}<span class="chip c-warn plain">not early</span> {% endif %}{{ p.words }}</td></tr>
+    {% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="empty">None waiting.</p>{% endif %}
+</section>
+
 {% if r.recent %}
 <section class="panel">
   <header><div><h2>Recently closed</h2><p>Reviewing again changes the verdict: reject withdraws the overrides an accept made.</p></div></header>

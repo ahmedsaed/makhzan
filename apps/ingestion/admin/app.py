@@ -696,6 +696,7 @@ async def review(request: Request, report_id: int, verdict: str):
         detail = {
             "overrides": [{"id": a.row.id, "outcome": a.outcome} for a in done.added],
             "withdrawn": done.withdrawn,
+            "rechecks": done.rechecks,
         }
         if done.refused:
             detail["refused"] = done.refused
@@ -708,6 +709,10 @@ async def review(request: Request, report_id: int, verdict: str):
     lines = [f"R-{report_id} {status}."] + [ruling_line(a) for a in done.added]
     if done.withdrawn:
         lines.append(f"Withdrew {done.withdrawn} override(s) it had made.")
+    if done.rechecks:
+        lines.append(
+            f"Marked {done.rechecks} listing(s) to be re-read first by their shop's next run."
+        )
     return back("/reports", " ".join(lines))
 
 

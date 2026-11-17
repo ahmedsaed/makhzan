@@ -494,16 +494,23 @@ async def test_accepting_a_wrong_match_records_never_merge_rulings_then_reject_w
     assert len(accept.detail["overrides"]) == 2 and reject.detail["withdrawn"] == 2
 
 
-async def test_accepting_a_wrong_price_report_closes_it_without_rulings(queued):
-    (listing,) = await _listings(1)
-    report_id = await _report("wrong_price_stock", [(listing, True)])
+async def test_accepting_a_wrong_price_report_marks_the_listing_to_be_read_first(queued):
+    (listing, other) = await _listings(2)
+    report_id = await _report("wrong_price_stock", [(listing, True), (other, False)])
     async with _client() as client:
         csrf = await _session(client)
-        assert "No early re-check is queued" in (await client.get("/reports")).text
-        await client.post(f"/reports/{report_id}/accept", data={"csrf": csrf})
+        assert "re-read first by their shop" in (await client.get("/reports")).text
+        response = await client.post(f"/reports/{report_id}/accept", data={"csrf": csrf})
+        assert response.status_code == 303
+        page = await client.get("/reports")
+        assert "Re-checks pending" in page.text and "source not loaded" in page.text
     async with SessionLocal() as session:
         assert (await session.get(Report, report_id)).status == "accepted"
         assert not list(await session.scalars(select(GroupingOverride)))
+        assert (await session.get(Listing, listing)).recheck_requested_at is not None
+        assert (await session.get(Listing, other)).recheck_requested_at is None  # not ticked
+    (accepted,) = await _actions("report.accept")
+    assert accepted.detail["rechecks"] == 1
 
 
 async def test_adding_an_override_needs_a_note_and_two_shops_for_must(queued):

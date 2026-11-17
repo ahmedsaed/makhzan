@@ -48,6 +48,8 @@ from makhzan_schemas import reports as rules
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import GroupingOverride, Report
 
+from worker import recheck
+
 REASON_TEXT = {
     "offers_not_same": "These offers aren't the same product",
     "same_as_other": "The same as another product",
@@ -183,6 +185,8 @@ class Reviewed:
     added: list = field(default_factory=list)
     #: A reject's withdrawn rulings.
     withdrawn: int = 0
+    #: An accepted wrong price or stock report: listings marked to be read first.
+    rechecks: int = 0
 
 
 async def review_reports(
@@ -229,6 +233,10 @@ async def review_reports(
         done = Reviewed(report_id, status)
         if status == "accepted":
             done.added = await rulings.accept_report(session, report, created_by=by, pairs=pairs)
+            if report.reason == RECHECK_REASON:
+                # Owner decision (2026-11-17): the offers the visitor ticked are
+                # read first by their shop's next run (worker/recheck.py).
+                done.rechecks = await recheck.request(session, _ticked_ids(report))
         else:
             done.withdrawn = await rulings.withdraw_report(
                 session, report_id, removed_by=f"{by} (report rejected)"
@@ -262,7 +270,26 @@ async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int
                 print("  " + ruling_line(added))
             if done.withdrawn:
                 print(f"  withdrew {done.withdrawn} grouping override(s) it had made")
+            if done.rechecks:
+                print(f"  marked {done.rechecks} listing(s) to be re-read first by their shop")
     return 1 if missing else 0
+
+
+#: The report reason whose acceptance asks for an early re-read.
+RECHECK_REASON = "wrong_price_stock"
+
+
+def _ticked_ids(report: Report) -> list:
+    """The listing ids a report names (ticked or picked), those that parse."""
+    import uuid
+
+    out = []
+    for value in report.offer_ids or []:
+        try:
+            out.append(uuid.UUID(str(value)))
+        except ValueError:
+            continue
+    return out
 
 
 def override_lines(row: GroupingOverride) -> list[str]:

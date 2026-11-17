@@ -621,14 +621,16 @@ def accept_preview(report: Report) -> str:
         return "Records one must_merge override between a listing of each product."
     if report.reason == "wrong_price_stock":
         return (
-            "Closes it. No early re-check is queued: the crawler has no per-listing "
-            "re-check yet (an open question for the owner); the listing is re-read on its "
-            "next sweep."
+            "Marks the ticked offer(s) to be re-read first by their shop's next run: by id "
+            "where the shop allows it, else through its product pages, else at its "
+            "partition's turn (see Re-checks pending below)."
         )
     return "Closes it; no ruling is recorded for this kind of report."
 
 
 async def reports_view(session) -> dict:
+    # The adapters say how each shop honours a re-check (worker/recheck.py).
+    await status.collect_declared_partitions(session)
     month = _now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     rows = await report_rules.new_reports(session, limit=50)
     recent = list(
@@ -651,6 +653,7 @@ async def reports_view(session) -> dict:
             .where(Report.status != "new", Report.reviewed_at >= month)
         ),
         "recent": [(r, REASON_TEXT.get(r.reason, r.reason)) for r in recent],
+        "rechecks": await status.collect_rechecks(session),
     }
 
 
