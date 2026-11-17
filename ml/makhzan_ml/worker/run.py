@@ -11,8 +11,13 @@
    model is loaded on the first lease that brings jobs, never on an empty night, and
    checked against its pins (`judges.load`); each job's requests are scored **in the
    order given, one per call**, each request's `request_sha256` first checked against
-   its payload, and `POST /results` after each job. A background thread sends
-   `/heartbeat` every `heartbeat_s` naming the jobs still held.
+   its payload, and `POST /results` after each job. Each lease carries a fresh
+   `lease_request_id` (the same on a retry of that call, so a lost answer gives the same
+   lease back) and honest time: the seconds left in the window, less a model load still
+   to come, and the measured seconds per request; the broker returns only jobs that fit.
+   A heartbeat goes out as each job starts, naming it in hand (so an expiry is charged to
+   it alone), and a background thread sends one every `heartbeat_s` naming the jobs still
+   held. Each job's prompt version is compared with the stages hello announced.
 5. Stop (the window's end, SIGTERM, SIGINT): no new request is started, the one in
    flight finishes (a forward pass cannot be interrupted), finished orders are
    submitted, the rest of the lease goes back with `/release` reason "graceful", and
@@ -24,10 +29,9 @@
    before the window ends is not started.
 6. Empty queues: `on_empty = "exit"` exits; `"wait"` polls every `poll_s` until the
    window ends.
-7. The broker sees a session end (P16) at a graceful `/release` of held jobs or at a
-   lease that comes back empty (broker-api.md §3.1); a release naming no jobs is not
-   valid, so a session that stops between leases with nothing held is not seen to end,
-   and the log says so.
+7. Every session that said hello ends with `POST /release {"session"}`, a graceful release
+   naming no jobs (broker-api.md §3.5), however it stopped: the window's end, a signal, an
+   empty queue, an error. So the broker sees it end and can consider the P16 rebuild.
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its
 job, order, request hash and score (never the payload), the moment it is known not to
@@ -45,6 +49,7 @@ import os
 import signal
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -77,8 +82,12 @@ EXIT_UNDELIVERED = 6  # the session ended, but some scores could not be delivere
 #: would otherwise turn the whole queue into failed attempts. One job failing again and
 #: again is that job's problem: the broker makes it dead at max_attempts (a poison job).
 MAX_CONSECUTIVE_ERRORS = 3
-#: For lease sizing when a worker runs always: a day's worth.
+#: For the window check when a worker runs always: a day's worth. (Leases then carry no
+#: seconds_left at all: only max_jobs limits them.)
 ALWAYS_SECONDS_LEFT = 86_400
+#: A model load still to come, taken off the time a first lease says it has. Measured:
+#: Kev 130 s and pplx 73-95 s on the home server's CPU, under 10 s on the GPU.
+LOAD_ESTIMATE_S = {"cpu": 150.0, "gpu": 30.0}
 
 
 def canonical_json(request: object) -> str:
@@ -162,6 +171,7 @@ class Worker:
         self.judge_info: dict[str, dict] = {}  # what each load reported, kept after unloading
         self.undelivered: list[dict] = []
         self.session_closed = False  # the broker saw the session end (P16)
+        self.stages: dict[str, dict[str, str]] = {}  # model -> {"pipeline/stage": prompt}
         self.failed_jobs: set[int] = set()  # distinct jobs failed since the last success
         self.scored = 0
         self._hb_thread: threading.Thread | None = None
@@ -241,14 +251,26 @@ class Worker:
                 code,
                 self.scored,
             )
-            if self.session and not self.session_closed:
-                log.info(
-                    "the broker was not told this session ended: it stopped between leases "
-                    "with nothing held (no release was due)"
-                )
         return code
 
+    def _end_session(self) -> None:
+        """`POST /release {"session"}`: the broker records the session's end (P16)."""
+        if self.session is None:
+            return
+        try:
+            self.broker.release({"session": self.session, "reason": "graceful"})
+            self.session_closed = True
+            log.info("session %s ended at the broker", self.session)
+        except (BrokerError, Unreachable) as e:
+            log.warning("could not tell the broker the session ended: %s", e)
+
     def _session(self) -> int:
+        code = self._session_body()
+        if code not in (EXIT_UNREACHABLE, EXIT_AUTH):  # a dead or refusing broker: no use
+            self._end_session()
+        return code
+
+    def _session_body(self) -> int:
         self._start_window_timer()
         try:
             self._preflight()
@@ -341,6 +363,18 @@ class Worker:
         ok = []
         for key in cfg.models:
             answer = (resp.get("models") or {}).get(key) or {}
+            stages = {
+                f"{st.get('pipeline')}/{st.get('stage')}": st.get("prompt_version")
+                for st in answer.get("stages") or []
+                if isinstance(st, dict)
+            }
+            self.stages[key] = stages
+            if stages:
+                log.info(
+                    "hello: %s stages: %s",
+                    key,
+                    ", ".join(f"{k} prompt {v}" for k, v in sorted(stages.items())),
+                )
             if answer.get("ok"):
                 ok.append(key)
                 log.info(
@@ -400,17 +434,23 @@ class Worker:
             if left < self.spr[key]:
                 self.request_stop("too little of the window is left for one request")
                 return "stop"
+            body = {
+                "session": self.session,
+                "model": key,
+                "model_version": PINS[key].model_version,
+                "max_jobs": self.cfg.max_jobs,
+                # One id per lease attempt, the same on the client's retries of it: a lease
+                # whose answer was lost comes back as the same lease, not orphaned.
+                "lease_request_id": uuid.uuid4().hex,
+            }
+            if self._closes_at() is not None:
+                # Honest time, so every job the broker returns fits (it keeps a 60 s margin):
+                # the window, less a model load still to come; the measured pace.
+                loading = 0.0 if self._loaded(key) else LOAD_ESTIMATE_S[self.cfg.device]
+                body["seconds_left"] = max(0, int(left - loading))
+                body["seconds_per_request"] = max(0.01, round(self.spr[key], 2))
             try:
-                lease = self.broker.lease(
-                    {
-                        "session": self.session,
-                        "model": key,
-                        "model_version": PINS[key].model_version,
-                        "max_jobs": self.cfg.max_jobs,
-                        "seconds_left": int(left),
-                        "seconds_per_request": max(1, round(self.spr[key])),
-                    }
-                )
+                lease = self.broker.lease(body)
             except VersionDrift as e:
                 raise _Fatal(
                     EXIT_VERSION,
@@ -422,10 +462,30 @@ class Worker:
                 self.session_closed = True  # an empty lease ends the session at the broker
                 return "empty"
             self.session_closed = False  # a lease with jobs reopens it
+            self._check_prompts(key, jobs)
             self._process_lease(key, lease["lease_id"], jobs)
         return "stop"
 
     # -- one lease -------------------------------------------------------------------------
+
+    def _loaded(self, key: str) -> bool:
+        return self.judge is not None and self.judge.key == key
+
+    def _check_prompts(self, key: str, jobs: list[dict]) -> None:
+        """Each job's prompt version should be one hello announced for this model. The
+        broker renders, so a mismatch is only logged: the registry moved since hello."""
+        known = set(self.stages.get(key, {}).values())
+        if not known:
+            return
+        for job in jobs:
+            if job.get("prompt_version") not in known:
+                log.warning(
+                    "job %s: prompt version %s is not one hello announced for %s (%s)",
+                    job.get("job_id"),
+                    job.get("prompt_version"),
+                    key,
+                    ", ".join(sorted(known)),
+                )
 
     def _held_jobs(self, lease_id: str) -> list[int]:
         with self.held.lock:
@@ -519,6 +579,11 @@ class Worker:
             self._release(lease_id, [job_id], "error", "the job carried no requests")
             return True
         scores: list[dict] = []
+        # The job is now in hand: say so at once, so an expiry (a crash, a kill for memory)
+        # is charged to this job alone, not to the lease's others that never started.
+        with self.held.lock:
+            self.held.progress = {"job_id": job_id, "order": requests[0].get("order")}
+        self.heartbeat_once()
         for req in requests:
             if self._lost(lease_id, job_id):
                 break
