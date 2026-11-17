@@ -212,10 +212,26 @@ class LoginLimiter:
             waits.append(self._all[0] + self.WINDOW - self._clock())
         return max(1, int(max(waits)) + 1) if waits else 0
 
-    def failed(self, client: str) -> None:
+    def failed(self, client: str) -> float:
+        """Count one attempt as failed. Returns its stamp, for `refund`.
+
+        Called before the password is checked, not after: requests that arrive
+        together are then each counted as they come, instead of all passing
+        the check while the first ones are still being verified.
+        """
         now = self._clock()
         self._by_client.setdefault(client, deque()).append(now)
         self._all.append(now)
+        return now
+
+    def refund(self, client: str, stamp: float) -> None:
+        """Take back one attempt counted by `failed` (it succeeded, or was never checked)."""
+        for times in (self._by_client.get(client), self._all):
+            if times is not None:
+                try:
+                    times.remove(stamp)
+                except ValueError:
+                    pass
 
     def succeeded(self, client: str) -> None:
         self._by_client.pop(client, None)

@@ -19,6 +19,7 @@ restarts or touches infrastructure.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from collections.abc import Awaitable, Callable
@@ -68,6 +69,8 @@ templates.env.globals["static_v"] = str(
 )
 
 limiter = auth.LoginLimiter()
+#: Password checks running at once: each holds 128 MiB of scrypt for half a second.
+VERIFY_SLOTS = asyncio.Semaphore(2)
 
 FLASH_COOKIE = "mk_admin_flash"
 NAV = [
@@ -391,19 +394,26 @@ async def login(request: Request):
         )
         response.headers["Retry-After"] = str(wait)
         return response
+    # Counted before the check and refunded if it succeeds: concurrent attempts
+    # are each counted as they arrive, so they cannot slip past the limit
+    # together while the first ones are still being verified.
+    attempt = limiter.failed(client)
     try:
-        # Half a second of scrypt: off the event loop, so the page stays responsive.
-        right = await run_in_threadpool(
-            auth.verify_password, fields.get("password", ""), password_hash()
-        )
+        # Half a second and 128 MiB of scrypt each: off the event loop, and at
+        # most VERIFY_SLOTS at once, whatever arrives.
+        async with VERIFY_SLOTS:
+            right = await run_in_threadpool(
+                auth.verify_password, fields.get("password", ""), password_hash()
+            )
     except auth.HashUnusable as exc:
+        limiter.refund(client, attempt)
         return _login_page(request, f"The stored password hash cannot be checked: {exc}", 503)
     if not right:
-        limiter.failed(client)
         async with SessionLocal() as db:
             await audit(db, request, "login.failed")
             await db.commit()
         return _login_page(request, "Wrong password.", 401)
+    limiter.refund(client, attempt)
     limiter.succeeded(client)
     value, _ = auth.new_session(password_hash(), secret(), session_hours())
     async with SessionLocal() as db:

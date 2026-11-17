@@ -8,7 +8,10 @@ fictional.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import threading
+import time
 import uuid
 from decimal import Decimal
 
@@ -49,6 +52,7 @@ def queued(monkeypatch) -> list[int]:
     monkeypatch.setenv("ADMIN_API_HEALTH_URL", "http://127.0.0.1:9/health")
     monkeypatch.setenv("ADMIN_BROKER_HEALTH_URL", "http://127.0.0.1:9/ai/v1/health")
     monkeypatch.setattr(admin_app, "limiter", auth.LoginLimiter())
+    monkeypatch.setattr(admin_app, "VERIFY_SLOTS", asyncio.Semaphore(2))
     jobs: list[int] = []
 
     async def enqueue(action_id: int) -> None:
@@ -131,6 +135,47 @@ async def test_a_wrong_password_is_refused_and_audited(queued):
         assert (await client.get("/")).status_code == 303
     (failed,) = await _actions()
     assert (failed.action, failed.actor) == ("login.failed", "owner")
+
+
+async def test_concurrent_bad_logins_are_all_counted_and_verified_two_at_a_time(
+    queued, monkeypatch
+):
+    """Each check holds 128 MiB of scrypt: requests arriving together must neither
+    slip past the limiter while the first are checked nor all run at once."""
+    lock = threading.Lock()
+    state = {"running": 0, "peak": 0, "calls": 0}
+
+    def slow_verify(password, stored):
+        with lock:
+            state["running"] += 1
+            state["calls"] += 1
+            state["peak"] = max(state["peak"], state["running"])
+        time.sleep(0.05)
+        with lock:
+            state["running"] -= 1
+        return False
+
+    monkeypatch.setattr(auth, "verify_password", slow_verify)
+    async with _client() as client:
+        token = _csrf((await client.get("/login")).text)
+        responses = await asyncio.gather(
+            *(client.post("/login", data={"csrf": token, "password": "guess"}) for _ in range(40))
+        )
+    codes = [r.status_code for r in responses]
+    limit = auth.LoginLimiter.PER_CLIENT
+    assert codes.count(401) == limit and codes.count(429) == 40 - limit
+    assert state["calls"] == limit  # every attempt let through was counted first
+    assert state["peak"] <= 2
+    assert len(admin_app.limiter._by_client["127.0.0.1"]) == limit
+    assert len(await _actions("login.failed")) == limit
+
+
+async def test_a_successful_login_is_refunded(queued):
+    async with _client() as client:
+        assert (await _login(client, "guess")).status_code == 401
+        assert (await _login(client)).status_code == 303
+    assert admin_app.limiter.retry_after("127.0.0.1") == 0
+    assert len(admin_app.limiter._all) == 1  # the failure; the success was taken back
 
 
 async def test_logins_are_rate_limited_per_address(queued):
