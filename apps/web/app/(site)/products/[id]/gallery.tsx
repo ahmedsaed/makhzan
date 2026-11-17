@@ -69,7 +69,9 @@ export function Gallery({
           aria-label={`${photos.length} photos`}
           data-gallery
           data-carousel-track
-          className="flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain"
+          // No scrollbar in any browser: the arrows and each photo's "n / N"
+          // are the controls, and it still scrolls by touch, trackpad and keys.
+          className="flex snap-x snap-mandatory [scrollbar-width:none] gap-2 overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden"
         >
           {photos.map((item, index) => (
             <div key={item.src} data-photo-count className="relative w-full shrink-0 snap-center">

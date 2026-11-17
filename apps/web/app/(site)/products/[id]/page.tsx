@@ -50,16 +50,26 @@ import {
   boxSpan,
   isInStock,
   isOnRequest,
+  isOutOfStock,
   leadNotes,
   minimumLine,
   minimumWithTotal,
   needsEach,
+  quotedLead,
   unitPrice,
   unitPriceText,
 } from "@/lib/offers";
 import { buildHistory, HISTORY_DAYS } from "@/lib/history";
 import { reportContextOf } from "@/lib/report";
 import { productIdFrom, routes } from "@/lib/routes";
+import {
+  aiMatchedCount,
+  detailIndexOf,
+  initialPick,
+  photoIndexOf,
+  shopLead,
+  shopParam,
+} from "@/lib/shop-view";
 import { absoluteUrl } from "@/lib/site";
 import { departmentLabel } from "@/lib/departments";
 import { cn } from "@/lib/utils";
@@ -71,6 +81,16 @@ import { Gallery } from "./gallery";
 import { PriceHistoryCard } from "./history";
 import { Offers } from "./offers";
 import { PartNumberLines } from "./part-numbers";
+import {
+  AiNote,
+  GalleryFollower,
+  PickedThumb,
+  type PickMeta,
+  ShopTitle,
+  ShopViewProvider,
+  ShopViewStatus,
+  WhenAction,
+} from "./shop-view";
 import { OptionsSection, PriceBreaksTable, TermPills } from "./terms";
 
 /**
@@ -88,6 +108,11 @@ import { OptionsSection, PriceBreaksTable, TermPills } from "./terms";
  * On a phone a fixed bar keeps the price, its age and the way out on screen.
  * On a wide screen the page goes two columns — photo and description left;
  * title, summary, primary action and offers right — and the bar goes away.
+ *
+ * With several offers the page is a shop view (lib/shop-view.ts): one shop's
+ * offer is picked (the representative, or `?shop=`'s) and the h1, photo, ringed row,
+ * open tab, primary button and bottom bar follow it; the metadata stays the
+ * product's. Offers matched by AI are badged, and counted under the title.
  *
  * DOM order is the phone order: photo, title and price, offers (or the shop),
  * description, similar products. The offers must never sit below shop prose.
@@ -158,14 +183,24 @@ export async function generateMetadata({
   });
 }
 
-export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ProductPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ shop?: string | string[] }>;
+}) {
   const param = (await params).id;
   const id = productIdFrom(param);
   const product = await loadProduct(id);
+  const shopSlug = shopParam((await searchParams).shop);
   // A bare id, an old title's slug or a mistyped one: one permanent redirect
-  // to the readable URL, so links and search engines settle on it.
+  // to the readable URL, so links and search engines settle on it. A linked
+  // shop view keeps its shop.
   const path = productPath(id, product);
-  if (`/products/${param}` !== path) permanentRedirect(path);
+  if (`/products/${param}` !== path) {
+    permanentRedirect(shopSlug ? `${path}?${new URLSearchParams({ shop: shopSlug })}` : path);
+  }
   const now = new Date();
   const title = displayTitle(product);
   if (isGone(product)) {
@@ -174,6 +209,14 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
   }
   const several = product.offers.length >= 2;
   const primary = primaryOffer(product.offers, now);
+  // The shop view (lib/shop-view.ts), with several offers: `?shop=`'s offer,
+  // or the product's representative (whose title the product's is). One
+  // offer has nothing to pick between.
+  const representative = product.representative_offer_id ?? null;
+  const pick = several ? initialPick(product.offers, shopSlug, now, representative) : null;
+  // What a plain load picks, for a URL that loses `?shop=` (Back, a link).
+  const plainPick = several ? initialPick(product.offers, null, now, representative) : null;
+  const aiCount = several ? aiMatchedCount(product) : 0;
   const brand = brandOf(product);
   const soleShop = several ? null : (product.offers[0].supplier?.slug ?? null);
   // Every shop's profile, for its opening hours beside how to reach it (an
@@ -236,16 +279,45 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
           },
           { label: product.category.name_en, href: routes.category(product.category.ref) },
         ];
-  // Description and specs from one shop: the one "What the shops say" opens
-  // on. Without its own words, the meta description's summary (Google asks
+  // Description and specs from one shop: the richest, whatever shop the page
+  // opens on (JSON-LD is the product's, never the shop view's, so `?shop=`
+  // changes none of it). Without its own words, the meta description's summary (Google asks
   // for a description either way). Null with no current price to state.
   const structured = productJsonLd(product, absoluteUrl(path), title, {
     description: sources[0]?.description ?? productDescription(product),
     details: sources[0]?.details ?? null,
     now,
   });
+  // What the shop view follows for each offer: its shop, its own title, its
+  // photo and its tab. The h1 is the picked shop's title; <title>, meta,
+  // JSON-LD and breadcrumbs above stay the product's.
+  const pickMeta: Record<string, PickMeta> = Object.fromEntries(
+    product.offers.map((offer) => [
+      offer.id,
+      {
+        slug: offer.supplier?.slug ?? null,
+        shop: offer.supplier?.name ?? "Unknown shop",
+        title: titleOf(offer) || title,
+        linkable: Boolean(offer.source_url && offer.supplier),
+        photo: photoIndexOf(offer, product.offers, photos),
+        detail: detailIndexOf(offer, sources),
+      },
+    ]),
+  );
+  // Each shop's lead offer: what `?shop=` picks, so the client can follow a
+  // URL the server did not render (Back onto a rewritten `?shop=`).
+  const leads: Record<string, string> = Object.fromEntries(
+    shopSlugs.flatMap((slug) => {
+      const lead = shopLead(product.offers, slug, now);
+      return lead ? [[slug, lead.id]] : [];
+    }),
+  );
+  const headingClass = cn(
+    "min-w-0 flex-1",
+    several ? "text-lg leading-tight lg:text-[26px]" : "text-xl leading-tight lg:text-[26px]",
+  );
 
-  return (
+  const page = (
     <Container className="pt-3 pb-8 lg:pt-4 lg:pb-12">
       {structured && (
         <script
@@ -291,37 +363,27 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
             priority
             frameClassName="aspect-[4/3] lg:aspect-square"
           />
+          {/* Moves the strip to the picked shop's photo. */}
+          {several && <GalleryFollower />}
         </div>
 
         <div className="min-w-0 lg:col-start-2 lg:row-start-1">
           <div className="flex gap-3">
-            {several && (
-              <PhotoFrame
-                src={photos[0]?.src ?? null}
-                shop={photos[0]?.shop}
-                alt={title}
-                size={104}
-                priority
-                className="lg:hidden"
-              />
-            )}
+            {several && <PickedThumb photos={photos} alt={title} className="lg:hidden" />}
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               {/* The title, and at the far right of its row the one way to
                   report anything wrong on the page (variant F of the
                   approved mockup): a labelled button, a flag alone on a
-                  phone so the title keeps its width. */}
+                  phone so the title keeps its width. With several offers
+                  it is the picked shop's own title (the shop view). */}
               <div className="flex items-start justify-between gap-3">
-                <h1
-                  dir="auto"
-                  className={cn(
-                    "min-w-0 flex-1",
-                    several
-                      ? "text-lg leading-tight lg:text-[26px]"
-                      : "text-xl leading-tight lg:text-[26px]",
-                  )}
-                >
-                  {title}
-                </h1>
+                {several ? (
+                  <ShopTitle fallback={title} className={headingClass} />
+                ) : (
+                  <h1 dir="auto" className={headingClass}>
+                    {title}
+                  </h1>
+                )}
                 <div className="ms-auto mt-0.5 shrink-0">
                   <ReportProblem
                     context={reportContextOf({
@@ -350,6 +412,8 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
             similar={similar}
             history={history}
           />
+          {/* Hidden while no offer was matched by AI: today, every one. */}
+          {aiCount > 0 && <AiNote count={aiCount} total={product.offers.length} />}
         </div>
 
         <div
@@ -363,8 +427,13 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
         >
           {several ? (
             <>
-              <Summary product={product} primary={primary} narrow={split} now={now} />
-              <Offers {...splitOffers(product.offers, now)} productTitle={title} now={now} />
+              <Summary product={product} narrow={split} now={now} />
+              <Offers
+                {...splitOffers(product.offers, now)}
+                productTitle={title}
+                picked={pick?.offer.id ?? null}
+                now={now}
+              />
               <ShopsContact product={product} hoursOf={hoursOf} now={now} />
             </>
           ) : (
@@ -390,9 +459,37 @@ export default async function ProductPage({ params }: { params: Promise<{ id: st
 
       <SimilarProducts similar={similar} now={now} />
 
-      {primary && <BottomBar offer={primary} product={product} now={now} />}
+      {/* The bar opens the picked shop's offer (the representative on a
+          plain load), or the cheapest when the picked one has no link out. */}
+      {several
+        ? linkableOffers(product.offers).map((offer) => (
+            <WhenAction key={offer.id} offer={offer.id}>
+              <BottomBar offer={offer} product={product} now={now} />
+            </WhenAction>
+          ))
+        : primary && <BottomBar offer={primary} product={product} now={now} />}
+      {several && <ShopViewStatus />}
     </Container>
   );
+
+  if (!pick) return page;
+  return (
+    <ShopViewProvider
+      initial={pick.offer.id}
+      explicit={pick.explicit}
+      fallback={plainPick?.offer.id ?? pick.offer.id}
+      primary={primary?.id ?? null}
+      meta={pickMeta}
+      leads={leads}
+    >
+      {page}
+    </ShopViewProvider>
+  );
+}
+
+/** Offers with somewhere to go: the ones a button or the bar can open. */
+function linkableOffers(offers: Offer[]): Offer[] {
+  return offers.filter((offer) => offer.source_url && offer.supplier);
 }
 
 /** The row of similar products that ends every product page. */
@@ -728,12 +825,10 @@ function ShopsContact({
  */
 function Summary({
   product,
-  primary,
   narrow,
   now,
 }: {
   product: Product;
-  primary: Offer | null;
   /** In the narrow column: the button takes the full width under the price. */
   narrow: boolean;
   now: Date;
@@ -749,8 +844,6 @@ function Summary({
   // The lowest price, while it is in stock (or not known gone): what the
   // notes under the range and the button explain.
   const best = summary.state !== "out_of_stock" ? summary.best : null;
-  const leads = best !== null && primary?.id === best.offer.id;
-  const notes = leads ? leadNotes(best) : [];
   const onRequestOnly = summary.priced.length === 0 && summary.onRequest.length > 0;
   const bestShop = best?.offer.supplier?.name ?? "one shop";
   return (
@@ -806,26 +899,37 @@ function Summary({
         )}
         {allStale && <StaleNote lastVerified={newest} now={now} className="mt-1" />}
       </div>
-      {primary?.source_url && primary.supplier && (
-        <div className={cn("hidden lg:block", narrow ? "lg:w-full" : "ms-auto")}>
-          <ShopLink
-            href={primary.source_url}
-            shop={primary.supplier.slug}
-            data-primary
-            className={cn(PRIMARY, narrow && "w-full")}
-          >
-            {leads
-              ? `${unitPriceText(best)} at ${primary.supplier.name}`
-              : `View at ${primary.supplier.name}`}
-            <ExternalLink aria-hidden="true" className="size-4" />
-          </ShopLink>
-          {notes.length > 0 && (
-            <p data-primary-notes className="mt-1.5 text-[13px] text-ink-2">
-              {notes.join(" · ")}
-            </p>
-          )}
-        </div>
-      )}
+      {/* One button per offer it can open; the shop view shows the picked
+          shop's (the primary offer's on load), so it follows the pick. */}
+      {linkableOffers(product.offers).map((offer) => {
+        if (!offer.source_url || !offer.supplier) return null;
+        // The bottom bar quotes the same (quotedLead): no price for an offer
+        // known to be gone.
+        const lead = quotedLead(offer, summary, now);
+        const own = lead ? leadNotes(lead) : [];
+        return (
+          <WhenAction key={offer.id} offer={offer.id}>
+            <div className={cn("hidden lg:block", narrow ? "lg:w-full" : "ms-auto")}>
+              <ShopLink
+                href={offer.source_url}
+                shop={offer.supplier.slug}
+                data-primary
+                className={cn(PRIMARY, narrow && "w-full")}
+              >
+                {lead
+                  ? `${unitPriceText(lead)} at ${offer.supplier.name}`
+                  : `View at ${offer.supplier.name}`}
+                <ExternalLink aria-hidden="true" className="size-4" />
+              </ShopLink>
+              {own.length > 0 && (
+                <p data-primary-notes className="mt-1.5 text-[13px] text-ink-2">
+                  {own.join(" · ")}
+                </p>
+              )}
+            </div>
+          </WhenAction>
+        );
+      })}
     </section>
   );
 }
@@ -845,8 +949,11 @@ function BottomBar({ offer, product, now }: { offer: Offer; product: Product; no
   // The comparison the summary, or the one-shop box, reads: one price everywhere.
   const summary = summarizeOffers(several ? product.offers : [offer], now);
   const unit = unitPrice(offer, now);
-  const lead =
-    summary.best && summary.state !== "out_of_stock" && summary.best.offer.id === offer.id
+  // With several offers, what the primary button quotes for the same offer
+  // (quotedLead): an offer known to be gone shows that instead of a price.
+  const lead = several
+    ? quotedLead(offer, summary, now)
+    : summary.best && summary.state !== "out_of_stock" && summary.best.offer.id === offer.id
       ? summary.best
       : unit && { offer, ...unit };
   const span = !several && lead ? boxSpan(offer, now) : null;
@@ -854,6 +961,10 @@ function BottomBar({ offer, product, now }: { offer: Offer; product: Product; no
   if (!lead) {
     price = isOnRequest(offer) ? (
       <OnRequest className="text-[15px]" />
+    ) : several && isOutOfStock(offer) ? (
+      <span data-bar-stock>
+        <StockBadge signal={offer.stock_signal} className="text-[15px]" />
+      </span>
     ) : (
       <NoPrice className="text-sm" />
     );

@@ -73,6 +73,9 @@ _unit("resistance", "1", "ohm", "ohms", "ω", "r")
 _unit("resistance", "1000", "k", "kohm", "kω")
 _unit("resistance", "1000000", "mohm", "mω")
 _unit("dof", "1", "dof")
+# A gear motor's speed is the variant a shop sells it by: 130 and 280 RPM GA25-370
+# motors share every other word, so without it they merge on title.
+_unit("speed", "1", "rpm")
 _unit("bit", "1", "bit", "bits")
 _unit("quantity", "1", "pcs", "pc", "piece", "pieces", "pack")
 

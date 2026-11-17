@@ -12,6 +12,7 @@
 #   ./makhzan retire SOURCE [--yes] # remove a source and its listings (dry run without --yes)
 #   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
 #   ./makhzan reports [list|show ID|accept ID..|reject ID..]  # review "Report a problem"
+#   ./makhzan overrides [list|add A B --kind never|must --note ..|remove ID..]  # grouping rulings
 #
 # Run it on the server, or from a laptop: without a .env.prod here it re-runs
 # itself on DEPLOY_HOST over SSH, using the same .env.local variables as
@@ -136,5 +137,8 @@ case "$cmd" in
   # Visitors' reports from product pages: the list shows each with what the
   # page showed then; accept/reject set status and reviewed_at (worker/reports.py).
   reports) "${COMPOSE[@]}" exec -T ingestion python -m worker.reports "$@" ;;
+  # Grouping rulings: two listings never, or always, one product (worker/overrides.py).
+  # Accepting a grouping report writes them too; a regroup applies them.
+  overrides) "${COMPOSE[@]}" exec -T ingestion python -m worker.overrides "$@" ;;
   *) echo "unknown command: $cmd" >&2; usage 1 ;;
 esac

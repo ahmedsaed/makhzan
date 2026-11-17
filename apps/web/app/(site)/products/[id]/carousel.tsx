@@ -41,9 +41,10 @@ export function stepStrip(track: HTMLElement | null, direction: -1 | 1) {
   track?.scrollBy({ left: direction * stepOf(track), behavior: "smooth" });
 }
 
-/** Straight to item `index`, without animating: for opening on a photo. */
-export function jumpStrip(track: HTMLElement, index: number) {
-  track.scrollTo({ left: index * stepOf(track), behavior: "instant" });
+/** Straight to item `index`, without animating (for opening on a photo), or
+ *  gliding there (for following a picked shop, unless motion is reduced). */
+export function jumpStrip(track: HTMLElement, index: number, smooth = false) {
+  track.scrollTo({ left: index * stepOf(track), behavior: smooth ? "smooth" : "instant" });
 }
 
 /**

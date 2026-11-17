@@ -21,7 +21,10 @@ const OLD_TO_NEW: [string, string][] = [
   ["/en/browse/electronics/ics?sort=price_asc", "/departments/electronics/ics?sort=price_asc"],
   ["/trades", "/departments"],
   ["/trades/electronics", "/departments/electronics"],
-  ["/trades/electronics/resistors?sort=price_asc", "/departments/electronics/resistors?sort=price_asc"],
+  [
+    "/trades/electronics/resistors?sort=price_asc",
+    "/departments/electronics/resistors?sort=price_asc",
+  ],
   ["/en/trades/electronics", "/departments/electronics"],
   ["/en/suppliers/shop-a", "/shops/shop-a"],
   ["/suppliers/shop-a", "/shops/shop-a"],
@@ -44,7 +47,8 @@ for (const [from, to] of OLD_TO_NEW) {
 test("an old listing URL ends on its product page", async ({ page }) => {
   await page.goto("/en/listings/listing-1");
   expect(new URL(page.url()).pathname).toBe("/products/prod-1");
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("ESP32-WROOM-32");
+  // The product's title names the page (the h1 is the cheapest shop's own).
+  await expect(page).toHaveTitle(/ESP32-WROOM-32/);
 });
 
 test("a listing that does not exist is a real 404", async ({ request }) => {

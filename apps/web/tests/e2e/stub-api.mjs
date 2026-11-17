@@ -22,6 +22,7 @@ import { realHistoryFixture } from "./fixtures/real-history.mjs";
 import { productFixture } from "./fixtures/product.mjs";
 import { photoShopRoute } from "./fixtures/photo-shop.mjs";
 import { searchFixture } from "./fixtures/search.mjs";
+import { shopViewFixture, shopViewPhoto } from "./fixtures/shop-view.mjs";
 import { shopName, shopRoute } from "./fixtures/shops.mjs";
 import {
   FAILING_DEPARTMENT,
@@ -309,6 +310,13 @@ const server = createServer((req, res) => {
       send(202, { reference: "R-101" });
     });
     return;
+  }
+  const shopView = shopViewFixture(path, PORT);
+  if (shopView) return send(...shopView);
+  const drawn = shopViewPhoto(path);
+  if (drawn) {
+    res.writeHead(200, { "content-type": "image/svg+xml" });
+    return res.end(drawn);
   }
   const credited = photoShopRoute(url, PORT);
   if (credited) return send(...credited);
