@@ -12,7 +12,8 @@ rule, prompts and hashes, and this document must be fixed.
 Owner decisions this rests on (2026-11-17, `docs/ai/decision-review.md` §6,
 numbered P1–P17 there and in the code, apart from the register's D-numbers):
 the broker is a separate service from the API image with its own app object
-and hostname, never under the public `/api` rewrite (P2); one bearer token per
+and port, never under the public `/api` rewrite (P2), reached only over
+Tailscale; one bearer token per
 worker, stored as sha256 (P3); no shadow period: the mode is `off` until the
 owner sets it `live`, after reviewing the backlog's groupings on a local copy
 (P4); content hash per listing (P5); a decision stays until re-scored (P6);
@@ -76,7 +77,10 @@ triggers (producers)           broker (generic)                 workers (generic
 
 ## 2. Service
 
-- Base path `/ai/v1`, on its own hostname behind the reverse proxy, TLS only.
+- Base path `/ai/v1`, at `http://<server tailscale ip>:<port>`, reachable
+  only over Tailscale (owner, 2026-11-17; `docs/ai/broker-deploy.md`). There
+  is no public hostname. Tailscale encrypts the link (WireGuard), so plain
+  HTTP is acceptable on it; the bearer tokens still authenticate each worker.
 - JSON bodies, UTF-8. Times are ISO 8601 UTC. Ids are listing UUIDs and
   integer job ids. Hashes are lowercase hex sha256.
 - **Worker auth**: `Authorization: Bearer <token>`. The broker looks up
@@ -94,7 +98,8 @@ triggers (producers)           broker (generic)                 workers (generic
   (`AI_BROKER_MAX_BODY`).
 - Bodies that fail validation get `422 {"error": "invalid", "detail": [...]}`.
 - Production never runs a model. Catalogue text goes only to authenticated
-  workers, over TLS; workers write none of it to disk and log no payloads.
+  workers, over Tailscale; workers write none of it to disk and log no
+  payloads.
 
 ### 2.1 Modes
 
@@ -147,7 +152,6 @@ writes decisions, so the backlog can be scored while the mode is off.
 
 - **One model per session.** `models` names exactly one model key, else
   `422 {"error": "invalid"}`; a worker serving two keys opens one session
-  per key. So "never leased" and `end_model` are per model by construction.
   The key must be one of the worker's `ai_workers.models`, else
   `403 {"error": "model_not_allowed", "model": "…"}`.
 - The broker answers the model version the registry uses now
@@ -176,22 +180,19 @@ writes decisions, so the backlog can be scored while the mode is off.
   first.
 - The broker stores a session row (`ai_sessions`: worker, session id, the
   model versions it reported and whether each was `ok`, the rest of the
-  hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, end_model, and the
+  hello, `lease_s`, started_at, last_seen_at, ended_at, end_reason, and the
   last lease's request id and lease id) and `ai_workers.last_hello` for
   status. `ended_at` / `end_reason` record how a session last stopped:
   `released` (a graceful `/release`, with or without jobs, of a session not
-  already ended), `empty` (a lease came back empty) or `none_fit` (work
-  queued, none fitting the time left); a release after `empty` or `none_fit`
-  keeps that end; `end_model` is the model whose lease ended it. A later lease that
-  returns jobs reopens it.
+  already ended) or `empty` (a lease came back empty); a release after
+  `empty` keeps that end. A later lease that returns jobs reopens it.
 
 ### 3.2 `POST /lease`
 
 ```json
 {"session": "6f1c…", "model": "kev",
  "model_version": "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0",
- "max_jobs": 2, "seconds_left": 10450, "seconds_per_request": 86,
- "lease_request_id": "3f2a…"}
+ "max_jobs": 2, "lease_request_id": "3f2a…"}
 ```
 
 ```json
@@ -239,30 +240,12 @@ writes decisions, so the backlog can be scored while the mode is off.
   not yet), a fresh lease is made, which reaps first. A session serves one
   model, so a replay is always of that model. A new id, or none, is always a
   fresh lease.
-- **Batch size, and a job that does not fit.** Jobs are added in priority
-  order while `owed requests × seconds_per_request` fits in `seconds_left`
-  minus a 60 s margin; at most `max_jobs`. The first job that does not fit
-  **stops** the lease (it stays queued): the broker never skips ahead to a
-  smaller job, which would invert priority. So every job returned fits the
-  time the worker said it has, and the worker needs no rule of its own for
-  "does not fit" beyond sending honest `seconds_left` and
-  `seconds_per_request`; a job it cannot start after all it releases
-  gracefully. Without both fields, only `max_jobs` limits the lease.
-- **"Nothing fits" is not "empty".** When work is queued but the first job
-  does not fit, the answer is `200 {"lease_id": null, "jobs": [], "reason":
-  "none_fit"}`. **The broker ends the session** (`end_reason = "none_fit"`,
-  `end_model` the model asked): the worker sends no release. It says hello
-  again next window, or (`on_empty = "wait"`) leases again in the same
-  session, which reopens it.
-  - A session that **had** leased before (a healthy night: it scored, then its
-    window ran low with a backlog left) ends like a graceful release, and the
-    P16 rebuild is considered for what it decided.
-  - A session that **never** got a lease skips P16 (it decided nothing), and
-    is what `nothing_fits` counts: after 3 such sessions in a week
-    (`broker.NONE_FIT_FLAG_AFTER`) for one worker **and model**, counted only
-    since that subject's latest dismissed or actioned flag, a `nothing_fits`
-    flag opens, subject "<worker>/<model>": its window is too short for one
-    job, or its `seconds_per_request` is wrong.
+- **Batch size: up to `max_jobs`, in priority order.** There is no time
+  fit (owner, 2026-11-17: needless complexity): the broker does not ask how
+  long the worker has. A worker whose window ends with a job unfinished
+  releases it gracefully (§3.5: no attempt charged, scores already posted
+  kept), and another worker or the next window picks it up. Fields an older
+  worker may still send (`seconds_left`, `seconds_per_request`) are ignored.
 - **Rendering at lease time**, from the current database rows: the stage's
   prompt variant (`pipelines.PIPELINES[p].stage(s).prompt`) through
   `prompt.requests(variant, record(a), record(b))`, where `record` is
@@ -306,7 +289,7 @@ writes decisions, so the backlog can be scored while the mode is off.
   `on_empty = "exit"` exits; with `"wait"` it polls until its window ends.
   An empty lease marks the session ended (`end_reason = "empty"`); the
   worker sends no release, and a `"wait"` worker's next lease in the same
-  session reopens it. P16 is considered at three moments, all session ends: a graceful `/release`, an `empty` lease, and a `none_fit` after a lease (§3.4).
+  session reopens it. P16 is considered at both session ends: a graceful `/release` and an `empty` lease (§3.4).
 
 ### 3.3 `POST /heartbeat`
 
@@ -436,8 +419,8 @@ next rebuild, only when the mode is `live`.
 
 **Rebuild after a window (P16).** The broker cannot see worker windows, so it
 uses what it can see: when a worker ends a session, by a graceful `/release`,
-by a lease that came back empty, or by a none_fit after a lease, and new standing "same" decisions were
-written since the last rebuild the broker queued, it queues
+or by a lease that came back empty, and new standing decisions were written
+since the last rebuild the broker queued, it queues
 `rebuild_and_reindex` through the existing `request_rebuild` job-id scheme
 (deduplicated by window; the scheme is `makhzan_schemas.rebuild`, shared
 with the worker). Only in mode `live`; in `off` nothing is queued, since the
@@ -450,11 +433,11 @@ for certain: the daily producers write decisions (pairs settled from stored
 scores) inside a transaction that can run for minutes; a worker's session
 that ends meanwhile records a higher id from a /results, and the producers'
 lower ids, committed after, are never newer than the watermark. They take
-effect at the next rebuild, the next day's at the latest. A same-outcome re-score updates its row in
-place and so queues nothing; a "same" turned "not same" does not queue one
-either (the next daily rebuild applies it). That is `broker.REBUILD_ON_UNMERGE
-= False`, an owner decision pending; True queues one for any new standing
-decision.
+effect at the next rebuild, the next day's at the latest. A same-outcome
+re-score updates its row in place and so queues nothing. Any new standing
+decision counts, "not same" included, so a "same" turned "not same" (an AI
+merge to undo) is applied at the window's end (`broker.REBUILD_ON_UNMERGE =
+True`, owner, 2026-11-17).
 
 ### 3.5 `POST /release`
 
@@ -472,11 +455,10 @@ absent, `lease_id` optional) is how a worker that holds nothing ends its
 session: window over, a stop signal between leases, or done after its last
 results. It marks the session ended and considers the P16 rebuild, as a
 release with jobs does. A worker that stops between leases should always send
-it. **After an `empty` or `none_fit` answer the broker has already ended the
-session, and the worker sends no release** (§3.2; an `on_empty = "wait"`
-worker leases again in the same session). A release that comes
-anyway keeps the recorded end (`empty` or `none_fit`, what `nothing_fits`
-counts) and only considers P16. An `error` release must name its jobs (422
+it. **After an `empty` answer the broker has already ended the session, and
+the worker sends no release** (§3.2; an `on_empty = "wait"` worker leases
+again in the same session). A release that comes anyway keeps the recorded
+end and only considers P16. An `error` release must name its jobs (422
 otherwise).
 
 The caller must hold the lease and serve the jobs' model (as for `/results`).
@@ -486,8 +468,7 @@ job is `dead` and a `poison_job` flag is opened. Lease fields are cleared.
 Scores already submitted are kept: half a job is not lost, and the next
 lease carries only the order still owed. A graceful release marks the
 session ended (`end_reason = "released"`), except one that comes after the
-broker already ended it with `empty` or `none_fit`, which keeps that end.
-P16 is considered at three moments, all session ends: a graceful `/release`, an `empty` lease, and a `none_fit` after a lease (§3.4).
+broker already ended it with `empty`, which keeps that end. P16 is considered at both session ends: a graceful `/release` and an `empty` lease (§3.4).
 
 ### 3.6 Errors
 
@@ -519,8 +500,8 @@ P16 is considered at three moments, all session ends: a graceful `/release`, an 
 - Flags are listed and closed by hand with `./makhzan ai flags list` and
   `./makhzan ai flags dismiss ID [ID ...] --note "why"`. Given several ids
   it dismisses the open ones, commits them, and exits 1 if any was missing
-  or already closed. It always sets `resolved_at`, which a `nothing_fits`
-  count starts from; a flag closed by hand in SQL must set it too.
+  or already closed. It always sets `resolved_at`; a flag closed by hand
+  in SQL should set it too.
 - Any number of workers, on any machines, may lease at once; `SKIP LOCKED`
   and the request-hash idempotency make overlap harmless.
 
@@ -552,17 +533,20 @@ window): the judge sweep, then candidates, re-scores and the audit
 advisory lock): a second run, daily or by hand, is skipped and says so.
 `ai_listing_state` is written with upserts, and a listing that leaves the
 scope (archived, or out of electronics) loses its row. The owner decisions
-still pending are named constants: `candidates.BASELINE_FIRST_RUN`,
-`candidates.SKIP_DECISION_STATES` (revoked pairs stay out), the
-`triggers.*` priorities and `broker.REBUILD_ON_UNMERGE`.
+of 2026-11-17 are named constants: `candidates.BASELINE_FIRST_RUN`,
+`candidates.REOFFER_REVOKED_ON_TEXT_CHANGE`, the `triggers.*` priorities,
+`broker.REBUILD_ON_UNMERGE` and `policy.DOMAINS` (a decision acts only while
+both listings are in electronics; `decisions.load_ai_same`).
 
 - **candidates** (`match`, priority 60): electronics only (P15). A listing
   whose content hash differs from the one its candidates were last found for
   (`ai_listing_state`) gets its K = 10 nearest other-shop listings by
   title-token Jaccard (the experiments' method), plus the identifier-key
   pairs the rules split. Dropped: today's vetoes (P13), pairs the rules
-  merged, pairs with an override, pairs with a standing (the re-score's) or
-  revoked decision in `match`. One-directional; `./makhzan ai candidates
+  merged, pairs with an override, pairs with a standing decision in `match`
+  (the re-score's), and pairs whose decision a person revoked while both
+  listings still show the text it was revoked on (a text change offers it
+  again: owner, option (b)). One-directional; `./makhzan ai candidates
   --mutual` also takes listings whose own top K now holds a changed one. **The
   first run on a database with no `ai_listing_state` records a baseline and
   queues nothing**: the existing catalogue is the backlog's.
@@ -617,11 +601,10 @@ heartbeat_s = 60
 
 - The worker (phase 3) and its images, and the tooling that pushes a locally
   reviewed backlog's scores and decisions to production.
-- The proxy hostname itself: the owner's to add (`docs/ai/broker-deploy.md`).
 - Applying a new policy: `redecide` is a dry run only.
 - Writing `ai_decisions.effect` after each regroup (the columns exist; nothing
   writes them yet), and citing revoked decisions on the regroup that undoes
   them (`revoked_ai_decisions`).
-- Flags other than `poison_job`, `version_drift` and `nothing_fits`: P12's rules-merged
+- Flags other than `poison_job` and `version_drift`: P12's rules-merged
   audit is counted in status, not flagged, since no threshold is chosen; no
   `blocked_same` is written until `effect` is.

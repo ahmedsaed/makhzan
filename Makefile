@@ -129,7 +129,7 @@ ai:  ## AI matching: make ai ARGS="status" | "worker add NAME --models kev" | "b
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.ai $(ARGS)
 
 # The AI broker on :8100, its own app object (docs/ai/broker-api.md). Workers point
-# at http://localhost:8100/ai/v1 locally; in production it has its own hostname.
+# at http://localhost:8100/ai/v1 locally; in production, over Tailscale.
 broker:  ## Run the AI broker on :8100
 	cd apps/api && DATABASE_URL="$(DB_URL)" poetry run uvicorn app.broker.main:app --reload --port 8100
 

@@ -83,11 +83,11 @@ cmd_status() {
   fi
   echo
   echo "==> Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"
-  local broker_port="${BROKER_PORT:-8100}"
-  if curl -fsS --max-time 5 "http://127.0.0.1:${broker_port}/ai/v1/health" >/dev/null 2>&1; then
-    echo "==> AI broker: /ai/v1/health answers on 127.0.0.1:${broker_port}"
+  local broker="${BROKER_BIND:-127.0.0.1:8100}"
+  if curl -fsS --max-time 5 "http://${broker}/ai/v1/health" >/dev/null 2>&1; then
+    echo "==> AI broker: /ai/v1/health answers on ${broker}"
   else
-    echo "==> AI broker: /ai/v1/health on 127.0.0.1:${broker_port} is NOT answering"
+    echo "==> AI broker: /ai/v1/health on ${broker} is NOT answering"
   fi
   echo
 

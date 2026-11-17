@@ -641,7 +641,8 @@ Pipelines, models and prompts are data (`ai/pipelines.py`, `ai/policy.py`,
 `ai/prompt.py`): a new one is a registry entry, not a migration.
 
 **Workers talk only to the broker** (`app.broker.main:app`, its own service
-and hostname, never under `/api`; `docs/ai/broker-deploy.md`). Its logic is
+and port, reached only over Tailscale, never under `/api`;
+`docs/ai/broker-deploy.md`). Its logic is
 `makhzan_schemas.ai.broker`; what follows a score is `ai.flow.advance`, the
 one generic step (current scores by request hash, `transition()`, next stage
 or `write_decision`), which triggers use too, so an already-scored pair
