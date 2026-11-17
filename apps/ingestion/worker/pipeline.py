@@ -22,7 +22,7 @@ import os
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -62,6 +62,7 @@ from worker.http import (
 )
 from worker.identity import Identity, identity_for, using_identity
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
+from worker.pause import paused_reason
 from worker.sources.base import CONTACT_PART, ConfirmStopped, SourceAdapter, SupplierInfo
 
 #: How long one source's job may take before arq cancels it (worker.main).
@@ -681,8 +682,13 @@ async def _sweep_partition(
     deadline: float | None = None,
     halt: list[str] | None = None,
     categories: Counter | None = None,
+    stop_check: Callable[[], Awaitable[bool]] | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
+
+    `stop_check` is asked before every page; True stops the sweep there, its
+    cursor kept, like the deadline: how a pause (`worker.pause`) reaches a run
+    already going.
 
     `categories` counts category changes to stored listings (`_ingest_item`).
 
@@ -733,6 +739,8 @@ async def _sweep_partition(
             return False  # the run's adaptive budget is spent
         if deadline is not None and _clock() >= deadline:
             return False  # the run's time budget is spent; the cursor resumes here
+        if stop_check is not None and await stop_check():
+            return False  # paused by a person; the cursor resumes here when resumed
 
         log = current_request_log()
         before = _requests_logged(log)
@@ -1448,6 +1456,8 @@ async def _logged_run(
     deadline = _clock() + JOB_TIMEOUT * RUN_TIME_SHARE
     #: Why the run stopped early, if it did: its own host refused it.
     halt: list[str] = []
+    #: Why a person paused it mid-run, if they did (the crawl or the shop).
+    paused: list[str] = []
 
     async with SessionLocal() as session:
         run = IngestionRun(source=source_id, source_type=adapter.source_type)
@@ -1467,9 +1477,22 @@ async def _logged_run(
             adapter.resume_from(await _last_source_report(session, source_id))
         run_page_budget = budget.get("pages")
 
+        # Paused before it began (a run enqueued by hand on a paused shop):
+        # nothing is sent at all, the cycle's reference data included.
+        if limit is None and (reason := await paused_reason(session, source_id)):
+            paused.append(reason)
         # Before any page: the adapter reads it while turning pages into listings.
-        cycle_requests = await _load_cycle_data(
-            session, adapter, supplier_id, ephemeral=limit is not None, errors=errors, halt=halt
+        cycle_requests = (
+            Counter()
+            if paused
+            else await _load_cycle_data(
+                session,
+                adapter,
+                supplier_id,
+                ephemeral=limit is not None,
+                errors=errors,
+                halt=halt,
+            )
         )
         fetch_failed = False
         observed: Counter = Counter()
@@ -1480,6 +1503,18 @@ async def _logged_run(
         categories: Counter = Counter()
         #: Requests outside the sweep and the details stage (confirmation), by label.
         sent_extra: Counter = Counter()
+
+        async def pause_check() -> bool:
+            """Whether the crawl or this shop was paused since the run began.
+
+            Asked before every page of a full run, never of a `limit=` run
+            (those are for looking at a paused shop). Once paused, the run
+            stays stopped: resuming takes effect at the next run.
+            """
+            if limit is None and not paused:
+                if reason := await paused_reason(session, source_id):
+                    paused.append(reason)
+            return bool(paused)
 
         def checkpoint(more: Counter | None = None) -> None:
             """Put what the run has sent so far on its row, for the next commit.
@@ -1528,6 +1563,8 @@ async def _logged_run(
             if _clock() >= deadline:
                 stopped = "time budget spent; the cursors resume next run"
                 break
+            if await pause_check():
+                break
             if i:
                 # Partitions share one host. The pause between pages ends at a
                 # partition's last page, so without this the next partition's
@@ -1552,6 +1589,7 @@ async def _logged_run(
                 deadline=deadline,
                 halt=halt,
                 categories=categories,
+                stop_check=pause_check,
             )
             fetch_failed = fetch_failed or failed
             if halt:
@@ -1560,6 +1598,8 @@ async def _logged_run(
                 stopped = f"refused by its host: {halt[0]}"
                 break
 
+        if paused and stopped is None:
+            stopped = f"{paused[0]}; the cursors resume once it is resumed"
         archived, cycle = 0, {}
         confirm: Confirmer | None = None
         if limit is None:
@@ -1576,7 +1616,11 @@ async def _logged_run(
                     may_send=lambda: (
                         f"refused by its host: {halt[0]}"
                         if halt
-                        else ("time budget spent" if _clock() >= deadline else None)
+                        else (
+                            "time budget spent"
+                            if _clock() >= deadline
+                            else (paused[0] if paused else None)
+                        )
                     ),
                     budget_left=lambda: (
                         None if run_page_budget is None else run_page_budget - tally["pages"]
@@ -1596,7 +1640,7 @@ async def _logged_run(
 
         details_requests: Counter = Counter()
         details: dict = {}
-        if limit is None and not fetch_failed and _clock() < deadline:
+        if limit is None and not fetch_failed and not paused and _clock() < deadline:
             # After the sweep and its archiving, so only listings the shop still
             # sells are read. A `limit=` run is a quick test: it never costs a
             # shop product-page requests. Nor does a run whose sweep failed: a

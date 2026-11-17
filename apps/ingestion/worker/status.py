@@ -24,6 +24,7 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
+from makhzan_schemas import crawl
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.domains.crosswalks import fold_names, load_crosswalk, normalize_category_name
 from makhzan_schemas.enums import IngestionStatus, ListingStatus, ReviewStatus
@@ -211,7 +212,7 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
                 ],
             }
         )
-    return {"declared": declared, "sources": out}
+    return {"declared": declared, "sources": out, "crawl_pause": await crawl.crawl_pause(session)}
 
 
 def _pause_text(entry: dict) -> str:
@@ -238,6 +239,12 @@ async def sweep_progress(session, source_filter: str | None) -> None:
         print(f"  {RED}{source_id}: not loaded, so not being swept — {error}{RESET}")
     if declared["empty"]:
         print(f"  {YELLOW}the sources table is empty — run `make sources`{RESET}")
+    if pause := data["crawl_pause"]:
+        why = f": {pause['note']}" if pause.get("note") else ""
+        print(
+            f"  {YELLOW}the whole crawl is paused by {pause.get('by')} since"
+            f" {pause.get('at')}{why} (`./makhzan crawl on` resumes it){RESET}"
+        )
     if not data["sources"]:
         print(f"  {DIM}no cursors yet — nothing has been swept{RESET}")
         return

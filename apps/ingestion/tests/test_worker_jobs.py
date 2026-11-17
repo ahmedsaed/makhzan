@@ -66,7 +66,12 @@ def worker(monkeypatch):
         return True
 
     monkeypatch.setattr(main, "_run_source", run_source)
+
+    async def not_paused(source_id):
+        return None
+
     monkeypatch.setattr(main, "source_enabled", enabled)
+    monkeypatch.setattr(main, "source_paused", not_paused)
     monkeypatch.setattr(main, "_SOURCE_LOCKS", {})
     monkeypatch.setattr(main, "CRAWL_ENABLED", True)
     return main

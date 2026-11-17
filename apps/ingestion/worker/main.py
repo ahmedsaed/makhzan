@@ -35,6 +35,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from worker.indexer import get_client, reindex_all
+from worker.pause import paused_reason, paused_sources
 from worker import pipeline as _pipeline
 from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
@@ -182,6 +183,17 @@ async def source_enabled(source_id: str) -> bool:
     return bool(enabled)
 
 
+async def source_paused(source_id: str) -> str | None:
+    """Why the daily run of `source_id` must not start, if the crawl or the shop is paused.
+
+    Read as the job starts, like `source_enabled`: the pause (the admin
+    dashboard, `./makhzan crawl off`, `./makhzan shop pause`) may have been set
+    after the job was queued.
+    """
+    async with SessionLocal() as session:
+        return await paused_reason(session, source_id)
+
+
 async def crawl_source(ctx: dict, source_id: str) -> dict:
     """Arq task: one source's daily run, enqueued by `refresh_all`.
 
@@ -196,6 +208,8 @@ async def crawl_source(ctx: dict, source_id: str) -> dict:
             return {"source": source_id, "status": "skipped", "reason": "CRAWL_ENABLED is off"}
         if not await source_enabled(source_id):
             return {"source": source_id, "status": "skipped", "reason": "retired or disabled"}
+        if paused := await source_paused(source_id):
+            return {"source": source_id, "status": "skipped", "reason": paused}
         return await _exclusive(
             source_id, source_id, lambda: _run_source(source_id, get(source_id))
         )
@@ -326,14 +340,26 @@ async def refresh_all(ctx: dict) -> list[dict]:
     recorded on its own run; the rest carry on. The job id names the source and
     the day, so a source is never queued twice for one day, and `_exclusive`
     keeps a run started by hand from overlapping it.
+
+    Two pauses a person sets in the database are honoured on top of
+    `CRAWL_ENABLED` (`worker.pause`): the crawl-wide one queues nothing, and a
+    paused shop is left out, as if disabled, without touching sources.toml.
     """
     if not CRAWL_ENABLED:
         return [{"status": "skipped", "reason": "CRAWL_ENABLED is off"}]
+    async with SessionLocal() as session:
+        pause = await crawl.crawl_pause(session)
+        paused = await paused_sources(session)
+    if pause is not None:
+        return [{"status": "skipped", "reason": f"crawl paused by {pause.get('by') or '?'}"}]
 
     await load_adapters()
     today = datetime.now(timezone.utc).date()
     queued = []
     for adapter in all_enabled():
+        if adapter.source_id in paused:
+            queued.append({"source": adapter.source_id, "status": "skipped", "reason": "paused"})
+            continue
         job = await ctx["redis"].enqueue_job(
             "crawl_source", adapter.source_id, _job_id=crawl_job_id(adapter.source_id, today)
         )
