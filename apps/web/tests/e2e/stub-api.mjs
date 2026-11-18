@@ -70,6 +70,13 @@ const CATEGORIES = [
     ["soldering", "Soldering", "tools", 3],
     ["other", "Accessories & Other", null, 0],
     ["accessories", "Accessories", "other", 4],
+    // Three more single-category groups, so the phone's group row overflows.
+    ["power", "Power", null, 0],
+    ["batteries", "Batteries & Chargers", "power", 2],
+    ["boards-modules", "Boards & Modules", null, 0],
+    ["sensors", "Sensors", "boards-modules", 2],
+    ["prototyping", "Prototyping", null, 0],
+    ["prototyping-supplies", "Breadboards & Wires", "prototyping", 1],
   ].map(([slug, name_en, parent, count]) => ({
     ref: `electronics:${slug}`,
     domain: "electronics",

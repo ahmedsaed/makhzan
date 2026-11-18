@@ -4,6 +4,7 @@ import { Breadcrumb, type Crumb } from "@/components/breadcrumb";
 import { Link } from "@/components/link";
 import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
+import { ScrollRow } from "@/components/scroll-row";
 import { Container } from "@/components/section";
 import { hasCategoryIcons, tileIcon } from "@/components/category-icons";
 import { categoryNameOf, type Category } from "@/lib/api";
@@ -137,19 +138,17 @@ export async function DepartmentBrowse({
         crumbs={selected ? crumbs : undefined}
       >
         {tree.groups.length > 1 && (
-          // On a phone as many columns as fit at 76px, so a long group name
-          // ("Bearings & Transmission") wraps between words rather than inside
-          // one. From `lg` the tiles lie on their side, in balanced rows.
-          <nav
-            aria-label="Groups"
+          // On a phone one row of 76px tiles scrolling sideways, so the products
+          // start high on the page (owner, 2026-11-18); 76px lets a long group
+          // name ("Bearings & Transmission") wrap between words. From `sm` a
+          // grid, and from `lg` the tiles lie on their side, in balanced rows.
+          <ScrollRow
+            label="Groups"
             style={columns(tree.groups.length, 4, 5)}
-            className={cn(
-              "grid grid-cols-[repeat(auto-fill,minmax(4.75rem,1fr))] gap-1.5 sm:grid-cols-6",
-              BALANCED,
-            )}
+            className={cn("gap-1.5 sm:grid sm:grid-cols-6 max-sm:[&>*]:w-[4.75rem]", BALANCED)}
           >
             {tree.groups.map(tile)}
-          </nav>
+          </ScrollRow>
         )}
       </DepartmentHeader>
 
@@ -160,7 +159,12 @@ export async function DepartmentBrowse({
               {shelfTitle}
             </h2>
             {tree.group ? (
-              <nav aria-label="Categories" className="flex flex-wrap gap-2">
+              // On a phone one sideways row; the padding keeps the chips'
+              // invisible tap extension inside the scrolling box (S4).
+              <ScrollRow
+                label="Categories"
+                className="flex flex-wrap gap-2 max-sm:-my-1.5 max-sm:py-1.5"
+              >
                 {shelf.map((node) => (
                   <CategoryChip
                     key={node.ref}
@@ -172,9 +176,12 @@ export async function DepartmentBrowse({
                     withIcon={withIcon}
                   />
                 ))}
-              </nav>
+              </ScrollRow>
             ) : (
-              <nav aria-label="Categories" className="flex flex-wrap gap-x-1.5 gap-y-3">
+              <ScrollRow
+                label="Categories"
+                className="flex flex-wrap gap-x-1.5 gap-y-3 max-sm:-my-2 max-sm:py-2"
+              >
                 {shelf.map((node) => (
                   <ShortcutPill
                     key={node.ref}
@@ -186,7 +193,7 @@ export async function DepartmentBrowse({
                     withIcon={withIcon}
                   />
                 ))}
-              </nav>
+              </ScrollRow>
             )}
           </section>
         )}

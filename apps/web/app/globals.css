@@ -272,6 +272,27 @@
       display: none;
     }
   }
+
+  /* A phone's sideways row (components/scroll-row.tsx) fades out over 2.5rem
+   * on each edge that hides content, and only there; at the row's end that
+   * edge is sharp again. Black and transparent are mask alpha, not colours. */
+  @media (width < 40rem) {
+    [data-scroll-row][data-more-end] {
+      mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
+    }
+    [data-scroll-row][data-more-start] {
+      mask-image: linear-gradient(to left, black calc(100% - 2.5rem), transparent);
+    }
+    [data-scroll-row][data-more-start][data-more-end] {
+      mask-image: linear-gradient(
+        to right,
+        transparent,
+        black 2.5rem,
+        black calc(100% - 2.5rem),
+        transparent
+      );
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
