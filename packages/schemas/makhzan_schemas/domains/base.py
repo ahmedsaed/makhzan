@@ -204,6 +204,10 @@ def _keyword_pattern(keyword: str) -> str:
     the left boundary applies to the first part, a "\\b" to the last.
     """
     parts = keyword.split(" ... ")
+    if any(part.endswith("\\b") for part in parts[:-1]):
+        # Only the last part can be closed on the right; elsewhere "\\b" would
+        # be matched as two literal characters.
+        raise ValueError(f"keyword {keyword!r}: only its last part may end in \\b")
     last = parts[-1]
     closed = last.endswith("\\b")
     if closed:

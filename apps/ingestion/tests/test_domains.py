@@ -218,6 +218,8 @@ def test_camera_accessories_are_not_cameras(title, expected):
         # Named first, sold with the accessory: a camera (accepted ambiguity).
         "Camera with Power Adapter Cable",
         "Doorbell Camera Rechargeable Battery",
+        "Mini Camera USB Charging 1080P",
+        "Dome Camera with Ceiling Mount",
         "Body Worn Camera with Strap Clip",
         "Endoscope Camera 5 Meter Cable Length - Waterproof USB OTG Borescope",
     ],
@@ -280,6 +282,33 @@ def test_every_profiles_rules_compile(domain):
 )
 def test_camera_shop_tags_keep_their_leaf(tags, expected):
     assert get_profile("electronics").resolve_category_slug(tags, None) == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # Accepted ambiguities (see `_FOR_A_CAMERA`): real cameras inference
+        # does not file, because the shape is an accessory's. Pinned so that
+        # changing them is a decision.
+        ("Dash Cam for Car Front and Rear Camera", None),
+        ("Dome Camera Ceiling Mount", None),
+        ("Bullet Camera Metal Bracket", "mechanical"),
+    ],
+)
+def test_accepted_camera_ambiguities(title, expected):
+    assert get_profile("electronics").resolve_category_slug(None, title) == expected
+
+
+def test_a_closed_part_before_a_gap_is_refused():
+    """ "\\b" closes only the last part of "a ... b"; anywhere else it is an error."""
+    profile = DomainProfile(
+        slug="gapclosed",
+        name_en="Gap",
+        name_ar="فجوة",
+        category_rules=[("parts", [r"for\b ... widget"])],
+    )
+    with pytest.raises(ValueError, match="last part"):
+        profile.resolve_category_slug(None, "anything")
 
 
 def test_a_gap_keyword_allows_a_few_words_between():

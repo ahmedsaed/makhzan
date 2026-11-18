@@ -91,6 +91,15 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
 #: compatible with one, whatever stands between ("Battery for Canon Camera",
 #: "Tripod for Smartphones and Mirrorless Cameras", "Hard Case for Dash Cam").
 #: "a ... b" allows up to four words between (`base.MAX_GAP_WORDS`).
+#:
+#: Accepted ambiguities, pinned by tests so a change to them is deliberate:
+#: - "for ... camera" cannot tell an accessory for a camera from a camera for
+#:   a place: "Dash Cam for Car Front and Rear Camera" is not a camera by
+#:   inference. "Camera with Power Adapter Cable" is, though it could be a cable.
+#: - Without "with", an accessory word after the camera wins: "Dome Camera
+#:   Ceiling Mount" and "Bullet Camera Metal Bracket" are not cameras by
+#:   inference, while "Dome Camera with Ceiling Mount" is.
+#: All of these matter only on an inference miss; a crosswalk decides first.
 _FOR_A_CAMERA = [
     "!for ... camera",
     r"!for ... cam\b",
@@ -246,7 +255,8 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             r"!brackets\b",
             "!quick release",
             r"!power bank\b",
-            r"!charging\b",
+            r"!charging cable\b",
+            r"!charging dock\b",
             r"!speedlite\b",
             r"!camera flash\b",
             r"!backpack\b",
