@@ -123,6 +123,82 @@ def test_short_filament_names_still_match_the_material(title):
     assert get_profile("electronics").resolve_category_slug(None, title) == "filament"
 
 
+@pytest.mark.parametrize(
+    ("tags", "title", "expected"),
+    [
+        (None, "OV7670 Camera Module", "cameras"),
+        (None, "USB Webcam 1080p Full HD", "cameras"),
+        # A camera that connects over Wi-Fi is a camera, not a wireless module.
+        (None, "Outdoor Smart Wi-Fi Camera, Sound and Light", "cameras"),
+        (None, "WIFI Endoscope 5.5mm Industrial", "cameras"),
+        (["AI Machine Vision"], "Depth Kit with PoE, IP67", "cameras"),
+        # A camera board is still a board.
+        (None, "ESP32-CAM Development Board with OV2640 Camera", "dev-boards"),
+        # A thermal camera is a test instrument; "thermal" alone said cooling.
+        (None, "Infrared Rapid Thermal Camera", "measurement"),
+    ],
+)
+def test_cameras_and_imaging(tags, title, expected):
+    assert get_profile("electronics").resolve_category_slug(tags, title) == expected
+
+
+def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
+    """One shop's "Security Camera" tag also holds an RFID card copier and
+    barcode modules; only a title that says camera is a camera."""
+    electronics = get_profile("electronics")
+    assert electronics.resolve_category_slug(["Security Camera"], "RFID Card Copier") is None
+    assert (
+        electronics.resolve_category_slug(["Devices", "Security Camera"], "Indoor Wi-Fi Camera")
+        == "cameras"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tags", "title"),
+    [
+        # Kits name their parts; the kit is what they are.
+        (None, "Educational Solar Robot Kit 6 in 1"),
+        (None, "Humanoid Robot Kit 17DOF with Servo Motors"),
+        (None, "Kids Electric Circuit Kit - 56 Parts DIY STEM Toys"),
+        (None, "DIY Wood Traffic Lights - Science Toy"),
+        (None, "Digital Logic Design Kit - Faculty of Engineering"),
+        (None, "Electronics Kit - Engineering Institute, Spring Term"),
+        (["Project Kits"], "Smart City Kit"),
+    ],
+)
+def test_educational_and_robot_kits(tags, title):
+    assert get_profile("electronics").resolve_category_slug(tags, title) == "kits"
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # Filed with what it is built on, as before.
+        ("Arduino Starter Kit UNO R3", "dev-boards"),
+        # A printer's board set, not a course box.
+        ("3D Printer Electronics Kit", "printers-3d"),
+        # "kit" alone is never enough.
+        ("O-Ring Service Kit NBR-70 (30 Sizes)", None),
+        ("Soldering Starter Kit 60W", "soldering"),
+    ],
+)
+def test_kit_alone_does_not_make_a_teaching_kit(title, expected):
+    assert get_profile("electronics").resolve_category_slug(None, title) == expected
+
+
+def test_photography_is_its_own_department():
+    """Studio lights and tripods are not electronics accessories. Filled by
+    crosswalk only: inference runs under a supplier's default domain, and no
+    supplier defaults to photography, so it carries no keyword rules."""
+    photography = get_profile("photography")
+    assert photography.slug == "photography"
+    leaves = {slug for slug, _en, _ar, parent in photography.taxonomy if parent}
+    assert leaves == {"photo-lights", "tripods", "camera-bags", "camera-accessories"}
+    assert photography.category_rules == []
+    electronics = {slug for slug, *_ in get_profile("electronics").taxonomy}
+    assert {"cameras", "kits"} <= electronics
+
+
 def test_electronics_ranks_its_identifier_first():
     assert get_profile("electronics").search_attributes[0] == "part_number"
 

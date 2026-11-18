@@ -62,6 +62,7 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("wireless", "Communication & Wireless", "الاتصالات واللاسلكي", "boards-modules"),
     ("displays", "Displays", "الشاشات", "boards-modules"),
     ("modules", "Modules", "الوحدات", "boards-modules"),
+    ("cameras", "Cameras & Imaging", "الكاميرات والتصوير", "boards-modules"),
     # Power
     ("power-supplies", "Power Supplies & Converters", "مصادر الطاقة والمحوّلات", "power"),
     ("batteries", "Batteries & Chargers", "البطاريات والشواحن", "power"),
@@ -81,6 +82,7 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("measurement", "Measurement & Test", "القياس والاختبار", "tools"),
     # Prototyping
     ("prototyping-supplies", "Breadboards & Wires", "لوحات التجارب والأسلاك", "prototyping"),
+    ("kits", "Educational & Robot Kits", "الأطقم التعليمية والروبوتات", "prototyping"),
     # Other
     ("accessories", "Accessories", "إكسسوارات", "other"),
 ]
@@ -135,6 +137,38 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "fpga",
         ],
     ),
+    # Kits name their parts ("Solar Robot Kit", "Robot Arm Kit with 4 Servos"), so
+    # the phrases that say a listing *is* a kit go ahead of the parts' own leaves.
+    # Behind dev boards, though: an Arduino starter kit is filed with Arduino.
+    # Never bare "kit": a mainboard kit, an O-ring service kit and a developer
+    # kit are not teaching kits.
+    (
+        "kits",
+        [
+            "educational kit",
+            "educational robot",
+            "educational toy",
+            r"stem\b",
+            "science toy",
+            "learning kit",
+            "robot kit",
+            "robotic kit",
+            "robotics kit",
+            "robot arm kit",
+            "robotic arm kit",
+            "project kit",
+            "lab kit",
+            "logic kit",
+            "digital logic design",
+            "for kids",
+        ],
+    ),
+    # A thermal camera is a test instrument, and "thermal" alone filed it with
+    # fans and heatsinks.
+    ("measurement", ["thermal camera", "thermal imag"]),
+    # Ahead of wireless: a "Wi-Fi Camera" or "WiFi Endoscope" is a camera that
+    # happens to connect wirelessly. Behind dev boards: an ESP32-CAM is a board.
+    ("cameras", ["camera", "webcam", "endoscope", "borescope", "machine vision"]),
     (
         "wireless",
         [
@@ -224,6 +258,9 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # Last of the printing leaves: "Extrusion Nozzle for 3D Printer" and "PLA
     # Filament Roll for 3D Printer" name a printer only as what they fit.
     ("printers-3d", ["3d printer"]),
+    # A course's parts box ("Electronics Kit – <faculty>"), but only once the
+    # printers have spoken: "3D Printer Electronics Kit" is a printer's board set.
+    ("kits", ["electronics kit", "electronic kit"]),
     (
         "mechanical",
         [
@@ -292,6 +329,11 @@ _GENERIC = {
     # alike; read as a category it filed all 94 under one leaf. The title can
     # tell them apart.
     "3d printer filament",
+    # Likewise a tag that names a camera but holds a mixed bag: one shop's tag
+    # of this name carries Wi-Fi cameras beside an RFID card copier, a CCTV
+    # power supply and barcode and palm-vein modules. Read as a category it
+    # filed them all as cameras; the cameras' own titles say "camera".
+    "security camera",
 }
 
 # Generic descriptors that don't distinguish products — dropped from title signatures.
