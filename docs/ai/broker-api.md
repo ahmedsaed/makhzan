@@ -622,10 +622,29 @@ lease_s  = 900
 heartbeat_s = 60
 ```
 
+## 6.1 Importing a locally scored backlog
+
+`./makhzan ai import DIR [--dry-run | --verify]` (`python -m worker.ai_import`;
+`make ai ARGS="import DIR"` locally) stores a backlog run's `scores-*.jsonl`
+and writes the decisions they make. Every line must name the code's judge
+(model version, weights revision, prompt version, hash version), or the
+whole import is refused. Each request is re-rendered from the listing as it
+is now and kept only when its `request_sha256` matches; the rest are counted
+as stale and skipped. Scores go in idempotently on (judge, request hash);
+then every pair whose stages are all scored goes through `flow.advance`, so
+the decisions, their evidence and request hashes, and a person's
+revocations are exactly what the broker would write. `--dry-run` rolls back
+and writes no decision; `--verify` checks stored scores and standing
+decisions against the files and changes nothing. `./makhzan` copies the
+files into the worker container first.
+
 ## 7. What is not here yet
 
-- The worker (phase 3) and its images, and the tooling that pushes a locally
-  reviewed backlog's scores and decisions to production.
+- A way to queue the pairs an import skips as stale (`worker.ai_import`
+  counts them and queues nothing). In production the first daily trigger
+  run records a baseline of content hashes, so a listing whose text changed
+  between the backlog's dump and the import is not offered again until it
+  changes once more.
 - Applying a new policy: `redecide` is a dry run only.
 - Writing `ai_decisions.effect` after each regroup (the columns exist; nothing
   writes them yet), and citing revoked decisions on the regroup that undoes

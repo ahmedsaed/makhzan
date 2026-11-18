@@ -14,6 +14,7 @@
     python -m worker.ai jobs retry ID [ID ...]
     python -m worker.ai flags list [--all]
     python -m worker.ai flags dismiss ID [ID ...] --note "why" [--by NAME]
+    python -m worker.ai import DIR [--dry-run | --verify]   # a locally scored backlog
 
 `./makhzan ai ...` runs this in the production worker (for `admin-token` it
 also writes the hash into .env.prod and recreates the broker), and `make ai
@@ -30,6 +31,8 @@ one decision and cancels the pair's queued jobs; the next regroup undoes what
 it joined. The pair is offered again only when the text the models see
 changes, and no decision is written for it from scores the revocation already
 saw (to rule on it for good, use `./makhzan overrides`).
+`import` stores a locally scored backlog's scores and writes the decisions
+they make through the pipeline's own code (`worker.ai_import`).
 `flags dismiss` sets `resolved_at` (a hand-closed flag must too). Given
 several ids it dismisses the open ones and exits 1 if any was not open.
 """
@@ -55,6 +58,7 @@ from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import AiDecision, AiFlag, AiJob, AiWorker
 from sqlalchemy import func, select
 
+from worker import ai_import
 from worker.reports import printable, who
 
 
@@ -377,6 +381,8 @@ def _parser() -> argparse.ArgumentParser:
     dismiss.add_argument("ids", type=lambda v: int(v.strip().removeprefix("#")), nargs="+")
     dismiss.add_argument("--note", required=True, help="why: kept with the flag")
     dismiss.add_argument("--by", help="who is dismissing (default: login)")
+    imported = sub.add_parser("import", help="store a locally scored backlog and decide its pairs")
+    ai_import.add_arguments(imported)
     jobs = sub.add_parser("jobs", help="the job queue")
     jsub = jobs.add_subparsers(dest="action", required=True)
     jlist = jsub.add_parser("list")
@@ -422,6 +428,8 @@ async def run(argv: Sequence[str] | None = None) -> int:
             if not args.note.strip():
                 parser.error("--note must say why")
             return await _flags_dismiss(args.ids, args.note, who(args.by))
+        case "import":
+            return await ai_import.main(args)
         case "jobs" if args.action == "list":
             return await _jobs_list(args.dead, args.limit)
         case "jobs":
