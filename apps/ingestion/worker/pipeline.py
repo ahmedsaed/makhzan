@@ -790,7 +790,7 @@ async def _sweep_partition(
                     not_products[f"{raw.title} ({skipped})"] += 1
             except Exception as exc:  # noqa: BLE001 — one bad item must not kill the run
                 run.items_failed += 1
-                errors.append(str(exc))
+                errors.append(f"{type(exc).__name__}: {exc}")
 
         if not ephemeral:
             # Checkpoint: everything up to and including this page is durable.
@@ -1036,7 +1036,7 @@ class Confirmer:
                 )
             except Exception as exc:  # noqa: BLE001 — one bad item must not stop the rest
                 self.run.items_failed += 1
-                self.errors.append(f"confirm {raw.external_id}: {exc}")
+                self.errors.append(f"confirm {raw.external_id}: {type(exc).__name__}: {exc}")
                 continue
             if skipped is None and self.run.items_for_review == for_review:
                 upserted.add(str(raw.external_id))
@@ -1138,7 +1138,7 @@ async def _recheck_first(
             read += 1
         except Exception as exc:  # noqa: BLE001 — one bad item must not stop the rest
             run.items_failed += 1
-            errors.append(f"re-check {raw.external_id}: {exc}"[:300])
+            errors.append(f"re-check {raw.external_id}: {type(exc).__name__}: {exc}"[:300])
     by_external = {str(row.external_id): row for row in listings}
     now = datetime.now(timezone.utc)
     for external_id in answer.seen:
@@ -1868,7 +1868,7 @@ async def _logged_run(
                 # Whatever went wrong reading details, the run's own record
                 # (requests, pacing, archiving) is what /how-we-crawl publishes.
                 await session.rollback()
-                errors.append(f"details: {exc}")
+                errors.append(f"details: {type(exc).__name__}: {exc}")
 
         if paused and stopped is None:
             # First seen after the sweep: by the confirmation or the details stage.
