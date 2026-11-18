@@ -64,9 +64,9 @@ export const SECURITY_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M4.5 12a7.5 7.5 0 0 1 15 0v3" />
-        <path d="M7.5 12.5a4.5 4.5 0 0 1 9 0v2.5c0 2 .5 3.5 1.5 5" />
-        <path d="M10.5 14a1.5 1.5 0 0 1 3 0v3c0 1.5.5 2.5 1 3.5M4.5 12v4" />
+        <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+        <path d="M8 13.5a4 4 0 0 1 8 0v1" />
+        <path d="M10.5 16v-2.5a1.5 1.5 0 0 1 3 0v3" />
       </>
     ),
   },

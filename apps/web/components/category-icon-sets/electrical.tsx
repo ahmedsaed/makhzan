@@ -120,9 +120,9 @@ export const ELECTRICAL_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M12 0v6M12 19v5" />
-        <path d="M12 19l5.5-11.5" />
-        <path d="M15 4l5 5M20 4l-5 5" />
+        <rect x="6.5" y="3" width="11" height="18" rx="1.5" />
+        <rect x="9.5" y="6" width="5" height="6.5" rx="1" />
+        <path d="M12 7.5v3M9.5 17h5" />
       </>
     ),
   },
@@ -153,9 +153,9 @@ export const ELECTRICAL_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M12 0v6M12 19v5" />
-        <path d="M12 19 18 7.5" />
-        <path d="M12.6 12.2l4.8 2.5" />
+        <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+        <circle cx="12" cy="12" r="4.5" />
+        <path d="M12 12l3.25-3.25M12 6.5V7" />
       </>
     ),
   },
@@ -319,9 +319,9 @@ export const ELECTRICAL_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="6" y="5" width="12" height="14" rx="1" />
-        <path d="M0 9h6M0 15h6M18 12h6" />
-        <path d="M8.5 12q1.5-3.5 3 0t3 0" />
+        <rect x="2.5" y="6" width="19" height="12" rx="1.5" />
+        <path d="M5.5 12q1.25-3.5 2.5 0t2.5 0" />
+        <path d="M13.5 14.5v-5H16v5h2.5" />
       </>
     ),
   },

@@ -8,8 +8,8 @@ export const SAFETY_ICONS: Record<string, Glyph> = {
     kind: "group",
     body: (
       <>
-        <path d="M8.5 3.5 5 7.5V21h14V7.5l-3.5-4" />
-        <path d="M8.5 3.5 12 9l3.5-5.5M12 9v12M5 14.5h14" />
+        <path d="M12 3 20 6v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6z" />
+        <path d="M8.5 12l2.5 2.5 4.5-5" />
       </>
     ),
   },
@@ -60,8 +60,8 @@ export const SAFETY_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M4.5 17v-2a7.5 7.5 0 0 1 15 0v2" />
-        <path d="M2.5 17h19M12 7.5V17" />
+        <path d="M4 17.5C4 11.5 7.5 7.5 12.5 7.5c4 0 6.5 2.5 7 6.5l2 1v2.5z" />
+        <path d="M12.5 7.5v10" />
       </>
     ),
   },
@@ -70,9 +70,9 @@ export const SAFETY_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M4.5 4.5h15v11a4.5 4.5 0 0 1-4.5 4.5H9a4.5 4.5 0 0 1-4.5-4.5z" />
-        <rect x="7.5" y="8.5" width="9" height="3.5" rx="0.75" />
-        <path d="M4.5 8H2.5M19.5 8h2" />
+        <path d="M9 3.5v5H6.5L5 21h14L17.5 8.5H15v-5" />
+        <path d="M9 3.5q3-1.5 6 0" />
+        <rect x="9.5" y="14" width="5" height="3.5" rx="0.5" />
       </>
     ),
   },

@@ -95,8 +95,9 @@ export const MATERIALS_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="4" y="4" width="16" height="16" rx="1" />
-        <path d="M4 9.33h16M4 14.67h16M9.33 4v16M14.67 4v16" />
+        <path d="M3 12.5h18l-3 6.5H6z" />
+        <path d="M8 12.5v-3h6l2 3" />
+        <path d="M3 21.5q1.5-1.25 3 0t3 0 3 0 3 0 3 0" />
       </>
     ),
   },
@@ -179,9 +180,7 @@ export const MATERIALS_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="7" cy="16.5" r="4" />
-        <circle cx="17" cy="16.5" r="4" />
-        <circle cx="12" cy="8.25" r="4" />
+        <path d="M5 4v16h15v-4.5H9.5V4z" />
       </>
     ),
   },

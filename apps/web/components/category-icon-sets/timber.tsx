@@ -33,8 +33,8 @@ export const TIMBER_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M12 3.5c1.5 0 2 1.5 3 1.5s2.5-.5 2.5 1.5c0 1-1.5 1.5-1.5 2.5s2 1.5 2 3c0 2-2.5 1.5-3 2.5-.5 1.5-1 3-3 3s-2.5-1.5-3-3c-.5-1-3-.5-3-2.5 0-1.5 2-2 2-3S6.5 7.5 6.5 6.5C6.5 4.5 8 5 9 5s1.5-1.5 3-1.5z" />
-        <path d="M12 8v13" />
+        <rect x="3" y="6" width="18" height="12" rx="1.5" />
+        <path d="M7 18c0-5 2-8 5-8s5 3 5 8M9.75 18c0-2.5 1-4.5 2.25-4.5s2.25 2 2.25 4.5" />
       </>
     ),
   },
@@ -43,8 +43,8 @@ export const TIMBER_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M12 3c5 2 7.5 6 7.5 10.5S16 21 12 21s-7.5-3.5-7.5-7.5S7 5 12 3z" />
-        <path d="M12 21V8M12 12.5l3.25-3M12 16l4-3.5M12 12.5l-3.25-3M12 16l-4-3.5" />
+        <rect x="3" y="6" width="18" height="12" rx="1.5" />
+        <path d="M6 10h12M6 14h12" />
       </>
     ),
   },
@@ -53,9 +53,8 @@ export const TIMBER_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="12" cy="12" r="8.5" />
-        <circle cx="12" cy="12" r="5" />
-        <circle cx="12" cy="12" r="1.5" />
+        <rect x="3" y="6" width="18" height="12" rx="1.5" />
+        <path d="M6 9.5q2-2.25 4 0t4 0 4 0M6 14.5q2 2.25 4 0t4 0 4 0" />
       </>
     ),
   },
@@ -84,8 +83,8 @@ export const TIMBER_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="3" y="6.5" width="18" height="11" rx="1.5" />
-        <path d="M6.5 10.5H13M11 13.5h6.5" />
+        <rect x="3" y="6" width="18" height="12" rx="1.5" />
+        <path d="M6.5 15 11 9.5M10 16.5l5-6.5M14 16.5l4-5" />
       </>
     ),
   },
@@ -94,8 +93,8 @@ export const TIMBER_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="12" cy="9.5" r="6.5" />
-        <path d="M12 16v5.5M9 21.5h6" />
+        <rect x="3" y="6" width="18" height="12" rx="1.5" />
+        <path d="M7 10h2M13 9.5h3M9 13h3M15.5 14h2M7.5 15.5h0M12.5 11.5h0M17.5 11.5h0M11 16h0" />
       </>
     ),
   },

@@ -59,9 +59,9 @@ export const PIPING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M3 10l9 5-9 5zM21 10l-9 5 9 5z" />
-        <circle cx="12" cy="15" r="1.5" />
-        <path d="M12 13.5V5M9 5h6" />
+        <path d="M2.5 16h4M17.5 16h4" />
+        <circle cx="12" cy="16" r="5.5" />
+        <path d="M12 10.5V4M8.5 4h7M9.5 12.5h5" />
       </>
     ),
   },
@@ -70,8 +70,10 @@ export const PIPING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M3 10l9 5-9 5zM21 10l-9 5 9 5z" />
-        <path d="M12 15V5M8.5 5h7" />
+        <path d="M2.5 15.5H6M18 15.5h3.5" />
+        <rect x="6" y="11" width="12" height="9.5" rx="2" />
+        <path d="M12 11V4M8 4h8" />
+        <path d="M9.5 11v5.5l2.5 2.5 2.5-2.5V11" />
       </>
     ),
   },
@@ -110,8 +112,10 @@ export const PIPING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M3.5 5.5h17M5 5.5l2.5 14h9L19 5.5" />
-        <path d="M8.5 5.5l1 14M12 5.5v14M15.5 5.5l-1 14M6.5 12h11" />
+        <rect x="2.5" y="4" width="19" height="7" rx="1" />
+        <path d="M5.5 4v7M18.5 4v7" />
+        <path d="M9 11l3.5 9h7L16 11M12 20h9" />
+        <path d="M13.5 15h4" />
       </>
     ),
   },
@@ -120,8 +124,9 @@ export const PIPING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M2.5 12h4M16.5 12h5" />
-        <path d="M6.5 8.5v7M9 6v12M11.5 8.5v7M14 6v12M16.5 8.5v7" />
+        <path d="M2.5 10H6M2.5 14H6M13.5 10h8M13.5 14h8" />
+        <path d="M6 10q1.25-5 2.5 0q1.25-5 2.5 0q1.25-5 2.5 0" />
+        <path d="M6 14q1.25 5 2.5 0q1.25 5 2.5 0q1.25 5 2.5 0" />
       </>
     ),
   },

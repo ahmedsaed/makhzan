@@ -8,9 +8,8 @@ export const RIGGING_ICONS: Record<string, Glyph> = {
     kind: "group",
     body: (
       <>
-        <rect x="7" y="3" width="10" height="8" rx="2" />
-        <rect x="10.75" y="11" width="2.5" height="4" rx="1.25" />
-        <path d="M12 15v2.5a2.75 2.75 0 1 0 2.75 2.75" />
+        <rect x="8" y="2.5" width="8" height="6.5" rx="1.5" />
+        <path d="M12 9v8a4 4 0 0 1-8 0v-2.5" />
       </>
     ),
   },
@@ -42,11 +41,8 @@ export const RIGGING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="11.5" cy="4.5" r="1.75" />
-        <path d="M11.5 6.25V8.5" />
-        <rect x="7" y="8.5" width="9" height="7" rx="2" />
-        <path d="M16 11l5.5 9M11.5 15.5V17" />
-        <circle cx="11.5" cy="19" r="2" />
+        <rect x="6" y="3.5" width="10" height="8" rx="2" />
+        <path d="M16 7.5l5.5 7.5M11 11.5v6a3 3 0 0 1-6 0v-2" />
       </>
     ),
   },

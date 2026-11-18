@@ -96,9 +96,8 @@ export const CHEMICALS_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="9" cy="11" r="6.5" />
-        <circle cx="9" cy="11" r="2" />
-        <path d="M9 17.5h12.5v-5" />
+        <path d="M3.5 7.5 5.25 9 3.5 10.5 5.25 12 3.5 13.5H20.5v-6z" />
+        <path d="M20.5 13.5c0 3-2 4.5-5 4.5" />
       </>
     ),
   },
@@ -186,9 +185,9 @@ export const CHEMICALS_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="3" y="6.5" width="4" height="9" rx="0.75" />
-        <path d="M7 9h14M7 13h14M11 9v4M14.5 9v4M18 9v4" />
-        <path d="M8 19h0M12 20.5h0M16 19h0" />
+        <rect x="3" y="9" width="18" height="11" rx="1" />
+        <path d="M7 9c0-3 2-4 3.5-3.5M13 9c.5-3 3-3.5 4.5-2.5" />
+        <path d="M8 14h0M13 15.5h0M17 13.5h0" />
       </>
     ),
   },

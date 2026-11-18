@@ -54,8 +54,9 @@ export const GARDEN_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M4.5 20.5 12 10M8 21.5l5.5-9.5" />
-        <path d="M12 10 18.5 3.5M13.5 12c3.5 0 6.5-2.5 6.5-6" />
+        <path d="M20 4c-5.5 0-9 3.5-9 9l5 3.5" />
+        <path d="M11 13 5 21M16 16.5 10 21.5" />
+        <circle cx="11.5" cy="14" r="1" />
       </>
     ),
   },

@@ -239,9 +239,10 @@ export const MACHINERY_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="11" cy="13" r="6.5" />
-        <path d="M11 9.5 14 14.5H8z" />
-        <path d="M11 6.5V2M17.5 13H22" />
+        <rect x="4" y="6" width="16" height="12" rx="1.5" />
+        <circle cx="9" cy="12" r="2.25" />
+        <circle cx="15" cy="12" r="2.25" />
+        <path d="M0.5 9H4M0.5 15H4M20 9h3.5M20 15h3.5" />
       </>
     ),
   },
@@ -250,9 +251,8 @@ export const MACHINERY_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="7.5" y="6.5" width="9" height="11" rx="1" />
-        <path d="M10.5 6.5v11M13.5 6.5v11" />
-        <path d="M2.5 12h5M16.5 12h5" />
+        <path d="M2.5 9.5h6l3 2.5-3 2.5h-6z" />
+        <path d="M21.5 8.5H14v7h7.5M16.5 8.5v7" />
       </>
     ),
   },

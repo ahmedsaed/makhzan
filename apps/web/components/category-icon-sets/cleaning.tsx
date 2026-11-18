@@ -50,8 +50,9 @@ export const CLEANING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="7" y="12" width="9" height="5" rx="2" />
-        <path d="M14.5 12l3.5-9M3.5 20h17" />
+        <rect x="6" y="9" width="9" height="9" rx="2" />
+        <path d="M15 11 20 5M18 4h4" />
+        <ellipse cx="10.5" cy="20.25" rx="7" ry="1.5" />
       </>
     ),
   },
@@ -60,11 +61,12 @@ export const CLEANING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="3.5" y="11" width="8" height="10" rx="2" />
-        <path d="M11.5 14H15" />
-        <circle cx="17.5" cy="14" r="2" />
-        <circle cx="15" cy="9.5" r="2" />
-        <circle cx="19.5" cy="9" r="1.5" />
+        <rect x="7" y="3" width="6" height="8" rx="1.5" />
+        <rect x="4" y="11" width="12" height="4" rx="1" />
+        <path d="M16 13h2" />
+        <circle cx="20" cy="13" r="1.5" />
+        <circle cx="17" cy="18" r="1.75" />
+        <circle cx="12.5" cy="19.5" r="1.5" />
       </>
     ),
   },

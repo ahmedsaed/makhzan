@@ -65,8 +65,9 @@ export const AUTOMOTIVE_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <circle cx="12" cy="12" r="6.5" />
-        <path d="M12 2.5v19M2.5 12h19" />
+        <circle cx="12" cy="14.5" r="4.5" />
+        <path d="M12 14.5h0M5.5 10.5a7.5 7.5 0 0 1 13 0" />
+        <path d="M5.5 10.5 8 10M5.5 10 5 7.5M18.5 10 16 10M18.5 10l.5-2.5" />
       </>
     ),
   },
