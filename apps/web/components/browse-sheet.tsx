@@ -18,8 +18,10 @@ import { cn } from "@/lib/utils";
  * The sheet is a modal `<dialog>`: the browser makes the rest of the page
  * inert (the focus trap), gives it `aria-modal`, and closes it on Escape. It
  * is named by its heading, locks the page's scroll while open, and closes on a
- * swipe down, a tap outside it, Escape or the choice of a link; the browser
- * returns focus to the pill. Widening the window past `md` (a phone turned on
+ * swipe down, a tap outside it, Escape or the choice of a link, and puts focus
+ * back on the pill itself: the dialog's own restore returns focus to whatever
+ * had it before, and in Safari and Firefox on macOS a click does not focus a
+ * link, so that would be the page's body. Widening the window past `md` (a phone turned on
  * its side, a resized window) closes it too: the sheet is hidden there and the
  * sidebar shows, and a hidden modal would leave the page inert and unscrollable.
  *
@@ -74,6 +76,7 @@ export function BrowseSheet({
       document.documentElement.style.removeProperty("overflow");
       setDrag(0);
       start.current = null;
+      pill.current?.focus();
     };
     // From `md` the sheet is hidden and the sidebar shows: close it, or the
     // page behind would stay inert under a modal nobody can see.

@@ -54,12 +54,21 @@ export function PriceChip({
     };
     window.addEventListener("keydown", onKey);
     document.addEventListener("click", onClick);
-    const onResize = () => place(ref.current, form.current);
+    // One placement a frame, however fast the window resizes or the bar scrolls.
+    let frame = 0;
+    const onResize = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        place(ref.current, form.current);
+      });
+    };
     window.addEventListener("resize", onResize);
     // The chip moves when its bar scrolls sideways; the panel follows it.
     const bar = ref.current?.closest("[data-scroll-fade]");
     bar?.addEventListener("scroll", onResize, { passive: true });
     return () => {
+      cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("click", onClick);
       window.removeEventListener("resize", onResize);
@@ -81,7 +90,16 @@ export function PriceChip({
       ref={ref}
       data-price-chip
       className="group"
-      onToggle={() => place(ref.current, form.current)}
+      onToggle={() => {
+        // Tapped while cut off at the bar's edge (320px), the chip comes into
+        // view first; the panel then sits under it.
+        if (ref.current?.open) {
+          ref.current
+            .querySelector("summary")
+            ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+        }
+        place(ref.current, form.current);
+      }}
     >
       <summary
         className={cn(

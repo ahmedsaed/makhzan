@@ -196,41 +196,58 @@ test.describe("on a phone", () => {
 
   test("the Price panel follows its chip when the bar scrolls", async ({ page }) => {
     await page.goto("/departments/electronics/resistors");
-    // A panel narrower than the row, so where it sits depends on the chip.
-    await page.addStyleTag({ content: "form[aria-label='Price, EGP'] { width: 12rem; }" });
+    // A panel narrow enough not to be clamped, so where it sits is the chip's.
+    await page.addStyleTag({ content: "form[aria-label='Price, EGP'] { width: 4rem; }" });
     await page.locator("[data-price-chip] summary").click();
+    const offset = () =>
+      page.evaluate(() => {
+        const panel = document.querySelector<HTMLElement>("form[aria-label='Price, EGP']")!;
+        const chip = document.querySelector("[data-price-chip] summary")!;
+        return Math.round(panel.getBoundingClientRect().left - chip.getBoundingClientRect().left);
+      });
+    await expect.poll(offset).toBe(0);
     const bar = page.getByRole("navigation", { name: "Quick filters" });
     await bar.evaluate((el) => {
       el.style.scrollBehavior = "auto";
       el.scrollLeft = el.scrollWidth;
     });
-    await expect
-      .poll(async () =>
-        page.evaluate(() => {
-          const panel = document.querySelector<HTMLElement>("form[aria-label='Price, EGP']")!;
-          const chip = document.querySelector("[data-price-chip] summary")!;
-          const row = panel.offsetParent!.getBoundingClientRect();
-          const want = Math.max(
-            0,
-            Math.min(chip.getBoundingClientRect().left - row.left, row.width - panel.offsetWidth),
-          );
-          return Math.abs(panel.getBoundingClientRect().left - row.left - want) < 1.5;
-        }),
-      )
-      .toBe(true);
+    // The chip moved left with the bar; the panel moved with it.
+    await expect.poll(offset).toBe(0);
   });
 
-  test("the fade follows a chip that changes width", async ({ page }) => {
+  test("the fade follows chips that change width, with no scroll", async ({ page }) => {
     await page.goto("/departments/electronics/resistors");
     const bar = page.getByRole("navigation", { name: "Quick filters" });
-    await bar.evaluate((el) => (el.scrollLeft = el.scrollWidth));
-    await expect(bar).not.toHaveAttribute("data-more-end");
-    // A chip grows (a price set names itself) while the bar keeps its size.
-    await bar.evaluate((el) => {
-      (el.firstElementChild as HTMLElement).style.paddingRight = "200px";
-      el.scrollLeft = 0;
-    });
+    expect(await bar.evaluate((el) => el.scrollLeft)).toBe(0);
     await expect(bar).toHaveAttribute("data-more-end", "true");
+    // Every chip shrinks (as a long price label would give way to "Price")
+    // while the bar keeps its size and is never scrolled: only watching the
+    // chips themselves can notice that nothing overflows any more.
+    await bar.evaluate((el) => {
+      for (const chip of el.children) {
+        const box = chip as HTMLElement;
+        box.style.width = "40px";
+        box.style.overflow = "hidden";
+      }
+    });
+    await expect(bar).not.toHaveAttribute("data-more-end");
+    expect(await bar.evaluate((el) => el.scrollLeft)).toBe(0);
+  });
+
+  test("tapping Price brings it into view at 320px", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto("/departments/electronics/resistors");
+    const bar = page.getByRole("navigation", { name: "Quick filters" });
+    const chip = page.locator("[data-price-chip] summary");
+    await chip.dispatchEvent("click");
+    await expect(page.getByRole("form", { name: "Price, EGP" })).toBeVisible();
+    const fits = await chip.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const row = el.closest("[data-scroll-fade]")!.getBoundingClientRect();
+      return box.left >= row.left - 1 && box.right <= row.right + 1;
+    });
+    expect(fits).toBe(true);
+    expect(await bar.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
   });
 
   test("there is no category row, only the Browse pill", async ({ page }) => {
@@ -291,7 +308,8 @@ test.describe("on a phone", () => {
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
     await expect(pill).toBeFocused();
-    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
+    // The scroll lock is released by the dialog's close event, a task after it hides.
+    await expect.poll(() => page.evaluate(() => document.documentElement.style.overflow)).toBe("");
   });
 
   test("closes on a mouse click on Close", async ({ page }) => {
@@ -304,6 +322,22 @@ test.describe("on a phone", () => {
     await page.mouse.move(close.x + close.width / 2, close.y + close.height / 2);
     await page.mouse.down();
     await page.mouse.up();
+    await expect(sheet).toBeHidden();
+    await expect(pill).toBeFocused();
+  });
+
+  test("puts focus on the pill after a dismissal even if a tap did not focus it", async ({
+    page,
+  }) => {
+    // Safari and Firefox on macOS do not focus a link on click, so the dialog's
+    // own restore would return focus to the body. Open it as they would.
+    await page.goto("/departments/electronics/resistors");
+    const pill = page.locator("[data-browse-pill]");
+    await pill.evaluate((el) => (el as HTMLElement).blur());
+    await pill.dispatchEvent("click");
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await expect(sheet).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
     await expect(pill).toBeFocused();
   });
@@ -377,7 +411,7 @@ test.describe("on a phone", () => {
     await expect(sheet).toBeVisible();
     await page.setViewportSize({ width: 844, height: 390 });
     await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
-    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
+    await expect.poll(() => page.evaluate(() => document.documentElement.style.overflow)).toBe("");
     // The sidebar shows, and works: nothing is left inert.
     await sidebar(page).locator("[data-tree-category='electronics:ics']").click();
     await expect(page).toHaveURL("/departments/electronics/ics");
