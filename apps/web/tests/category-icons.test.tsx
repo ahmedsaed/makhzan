@@ -3,7 +3,7 @@
  * and Electronics, the first department with a drawn set, has one for every
  * group and category in its taxonomy.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -165,7 +165,7 @@ function taxonomyOf(domain: string): [string, string | null][] | null {
   if (at === -1) throw new Error(`${path}: no TAXONOMY`);
   const block = source.slice(at, source.indexOf("\n]", at));
   const rows = [
-    ...block.matchAll(/\(\s*"([a-z0-9-]+)",\s*"[^"]*",\s*"[^"]*",\s*(None|"([a-z0-9-]+)")\s*\)/g),
+    ...block.matchAll(/\(\s*"([a-z0-9-]+)",\s*"[^"]*",\s*"[^"]*",\s*(None|"([a-z0-9-]+)"),?\s*\)/g),
   ].map((m): [string, string | null] => [m[1], m[3] ?? null]);
   const tupleLines = block.split("\n").filter((line) => /^\s*\(/.test(line)).length;
   if (rows.length !== tupleLines) {
@@ -250,14 +250,17 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
   it("never matches a bare slug, nor another department's same slug", () => {
     expect(categoryGlyph("measurement")).toBeNull();
     expect(categoryGlyph("electronics:measurement")).not.toBeNull();
-    expect(categoryGlyph("tools:measurement")).toBeNull();
+        expect(categoryGlyph("welding:measurement")).toBeNull();
     expect(categoryGlyph("toString")).toBeNull();
   });
 
   it("knows which departments are drawn", () => {
-    expect([...DEPARTMENTS_WITH_ICONS]).toEqual(["electronics", "photography"]);
+    expect([...DEPARTMENTS_WITH_ICONS].sort()).toEqual(
+      ["electronics", "photography"].sort(),
+    );
     expect(hasCategoryIcons("electronics")).toBe(true);
     expect(hasCategoryIcons("seals-bearings")).toBe(false);
+    expect(hasCategoryIcons("welding")).toBe(false);
   });
 
   it("renders nothing for a category it has not drawn", () => {
@@ -265,13 +268,66 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
   });
 
   it("gives an undrawn group tile its department's icon", () => {
-    expect(tileIcon("seals-bearings:seals", "seals-bearings")).toBe(
-      departmentIcon("seals-bearings"),
-    );
+    expect(tileIcon("welding:not-drawn", "welding")).toBe(departmentIcon("welding"));
     expect(tileIcon("electronics:power", "electronics")).not.toBe(departmentIcon("electronics"));
     const Tile = tileIcon("electronics:power", "electronics");
     expect(renderToStaticMarkup(<Tile className="x" strokeWidth={1.25} />)).toContain(
       'stroke-width="1.5"',
     );
+  });
+});
+
+/**
+ * Icons that are deliberately one glyph, because they mean the same thing: the
+ * catch-all "Other …" categories. Anything else drawn twice is a mistake.
+ */
+const SAME_GLYPH_ALLOWED: string[][] = [];
+
+describe("no two icons are the same drawing", () => {
+  const byDrawing = new Map<string, string[]>();
+  for (const [ref, glyph] of ENTRIES) {
+    const drawing = renderToStaticMarkup(glyph.body);
+    byDrawing.set(drawing, [...(byDrawing.get(drawing) ?? []), ref]);
+  }
+  const shared = [...byDrawing.values()].filter((refs) => refs.length > 1);
+
+  it("repeats a drawing only where the allow-list says it is the same thing", () => {
+    const allowed = SAME_GLYPH_ALLOWED.map((refs) => [...refs].sort().join());
+    const found = shared.map((refs) => [...refs].sort().join());
+    expect(found.sort()).toEqual(allowed.sort());
+  });
+
+  it("allows only refs that exist", () => {
+    for (const ref of SAME_GLYPH_ALLOWED.flat()) expect(categoryGlyph(ref), ref).not.toBeNull();
+  });
+});
+
+describe("S7 · department tile icons follow the style guide", () => {
+  const domains = readdirSync(DOMAINS)
+    .filter((f) => f.endsWith(".py") && !["__init__.py", "base.py"].includes(f))
+    .map((f) => f.replace(/\.py$/, "").replace(/_/g, "-"));
+
+  it("finds the departments", () => {
+    expect(domains.length).toBeGreaterThanOrEqual(16);
+  });
+
+  it.each([...domains, "photography"])("%s has a drawn tile icon", (domain) => {
+    const Icon = departmentIcon(domain);
+    const html = renderToStaticMarkup(<Icon />);
+    const svg = new DOMParser().parseFromString(html, "image/svg+xml").documentElement;
+    expect(svg.getAttribute("data-department-icon"), `draw ${domain} in departments.tsx`).toBe(
+      domain,
+    );
+    expect(svg.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(svg.getAttribute("fill")).toBe("none");
+    expect(svg.getAttribute("stroke")).toBe("currentColor");
+    expect(svg.getAttribute("stroke-width")).toBe("1.5");
+    expect(svg.getAttribute("stroke-linecap")).toBe("round");
+    expect(svg.getAttribute("stroke-linejoin")).toBe("round");
+    for (const shape of svg.querySelectorAll("*")) {
+      expect(["path", "rect", "circle", "line", "ellipse"]).toContain(shape.tagName);
+      expect(shape.hasAttribute("fill") || shape.hasAttribute("stroke")).toBe(false);
+      expect(shape.hasAttribute("style") || shape.hasAttribute("transform")).toBe(false);
+    }
   });
 });

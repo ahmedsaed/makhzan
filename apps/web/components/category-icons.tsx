@@ -1,6 +1,9 @@
-import type { ComponentType, ReactElement } from "react";
+import type { ComponentType } from "react";
 
+import type { Glyph, GlyphKind } from "@/components/category-icon-sets/types";
 import { departmentIcon } from "@/components/department-icon";
+
+export type { Glyph, GlyphKind };
 
 /**
  * makhzan's own icon set for departments' groups and categories (docs/DESIGN.md,
@@ -35,16 +38,6 @@ import { departmentIcon } from "@/components/department-icon";
  * and the photography department are drawn for feat/taxonomy-gaps before it
  * merges. A ref nothing lists yet is simply never looked up.
  */
-
-export type GlyphKind = "group" | "category";
-
-export type Glyph = {
-  /** The category's English name, for the contact sheet and the tests. */
-  label: string;
-  kind: GlyphKind;
-  /** The strokes, drawn on the 24 × 24 grid; the `<svg>` around them sets the style. */
-  body: ReactElement;
-};
 
 export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
   // Groups: objects you would hold.
