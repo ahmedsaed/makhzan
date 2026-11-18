@@ -1,0 +1,516 @@
+"""Pausing the crawl, all of it or one shop, from the database (worker/pause.py).
+
+The admin dashboard and `./makhzan crawl|shop` set the pause; these pin that the
+worker honours it everywhere a run could start or go on, and that the sync from
+sources.toml, which rewrites `enabled` on every deploy, never touches it.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import httpx
+
+from makhzan_schemas import crawl
+from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.enums import ListingStatus
+from makhzan_schemas.models import IngestionRun, Source
+from sqlalchemy import select
+from test_crawl_phase1 import _run_until_cycle, _status_of, _woo_adapter
+from test_crawl_phase1 import allow_robots, woo  # noqa: F401 — fixtures
+from test_pipeline import SRC, StubAdapter, _cursors, _listings
+from test_worker_jobs import FakeRedis
+from worker import main, pause
+from worker.pipeline import CONFIRM_MAX_FAILED_RUNS, run_source
+from worker.sources.sync import sync_sources
+
+
+def _source(source_id: str, **kw) -> Source:
+    return Source(
+        source_id=source_id,
+        adapter="fixture",
+        supplier={"slug": source_id, "name": source_id},
+        config={},
+        **kw,
+    )
+
+
+async def _add(*rows: Source) -> None:
+    async with SessionLocal() as session:
+        session.add_all(rows)
+        await session.commit()
+
+
+async def _pause_shop(source_id: str, note: str | None = "blocked") -> None:
+    async with SessionLocal() as session:
+        await pause.pause_source(session, source_id, by="tester", note=note)
+        await session.commit()
+
+
+async def _pause_crawl(paused: bool = True) -> None:
+    async with SessionLocal() as session:
+        await crawl.set_crawl_pause(session, paused, by="tester", note="maintenance")
+        await session.commit()
+
+
+def _cron(monkeypatch, ids: list[str]) -> None:
+    async def no_load():
+        return None
+
+    monkeypatch.setattr(main, "load_adapters", no_load)
+    monkeypatch.setattr(main, "all_enabled", lambda: [SimpleNamespace(source_id=i) for i in ids])
+    monkeypatch.setattr(main, "CRAWL_ENABLED", True)
+
+
+async def test_the_daily_cron_leaves_a_paused_shop_out(monkeypatch):
+    await _add(_source("shop-a"), _source("shop-b"))
+    await _pause_shop("shop-b")
+    _cron(monkeypatch, ["shop-a", "shop-b"])
+    redis = FakeRedis()
+    queued = await main.refresh_all({"redis": redis})
+    assert {q["source"]: q["status"] for q in queued} == {"shop-a": "queued", "shop-b": "skipped"}
+    assert [j.split(":")[1] for j in redis.named("crawl_source")] == ["shop-a"]
+
+
+async def test_the_crawl_wide_pause_queues_nothing_and_resuming_queues_again(monkeypatch):
+    await _add(_source("shop-a"))
+    _cron(monkeypatch, ["shop-a"])
+    await _pause_crawl(True)
+    redis = FakeRedis()
+    (skipped,) = await main.refresh_all({"redis": redis})
+    assert skipped["status"] == "skipped" and "paused by tester" in skipped["reason"]
+    assert redis.jobs == {}
+    async with SessionLocal() as session:
+        assert await crawl.crawl_enabled_in(session) is False  # what /how-we-crawl reads
+
+    await _pause_crawl(False)
+    assert [q["status"] for q in await main.refresh_all({"redis": redis})] == ["queued"]
+    async with SessionLocal() as session:
+        assert await crawl.crawl_enabled_in(session) is True
+
+
+async def test_a_daily_job_queued_before_the_pause_skips_the_shop(monkeypatch):
+    await _add(_source("shop-a"))
+    await _pause_shop("shop-a")
+    monkeypatch.setattr(main, "CRAWL_ENABLED", True)
+    ran: list[str] = []
+
+    async def run(source_id, adapter, limit=None):
+        ran.append(source_id)
+
+    monkeypatch.setattr(main, "_run_source", run)
+    monkeypatch.setattr(main, "get", lambda source_id: None)
+    summary = await main.crawl_source({"redis": FakeRedis()}, "shop-a")
+    assert summary["status"] == "skipped" and "shop paused by tester" in summary["reason"]
+    assert ran == []
+
+
+async def test_the_sync_from_sources_toml_keeps_a_pause():
+    """`enabled` is the file's and rewritten on every deploy; the pause is not."""
+    await _add(_source("shop-a"))
+    await _pause_shop("shop-a", note="403 since Monday")
+    changed = _source("shop-a", base_url="https://shop-a.test", enabled=True)
+    async with SessionLocal() as session:
+        report = await sync_sources(session, [changed])
+    assert report["updated"] == ["shop-a"]
+    async with SessionLocal() as session:
+        row = await session.scalar(select(Source).where(Source.source_id == "shop-a"))
+    assert row.base_url == "https://shop-a.test"
+    assert row.paused_at is not None
+    assert (row.paused_by, row.pause_note) == ("tester", "403 since Monday")
+
+
+async def test_resuming_clears_the_pause_and_pausing_twice_keeps_the_first():
+    await _add(_source("shop-a"))
+    await _pause_shop("shop-a", note="first")
+    await _pause_shop("shop-a", note="second")
+    async with SessionLocal() as session:
+        assert (await pause.paused_reason(session, "shop-a")) == "shop paused by tester"
+        row = await session.scalar(select(Source).where(Source.source_id == "shop-a"))
+        assert row.pause_note == "first"
+        await pause.resume_source(session, "shop-a")
+        await session.commit()
+        assert await pause.paused_reason(session, "shop-a") is None
+        assert await pause.paused_sources(session) == set()
+
+
+class PausedMidRun(StubAdapter):
+    """Pauses its own shop, from another session, while page 1 is being read."""
+
+    async def fetch_page(self, partition, page):
+        if page == 1:
+            await _pause_shop(SRC, note="paused mid-run")
+        return await super().fetch_page(partition, page)
+
+
+async def test_a_full_run_stops_at_the_next_page_and_keeps_its_cursor():
+    await _add(_source(SRC))
+    adapter = PausedMidRun()
+    await run_source(SRC, adapter)
+    # Page 1 was already being read: it is kept; page 2 is never asked for.
+    assert adapter.fetched == [("", 1)]
+    assert sorted(x.external_id for x in await _listings()) == ["a1", "a2"]
+    assert await _cursors() == {"": (2, False)}
+    async with SessionLocal() as session:
+        run = await session.scalar(select(IngestionRun).where(IngestionRun.source == SRC))
+    assert "shop paused by tester" in run.stats["stopped"]
+
+
+async def test_a_run_started_while_paused_sends_nothing():
+    await _add(_source(SRC))
+    await _pause_crawl(True)
+    adapter = StubAdapter()
+    await run_source(SRC, adapter)
+    assert adapter.fetched == []
+    async with SessionLocal() as session:
+        run = await session.scalar(select(IngestionRun).where(IngestionRun.source == SRC))
+    assert "crawl paused" in run.stats["stopped"]
+
+
+async def test_a_limit_run_still_works_on_a_paused_shop():
+    """The dashboard's "Run now" is how a paused shop is looked at."""
+    await _add(_source(SRC))
+    await _pause_shop(SRC)
+    adapter = StubAdapter()
+    await run_source(SRC, adapter, limit=3)
+    assert adapter.fetched == [("", 1), ("", 2)]
+
+
+async def test_the_cli_pauses_and_resumes(capsys):
+    await _add(_source("shop-a"))
+    assert await pause.run(["shop", "pause", "shop-a", "--note", "why", "--by", "ops"]) == 0
+    assert await pause.run(["shop"]) == 0
+    assert "PAUSED" in capsys.readouterr().out
+    assert await pause.run(["shop", "resume", "shop-a"]) == 0
+    assert await pause.run(["shop", "pause", "nope"]) == 1
+    assert await pause.run(["crawl", "off", "--by", "ops"]) == 0
+    assert "the daily crawl is OFF" in capsys.readouterr().out
+    assert await pause.run(["crawl", "on", "--by", "ops"]) == 0
+    assert "the daily crawl is on" in capsys.readouterr().out
+
+
+async def test_make_status_shows_both_pauses(capsys):
+    from worker import status
+
+    await _add(_source(SRC))
+    await run_source(SRC, StubAdapter(fail_on_page=2))  # an open cycle, cursor at page 2
+    await _pause_shop(SRC, note="blocked by its host")
+    await _pause_crawl(True)
+    async with SessionLocal() as session:
+        await status.sweep_progress(session, None)
+    out = capsys.readouterr().out
+    assert "the whole crawl is paused by tester (0m ago)" in out
+    assert "paused by tester" in out and "blocked by its host" in out
+    assert "the daily run skips it" in out
+
+
+async def test_identity_and_details_mark_a_shop_a_person_paused(capsys, monkeypatch):
+    from worker import status
+    from worker.sources import registry
+
+    await _add(_source(SRC))
+    await _pause_shop(SRC)
+    monkeypatch.setattr(registry, "_REGISTRY", {SRC: StubAdapter()})
+    async with SessionLocal() as session:
+        await status.crawler_identity(session, None)
+        await status.product_details(session, None)
+    out = capsys.readouterr().out
+    identity, details = out.split("PRODUCT DETAILS")
+    assert "(paused by tester)" in identity
+    assert "[paused by tester]" in details
+
+
+async def test_the_dashboard_joins_a_paused_source_to_its_shop_not_its_id():
+    """A source's id need not be its shop's slug: the overview's catalogue line
+    for a paused source is found through the source's supplier slug."""
+    from admin import data
+    from makhzan_schemas.enums import SourceType
+    from makhzan_schemas.models import Listing, Supplier
+
+    await _add(
+        Source(
+            source_id="feed-1",
+            adapter="fixture",
+            supplier={"slug": "the-shop", "name": "The Shop"},
+            config={},
+            enabled=False,
+        )
+    )
+    async with SessionLocal() as session:
+        shop = Supplier(slug="the-shop", name="The Shop", source_type=SourceType.SCRAPED)
+        session.add(shop)
+        await session.flush()
+        session.add(
+            Listing(
+                supplier_id=shop.id,
+                source="feed-1",
+                source_type=SourceType.SCRAPED,
+                external_id="1",
+                title_en="a relay",
+                images=[],
+                attributes={},
+            )
+        )
+        await session.commit()
+    async with SessionLocal() as session:
+        view = await data.overview(session, {"overrides": 0, "reports": 0})
+    (item,) = [i for i in view["attention"] if i["title"] == "feed-1 is paused"]
+    assert "1 listings" in item["detail"] and "enabled = false" in item["detail"]
+
+
+async def test_dismissing_a_flag_with_a_blank_note_exits_cleanly(capsys):
+    from worker import ai
+
+    assert await ai._flags_dismiss([1], "  ", "tester") == 1
+    assert "note must say why" in capsys.readouterr().err
+
+
+async def test_a_pause_holds_a_held_cycle_without_counting_confirmation_attempts(woo):  # noqa: F811
+    """A paused run must not reach the archive confirmation: its refusal to ask
+    would count as a failed attempt, and after CONFIRM_MAX_FAILED_RUNS the
+    candidates archive unconfirmed, on the very shop a person paused."""
+    await _add(_source("woo"))
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    for _ in range(5):
+        first = await run_source("woo", _woo_adapter())
+        if first.stats.get("archive_confirm"):
+            break
+    assert first.stats["archive_confirm"]["attempt"] == 1  # held after one failed attempt
+
+    await _pause_shop("woo")
+    asked = len(woo.included())
+    for _ in range(CONFIRM_MAX_FAILED_RUNS + 2):
+        paused_run = await run_source("woo", _woo_adapter())
+        assert "archive_confirm" not in paused_run.stats
+        assert not paused_run.stats.get("archived") and not paused_run.stats.get("cycle")
+    assert len(woo.included()) == asked, "nothing asked while paused"
+    assert (await _status_of("2")).status == ListingStatus.ACTIVE
+
+    # Resumed: the next failed attempt is the second, not the fifth.
+    async with SessionLocal() as session:
+        await pause.resume_source(session, "woo")
+        await session.commit()
+    second = await run_source("woo", _woo_adapter())
+    assert second.stats["archive_confirm"]["attempt"] == 2
+
+
+async def test_a_pause_noticed_at_the_confirmation_holds_without_an_attempt(
+    woo,  # noqa: F811
+    monkeypatch,
+):
+    """The run began unpaused, then the shop was paused before its cycle's
+    candidates were asked about: nothing is asked, nothing archived, and the
+    hold is not counted against the confirmation's limits."""
+    from worker import pipeline
+
+    await _add(_source("woo"))
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    for _ in range(5):
+        first = await run_source("woo", _woo_adapter())
+        if first.stats.get("archive_confirm"):
+            break
+    assert first.stats["archive_confirm"]["attempt"] == 1
+
+    # Unpaused as the next run starts (its first check), paused from then on.
+    calls: list[int] = []
+
+    async def paused_after_start(session, source_id):
+        calls.append(1)
+        return None if len(calls) == 1 else "shop paused by tester"
+
+    monkeypatch.setattr(pipeline, "paused_reason", paused_after_start)
+    asked = len(woo.included())
+    held = await run_source("woo", _woo_adapter())
+    report = held.stats["archive_confirm"]
+    assert report["paused"] == "shop paused by tester" and report["held"] == 1
+    assert held.stats["stopped"].startswith("shop paused by tester")
+    assert "attempt" not in report and "failed" not in report
+    assert len(woo.included()) == asked
+    assert not held.stats.get("archived") and not held.stats.get("cycle")
+    assert (await _status_of("2")).status == ListingStatus.ACTIVE
+
+    monkeypatch.setattr(pipeline, "paused_reason", pause.paused_reason)
+    # The next real attempt is the second, so it gives up and archives as before.
+    asked = len(woo.included())
+    second = await run_source("woo", _woo_adapter())
+    assert second.stats["archive_confirm"]["attempt"] == 2
+    assert len(woo.included()) == asked + 1, "asked the fake shop, which answered 500"
+
+
+async def test_a_pause_between_include_batches_keeps_answers_and_holds_the_rest(
+    woo,  # noqa: F811
+    monkeypatch,
+):
+    """Paused while asking (the fixture's include batches hold two ids): what the
+    first batch answered stands, the unasked rest waits, and no attempt counts."""
+    from worker import pipeline
+
+    await _add(_source("woo"))
+    woo.catalogue = {i: "instock" for i in range(1, 6)}
+    await _run_until_cycle()
+    for gone in (3, 4, 5):
+        del woo.catalogue[gone]
+
+    async def paused_once_asked(session, source_id):
+        return "shop paused by tester" if woo.included() else None
+
+    monkeypatch.setattr(pipeline, "paused_reason", paused_once_asked)
+    runs = await _run_until_confirm()
+    closing = runs[-1]
+    report = closing.stats["archive_confirm"]
+    assert len(woo.included()) == 1, "the second batch was never asked"
+    assert report["paused"] == "shop paused by tester"
+    assert (report["absent"], report["held"]) == (2, 1)
+    assert "attempt" not in report
+    assert closing.stats["archived"] == 2 and not closing.stats.get("cycle")
+    statuses = sorted([(await _status_of(str(i))).status for i in (3, 4, 5)])
+    # The two asked are gone; the one unasked is held for when the shop is resumed.
+    assert statuses == sorted(
+        [ListingStatus.ARCHIVED, ListingStatus.ARCHIVED, ListingStatus.ACTIVE]
+    )
+
+
+async def _held_cycle_aged(woo, days: int = 3) -> None:  # noqa: F811
+    """A cycle held after one failed confirmation, its sweep `days` old."""
+    from datetime import UTC, datetime, timedelta
+
+    from makhzan_schemas.models import SourceCursor
+    from sqlalchemy import update
+
+    woo.catalogue = {1: "instock", 2: "instock"}
+    await _run_until_cycle()
+    del woo.catalogue[2]
+    woo.include_status = 500
+    first = (await _run_until_confirm())[-1]
+    assert first.stats["archive_confirm"]["attempt"] == 1
+    async with SessionLocal() as session:
+        await session.execute(
+            update(SourceCursor).values(updated_at=datetime.now(UTC) - timedelta(days=days))
+        )
+        await session.commit()
+
+
+async def test_after_a_long_pause_the_first_run_is_not_overdue(woo):  # noqa: F811
+    await _add(_source("woo"))
+    await _held_cycle_aged(woo)
+    await _pause_shop("woo")
+    async with SessionLocal() as session:
+        await pause.resume_source(session, "woo")
+        await session.commit()
+        row = await session.scalar(select(Source).where(Source.source_id == "woo"))
+        assert row.resumed_at is not None
+    woo.include_status = 200
+    after = await run_source("woo", _woo_adapter())
+    report = after.stats["archive_confirm"]
+    assert "overdue" not in report  # the window runs from the resume
+    assert report["absent"] == 1 and after.stats.get("cycle")
+
+
+async def test_after_a_resume_failures_still_give_up_after_the_max(woo):  # noqa: F811
+    await _add(_source("woo"))
+    await _held_cycle_aged(woo)
+    await _pause_crawl(True)
+    await _pause_crawl(False)  # the crawl-wide resume stamps its own resumed_at
+    async with SessionLocal() as session:
+        assert await crawl.crawl_resumed_at(session) is not None
+    second = await run_source("woo", _woo_adapter())  # still answering 500
+    report = second.stats["archive_confirm"]
+    assert "overdue" not in report
+    assert report["attempt"] == CONFIRM_MAX_FAILED_RUNS and report["gave_up"] == 1
+    assert second.stats["archived"] == 1
+
+
+async def test_without_a_resume_an_old_hold_is_still_overdue(woo):  # noqa: F811
+    """The control: the stamp, not the pause, is what moves the window."""
+    await _add(_source("woo"))
+    await _held_cycle_aged(woo)
+    woo.include_status = 200
+    late = await run_source("woo", _woo_adapter())
+    assert late.stats["archive_confirm"]["overdue"] is True
+
+
+async def test_resuming_stamps_resumed_at_only_when_something_was_paused():
+    await _add(_source("shop-a"))
+    async with SessionLocal() as session:
+        await pause.resume_source(session, "shop-a")  # not paused: no stamp
+        await crawl.set_crawl_pause(session, False, by="tester")
+        await session.commit()
+        row = await session.scalar(select(Source).where(Source.source_id == "shop-a"))
+        assert row.resumed_at is None
+        assert await crawl.crawl_resumed_at(session) is None
+
+
+async def test_a_cycle_held_only_by_a_pause_reports_its_sweep_time():
+    """`cycle_seconds` is the sweep, not the days the shop stayed paused.
+
+    A run stopped by a pause skips the cycle's end and leaves no report, so
+    the cycle is found held by its sweep having ended in an earlier run: here
+    an hour-long sweep that finished five days ago, closed by a run that reads
+    no page.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from makhzan_schemas.models import SourceCursor
+
+    await _add(_source(SRC))
+    now = datetime.now(UTC)
+    async with SessionLocal() as session:
+        session.add(
+            SourceCursor(
+                source=SRC,
+                partition_key="",
+                next_page=1,
+                exhausted=True,
+                cycle_started_at=now - timedelta(days=5, hours=1),
+                updated_at=now - timedelta(days=5),
+            )
+        )
+        await session.commit()
+    adapter = StubAdapter()
+    closing = await run_source(SRC, adapter)
+    assert adapter.fetched == []  # nothing left to sweep
+    seconds = closing.stats["cycle"]["cycle_seconds"]
+    assert 3500 < seconds < 3700, "the hour of the sweep, not the five days held"
+
+
+async def _run_until_confirm():
+    runs = []
+    for _ in range(10):
+        runs.append(await run_source("woo", _woo_adapter()))
+        if runs[-1].stats.get("archive_confirm"):
+            return runs
+    raise AssertionError("no confirmation ran")
+
+
+async def test_a_pause_stops_the_details_stage_before_its_next_page(monkeypatch):
+    import test_details as td
+
+    from worker import http as http_mod
+    from worker import robots as robots_mod
+
+    clock = td._Clock()
+    monkeypatch.setattr(robots_mod, "ROBOTS", td._AllowAll())
+    monkeypatch.setattr(http_mod.asyncio, "sleep", clock.sleep)
+    monkeypatch.setattr(http_mod, "_now", clock)
+
+    class PausingShop(td._Shop):
+        async def fetch_details(self, listing, fetcher):
+            details = await super().fetch_details(listing, fetcher)
+            await _pause_shop(self.source_id, note="paused while reading pages")
+            return details
+
+    shop = PausingShop({"a": "t1", "b": "t1", "c": "t1"})
+    monkeypatch.setattr(
+        http_mod, "make_client", lambda **kw: httpx.AsyncClient(transport=shop.transport(), **kw)
+    )
+    await _add(_source(shop.source_id))
+    run = await run_source(shop.source_id, shop)
+    assert len(shop.details_sent()) == 1, "the page in hand is kept; no next one"
+    assert run.stats["details"]["stopped"] == "paused"
+    assert run.stats["stopped"].startswith("shop paused by tester")

@@ -49,7 +49,7 @@ import asyncio
 import logging
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -275,18 +275,10 @@ async def due_listings(
         room = settings.per_run - len(picked)
         if room <= 0:
             break
-        rows = (
-            (
-                await session.execute(
-                    select(Listing)
-                    .where(c["eligible"], c[reason])
-                    .order_by(*orders[reason])
-                    .limit(room)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        query = select(Listing).where(c["eligible"], c[reason])
+        if picked:
+            query = query.where(Listing.id.notin_([row.id for row, _ in picked]))
+        rows = (await session.execute(query.order_by(*orders[reason]).limit(room))).scalars().all()
         picked.extend((row, reason) for row in rows)
     return picked
 
@@ -399,6 +391,7 @@ async def run_details(
     pace,
     already_sent: bool,
     checkpoint: Callable[[Counter], None] | None = None,
+    stop: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[Counter, dict]:
     """Fetch details for this run's share of the due listings.
 
@@ -406,6 +399,8 @@ async def run_details(
     `stats.details`. Commits after every listing, so a run that dies keeps what
     it read. `pace` is the source's pause; `already_sent` says whether this run
     has sent the host anything yet, so the first page waits its turn too.
+    `stop` is asked before every page; True ends the stage there (a person
+    paused the shop or the crawl, `worker.pause`).
     """
     settings = adapter.details
     if settings is None or not settings.enabled:
@@ -421,6 +416,9 @@ async def run_details(
     if already_sent:
         await asyncio.sleep(await pace())
     for listing, reason in due:
+        if stop is not None and await stop():
+            summary["stopped"] = "paused"
+            break
         now = datetime.now(timezone.utc)
         attributes = dict(listing.attributes or {})
         try:

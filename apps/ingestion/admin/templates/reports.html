@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Reports · makhzan admin{% endblock %}
+{% macro offer_list(listings) -%}
+<ul class="offers">
+  {% for o in listings %}
+  <li class="{{ 'yes' if o.ticked else 'no' }}"><span class="mk" aria-label="{{ 'ticked or picked' if o.ticked else 'not ticked' }}">{{ "✓" if o.ticked else "·" }}</span>
+    <span class="t"><span class="mono">{{ (o.shop or {}).name or "?" }}</span> · {{ o.title or "(untitled)" }}{% if o.stock %} <span class="muted">({{ o.stock|replace("_", " ") }})</span>{% endif %}</span>
+    <span class="num">{{ o.price|money(o.currency) }}</span></li>
+  {% endfor %}
+</ul>
+{%- endmacro %}
+{% block content %}
+<div class="vhead">
+  <div><h1>Reports</h1><p>"Report a problem" from visitors, oldest first. Accept and reject do what <span class="mono">./makhzan reports accept|reject</span> does, with the same code.</p></div>
+  <div class="toolbar"><span class="chip {{ 'c-warn' if r.open else 'c-ok' }}">{{ r.open }} open</span><span class="chip c-neutral plain">{{ r.closed_month }} closed this month</span></div>
+</div>
+
+<div class="cards">
+  {% for item in r.reports %}{% set rep = item.row %}{% set snap = rep.snapshot or {} %}{% set product = snap.product or {} %}
+  <article class="card">
+    <div class="hd"><span class="chip {{ {'offers_not_same': 'c-crit', 'same_as_other': 'c-info', 'wrong_price_stock': 'c-warn'}.get(rep.reason, 'c-neutral') }}">{{ item.reason }}</span><span class="muted">{{ rep.created_at|age }} · <span class="mono">R-{{ rep.id }}</span></span></div>
+    <div class="bd">
+      <div><b>{{ product.title or "(untitled)" }}</b> <span class="mono muted small">{{ rep.product_id }}</span>{% if rep.reported_product_id %}<div class="muted small">reported as {{ rep.reported_product_id }}, merged since</div>{% endif %}</div>
+      {% if product.category_name %}<div class="muted small">filed under {{ product.category_name }} ({{ product.category }})</div>{% endif %}
+      {% if rep.field or rep.correct_value %}<div class="small">{% if rep.field %}Field: <b>{{ rep.field }}</b>{% endif %}{% if rep.correct_value %} → should be <b>{{ rep.correct_value }}</b>{% endif %}</div>{% endif %}
+      {% if product.listings %}{{ offer_list(product.listings) }}{% endif %}
+      {% if snap.other_product %}<div class="ink2 small">Same as: <span class="mono">{{ snap.other_product.id }}</span> · {{ snap.other_product.title or "(untitled)" }}</div>{{ offer_list(snap.other_product.listings or []) }}{% endif %}
+      <div class="note">{% if rep.description %}{{ rep.description }}{% else %}<span class="muted">No note.</span>{% endif %}</div>
+      {% if rep.email %}<div class="muted small">Reply wanted (email kept; shown only by <span class="mono">./makhzan reports show {{ rep.id }}</span>)</div>{% endif %}
+      <div class="muted small">Accept: {{ item.preview }}</div>
+    </div>
+    <div class="ft">
+      {{ m.post("/reports/" ~ rep.id ~ "/reject", "Reject", csrf, "btn danger") }}
+      {{ m.post("/reports/" ~ rep.id ~ "/accept", "Accept", csrf, "btn primary") }}
+    </div>
+  </article>
+  {% else %}<p class="muted">No open reports.</p>{% endfor %}
+</div>
+
+<section class="panel" id="rechecks">
+  <header><div><h2>Re-checks pending</h2><p>Listings an accepted wrong price or stock report asked to be read first. The shop's next full run reads them within its pace and robots.txt; any full read clears them.</p></div></header>
+  {% if r.rechecks %}
+  <div class="tw"><table><thead><tr><th>Shop</th><th class="n">Waiting</th><th>Oldest</th><th>How</th></tr></thead><tbody>
+    {% for p in r.rechecks %}
+    <tr><td class="mono">{{ p.source }}</td><td class="n">{{ p.count|num }}</td><td>{{ p.oldest|age }}</td>
+      <td class="wrap">{% if p.how == "partition" %}<span class="chip c-warn plain">not early</span> {% endif %}{{ p.words }}</td></tr>
+    {% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="empty">None waiting.</p>{% endif %}
+</section>
+
+{% if r.recent %}
+<section class="panel">
+  <header><div><h2>Recently closed</h2><p>Reviewing again changes the verdict: reject withdraws the overrides an accept made.</p></div></header>
+  <div class="tw"><table><thead><tr><th>Report</th><th>Reason</th><th>Verdict</th><th>When</th><th></th></tr></thead><tbody>
+    {% for rep, reason in r.recent %}
+    <tr><td class="mono">R-{{ rep.id }}</td><td>{{ reason }}</td><td><span class="chip {{ 'c-ok' if rep.status == 'accepted' else 'c-neutral' }}">{{ rep.status }}</span></td><td>{{ rep.reviewed_at|age }}</td>
+      <td>{% if rep.status == "accepted" %}{{ m.post("/reports/" ~ rep.id ~ "/reject", "Reject instead", csrf, "btn sm danger") }}{% else %}{{ m.post("/reports/" ~ rep.id ~ "/accept", "Accept instead", csrf) }}{% endif %}</td></tr>
+    {% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+{% endblock %}

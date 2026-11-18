@@ -3,7 +3,7 @@
     python -m worker.overrides                       # standing overrides, newest first
     python -m worker.overrides list [--limit N] [--all]   # --all: removed ones too
     python -m worker.overrides add LISTING LISTING --kind never|must [--forced] --note "why"
-    python -m worker.overrides remove ID [ID ...]    # keeps the row, marked removed
+    python -m worker.overrides remove ID [ID ...] [--note "why"]   # keeps the row, marked removed
 
 `./makhzan overrides ...` runs this in the production worker, and `make
 overrides ARGS="..."` against the local database. Accepting a grouping report
@@ -75,39 +75,61 @@ async def _list(limit: int, everything: bool = False) -> int:
     return 0
 
 
+class OverrideRefused(ValueError):
+    """A ruling that cannot be recorded: a listing is missing, or it could never act."""
+
+
+async def add_override(
+    session, a: uuid.UUID, b: uuid.UUID, kind: str, *, forced: bool, note: str, by: str
+) -> rulings.Added:
+    """Record one ruling by hand (flushed, not committed); what `overrides add` does.
+
+    Raises `OverrideRefused` for a listing that does not exist, or a must_merge
+    between two listings of one shop, which never merges, forced or not
+    (grouping._Rulings): it would sit in the table and never act. A pair with
+    the other ruling standing comes back as `conflict`, nothing written.
+    """
+    if a == b:
+        raise OverrideRefused("an override is about two different listings")
+    if not note.strip():
+        raise OverrideRefused("a note must say why")
+    if forced and kind != rulings.MUST:
+        raise OverrideRefused("only a must_merge can be forced")
+    shops = dict(
+        (
+            await session.execute(
+                select(Listing.id, Listing.supplier_id).where(Listing.id.in_([a, b]))
+            )
+        ).all()
+    )
+    missing = [str(x) for x in (a, b) if x not in shops]
+    if missing:
+        raise OverrideRefused(f"No listing {', '.join(missing)}.")
+    if kind == rulings.MUST and shops[a] == shops[b]:
+        raise OverrideRefused(
+            "Both listings are from the same shop, which never merges: a must_merge "
+            "between them would do nothing. Not recorded."
+        )
+    return await rulings.add(session, a, b, kind, forced=forced, note=note, created_by=by)
+
+
 async def _add(a: uuid.UUID, b: uuid.UUID, kind: str, forced: bool, note: str, by: str) -> int:
     async with SessionLocal() as session:
-        shops = dict(
-            (
-                await session.execute(
-                    select(Listing.id, Listing.supplier_id).where(Listing.id.in_([a, b]))
-                )
-            ).all()
-        )
-        missing = [str(x) for x in (a, b) if x not in shops]
-        if missing:
-            print(f"No listing {', '.join(missing)}.", file=sys.stderr)
+        try:
+            added = await add_override(session, a, b, kind, forced=forced, note=note, by=by)
+        except OverrideRefused as refused:
+            print(str(refused), file=sys.stderr)
             return 1
-        if kind == rulings.MUST and shops[a] == shops[b]:
-            # The same shop never merges, forced or not (grouping._Rulings), so
-            # this ruling would sit in the table and never act.
-            print(
-                "Both listings are from the same shop, which never merges: a must_merge "
-                "between them would do nothing. Not recorded.",
-                file=sys.stderr,
-            )
-            return 1
-        added = await rulings.add(session, a, b, kind, forced=forced, note=note, created_by=by)
         await session.commit()
     print(ruling_line(added))
     return 1 if added.outcome == "conflict" else 0
 
 
-async def _remove(ids: Sequence[int], by: str) -> int:
+async def _remove(ids: Sequence[int], by: str, note: str | None = None) -> int:
     missing = 0
     async with SessionLocal() as session:
         for override_id in ids:
-            row = await rulings.remove(session, override_id, removed_by=by)
+            row = await rulings.remove(session, override_id, removed_by=by, note=note)
             if row is None:
                 print(f"No override #{override_id}.", file=sys.stderr)
                 missing += 1
@@ -145,6 +167,7 @@ def _parser() -> argparse.ArgumentParser:
     remove = sub.add_parser("remove", help="withdraw one or more overrides (rows are kept)")
     remove.add_argument("ids", type=_override_id, nargs="+")
     remove.add_argument("--by", help="who is removing (default: login)")
+    remove.add_argument("--note", help="why: kept with the removed ruling")
     return parser
 
 
@@ -154,7 +177,7 @@ async def run(argv: Sequence[str] | None = None) -> int:
     if args.command in (None, "list"):
         return await _list(getattr(args, "limit", 100), getattr(args, "all", False))
     if args.command == "remove":
-        return await _remove(args.ids, who(args.by))
+        return await _remove(args.ids, who(args.by), args.note)
     kind = rulings.NEVER if args.kind == "never" else rulings.MUST
     if args.forced and kind != rulings.MUST:
         parser.error("--forced goes with --kind must")

@@ -12,13 +12,15 @@ For each source it sends, to the URL of the source's real first page
 (`SourceAdapter.probe_url`, else the private `probe-sites.txt`, else the shop's
 home page):
 
-    robots      GET /robots.txt, as the source's configured identity: its status,
-                and whether a group naming makhzanbot applies to the page
+    robots      robots.txt through the crawler's own cache (`worker.robots.ROBOTS`),
+                read as the source's configured identity if not cached: its
+                state (fetched, no rules, stale copy, unavailable), whether it
+                disallows the page, and whether a group names makhzanbot
     browser     the browser identity (what sources send by default)
     makhzanbot  the honest identity, unsigned
     signed      makhzanbot with a Web Bot Auth signature (only with a key)
 
-Each cell is the status code and the HTTP version the server answered with.
+Each other cell is the status code and the HTTP version the server answered with.
 
 **Why Python and not curl.** It used to be a curl script. curl differs from the
 crawler's httpx client in its TLS fingerprint (JA3/JA4), in negotiating HTTP/2
@@ -29,10 +31,15 @@ with the same headers, read fine. So every request here is built by
 run would send, or it measures nothing.
 
 Read-only and polite: one GET per column per source, no retries, no redirects
-followed (a 3xx is reported as such), and at least `MIN_GAP` seconds between
-any two requests to the same host — the crawler's own pace. robots.txt is asked
-first and obeyed: a page it disallows for makhzanbot, or a host whose robots.txt
-cannot be read (which a run would refuse too), is not requested at all.
+followed for the page (a 3xx is reported as such), at least `MIN_GAP` seconds
+between any two requests to the same host, and every request through the
+crawl's own gate (`worker.http.take_turn`: the host's pace and Crawl-delay, a
+pending Retry-After, the slowdown after errors). robots.txt is read as a run
+reads it, redirects and stored copies included, and obeyed: a page it
+disallows for makhzanbot, or a host whose robots.txt cannot be read (which a
+run would refuse too), is not requested at all. A host holding us off (a
+pending Retry-After, or slowed after errors) is not probed. Its requests
+belong to no run, so no run's `stats.pacing` counts them.
 """
 
 from __future__ import annotations
@@ -48,9 +55,10 @@ from pathlib import Path
 
 import httpx
 
-from worker.http import host_of, make_client
-from worker.identity import BROWSER, MAKHZANBOT, Identity, identity_for
-from worker.robots import ROBOTS_TOKEN, Rules, _agent_token
+from worker import http
+from worker.http import HostBackingOff, host_of, make_client, take_turn
+from worker.identity import BROWSER, MAKHZANBOT, Identity, identity_for, using_identity
+from worker.robots import ROBOTS_TOKEN, _agent_token
 
 #: Seconds between two requests to one host, at least: the crawler's pace.
 MIN_GAP = 15.0
@@ -79,7 +87,7 @@ class Cell:
         if self.error:
             return self.error
         if self.status is None:
-            return "-"
+            return self.note or "-"
         version = (self.http_version or "").replace("HTTP/", "h")
         out = f"{self.status} {version}".strip()
         return f"{out} {self.note}" if self.note else out
@@ -92,7 +100,16 @@ class Row:
 
 
 class _Gate:
-    """At least `gap` seconds between requests to one host."""
+    """At least `gap` seconds between requests to one host, and the crawler's own gate.
+
+    Every request also passes `worker.http.take_turn`, the per-host gate every
+    crawl request passes: it waits out a pending `Retry-After`, honours the
+    host's slowdown after errors and its pace, shares the last-sent time with
+    any run in the same process, and refuses (`HostBackingOff`) a host that
+    asked for longer than `RETRY_AFTER_CAP`. In the worker (the dashboard's
+    probe) that gate is the one the crawl uses; run on its own, it is this
+    process's.
+    """
 
     def __init__(
         self,
@@ -105,14 +122,39 @@ class _Gate:
         self._sleep = sleep
         self._last: dict[str, float] = {}
 
-    async def wait(self, url: str) -> None:
-        host = host_of(url)
-        last = self._last.get(host)
+    async def space(self, url: str) -> None:
+        """Wait out the probe's own gap to `url`'s host (no turn taken)."""
+        last = self._last.get(host_of(url))
         if last is not None:
             remaining = last + self.gap - self._clock()
             if remaining > 0:
                 await self._sleep(remaining)
-        self._last[host] = self._clock()
+
+    def mark(self, url: str) -> None:
+        """A request to the host just went out (or was answered from cache)."""
+        self._last[host_of(url)] = self._clock()
+
+    async def wait(self, url: str) -> None:
+        await self.space(url)
+        await take_turn(host_of(url))
+        self.mark(url)
+
+
+def refusal(url: str) -> str | None:
+    """Why the probe must not ask `url`'s host now, if the crawler's gate says so.
+
+    A `Retry-After` still pending, or a host slowed down after recent errors:
+    the probe is a diagnosis, and a host in either state has already said what
+    it thinks. Read from the process's gate (`worker.http`), which in the
+    worker is the crawl's.
+    """
+    host = host_of(url)
+    remaining = http._NOT_BEFORE.get(host, 0.0) - time.monotonic()
+    if remaining > 0:
+        return f"{host} asked us to wait {remaining:.0f}s more (Retry-After); not probed"
+    if http.slowdown(host) > 1:
+        return f"{host} is slowed down after recent errors; not probed"
+    return None
 
 
 async def _get(identity: Identity, url: str, gate: _Gate) -> tuple[Cell, httpx.Response | None]:
@@ -121,32 +163,52 @@ async def _get(identity: Identity, url: str, gate: _Gate) -> tuple[Cell, httpx.R
         async with make_client(identity=identity) as client:
             response = await client.get(url)
     except httpx.HTTPError as exc:
+        if isinstance(exc, httpx.TimeoutException):
+            http.note_trouble(host_of(url))
         return Cell(error=f"ERR {type(exc).__name__}"), None
+    # What the host answered binds the crawl too: a 429's Retry-After holds
+    # every later request to it, and errors slow it down (worker.http).
+    host = host_of(url)
+    http.note_response(host, response.status_code)
+    if response.status_code in http._RETRYABLE:
+        http.hold_host(host, response.headers.get("Retry-After"))
     return Cell(status=response.status_code, http_version=response.http_version), response
 
 
 async def _robots(identity: Identity, url: str, gate: _Gate) -> Cell:
-    cell, response = await _get(identity, f"{host_of(url)}/robots.txt", gate)
-    if response is None:
-        cell.forbids = True  # unreachable: a run would refuse the host too
-        return cell
-    status = response.status_code
-    if status < 300:
-        rules = Rules(response.text)
-        named = any(_agent_token(a) == ROBOTS_TOKEN for group in rules.groups for a in group.agents)
-        if not rules.allowed(url, ROBOTS_TOKEN):
-            cell.note, cell.forbids = "DISALLOWS this page", True
-        elif named:
-            cell.note = "names makhzanbot"
-    elif status == 429 or status >= 500:
-        cell.note, cell.forbids = "unreadable", True
-    elif 400 <= status < 500:
-        cell.note = "no rules"
-    else:
-        # A redirecting robots.txt: the crawler follows up to five hops and obeys
-        # where they lead. The probe does not follow redirects, so it has not
-        # read the rules, and asks for nothing it has not cleared.
-        cell.note, cell.forbids = "redirects (not followed)", True
+    """What robots.txt says of `url`, read through the crawler's own cache (`worker.robots.ROBOTS`).
+
+    So the probe sees what a run would: the cached rules or a fresh read (as
+    `identity`, paced by the host's gate, redirects followed as a run follows
+    them), a stored copy standing in for an unreadable file, `RobotsUnavailable`
+    when there is neither, and the file's Crawl-delay, which the gate then
+    applies to the probe's own requests. The cell says the cache's state, not a
+    status code: a cached file sends nothing.
+    """
+    from worker import robots as robots_mod
+
+    cache = robots_mod.ROBOTS
+    host = host_of(url)
+    await gate.space(url)
+    try:
+        with using_identity(identity):
+            allowed = await cache.allowed(url, ROBOTS_TOKEN)
+    except robots_mod.RobotsUnavailable as exc:
+        gate.mark(url)
+        # A run would refuse the host too: nothing else is asked.
+        return Cell(error=f"unavailable ({exc.reason[:60]})", forbids=True)
+    gate.mark(url)
+    entry = getattr(cache, "_hosts", {}).get(host)
+    state = getattr(entry, "state", None) or "read"
+    words = {"fetched": "fetched", "no_rules": "no rules", "stale": "stale copy"}
+    cell = Cell(note=words.get(state, state))
+    rules = getattr(entry, "rules", None)
+    if not allowed:
+        cell.note, cell.forbids = f"{cell.note}; DISALLOWS this page", True
+    elif rules is not None and any(
+        _agent_token(a) == ROBOTS_TOKEN for group in rules.groups for a in group.agents
+    ):
+        cell.note = f"{cell.note}; names makhzanbot"
     return cell
 
 
@@ -186,20 +248,39 @@ async def probe(
     rows = []
     for target in targets:
         row = Row(target)
-        robots_identity = identities.get(target.identity, identities["browser"])
-        robots = row.cells["robots"] = await _robots(robots_identity, target.url, gate)
-        for column in ("browser", "makhzanbot", "signed"):
-            identity = identities.get(column)
-            if robots.forbids:
-                row.cells[column] = Cell(error="not asked")
-            elif identity is None:
-                row.cells[column] = Cell()
-            else:
-                row.cells[column] = (await _get(identity, target.url, gate))[0]
+        if why := refusal(target.url):
+            row.cells = {column: Cell(error="not asked") for column in COLUMNS}
+            rows.append(row)
+            notes.append(f"{target.source_id}: {why}")
+            if on_row:
+                on_row(row)
+            continue
+        try:
+            await _probe_target(row, identities, gate)
+        except HostBackingOff as exc:
+            for column in COLUMNS:
+                row.cells.setdefault(column, Cell(error="not asked"))
+            notes.append(f"{target.source_id}: {exc}; not probed further")
         rows.append(row)
         if on_row:
             on_row(row)
     return rows, notes
+
+
+async def _probe_target(row: Row, identities: dict[str, Identity], gate: _Gate) -> None:
+    target = row.target
+    robots_identity = identities.get(target.identity, identities["browser"])
+    robots = row.cells["robots"] = await _robots(robots_identity, target.url, gate)
+    for column in ("browser", "makhzanbot", "signed"):
+        identity = identities.get(column)
+        if robots.forbids or refusal(target.url):
+            # robots.txt rules it out, or the host just told us to hold off
+            # (a 429's Retry-After): ask it nothing more.
+            row.cells[column] = Cell(error="not asked")
+        elif identity is None:
+            row.cells[column] = Cell()
+        else:
+            row.cells[column] = (await _get(identity, target.url, gate))[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -244,12 +325,21 @@ async def targets_from_sources(
     for adapter in all_enabled():
         if source_filter and adapter.source_id != source_filter:
             continue
-        url = adapter.probe_url() or sites.get(adapter.source_id)
-        if not url and adapter.base_url:
-            url = f"{adapter.base_url}/"
-        if url:
-            targets.append(Target(adapter.source_id, url, adapter.identity))
+        if target := target_for(adapter, sites):
+            targets.append(target)
     return targets
+
+
+def target_for(adapter, sites: dict[str, str]) -> Target | None:
+    """Where to probe one source: its real first page, else the sites list, else its home page.
+
+    Any source, enabled or not: the admin dashboard probes one shop at a time,
+    and the shop it asks about is usually one paused because it was blocked.
+    """
+    url = adapter.probe_url() or sites.get(adapter.source_id)
+    if not url and adapter.base_url:
+        url = f"{adapter.base_url}/"
+    return Target(adapter.source_id, url, adapter.identity) if url else None
 
 
 # --------------------------------------------------------------------------- #
@@ -295,6 +385,11 @@ async def main_async(args: argparse.Namespace) -> int:
     sites_path = Path(args.sites) if args.sites else default_sites_file()
     sites = read_sites(sites_path) if sites_path and sites_path.exists() else {}
     if args.no_db:
+        # No database at all: robots.txt copies are kept in memory for this
+        # probe, never written to `robots_copies`.
+        from worker import robots as robots_mod
+
+        robots_mod.ROBOTS = robots_mod.RobotsCache(store=robots_mod.RobotsStore())
         targets = [Target(label, url) for label, url in sites.items()]
         if args.source:
             targets = [t for t in targets if t.source_id == args.source]
@@ -310,7 +405,7 @@ async def main_async(args: argparse.Namespace) -> int:
     gap = max(args.delay, MIN_GAP)
     print(f"gap:       {gap:g} s between requests to one host; no retries, no redirects\n")
     # Rows print as they arrive, so the name column is sized before the first:
-    # "ampere-electronics" overran a fixed 14 and pushed its row out of line.
+    # A long source id overran a fixed 14 and pushed its row out of line.
     _WIDTHS["source"] = max(len("source"), *(len(t.source_id) for t in targets))
     print(_line({k: k for k in _WIDTHS}))
     print(_line({k: "-" * len(k) for k in _WIDTHS}))

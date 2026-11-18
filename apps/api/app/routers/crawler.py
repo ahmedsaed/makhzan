@@ -172,8 +172,8 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
         if slug in suppliers:
             by_shop[slug].append(source)
 
-    # What the worker said at startup: the API's own environment is stale
-    # after `./makhzan crawl off`, which recreates only the worker.
+    # What the worker said at startup (the API's own environment goes stale
+    # when only the worker is recreated), and the crawl-wide pause.
     crawling = await crawl.crawl_enabled_in(session)
     shops = []
     every_pacing: list[dict] = []
@@ -191,10 +191,13 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
             {
                 "slug": supplier.slug,
                 "name": supplier.name,
-                # Paused when the shop's sources are switched off, and for every
-                # shop while the whole crawl is (CRAWL_ENABLED off).
+                # Paused when the shop's sources are switched off or paused by a
+                # person, and for every shop while the whole crawl is
+                # (CRAWL_ENABLED off, or the crawl-wide pause).
                 "status": (
-                    "active" if crawling and any(s.enabled for s in its_sources) else "paused"
+                    "active"
+                    if crawling and any(s.enabled and s.paused_at is None for s in its_sources)
+                    else "paused"
                 ),
                 "last_read_at": max(reads) if reads else None,
                 "requests_7d": sum(n for n in counts if n is not None),

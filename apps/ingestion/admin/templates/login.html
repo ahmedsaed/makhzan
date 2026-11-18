@@ -1,0 +1,26 @@
+{%- import "_macros.html" as m -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in · makhzan admin</title>
+<link rel="stylesheet" href="/static/admin.css?v={{ static_v }}">
+</head>
+<body>
+<div class="login">
+  <form method="post" action="/login">
+    {{ m.brand() }}
+    <h1 style="font-size:18px">Sign in</h1>
+    {{ m.csrf_field(csrf) }}
+    <label class="f" for="pw">Password<input type="password" id="pw" name="password" autocomplete="current-password" required autofocus {% if error %}aria-invalid="true" aria-describedby="pwErr"{% endif %}></label>
+    {% if error %}<div class="err" id="pwErr" role="alert">{{ error }}</div>{% endif %}
+    {% if not configured %}<div class="err">No password is set on this server. Run <span class="mono">./makhzan admin password</span> there.</div>{% endif %}
+    <button class="btn primary" type="submit">Sign in</button>
+    <div class="ts"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
+      <span>Tailscale-only. This service listens on the tailnet address and is not reachable from the internet. One password, set on the server; there are no accounts.</span></div>
+  </form>
+</div>
+</body>
+</html>

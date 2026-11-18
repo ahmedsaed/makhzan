@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Activity · makhzan admin{% endblock %}
+{% block content %}
+<div class="vhead"><div><h1>Activity</h1><p>Every dashboard action, newest first (<span class="mono">admin_actions</span>): who, from where, what and when.</p></div></div>
+<section class="panel">
+  <div class="tw"><table><thead><tr><th>When</th><th>Who</th><th>From</th><th>Action</th><th>Target</th><th>Detail</th><th>Job</th></tr></thead><tbody>
+    {% for r in rows %}
+    <tr><td>{{ r.created_at|dt }}</td><td>{{ r.actor }}</td><td class="mono muted">{{ r.client or "" }}</td><td class="mono">{{ r.action }}</td><td class="mono">{{ r.target or "" }}</td>
+      <td class="wrap mono small muted">{{ r.detail|tojson|truncate(200) if r.detail else "" }}</td><td>{% if r.status %}{{ m.job_chip(r) }}{% endif %}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">Nothing yet.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}
