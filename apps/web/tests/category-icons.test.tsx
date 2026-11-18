@@ -257,7 +257,16 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
 
   it("knows which departments are drawn", () => {
     expect([...DEPARTMENTS_WITH_ICONS].sort()).toEqual(
-      ["electrical", "electronics", "machinery", "photography", "seals-bearings", "tools"].sort(),
+      [
+        "chemicals",
+        "electrical",
+        "electronics",
+        "machinery",
+        "photography",
+        "seals-bearings",
+        "tools",
+        "welding",
+      ].sort(),
     );
     expect(hasCategoryIcons("electronics")).toBe(true);
     expect(hasCategoryIcons("seals-bearings")).toBe(true);

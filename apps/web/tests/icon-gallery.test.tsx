@@ -21,6 +21,8 @@ const SECTIONS: [string, string][] = [
   ["tools", "Tools"],
   ["seals-bearings", "Seals & Bearings"],
   ["machinery", "Machinery"],
+  ["chemicals", "Chemicals"],
+  ["welding", "Welding"],
 ];
 
 const TILES = [
@@ -82,6 +84,23 @@ const WEAK: Record<string, string> = {
   "machinery:concrete-tools": "A trowel; the category also holds floats and screeds.",
   "machinery:hydraulic-components": "A hydraulic pump symbol; obscure outside the trade.",
   "machinery:machine-connectors": "A fitting between two pipe stubs; close to a fuse.",
+  "chemicals:adhesive-tapes": "A roll on its strip; close to the filament spool in electronics.",
+  "chemicals:paints": "A brush; the group's bucket carries the idea better.",
+  "chemicals:rust-removers": "A threaded bolt with flakes; says bolt more than remover.",
+  "chemicals:foams": "A can beside a cloud of foam.",
+  "chemicals:sealants": "Two blocks with a bead between; schematic.",
+  "chemicals:industrial-adhesives": "Two bonded plates with dots for glue.",
+  "chemicals:general-chemicals": "A beaker; stands for any chemical.",
+  "welding:welding-accessories": "A wire brush; the group holds clamps, magnets and more.",
+  "welding:welding-machines": "An arc on a plate rather than a machine.",
+  "welding:cutting-machines": "A torch over a cut plate; close to cutting torches.",
+  "welding:cutting-torches": "Handle, tube and a right-angle head; hard to read small.",
+  "welding:electrodes": "A coated rod; close to a pencil.",
+  "welding:earth-clamps": "Two jaws; could be a crocodile or a pair of pliers.",
+  "welding:flashback-arrestors": "A check-valve symbol in a body; close to piping's check valves.",
+  "welding:rod-heaters": "An oven with rods; says box.",
+  "welding:torch-heaters": "A flame beside a gas bottle; close to the instant-adhesive drop.",
+  "welding:torch-lighters": "A lighter with a flame; the real one is a flint striker.",
 };
 
 function cell(ref: string, label: string): string {
