@@ -2,8 +2,6 @@ import type { Glyph } from "./types";
 
 /** Photography: no schematic symbols, so the categories are the things themselves. */
 export const PHOTOGRAPHY_ICONS: Record<string, Glyph> = {
-  // Photography (feat/taxonomy-gaps): drawn ahead of the taxonomy reaching main.
-  // No schematic symbols here, so its categories are drawn as the things themselves.
   "photography:lighting": {
     label: "Lighting",
     kind: "group",
