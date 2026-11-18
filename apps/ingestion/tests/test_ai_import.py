@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from makhzan_schemas import overrides as rulings
@@ -216,11 +216,11 @@ async def test_a_listing_whose_text_changed_is_skipped_and_counted(tmp_path):
     # Every line of the two pairs that show `one` is stale: 4 Kev, 2 pplx.
     assert dict(report.stale) == {"kev": 4, "pplx": 2}
     assert report.stale_pairs == 2 and report.stale_listings == [str(one)]
-    # No baseline yet: the first trigger run would record its new text, so it is stranded.
-    assert report.baseline["verdict"] == "none" and report.stranded_listings == 1
+    # No trigger state at all: its first run records the new text and offers nothing.
+    assert report.stranded_listings == 1
     assert "./makhzan ai backlog" in report.recommendation
     assert report.inserted == 4
-    assert report.unsettled == 2
+    assert report.unsettled == 2 and not report.owes
     assert dict(report.written) == {"not_same": 1}
     assert await _count(AiDecision, *_of_pair(one, two)) == 0
     assert (await verify(directory)).mismatches == []
@@ -346,6 +346,7 @@ async def test_a_pair_a_person_ruled_on_is_not_decided(tmp_path):
         {"model_version": "kev-4b@000000000000+kev-0000000+T1.0"},
         {"weights_revision": "0" * 40},
         {"drop": ("weights_revision",)},
+        {"drop": ("scored_at",)},
         {"prompt_version": "K2-150@00000000"},
         {"hash_version": 1},
         {"model": "other"},
@@ -389,41 +390,55 @@ async def test_the_import_refuses_another_policy(tmp_path):
         await import_scores(directory, policy="p0", log=_quiet)
 
 
-async def test_the_baseline_is_read_and_compared_with_the_dump(tmp_path):
-    directory, (one, _, _) = await _scenario(tmp_path)
-    baseline = datetime(2026, 1, 5, tzinfo=UTC)
+async def _record_state(listing_id, recorded: bytes) -> None:
     async with SessionLocal() as session:
-        shown = await load_shown(session, (one,))
-        listing = await session.get(Listing, one)
-        listing.title_en = "Example sensor module XY-1 v2"
-        await session.flush()
-        changed = (await load_shown(session, (one,)))[one].content_sha256
-        # The trigger already recorded the new text: nothing will offer it again.
         session.add(
             AiListingState(
-                listing_id=one,
-                content_sha256=changed,
-                candidates_sha256=changed,
-                candidates_at=baseline,
+                listing_id=listing_id,
+                content_sha256=recorded,
+                candidates_sha256=recorded,
+                candidates_at=T0,
             )
         )
         await session.commit()
-    assert changed != shown[one].content_sha256
-    after = await import_scores(
-        directory, dry_run=True, snapshot_at=baseline - timedelta(days=1), log=_quiet
-    )
-    assert after.baseline["verdict"] == "after_snapshot"
-    assert after.stranded_listings == 1
-    before = await import_scores(
-        directory, dry_run=True, snapshot_at=baseline + timedelta(days=1), log=_quiet
-    )
-    assert before.baseline["verdict"] == "before_snapshot"
-    unknown = await import_scores(directory, dry_run=True, log=_quiet)
-    assert unknown.baseline["verdict"] == "unknown"
-    # Read-only: the state is as it was.
+
+
+async def test_a_stale_listing_is_stranded_once_the_trigger_recorded_its_text(tmp_path):
+    directory, (one, _, three) = await _scenario(tmp_path)
+    async with SessionLocal() as session:
+        before = (await load_shown(session, (one,)))[one].content_sha256
+        listing = await session.get(Listing, one)
+        listing.title_en = "Example sensor module XY-1 v2"
+        await session.commit()
+        changed = (await load_shown(session, (one,)))[one].content_sha256
+    await _record_state(three, b"\1" * 32)  # some state exists: not a first run
+    await _record_state(one, changed)
+    report = await import_scores(directory, dry_run=True, log=_quiet)
+    assert report.stale_listings == [str(one)] and report.stranded_listings == 1
+    # Recorded at its old text instead, the trigger offers it again: not stranded.
     async with SessionLocal() as session:
         state = await session.get(AiListingState, one)
-        assert state.candidates_at == baseline
+        state.candidates_sha256 = before
+        await session.commit()
+    report = await import_scores(directory, dry_run=True, log=_quiet)
+    assert report.stranded_listings == 0
+    assert "./makhzan ai backlog" in report.recommendation
+    async with SessionLocal() as session:  # read-only
+        assert (await session.get(AiListingState, one)).candidates_sha256 == before
+
+
+async def test_a_pair_owing_a_stage_is_counted_by_stage_and_recommended(tmp_path):
+    shops = [await _shop(f"shop-{c}") for c in "ab"]
+    one = await _listing(shops[0], "Example part P-1")
+    two = await _listing(shops[1], "Example part P-1 module")
+    _write(tmp_path, await _lines(one, two, KEV, 0.9, 0.9), [])  # Kev passes, no pplx line
+    report = await import_scores(tmp_path, log=_quiet)
+    assert dict(report.owes) == {"pplx": 1} and report.unsettled == 0
+    assert not report.stale_listings and not report.written
+    assert "1 pair(s) owing the pplx stage" in report.recommendation
+    assert "./makhzan ai backlog" in report.recommendation
+    checked = await verify(tmp_path)
+    assert checked.mismatches == [] and dict(checked.owes) == {"pplx": 1}
 
 
 async def test_verify_reports_a_decision_that_is_missing(tmp_path):
@@ -446,10 +461,3 @@ async def test_the_cli_runs_the_import(tmp_path, capsys):
         "same": 1,
         "not_same": 2,
     }
-
-
-def test_the_snapshot_time_needs_a_time_zone():
-    with pytest.raises(SystemExit):
-        ai_import._parser().parse_args(["x", "--snapshot-at", "2026-11-17T13:10"])
-    args = ai_import._parser().parse_args(["x", "--snapshot-at", "2026-11-17T13:10+02:00"])
-    assert args.snapshot_at.utcoffset() == timedelta(hours=2)

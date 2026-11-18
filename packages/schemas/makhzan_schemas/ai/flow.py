@@ -321,6 +321,17 @@ async def _revocation_stands(
     return True
 
 
+async def revocation_stands(
+    session: AsyncSession, pipeline_name: str, a: uuid.UUID, b: uuid.UUID, evidence: dict
+) -> bool:
+    """Whether a person's revocation keeps a decision with this `evidence`
+    (by stage, as `write_decision` stores it, request hashes included) from
+    being written for the pair: `write_decision`'s own guard, for a reader
+    that must agree with it (`worker.ai_import --verify`)."""
+    a, b = pair(a, b)
+    return await _revocation_stands(session, pipeline_name, a, b, evidence)
+
+
 async def write_decision(
     session: AsyncSession,
     pipeline_name: str,

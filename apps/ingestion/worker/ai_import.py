@@ -1,6 +1,6 @@
 """Import a locally scored AI backlog: its scores, then the decisions they make.
 
-    python -m worker.ai_import DIR [--dry-run | --verify] [--policy p1] [--snapshot-at TIME]
+    python -m worker.ai_import DIR [--dry-run | --verify] [--policy p1]
     python -m worker.ai import DIR ...            # the same, from the AI command
     ./makhzan ai import DIR ...                   # production (scripts/lib/ai_import.sh)
 
@@ -13,15 +13,9 @@ copy and, once the owner has reviewed the groupings, production (P4).
 
 What it does, in order:
 
-0. **Reads the candidates trigger's baseline, read-only** (`ai_listing_state`):
-   `ai_candidates` runs after every rebuild whatever the AI mode, and its
-   first run records every listing's content hash and offers nothing
-   (`candidates.BASELINE_FIRST_RUN`), so production may already hold one.
-   `min(candidates_at)` is when; with `--snapshot-at` (the time of the dump
-   the backlog was scored from) the two are compared. Nothing is queued.
 1. **Checks every line against the code**: a JSON object; its model's version
-   and weights revision are `policy.MODELS`'s (a missing weights revision is
-   refused too); its prompt version is `prompt.PROMPT_VERSIONS`'s for a stage
+   and weights revision are `policy.MODELS`'s (a missing weights revision or
+   `scored_at` is refused too); its prompt version is `prompt.PROMPT_VERSIONS`'s for a stage
    of `match`; its hash version is `hashing.HASH_VERSION`; ids, hashes, `p`
    and `scored_at` are well formed, and its order agrees with `shown_as_a`.
    Any bad line refuses the whole import, naming its file and line: scores of
@@ -35,9 +29,10 @@ What it does, in order:
    skipped and counted, with the listings involved: its score answers a
    request nobody would send now. Of those listings, the ones whose current
    text the candidates trigger has already recorded are **stranded**: no
-   trigger will offer them again until they change once more. The report
-   says how many, and recommends `./makhzan ai backlog` afterwards, which
-   finds candidates for every listing; nothing is queued here.
+   trigger will offer them again until they change once more (with no
+   `ai_listing_state` at all, every stale listing is: `ai_candidates`, which
+   runs after every rebuild whatever the mode, records its first baseline
+   and offers nothing).
 4. **Inserts the scores**, idempotently on (judge, `request_sha256`)
    (`uq_ai_score_request`): a re-run, or a request two pairs share
    byte-for-byte, stores one row. A request already scored in the database
@@ -54,15 +49,18 @@ What it does, in order:
    by a revocation, or its listing gone. A pair a person has ruled on
    (`grouping_overrides`, `load_overrides`) is never decided (CLAUDE.md:
    never re-ask a model about a ruled pair) and is counted; its scores are
-   still stored, as evidence. Pairs left owing a stage are counted, not
-   queued.
+   still stored, as evidence. A pair `transition` does not decide is
+   counted, not queued: by the stage it owes when it has fresh scores up to
+   it (Kev scored, no pplx line), or as having no fresh score at all. Either
+   kind, or a stale listing, makes the report recommend `./makhzan ai
+   backlog`, which offers those pairs again.
 
 Decisions are committed in chunks (`CHUNK` pairs): each takes a
 transaction-scoped advisory lock, and one transaction over the whole backlog
 would exhaust the lock table. A run cut off part-way is resumed by running it
 again; everything above is idempotent.
 
-`--dry-run` does steps 0 to 4 inside one transaction, computes each pair's
+`--dry-run` does steps 1 to 4 inside one transaction, computes each pair's
 step with `pipelines.transition` over the scores as they would be stored, and
 rolls back: it reports what would be inserted and decided without
 `write_decision`'s writes, so a pair a person revoked is reported as such
@@ -119,9 +117,8 @@ ORDERS = ("ab", "ba")
 #: How many stale listing ids the report prints in full.
 STALE_IDS_SHOWN = 200
 RECOMMEND_BACKLOG = (
-    "{n} listing(s) changed since the run and their pairs were skipped; {stranded} of them "
-    "will not be offered by the daily candidates trigger until they change again. "
-    "Run `./makhzan ai backlog` after this import to find their candidates afresh."
+    "Run `./makhzan ai backlog` after this import: it finds candidates for every listing and "
+    "offers the pairs left undecided here ({why})."
 )
 
 
@@ -148,7 +145,7 @@ class Line:
     device: str | None
     dtype: str | None
     threads: int | None
-    scored_at: datetime | None
+    scored_at: datetime
 
     @property
     def pair(self) -> tuple[uuid.UUID, uuid.UUID]:
@@ -165,7 +162,6 @@ class Report:
     stale_pairs: int = 0
     stale_listings: list[str] = field(default_factory=list)
     stranded_listings: int = 0
-    baseline: dict = field(default_factory=dict)
     inserted: int = 0
     already_stored: int = 0
     already_stored_p_differs: int = 0
@@ -178,6 +174,7 @@ class Report:
     written_by: Counter = field(default_factory=Counter)
     listing_gone: int = 0
     unsettled: int = 0
+    owes: Counter = field(default_factory=Counter)
     previous: Counter = field(default_factory=Counter)
     revoked_pairs: int = 0
     blocked_by_revocation: int = 0
@@ -189,7 +186,6 @@ class Report:
         return {
             "lines": self.lines,
             "lines_by_model": dict(self.by_model),
-            "baseline": self.baseline,
             "stale_lines_by_model": dict(self.stale),
             "lines_listing_missing": self.missing_listing,
             "lines_fresh_but_content_hash_differs": self.content_hash_differs,
@@ -209,7 +205,8 @@ class Report:
             "written_by_stage": dict(self.written_by),
             "blocked_by_revocation": self.blocked_by_revocation,
             "listing_gone_at_write": self.listing_gone,
-            "pairs_unsettled_stale": self.unsettled,
+            "pairs_unsettled_stale_or_unscored": self.unsettled,
+            "pairs_owing_a_stage": dict(self.owes),
             "planned_against_standing": dict(self.previous),
             "pairs_with_a_revoked_decision": self.revoked_pairs,
             "scores_held_before_import_p_differs": self.held_before_import_p_differs,
@@ -243,9 +240,9 @@ def _uuid(value: object, what: str, where: str) -> uuid.UUID:
     raise ImportRefused(f"{where}: {what} {value!r} is not a UUID")
 
 
-def _time(value: object, where: str) -> datetime | None:
+def _time(value: object, where: str) -> datetime:
     if value is None:
-        return None
+        raise ImportRefused(f"{where}: scored_at missing")
     try:
         moment = datetime.fromisoformat(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -349,48 +346,6 @@ async def judges_for(session: AsyncSession) -> dict[str, int]:
     return {s.name: await triggers.model_version_id(session, s) for s in pipeline(PIPELINE).stages}
 
 
-async def baseline_check(
-    session: AsyncSession, snapshot_at: datetime | None, report: Report
-) -> str:
-    """Step 0: the candidates trigger's baseline against the dump's time. Read-only."""
-    rows, first = (
-        await session.execute(
-            select(func.count(), func.min(AiListingState.candidates_at)).select_from(AiListingState)
-        )
-    ).one()
-    report.baseline = {
-        "listing_states": rows,
-        "baseline_at": first.isoformat() if first else None,
-        "snapshot_at": snapshot_at.isoformat() if snapshot_at else None,
-    }
-    if not rows or first is None:
-        report.baseline["verdict"] = "none"
-        return (
-            "baseline: none yet. The first ai_candidates run will record every listing's text "
-            "as it is then and offer nothing; listings that changed since the dump are the "
-            "stale ones below."
-        )
-    if snapshot_at is None:
-        report.baseline["verdict"] = "unknown"
-        return (
-            f"baseline: recorded at {first.isoformat()}; pass --snapshot-at (the dump's time) "
-            "to compare. Listings that changed between the dump and the baseline are stranded."
-        )
-    if first <= snapshot_at:
-        report.baseline["verdict"] = "before_snapshot"
-        return (
-            f"baseline: recorded at {first.isoformat()}, before the dump "
-            f"({snapshot_at.isoformat()}): a listing that changed after the dump is offered "
-            "by the daily trigger, unless it was already offered for its new text."
-        )
-    report.baseline["verdict"] = "after_snapshot"
-    return (
-        f"baseline: recorded at {first.isoformat()}, after the dump ({snapshot_at.isoformat()}): "
-        "listings that changed between the two were baselined at their new text and are "
-        "stranded (counted below)."
-    )
-
-
 def fresh_lines(lines: Sequence[Line], shown: dict[uuid.UUID, Shown], report: Report) -> list[Line]:
     """The lines whose request is what the renderer produces now; the rest counted,
     with the pairs and listings involved."""
@@ -431,10 +386,13 @@ async def count_stranded(
     session: AsyncSession, shown: dict[uuid.UUID, Shown], report: Report
 ) -> None:
     """Of the stale listings still present, those whose current text the candidates
-    trigger has already recorded (so it will not offer them), or that have no state
-    yet while a baseline exists (the next run records them as they are)."""
+    trigger has already recorded, so it will not offer them; all of them when the
+    trigger has recorded nothing yet (its first run records and offers nothing)."""
     ids = [uuid.UUID(x) for x in report.stale_listings if uuid.UUID(x) in shown]
     if not ids:
+        return
+    if not await session.scalar(select(func.count()).select_from(AiListingState)):
+        report.stranded_listings = len(ids)
         return
     states: dict[uuid.UUID, bytes | None] = {}
     for start in range(0, len(ids), _LOOKUP):
@@ -447,9 +405,6 @@ async def count_stranded(
     for x in ids:
         recorded = states.get(x)
         if recorded is not None and recorded == shown[x].content_sha256:
-            report.stranded_listings += 1
-        elif x not in states and report.baseline.get("verdict") in (None, "none"):
-            # No baseline yet: the first run records this text and offers nothing.
             report.stranded_listings += 1
 
 
@@ -576,11 +531,28 @@ def _check_policy(policy: str) -> None:
         )
 
 
+def _not_decided(report: Report, step) -> None:
+    """Count a pair `transition` does not decide: owing a stage it has fresh
+    scores up to, or with no fresh score at all (stale, unscored, listing gone)."""
+    if step is not None and step.mins:
+        report.owes[step.stage] += 1
+    else:
+        report.unsettled += 1
+
+
 def _recommend(report: Report) -> None:
+    why = []
     if report.stale_listings:
-        report.recommendation = RECOMMEND_BACKLOG.format(
-            n=len(report.stale_listings), stranded=report.stranded_listings
+        why.append(
+            f"{len(report.stale_listings)} listing(s) changed since the run, "
+            f"{report.stranded_listings} of them stranded"
         )
+    if report.unsettled:
+        why.append(f"{report.unsettled} pair(s) with no fresh score")
+    for stage, n in sorted(report.owes.items()):
+        why.append(f"{n} pair(s) owing the {stage} stage")
+    if why:
+        report.recommendation = RECOMMEND_BACKLOG.format(why="; ".join(why))
 
 
 async def import_scores(
@@ -589,10 +561,9 @@ async def import_scores(
     dry_run: bool = False,
     policy: str = "p1",
     chunk: int = CHUNK,
-    snapshot_at: datetime | None = None,
     log=print,
 ) -> Report:
-    """Steps 0 to 5 of the module docstring; `dry_run` rolls back and writes no decision."""
+    """Steps 1 to 5 of the module docstring; `dry_run` rolls back and writes no decision."""
     _check_policy(policy)
     lines = read_lines(directory)
     report = Report(lines=len(lines))
@@ -600,7 +571,6 @@ async def import_scores(
     report.pairs = len(keys)
     log(f"{len(lines)} lines, {len(keys)} pairs: all match the code's judges")
     async with SessionLocal() as session:
-        log(await baseline_check(session, snapshot_at, report))
         judges = await judges_for(session)
         all_judges = await flow.current_judges(session)
         shown = await load_shown(session, {x for key in keys for x in key})
@@ -622,7 +592,7 @@ async def import_scores(
                 continue
             step = steps.get(key, (None,))[0]
             if step is None or step.action != DECIDE:
-                report.unsettled += 1
+                _not_decided(report, step)
                 continue
             settled.append(key)
             report.planned[step.outcome] += 1
@@ -652,7 +622,7 @@ async def import_scores(
                 scores = current.get((PIPELINE, a, b))
                 step = transition(PIPELINE, scores.scores, ACTIVE) if scores else None
                 if step is None or step.action != DECIDE:
-                    report.unsettled += 1  # changed since it was planned
+                    _not_decided(report, step)  # changed since it was planned
                     continue
                 row = await flow.write_decision(session, PIPELINE, a, b, step, scores)
                 if row is flow.BLOCKED:
@@ -711,13 +681,13 @@ async def verify(directory: Path, *, policy: str = "p1") -> Report:
                 continue
             step, scores = steps.get(key, (None, None))
             if step is None or step.action != DECIDE:
-                report.unsettled += 1
+                _not_decided(report, step)
                 continue
             report.planned[step.outcome] += 1
             row = standing.get(key)
             if row is None:
                 evidence = {n: {**scores.evidence[n], "min": low} for n, low in step.mins}
-                if key in revoked and await flow._revocation_stands(
+                if key in revoked and await flow.revocation_stands(
                     session, PIPELINE, key[0], key[1], evidence
                 ):
                     report.blocked_by_revocation += 1
@@ -748,24 +718,12 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _aware(value: str) -> datetime:
-    moment = datetime.fromisoformat(value)
-    if moment.tzinfo is None:
-        raise argparse.ArgumentTypeError(f"{value!r} needs a time zone, e.g. +02:00")
-    return moment
-
-
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("directory", type=Path, help="the folder holding scores-*.jsonl")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="report, then roll back")
     mode.add_argument("--verify", action="store_true", help="check what is stored; change nothing")
     parser.add_argument("--policy", default="p1", help="the policy the run was approved under")
-    parser.add_argument(
-        "--snapshot-at",
-        type=_aware,
-        help="when the dump the backlog was scored from was taken (ISO, with a time zone)",
-    )
 
 
 async def main(args: argparse.Namespace) -> int:
@@ -773,12 +731,7 @@ async def main(args: argparse.Namespace) -> int:
         if args.verify:
             report = await verify(args.directory, policy=args.policy)
         else:
-            report = await import_scores(
-                args.directory,
-                dry_run=args.dry_run,
-                policy=args.policy,
-                snapshot_at=args.snapshot_at,
-            )
+            report = await import_scores(args.directory, dry_run=args.dry_run, policy=args.policy)
     except ImportRefused as refused:
         print(f"refused: {refused}", file=sys.stderr)
         return 2
