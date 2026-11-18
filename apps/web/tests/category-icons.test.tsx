@@ -80,7 +80,7 @@ function pathPoints(d: string): [number, number][] {
 
 describe("S7 · every category icon follows the style guide", () => {
   it("has icons to check", () => {
-    expect(ENTRIES.length).toBeGreaterThanOrEqual(90);
+    expect(ENTRIES.length).toBeGreaterThanOrEqual(130);
   });
 
   it.each(ENTRIES)("%s: one 1.5 stroke, round, unfilled, currentColor, on 24 × 24", (ref) => {
@@ -250,13 +250,14 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
   it("never matches a bare slug, nor another department's same slug", () => {
     expect(categoryGlyph("measurement")).toBeNull();
     expect(categoryGlyph("electronics:measurement")).not.toBeNull();
-        expect(categoryGlyph("welding:measurement")).toBeNull();
+    expect(categoryGlyph("tools:measurement")).not.toBe(categoryGlyph("electronics:measurement"));
+    expect(categoryGlyph("welding:measurement")).toBeNull();
     expect(categoryGlyph("toString")).toBeNull();
   });
 
   it("knows which departments are drawn", () => {
     expect([...DEPARTMENTS_WITH_ICONS].sort()).toEqual(
-      ["electrical", "electronics", "photography"].sort(),
+      ["electrical", "electronics", "photography", "tools"].sort(),
     );
     expect(hasCategoryIcons("electronics")).toBe(true);
     expect(hasCategoryIcons("seals-bearings")).toBe(false);
@@ -281,7 +282,14 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
  * Icons that are deliberately one glyph, because they mean the same thing: the
  * catch-all "Other …" categories. Anything else drawn twice is a mistake.
  */
-const SAME_GLYPH_ALLOWED: string[][] = [];
+const SAME_GLYPH_ALLOWED: string[][] = [
+  [
+    "tools:hand-tools-other",
+    "tools:power-tools-other",
+    "tools:measurement-other",
+    "tools:consumables-other",
+  ],
+];
 
 describe("no two icons are the same drawing", () => {
   const byDrawing = new Map<string, string[]>();

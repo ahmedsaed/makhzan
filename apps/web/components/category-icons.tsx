@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 
 import { ELECTRICAL_ICONS } from "@/components/category-icon-sets/electrical";
+import { TOOLS_ICONS } from "@/components/category-icon-sets/tools";
 import type { Glyph, GlyphKind } from "@/components/category-icon-sets/types";
 import { departmentIcon } from "@/components/department-icon";
 
@@ -42,6 +43,7 @@ export type { Glyph, GlyphKind };
 
 export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
   ...ELECTRICAL_ICONS,
+  ...TOOLS_ICONS,
   // Groups: objects you would hold.
   "electronics:components": {
     label: "Components",
