@@ -262,6 +262,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
         "chemicals",
         "electrical",
         "electronics",
+        "garden",
         "machinery",
         "materials",
         "photography",
@@ -305,6 +306,7 @@ const SAME_GLYPH_ALLOWED: string[][] = [
     "tools:measurement-other",
     "tools:consumables-other",
     "machinery:general-pumps",
+    "garden:garden-power-other",
   ],
 ];
 

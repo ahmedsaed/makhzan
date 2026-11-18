@@ -30,6 +30,7 @@ const SECTIONS: [string, string][] = [
   ["piping", "Piping"],
   ["rigging", "Rigging"],
   ["security", "Security"],
+  ["garden", "Garden"],
 ];
 
 const TILES = [
@@ -174,6 +175,11 @@ const WEAK: Record<string, string> = {
   "security:recorders": "A recorder box; close to a router or a set-top box.",
   "security:remote-controls": "A fob with signal arcs.",
   "security:cash-handling": "A banknote; the group holds counters and detectors too.",
+  "garden:garden-hand-tools": "A trowel standing for all hand tools.",
+  "garden:irrigation": "A watering can; hose and drip lines are not shown.",
+  "garden:cutting-garden": "Pruning shears; the pivot and hook are hard to read.",
+  "garden:mowers-trimmers": "A string trimmer; the mower is the power group's icon.",
+  "garden:sprinklers": "A sprinkler head with fanned spray.",
 };
 
 function cell(ref: string, label: string): string {
