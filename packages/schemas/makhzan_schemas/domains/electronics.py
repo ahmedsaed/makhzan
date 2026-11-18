@@ -129,8 +129,10 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "digital logic design",
         ],
     ),
-    # "Starter kit" is a kit too, except a soldering iron's starter bundle.
-    ("kits", ["starter kit", "!solder"]),
+    # "Starter kit" is a kit too, a board bundle included (an ESP32 or Raspberry
+    # Pi starter kit), except a soldering iron's starter bundle. Not "soldered"
+    # or "solderless": a kit sold soldered, or with a solderless breadboard.
+    ("kits", ["starter kit", r"!soldering\b"]),
     ("resistors", ["resistor"]),
     ("potentiometers", ["potentiometer", "trimmer", "rheostat"]),
     ("capacitors", ["capacitor"]),
@@ -178,8 +180,15 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # Ahead of wireless: a "Wi-Fi Camera" or "WiFi Endoscope" is a camera that
     # happens to connect wirelessly. Behind dev boards: an ESP32-CAM is a board.
     # Being this early, it must not take what is merely *for* a camera: a camera
-    # battery, a CCTV power adapter, a pan-tilt servo mount, a tripod screw or a
-    # motorised slider. The vetoes hand those to the leaves below.
+    # battery, a CCTV power adapter, a pan-tilt camera mount, a tripod screw or a
+    # motorised slider. Its vetoes hand those to the leaves below. They are
+    # phrases, closed on the right, because the single words are common in real
+    # camera titles too: "PoE Camera Power over Ethernet", "Wall Mount IP
+    # Camera", "Covert Camera", "Camera Module with Motorized Lens".
+    #
+    # A camera sold *with* an accessory says so, and is still a camera ("IP
+    # Camera with Power Adapter", "USB Camera with 1.5m Cable").
+    ("cameras", ["camera with", "camera battery powered", "camera, battery powered"]),
     (
         "cameras",
         [
@@ -190,33 +199,41 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "dashcam",
             "dash cam",
             "machine vision",
-            "!batter",
-            "!charger",
-            "!power",
-            "!adapter",
-            "!supply",
-            "!mount",
-            "!tripod",
-            "!screw",
-            "!slider",
-            "!cable",
-            "!housing",
-            "!cover",
-            "!flash",
-            "!light ring",
-            "!ring light",
-            "!fill light",
-            "!video light",
-            "!bracket",
-            "!holder",
-            "!lens cap",
-            "!servo",
-            "!motor",
-            "!bag",
-            "!strap",
-            "!cage",
-            r"!stand\b",
-            "!case",
+            r"!camera battery\b",
+            r"!camera batteries\b",
+            r"!battery charger\b",
+            r"!charger\b",
+            r"!power adapter\b",
+            r"!power supply\b",
+            r"!power supplies\b",
+            r"!camera mount\b",
+            r"!mounting bracket\b",
+            r"!camera bracket\b",
+            r"!camera tripod\b",
+            r"!tripod screw\b",
+            r"!slider\b",
+            r"!camera cable\b",
+            r"!ribbon cable\b",
+            r"!camera housing\b",
+            r"!camera cover\b",
+            r"!webcam cover\b",
+            r"!lens cover\b",
+            r"!lens cap\b",
+            r"!flash trigger\b",
+            r"!flash light\b",
+            r"!light ring\b",
+            r"!ring light\b",
+            r"!fill light\b",
+            r"!video light\b",
+            r"!camera holder\b",
+            r"!camera case\b",
+            r"!carrying case\b",
+            r"!camera stand\b",
+            r"!bag\b",
+            r"!bags\b",
+            r"!strap\b",
+            r"!straps\b",
+            r"!cage\b",
         ],
     ),
     (

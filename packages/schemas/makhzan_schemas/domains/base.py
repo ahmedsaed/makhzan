@@ -166,6 +166,14 @@ def _compiled_rules(
         for slug, kws in profile.category_rules:
             wanted = [kw for kw in kws if not kw.startswith("!")]
             vetoes = [kw[1:] for kw in kws if kw.startswith("!")]
+            if not wanted:
+                # An empty pattern matches every text: the rule would take the
+                # whole catalogue.
+                raise ValueError(
+                    f"{profile.slug} rule for {slug!r} has no keyword to match, only vetoes"
+                    if vetoes
+                    else f"{profile.slug} rule for {slug!r} has no keywords"
+                )
             cached.append(
                 (
                     slug,

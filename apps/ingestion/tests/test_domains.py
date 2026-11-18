@@ -166,7 +166,24 @@ def test_camera_accessories_are_not_cameras(title, expected):
 
 @pytest.mark.parametrize(
     "title",
-    ["IP Camera 1080p PoE", "Car Dash Camera Full HD", "Dashcam with G-Sensor", "OV2640 Camera"],
+    [
+        "IP Camera 1080p PoE",
+        "Car Dash Camera Full HD",
+        "Dashcam with G-Sensor",
+        "OV2640 Camera",
+        # The accessory words, in real cameras: a veto is a phrase, not a word.
+        "PoE Camera Power over Ethernet",
+        "Wireless Camera Battery Powered",
+        "Solar Battery Security Camera 4G",
+        "IP Camera with Power Adapter",
+        "Wall Mount IP Camera",
+        "Waterproof Case Camera",
+        "USB Camera with 1.5m Cable",
+        "Covert Camera Mini",
+        "Camera with Flash Memory",
+        "Camera Module with Motorized Lens",
+        "Endoscope Camera 5mm Semi Rigid Cable 5 Meter",
+    ],
 )
 def test_cameras_that_say_so_are_cameras(title):
     """A dash cam is a camera."""
@@ -183,6 +200,18 @@ def test_a_veto_lets_the_text_fall_through_to_later_rules(other_domain):
     )
     assert profile.resolve_category_slug(None, "Blue widget") == "widgets"
     assert profile.resolve_category_slug(None, "Widget spare spring") == "parts"
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [[("widgets", ["!spare"])], [("widgets", [])]],
+)
+def test_a_rule_with_nothing_to_match_is_refused(rules):
+    """An empty pattern matches every text, so such a rule would take the whole
+    catalogue; it is an error when the rules are compiled."""
+    profile = DomainProfile(slug="emptyrule", name_en="E", name_ar="ف", category_rules=rules)
+    with pytest.raises(ValueError, match="widgets"):
+        profile.resolve_category_slug(None, "anything")
 
 
 def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
@@ -212,6 +241,11 @@ def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
         # A starter or learning kit is a kit, whatever board it is built on.
         (None, "Arduino Starter Kit UNO R3"),
         (None, "Arduino Learning Kit 36 PCS"),
+        # ...but a kit sold soldered, or with a solderless breadboard, is.
+        (None, "Electronics Starter Kit (soldered)"),
+        (None, "Starter Kit with Solderless Breadboard"),
+        # Board bundles named "starter kit" too, by the same policy.
+        (None, "ESP32 Starter Kit with Sensors"),
     ],
 )
 def test_educational_and_robot_kits(tags, title):
@@ -227,6 +261,7 @@ def test_educational_and_robot_kits(tags, title):
         ("O-Ring Service Kit NBR-70 (30 Sizes)", None),
         ("Soldering Starter Kit 60W", "soldering"),
         # Neither "for kids" nor a bare "stem" makes a kit.
+        # A soldering iron's starter bundle is not a teaching kit...
         ("Wired Headphones for Kids", None),
         ("Valve Stem Seal Set", None),
     ],
