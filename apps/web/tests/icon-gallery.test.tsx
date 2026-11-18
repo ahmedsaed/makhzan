@@ -23,6 +23,7 @@ const SECTIONS: [string, string][] = [
   ["machinery", "Machinery"],
   ["chemicals", "Chemicals"],
   ["welding", "Welding"],
+  ["materials", "Materials"],
 ];
 
 const TILES = [
@@ -101,6 +102,14 @@ const WEAK: Record<string, string> = {
   "welding:rod-heaters": "An oven with rods; says box.",
   "welding:torch-heaters": "A flame beside a gas bottle; close to the instant-adhesive drop.",
   "welding:torch-lighters": "A lighter with a flame; the real one is a flint striker.",
+  "materials:rubber-sheet": "A slab in isometric; close to the group's stack of sheets.",
+  "materials:anti-vibration-pads": "A foot on a spring pad; schematic.",
+  "materials:membranes": "Rain over a layer; says waterproofing, not membrane.",
+  "materials:polyester-resins": "A weave grid for fibreglass; reads as a grid or a table.",
+  "materials:safety-flooring": "A plate with ridges; reads as a tile.",
+  "materials:insulation": "A wall with wavy fill; the loops say insulation to the trade only.",
+  "materials:metal-stock": "Round bars end-on; says pipes or logs.",
+  "materials:decorative-aggregates": "Three mounds for stone and sand.",
 };
 
 function cell(ref: string, label: string): string {

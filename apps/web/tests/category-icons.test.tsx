@@ -262,6 +262,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
         "electrical",
         "electronics",
         "machinery",
+        "materials",
         "photography",
         "seals-bearings",
         "tools",
