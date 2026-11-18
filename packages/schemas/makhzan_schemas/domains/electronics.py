@@ -95,6 +95,17 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
 #
 # A leaf may appear twice when part of its vocabulary must outrank another leaf
 # and part must not (see 3D printers below).
+#: Vetoes for both camera rules: a title that is something *for* a camera.
+_FOR_A_CAMERA = [
+    "!for camera",
+    "!for cameras",
+    "!for cctv camera",
+    "!for ip camera",
+    "!for security camera",
+    "!for dslr",
+    "!for webcam",
+]
+
 CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # Kits name their parts ("Educational Robot Kit with LED Eyes", "Solar Robot
     # Kit", "Arduino Learning Kit"), so the phrases that say a listing *is* a kit
@@ -187,8 +198,15 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # Camera", "Covert Camera", "Camera Module with Motorized Lens".
     #
     # A camera sold *with* an accessory says so, and is still a camera ("IP
-    # Camera with Power Adapter", "USB Camera with 1.5m Cable").
-    ("cameras", ["camera with", "camera battery powered", "camera, battery powered"]),
+    # Camera with Power Adapter", "USB Camera with 1.5m Cable") -- unless the
+    # title is an accessory *for* a camera that has the thing: "Power Adapter
+    # for Camera with 12V", "Tripod Screw for Camera with 1/4 Thread". Both
+    # rules refuse the "for ... camera" shape; "Camera with Power Adapter Cable"
+    # stays a camera, an ambiguity accepted.
+    (
+        "cameras",
+        ["camera with", "camera battery powered", "camera, battery powered", *_FOR_A_CAMERA],
+    ),
     (
         "cameras",
         [
@@ -199,6 +217,7 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "dashcam",
             "dash cam",
             "machine vision",
+            *_FOR_A_CAMERA,
             r"!camera battery\b",
             r"!camera batteries\b",
             r"!battery charger\b",

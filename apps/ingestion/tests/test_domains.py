@@ -158,6 +158,13 @@ def test_cameras_and_imaging(tags, title, expected):
         ("Camera Housing", None),
         ("Camera Flash Trigger", None),
         ("Machine Vision Light Ring", None),
+        # "X for camera with Y" is an X, not a camera sold with Y.
+        ("Lens Cap for Camera with 1/4 Thread", None),
+        ("Battery Pack for Camera with USB-C", "batteries"),
+        ("12V Power Adapter for CCTV Camera with DC jack", "power-supplies"),
+        ("Mount for Camera with Pan Tilt Servo", "servos"),
+        ("Power Adapter for Camera with 12V", "power-supplies"),
+        ("Tripod screw for camera with 1/4 thread", "mechanical"),
     ],
 )
 def test_camera_accessories_are_not_cameras(title, expected):
@@ -183,6 +190,8 @@ def test_camera_accessories_are_not_cameras(title, expected):
         "Camera with Flash Memory",
         "Camera Module with Motorized Lens",
         "Endoscope Camera 5mm Semi Rigid Cable 5 Meter",
+        # Named first, sold with the accessory: a camera (accepted ambiguity).
+        "Camera with Power Adapter Cable",
     ],
 )
 def test_cameras_that_say_so_are_cameras(title):
@@ -212,6 +221,20 @@ def test_a_rule_with_nothing_to_match_is_refused(rules):
     profile = DomainProfile(slug="emptyrule", name_en="E", name_ar="ف", category_rules=rules)
     with pytest.raises(ValueError, match="widgets"):
         profile.resolve_category_slug(None, "anything")
+
+
+def test_raspberry_pi_cameras_stay_with_dev_boards():
+    """Dev boards come ahead of cameras: a Raspberry Pi camera is filed with the
+    Pi, as an ESP32-CAM is with ESP32 (existing policy)."""
+    electronics = get_profile("electronics")
+    assert electronics.resolve_category_slug(None, "Raspberry Pi Camera Module V3") == "dev-boards"
+
+
+@pytest.mark.parametrize("domain", sorted(PROFILES))
+def test_every_profiles_rules_compile(domain):
+    """A rule with nothing to match is refused when compiled; compile them all
+    here so a bad rule fails the suite, not the first listing that reaches it."""
+    PROFILES[domain].resolve_category_slug(None, "anything")
 
 
 def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
