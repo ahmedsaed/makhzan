@@ -78,6 +78,11 @@ export function BrowseSheet({
   const [shown, setShown] = useState(true);
   const drag = useRef<Drag | null>(null);
   const timer = useRef(0);
+  // The closing animation's end listener, kept so every way out removes it:
+  // left attached, it would close the next opening when its own rise ended.
+  const onEnd = useRef<((event: AnimationEvent) => void) | null>(null);
+  // True while a swipe's glide is carrying the sheet out: the glide is the close.
+  const gliding = useRef(false);
   const headingId = useId();
 
   /** Back to rest: no inline motion left on the sheet or its backdrop. */
@@ -90,37 +95,47 @@ export function BrowseSheet({
     sheet.style.removeProperty("--sheet-backdrop-ms");
   }, []);
 
+  /** Forget a pending close: its timer, its end listener, a glide. */
+  const forget = useCallback(() => {
+    window.clearTimeout(timer.current);
+    gliding.current = false;
+    if (onEnd.current) dialog.current?.removeEventListener("animationend", onEnd.current);
+    onEnd.current = null;
+  }, []);
+
   /** Close now: the dialog shuts and the close handler tidies up. */
   const finish = useCallback(() => {
     const sheet = dialog.current;
-    window.clearTimeout(timer.current);
+    forget();
     if (!sheet) return;
     sheet.removeAttribute("data-closing");
     // Released here as well as on the close event, which comes a task later:
     // a close under reduced motion is then over by the time it returns.
     document.documentElement.style.removeProperty("overflow");
     if (sheet.open) sheet.close();
-  }, []);
+  }, [forget]);
 
   /** Close with the 200ms slide down, or at once under reduced motion. */
   const close = useCallback(() => {
     const sheet = dialog.current;
     if (!sheet?.open || sheet.hasAttribute("data-closing")) return;
+    // A swipe's glide is already carrying it out: let that be the close,
+    // rather than snapping back to the top to sink again.
+    if (gliding.current) return;
     if (reducedMotion()) return finish();
+    forget(); // a spring-back's tidy-up timer, say
     settle();
     sheet.setAttribute("data-closing", "");
-    const onEnd = (event: AnimationEvent) => {
-      if (event.target !== sheet) return;
-      sheet.removeEventListener("animationend", onEnd);
+    const end = (event: AnimationEvent) => {
+      // Only the sinking itself: not the rise, not a child's animation.
+      if (event.target !== sheet || event.animationName !== "sheet-out") return;
       finish();
     };
-    sheet.addEventListener("animationend", onEnd);
+    onEnd.current = end;
+    sheet.addEventListener("animationend", end);
     // The animation may never run (the sheet hidden, a browser without it).
-    timer.current = window.setTimeout(() => {
-      sheet.removeEventListener("animationend", onEnd);
-      finish();
-    }, CLOSE_MS + 100);
-  }, [finish, settle]);
+    timer.current = window.setTimeout(finish, CLOSE_MS + 100);
+  }, [finish, forget, settle]);
 
   // Hide on scroll down, show on scroll up, one measurement a frame.
   useEffect(() => {
@@ -147,7 +162,7 @@ export function BrowseSheet({
     const sheet = dialog.current;
     if (!sheet) return;
     const onClose = () => {
-      window.clearTimeout(timer.current);
+      forget();
       document.documentElement.style.removeProperty("overflow");
       sheet.removeAttribute("data-closing");
       settle();
@@ -170,13 +185,13 @@ export function BrowseSheet({
     sheet.addEventListener("cancel", onCancel);
     wide?.addEventListener("change", onWide);
     return () => {
-      window.clearTimeout(timer.current);
+      forget();
       sheet.removeEventListener("close", onClose);
       sheet.removeEventListener("cancel", onCancel);
       wide?.removeEventListener("change", onWide);
       document.documentElement.style.removeProperty("overflow");
     };
-  }, [close, finish, settle]);
+  }, [close, finish, forget, settle]);
 
   const open = (event: React.MouseEvent) => {
     const sheet = dialog.current;
@@ -257,13 +272,18 @@ export function BrowseSheet({
       sheet.style.transform = `translateY(${d.height}px)`;
       sheet.style.setProperty("--sheet-backdrop", "0");
       if (ms === 0) finish();
-      else timer.current = window.setTimeout(finish, ms);
+      else {
+        window.clearTimeout(timer.current);
+        gliding.current = true;
+        timer.current = window.setTimeout(finish, ms);
+      }
     } else {
       // Spring back, with a slight overshoot.
       sheet.style.transition = reduce ? "none" : `transform ${SPRING_MS}ms ${SPRING}`;
       sheet.style.setProperty("--sheet-backdrop-ms", reduce ? "0ms" : "200ms");
       sheet.style.transform = "translateY(0px)";
       sheet.style.removeProperty("--sheet-backdrop");
+      window.clearTimeout(timer.current);
       if (reduce) settle();
       else
         timer.current = window.setTimeout(() => {
