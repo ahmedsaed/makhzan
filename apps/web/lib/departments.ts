@@ -98,10 +98,9 @@ export function departmentSummaries(categories: Category[], limit = 4): Departme
 export type DepartmentNode = Category & { total: number };
 
 /**
- * One department's tree as its page shows it: the top-level groups, the selected
- * group and its categories, and — when nothing is selected — the department's
- * biggest categories. Empty branches are left out: a tile that leads to
- * nothing is a dead end.
+ * One department's tree as its browse tree shows it (components/browse-tree.tsx):
+ * the top-level groups by size, and the selected group with its categories.
+ * Empty branches are left out: a link that leads to nothing is a dead end.
  *
  * `selected` is the category the page is narrowed to; its group is the
  * top-level category above it, or itself when it is top level.
@@ -123,30 +122,5 @@ export function departmentTree(categories: Category[], selected: string | null =
   const groups = withTotals(categories.filter((category) => !category.parent));
   const group = root ? (groups.find((node) => node.ref === root.ref) ?? null) : null;
   const children = group ? withTotals(categories.filter((c) => c.parent === group.ref)) : [];
-  // A flat department has nothing to add here: its groups already are its categories.
-  const nested = groups.some((node) => categories.some((c) => c.parent === node.ref));
-  // A shortcut that leads where a group tile already does is the same thing
-  // shown twice ("Accessories & Other" 1,202 and its only category "Accessories"
-  // 1,202): a top-level leaf, or a group's only non-empty category, is left out.
-  // The eight biggest are taken first, so leaving one out shortens the shelf
-  // rather than pulling in a smaller category (the approved mockup).
-  const live = new Map<string | null, number>();
-  for (const node of withTotals(categories)) {
-    live.set(node.parent, (live.get(node.parent) ?? 0) + 1);
-  }
-  // The page shows group tiles only when there are two or more. A group's only
-  // category repeats its tile only when the two counts agree: no profile or
-  // crosswalk files a product on a group today (November 2026, all 16
-  // departments), but one that did would make the category a part of the group.
-  const tiles = new Map(groups.length > 1 ? groups.map((g) => [g.ref, g.total]) : []);
-  const repeatsGroup = (node: DepartmentNode) =>
-    !node.parent || (tiles.get(node.parent) === node.total && live.get(node.parent) === 1);
-  const top =
-    !group && nested
-      ? withTotals(leavesOf(categories))
-          .slice(0, 8)
-          .filter((node) => !repeatsGroup(node))
-      : [];
-
-  return { groups, group, children, top };
+  return { groups, group, children };
 }

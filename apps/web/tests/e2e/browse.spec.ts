@@ -117,11 +117,13 @@ test("empty results say so instead of showing an empty list", async ({ page }) =
 });
 
 test("a category is addressed through its department, never a bare slug", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/departments/electronics");
-  await page
-    .getByRole("navigation", { name: "Categories" })
-    .getByRole("link", { name: /Integrated Circuits/ })
-    .click();
+  const tree = page
+    .getByRole("complementary")
+    .getByRole("navigation", { name: "Browse Electronics" });
+  await tree.getByRole("button", { name: "Show categories in Components" }).click();
+  await tree.getByRole("link", { name: /Integrated Circuits/ }).click();
   await expect(page).toHaveURL("/departments/electronics/ics");
 });
 

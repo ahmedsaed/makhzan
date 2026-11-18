@@ -31,14 +31,6 @@ async function tapHeight(control: Locator): Promise<number> {
   });
 }
 
-/** Scroll a sideways row to its end at once (no smooth glide to wait out). */
-async function toRowEnd(row: Locator) {
-  await row.evaluate((el) => {
-    el.style.scrollBehavior = "auto";
-    el.scrollLeft = el.scrollWidth;
-  });
-}
-
 async function expectTappable(page: Page, controls: Record<string, Locator>) {
   for (const [name, control] of Object.entries(controls)) {
     await expect(control, name).toBeVisible();
@@ -78,24 +70,21 @@ test("a department page's controls", async ({ page }) => {
     "out of stock link": page.getByRole("link", { name: "2 more out of stock" }),
     sort: page.getByRole("combobox"),
     "list view": page.getByRole("button", { name: "List view" }),
-    "group tile": page.getByRole("navigation", { name: "Groups" }).getByRole("link").first(),
+    "Price chip": page.locator("[data-price-chip] summary"),
+    "Browse pill": page.locator("[data-browse-pill]"),
   });
 
-  // The shortcut pills are drawn 32px tall in a row that scrolls sideways
-  // (clipping is where an invisible extension gets lost); each must still take
-  // a 44px tap, at the row's start and, once scrolled there, at its end.
-  const shortcutRow = page.getByRole("navigation", { name: "Categories" }).getByRole("list");
-  const shortcuts = shortcutRow.getByRole("link");
-  await expectTappable(page, { "first shortcut pill": shortcuts.first() });
-  await toRowEnd(shortcutRow);
-  await expectTappable(page, { "last shortcut pill": shortcuts.last() });
-
-  await page.goto("/departments/electronics/components");
-  const chipRow = page.getByRole("navigation", { name: "Categories" }).getByRole("list");
-  const chips = chipRow.getByRole("link");
-  await expectTappable(page, { "first category chip": chips.first() });
-  await toRowEnd(chipRow);
-  await expectTappable(page, { "last category chip": chips.last() });
+  // The sheet's rows: a group, its chevron, and a category.
+  await page.goto("/departments/electronics/resistors");
+  await page.locator("[data-browse-pill]").click();
+  const sheet = page.locator("dialog[data-browse-sheet]");
+  await expectTappable(page, {
+    "sheet close": sheet.getByRole("button", { name: "Close" }),
+    "sheet group": sheet.locator("[data-tree-group='electronics:components']"),
+    "sheet chevron": sheet.getByRole("button", { name: /categories in Components/ }),
+    "sheet category": sheet.getByRole("link", { name: /^Resistors/ }),
+  });
+  await page.keyboard.press("Escape");
 
   await page.goto("/departments/seals-bearings/oil-seals");
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link");

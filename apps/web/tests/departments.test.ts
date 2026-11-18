@@ -86,18 +86,10 @@ describe("a department's tree", () => {
   });
 
   it("lists groups by size and leaves out empty ones", () => {
-    const { groups, group, children, top } = departmentTree(SEALS);
+    const { groups, group, children } = departmentTree(SEALS);
     expect(groups.map((g) => g.slug)).toEqual(["seals", "transmission"]);
     expect(group).toBeNull();
     expect(children).toEqual([]);
-    // Nothing selected: the department's biggest categories stand in.
-    expect(top.map((c) => c.slug)).toEqual([
-      "seals-other",
-      "o-rings",
-      "bearings",
-      "oil-seals",
-      "couplings",
-    ]);
   });
 
   it("selects a leaf's group and lists that group's categories", () => {
@@ -110,52 +102,9 @@ describe("a department's tree", () => {
     expect(departmentTree(SEALS, "seals-bearings:seals").group?.slug).toBe("seals");
   });
 
-  it("does not repeat a group that holds a single category as a shortcut", () => {
-    // The icon pilot: "Accessories & Other" 1,202 and its only category
-    // "Accessories" 1,202 were the same thing, shown twice.
-    const tree = departmentTree([
-      cat("electronics", "components", "Components", null, 0),
-      cat("electronics", "resistors", "Resistors", "components", 300),
-      cat("electronics", "capacitors", "Capacitors", "components", 100),
-      cat("electronics", "other", "Accessories & Other", null, 0),
-      cat("electronics", "accessories", "Accessories", "other", 200),
-      // An empty sibling does not make the group's one category less alone.
-      cat("electronics", "spares", "Spares", "other", 0),
-      cat("electronics", "loose", "Loose Parts", null, 250),
-    ]);
-    expect(tree.groups.map((g) => g.slug)).toEqual(["components", "loose", "other"]);
-    // Nor does a top-level leaf, which is a group tile itself.
-    expect(tree.top.map((c) => c.slug)).toEqual(["resistors", "capacitors"]);
-  });
-
-  it("keeps a group's only category when the group holds products of its own", () => {
-    const tree = departmentTree([
-      cat("electronics", "components", "Components", null, 0),
-      cat("electronics", "resistors", "Resistors", "components", 300),
-      cat("electronics", "capacitors", "Capacitors", "components", 100),
-      // 50 filed on the group itself: "Accessories" is not the whole of it.
-      cat("electronics", "other", "Accessories & Other", null, 50),
-      cat("electronics", "accessories", "Accessories", "other", 200),
-    ]);
-    expect(tree.top.map((c) => c.slug)).toEqual(["resistors", "accessories", "capacitors"]);
-  });
-
-  it("keeps the eight biggest, rather than reaching past one it leaves out", () => {
-    const tree = departmentTree([
-      cat("electronics", "components", "Components", null, 0),
-      ...Array.from({ length: 9 }, (_, i) =>
-        cat("electronics", `c${i}`, `C${i}`, "components", 1000 - i * 10),
-      ),
-      cat("electronics", "other", "Accessories & Other", null, 0),
-      cat("electronics", "accessories", "Accessories", "other", 995),
-    ]);
-    expect(tree.top).toHaveLength(7);
-    expect(tree.top.map((c) => c.slug)).not.toContain("accessories");
-  });
-
-  it("adds no biggest-categories row to a flat department", () => {
-    const { groups, top } = departmentTree(FLAT);
+  it("treats a flat department's categories as its groups", () => {
+    const { groups, group } = departmentTree(FLAT, "timber:oak");
     expect(groups.map((g) => g.slug)).toEqual(["oak", "teak"]);
-    expect(top).toEqual([]);
+    expect(group?.slug).toBe("oak");
   });
 });
