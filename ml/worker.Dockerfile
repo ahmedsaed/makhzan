@@ -9,26 +9,25 @@
 #   makhzan-ml/kev:1.0                ml/kev/Dockerfile               desk-kev   (GPU, bf16)
 #   makhzan-ml/pplx-decider:1.3       ml/pplx/Dockerfile              desk-pplx  (GPU, bf16)
 #
-# Build from the ml/ directory (docs/ai/worker.md, "Images"):
-#   docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/kev-cpu-lean:1.0 \
-#     -t makhzan-ml/kev-worker-cpu:1.0 ml
+# The two CPU workers are built by CI and published to GHCR, each chained onto the lean base
+# built in the same run (ml/docker-bake.hcl, .github/workflows/ai-worker-images.yml); the same
+# chain builds locally with `docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu`. The GPU
+# workers are local builds from the ml/ directory (docs/ai/worker.md, "Images"):
+#   docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/kev:1.0 \
+#     -t makhzan-ml/kev-worker-gpu:1.0 ml
 #
 # Nothing here changes how the model scores: the worker sets the same environment the compose
 # services and the CPU benchmark used (makhzan_ml/worker/judges.py) and adds only the worker's
-# own standard-library code. The base images are local builds, referenced by tag; they are not
-# in a registry, so FROM cannot pin them by digest. Report the built image's id at hello with
-# -e MAKHZAN_IMAGE=... (the run commands in docs/ai/worker.md do).
+# own standard-library code. Report the image at hello with -e MAKHZAN_IMAGE=... (its registry
+# digest, or a local build's id; the run commands in docs/ai/worker.md do).
 ARG BASE=makhzan-ml/kev-cpu-lean:1.0
 FROM ${BASE}
 
-# The Kev serving code the base image was built from. The worker refuses to score if it
-# disagrees with its pin. No default on purpose: the base images keep KEV_COMMIT as a build ARG
-# only, so a default here would only repeat the pin and could never fail. Pass it only from a
-# base that records its own commit (an ENV or LABEL in ml/kev/Dockerfile*, not there yet);
-# unset, the worker logs the commit as unrecorded. Not read by the pplx images.
-ARG KEV_COMMIT=
-ENV MAKHZAN_KEV_COMMIT=${KEV_COMMIT} \
-    PYTHONPATH=/opt/makhzan${PYTHONPATH:+:${PYTHONPATH}} \
+# MAKHZAN_KEV_COMMIT, the Kev serving code the worker checks against its pin, comes from the
+# Kev base images (ml/kev/Dockerfile*, an ENV beside the source it was built from); it is not
+# set here, so a worker layer cannot claim a commit its base does not hold. Unset in the pplx
+# images, which do not read it.
+ENV PYTHONPATH=/opt/makhzan${PYTHONPATH:+:${PYTHONPATH}} \
     PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
 

@@ -32,6 +32,11 @@ RUN useradd --uid 1000 --create-home kev
 USER kev
 ENV HOME=/home/kev HF_HOME=/home/kev/.cache/huggingface \
     HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 TRANSFORMERS_OFFLINE=1
+# The Kev code commit this image holds, for the worker's pin check (makhzan_ml/worker/judges.py)
+# and for `docker inspect`. Kev's own LICENSE (Apache-2.0) is in /opt/kev with its source.
+ENV MAKHZAN_KEV_COMMIT=${KEV_COMMIT}
+LABEL dev.makhzan.kev.commit=${KEV_COMMIT} dev.makhzan.kev.revision=${KEV_REVISION} \
+      org.opencontainers.image.licenses=Apache-2.0
 EXPOSE 8000
 ENTRYPOINT ["python", "-m", "kev.serve", "--host", "0.0.0.0", "--port", "8000"]
 # jaredpalmer/kev-4b@KEV_REVISION (exec form cannot expand an ARG; keep the two in step with
