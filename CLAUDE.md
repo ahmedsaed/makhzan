@@ -324,6 +324,13 @@ ranking decides the order. Only explicit category browse is scoped to one domain
 Adding a vertical means authoring a profile (taxonomy, rules, identifier
 strategy). That domain knowledge is the real cost; the code seam is already there.
 
+**Inference only ever guesses within the supplier's default domain.** It runs
+only when the crosswalk missed, so there is no crosswalk domain to go by: the
+pipeline infers under `Supplier.domain`. Keyword rules in a profile that no
+supplier defaults to are therefore never consulted. Such a
+department — photography today, stocked by electronics shops — is reached by
+crosswalk only, and its profile carries no rules.
+
 ### Authoritative categories vs keyword inference
 
 Two ways a listing gets a category, and picking the wrong one corrupts data.
@@ -774,6 +781,6 @@ behind each layout decision, the page tree and URLs, the style tokens, and rules
 they catch prop and state changes the build does not.
 
 Known gaps worth naming: identifiers are read for electronics, tools, chemicals
-and seals-bearings only. The other 12 domains have their own taxonomies but no
+and seals-bearings only. The other 13 domains have their own taxonomies but no
 identifier rules (their codes are family-level or sizes, and each is one shop
 today), so their listings group less (`docs/DOMAIN_GENERALIZATION.md`).

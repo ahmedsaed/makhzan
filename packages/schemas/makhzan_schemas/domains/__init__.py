@@ -17,6 +17,7 @@ from makhzan_schemas.domains.electronics import ELECTRONICS
 from makhzan_schemas.domains.garden import GARDEN
 from makhzan_schemas.domains.machinery import MACHINERY
 from makhzan_schemas.domains.materials import MATERIALS
+from makhzan_schemas.domains.photography import PHOTOGRAPHY
 from makhzan_schemas.domains.piping import PIPING
 from makhzan_schemas.domains.rigging import RIGGING
 from makhzan_schemas.domains.safety import SAFETY
@@ -39,6 +40,7 @@ __all__ = [
     "GARDEN",
     "MACHINERY",
     "MATERIALS",
+    "PHOTOGRAPHY",
     "PIPING",
     "RIGGING",
     "SAFETY",

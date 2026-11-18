@@ -42,7 +42,8 @@ Measured on 60.9k active listings (November 2026).
   headers can wrap them later.
 - Geizhals opens results with "Top categories" for the query. makhzan does too.
 - McMaster-Carr names categories by what they do and shows each as a photo of one
-  iconic object. makhzan's department and category tiles follow it.
+  iconic object. makhzan's department tiles follow it; inside a department its own
+  line icons, an object per group and a symbol per category, do the same job.
 - "Last checked" is the timestamp that matters; show it relative, and tell people to
   confirm on the shop's site.
 
@@ -54,8 +55,8 @@ Measured on 60.9k active listings (November 2026).
 │   └── /products/{id}-{slug}   Product: one shop, or several (offers list)
 │       └── shop's own page ↗   the only exit
 ├── /departments                All 16 departments as a directory: each with its categories as links
-│   └── /departments/{department}         Group tiles, category tiles, results underneath
-│       └── /departments/{department}/{category}   the same page, narrowed
+│   └── /departments/{department}         The department's tree beside its products
+│       └── /departments/{department}/{category}   the same page, narrowed (a group or a category)
 ├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
 │   └── /shops/{shop}           Freshness, what they carry, its products as scoped results
 ├── /how-we-crawl               The crawling policy, written for suppliers, and what the crawler did (#activity)
@@ -109,8 +110,14 @@ the page container on desktop; each section is left out when its fetch fails.
 
 **Results (search, department, category, shop search).**
 - A chip bar with the everyday filters, **In stock** and **Checked recently** (both
-  on by default) and **2+ shops**, plus a "Category, price" chip that opens a sheet (a
-  side rail on desktop) for the rest.
+  on by default) and **2+ shops**. On search and a shop's search a "Category, price"
+  chip opens a sheet (a side rail on desktop) for the rest; on department, group and
+  category pages the tree navigates instead, so there is no category filter and no
+  rail, and **Price** is a chip, third, before "2+ shops", that opens Min and Max under
+  itself, scrolled into view first if it was cut off at the bar's edge (an empty Min or
+  Max is left out of the URL). On a phone the chip bar scrolls sideways
+  and fades at an edge only while that edge hides chips, and not while Price is open, since
+  the fade would clip its panel.
 - "Top categories for “query”" above the results.
 - A toolbar: the count, "N more out of stock" and "N more out of date" (one click on
   either shows them), sort (best match, price low first, most shops, recently checked)
@@ -364,13 +371,67 @@ the page container on desktop; each section is left out when its fetch fails.
     "Stock history · last 12 weeks" with the strip, once 12 weeks are recorded, and a
     facts line "in stock N of the last 12 weeks · Stock history".
 
-**Department and category.** Header (name, count, "Search in {department}"); groups as object
-tiles; the selected group's categories as smaller object tiles; then results with the
-chip bar. No page is a dead-end list of links. From `lg` the search sits beside the
-name and the tiles lie on their side (a small frame, the name, its count and, for a
-group, its top three categories) in balanced rows across the full width: a row of
-large squares holding the same stand-in icon said nothing and left half the screen
-empty. Phones keep the square tiles. All departments (`/departments`) is a directory, full width, largest department
+**Department, group and category (layout B, the owner's choice of 18 November 2026).**
+One template, narrowed. From `md` the department's tree is a sidebar on the left (15rem,
+17.5rem from `lg`), sticky and scrolling by itself when long
+(`components/browse-tree.tsx`): "Browse {department}", then "All of {department}" with
+its count, then the groups by size, each with its object icon and count, expandable in
+place by a chevron to its categories with their symbols and counts (the chevron is named
+"Subcategories of {group}" and says open or closed by `aria-expanded` alone). The place you are is
+outlined in `chip-on` and bold, never filled (`aria-current="page"`); its group starts
+expanded, the others collapsed. A group holding one category links straight to it (only
+when their counts agree: no product is filed on a group today, but one that was would make
+the category only part of it). Empty branches are left out. The main column has the way
+back ("All departments") or the breadcrumb, the name and its count with "Search in
+{department}" beside it from `lg`, then the products straight away under the results'
+toolbar, so no page here is a dead-end list of links. In a department whose icons are not
+drawn yet the categories are plain and the groups keep the department's line icon.
+
+On a phone (below `md`) there is no category row at all. A floating pill at the bottom
+centre, clear of the home bar, names the place, "Resistors · Browse" (or the group or
+department), and opens the same tree as a bottom sheet (`components/browse-sheet.tsx`),
+the current group expanded. The sheet is a modal `<dialog>` named by its heading, so focus stays in it while it is open; it
+locks the page's scroll, closes on a swipe down, a tap outside it, Escape, Close or the
+choice of a link, and then puts focus on the pill itself, whatever had it before (Safari
+and Firefox on macOS do not focus a link on click, so the dialog's own restore would land on
+the page's body). It also closes when the window widens past `md`,
+where the sidebar takes over. The pill slides away while the page scrolls down
+and comes back on any scroll up or on keyboard focus; under `prefers-reduced-motion` it
+just shows and hides. The results end with room for it, so it never covers the last card.
+It is outlined, with no shadow. With JavaScript off it is a link to the page's own tree,
+which then shows on a phone too.
+
+**The sheet's look and motion** (the owner's sheet-motion mockup, option A with the funnel,
+18 November 2026; the desktop sidebar keeps its plain rows and chevrons). Every row is a
+button on the `tint` token: 44px tall, 8px corners, its icon, name and count (counts in
+`ink-2`, which keeps 4.5:1 on the tint where `ink-3` does not). A group is two such
+buttons in one row, 6px apart with no divider: its name, which leads to the group, and a
+44px control with a funnel icon (the category icons' style: 24 grid, 1.5 stroke, round
+caps, no fill), named "Subcategories of {group}", with `aria-expanded` and
+`aria-controls`. While the group is open the control fills solid in `chip-on` (150ms).
+Its categories are the same buttons, indented under it, and "All of {department}" at the
+top is one too. A group the tree collapses to one link (no stocked categories, or exactly
+one equal to the group) keeps the same two buttons and widths: its name leads where it
+always did, and the funnel is a disabled button (dimmed: `ink-3` on a half-strength tint,
+no pointer, out of the tab order, no `aria-expanded`), named "No subcategories in
+{group}". The place you are is a 2px `chip-on` outline, never a fill, on whichever button
+it is; on a group's own page, its name button. Under keyboard focus the current item, in the
+sheet and the sidebar alike, shows the site's focus ring (`link`, 2px out) instead, since the
+two are the same CSS outline.
+
+The sheet rises over 250ms (`cubic-bezier(.2,.8,.2,1)`) as its backdrop fades in, and sinks
+over 200ms (`cubic-bezier(.4,0,1,1)`) before the dialog closes; Escape, a tap outside, Close
+and a link all close it that way. A swipe on the handle moves it with the finger and thins
+the backdrop; let go past 80px or a quarter of the sheet (at most half), or with a flick
+faster than 0.5px/ms, and it glides out at the finger's speed in 120 to 240ms
+(`cubic-bezier(.25,.6,.4,1)`); otherwise it springs back in 380ms with a slight overshoot
+(`cubic-bezier(.3,1.35,.5,1)`). A group opens by `grid-template-rows` from `0fr` to `1fr` in
+250ms, nothing measured; its categories stay in the page while folded (server rendered,
+crawlable) but `inert`. Under `prefers-reduced-motion` all of it is instant, the backdrop
+included (`*::backdrop` is in the global rule), and closing never waits for an animation;
+the drag still follows the finger. Widening past `md` closes it at once.
+
+All departments (`/departments`) is a directory, full width, largest department
 first. A department with 10% or more of all products (three today) is a full-width block listing every
 group with up to six of its categories, as links with counts, in columns. The rest
 share a grid of cards (2, 3, then 4 across), each listing its biggest categories:
@@ -476,7 +537,8 @@ to, and open without JavaScript. Contact routes and does not collect: report a p
 crawler@ for personal data, hello@merope.dev for anything else. The other three fetch
 nothing. /privacy and /how-we-crawl each link to /contact.
 
-**Desktop.** Results get a side rail (category, price); the chips stay above the list;
+**Desktop.** Search results get a side rail (category, price), and department pages
+the tree instead; the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
 Product pages go two columns: a narrow one (about 26rem) with the photo and, under it,
 the way to the shop (price box, or the summary and the offers as two-line cards); and a
@@ -503,6 +565,7 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 | `link` | `#C2410C` | `#FB923C` |
 | `badge` / `badge-ink` ("3 shops") | `#FDECE3` / `#9A3412` | `#3A2416` / `#FDBA8C` |
 | `chip-on` / `chip-on-ink` | `#15171C` / `#FFFFFF` | `#ECECEA` / `#121316` |
+| `tint` (the phone sheet's buttons) | `#EFEFEA` | `#25282E` |
 | `warn` / `warn-line` / `warn-ink` | `#FEF9C3` / `#E5D36A` / `#574500` | `#2A2710` / `#57501C` / `#F3E08A` |
 | `age-muted` (15–45 days) | `#6E5A00` | `#D9C46C` |
 | `photo-frame` | `#FFFFFF` | `#FFFFFF` |
@@ -534,6 +597,50 @@ decoration: `aria-hidden`, no pointer events, behind all content, and hidden und
 `prefers-reduced-transparency`. Header, cards, controls and photo frames are opaque
 and cover it, and `ink` and `ink-2` keep 4.5:1 against the stroke colour itself
 (S2).
+
+### Category icons
+
+makhzan draws its own icons for a department's groups and categories
+(`apps/web/components/category-icons.tsx`; option 3 of the icon pilot, approved
+18 November 2026). The style guide, which a test holds every icon to (S7):
+
+- **A 24 × 24 grid with a 2-unit margin.** Drawn inside the 20 × 20 live area, curves
+  and arcs included (the test samples them, not just their end points). Only a
+  category's leads may run on to the edge, as a wire would, and the owner's ruling
+  (November 2026) is that a lead is any straight run that leaves the object: a
+  schematic symbol's wire, but also a hose, cable, pipe stub, port or spray. A group
+  is an object and keeps to the live area; a curve never reaches the margin.
+- **One stroke: 1.5 units, round caps and joins.** 1.25px at 20px, 2px at 32px. No
+  hairlines, no mixed weights. A dot is a zero-length segment, as heavy as a line.
+- **No fills; `currentColor`.** Outline only, in the colour of the text around it:
+  `ink-3` on a tile's white frame, `ink-2` in the browse tree, in both themes.
+  The brand orange stays the logo's.
+- **Groups are objects, categories are symbols.** A group is a simple silhouette of a
+  thing you would hold (a board, a motor, a printer). A category is its schematic
+  symbol where electronics has one everyone reads (resistor, capacitor, diode); where
+  the symbol is obscure, a package or part stands in (a DIP chip, a 5 mm LED, an
+  ultrasonic sensor). The two families look different at a glance.
+- **Strokes at least 2 units apart,** so two lines stay two at 18px (review, not tested).
+
+Icons are keyed by category ref, `domain:slug`, never a bare slug (slugs repeat across
+departments); a group is a top-level category, so it is keyed by its ref too. Each
+department's set lives in `components/category-icon-sets/<department>.tsx`. Every
+department with a profile is drawn in full: each group and category in its taxonomy has
+an icon, and a group's tile falls back to the department's tile icon only for a ref with
+no drawing. Electronics includes Cameras & Imaging and Educational & Robot Kits;
+Photography's categories have no schematic symbols, so they are the things themselves (a
+softbox, a tripod, a bag, a lens). A department's set is a batch: a new category in a
+department fails the test until its icon is added, and so does an icon for a ref no
+taxonomy has (none may be drawn ahead). No two icons in the registry may be the same
+drawing unless the test's allow-list says they mean the same thing (today six "Other ..."
+refs: the four Tools "Other" categories, Machinery's "Other Pumps" and Garden's "Other
+Garden Power Tools").
+
+**Department tiles** (`components/department-icon.tsx`, drawings in
+`category-icon-sets/departments.tsx`) are drawn in the same style, one object per
+department, for tiles and list rows; every department has one, and the tests hold them to
+the same live-area and attribute rules as the category icons.
+`tests/icon-gallery.test.tsx` writes the contact sheet for review when `GALLERY_OUT` is set.
 
 ### Brand
 
@@ -590,6 +697,7 @@ Each is meant to be checked by a test.
 - **S1** Colours come only from the tokens above; no literal colours in components.
 - **S2** Text meets 4.5:1 against its background in both themes (3:1 at 24px and up).
 - **S3** Prices use tabular figures; part numbers use the monospace face.
-- **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px.
+- **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px (checked at 320, 375 and 390px on department pages). A row that scrolls sideways inside itself (the chip bar) is not page scroll; it keeps its items' 44px inside its own box. The phone's Browse pill and every row of its sheet are 44px.
 - **S5** Photos are contained in a white frame in both themes; never cropped.
 - **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.
+- **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. Every group and category in a department's taxonomy has an icon, and no icon exists for a ref no taxonomy has. Shapes, curves and arcs stay inside the live area (a category's straight leads may reach the edge), and the 17 department tiles are held to the same.

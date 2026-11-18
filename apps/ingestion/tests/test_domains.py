@@ -123,6 +123,279 @@ def test_short_filament_names_still_match_the_material(title):
     assert get_profile("electronics").resolve_category_slug(None, title) == "filament"
 
 
+@pytest.mark.parametrize(
+    ("tags", "title", "expected"),
+    [
+        (None, "OV7670 Camera Module", "cameras"),
+        (None, "USB Webcam 1080p Full HD", "cameras"),
+        # A camera that connects over Wi-Fi is a camera, not a wireless module.
+        (None, "Outdoor Smart Wi-Fi Camera, Sound and Light", "cameras"),
+        (None, "WIFI Endoscope 5.5mm Industrial", "cameras"),
+        (["AI Machine Vision"], "Depth Kit with PoE, IP67", "cameras"),
+        # A camera board is still a board.
+        (None, "ESP32-CAM Development Board with OV2640 Camera", "dev-boards"),
+        # A thermal camera is a test instrument; "thermal" alone said cooling.
+        (None, "Infrared Rapid Thermal Camera", "measurement"),
+    ],
+)
+def test_cameras_and_imaging(tags, title, expected):
+    assert get_profile("electronics").resolve_category_slug(tags, title) == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # Things merely *for* a camera keep the leaf they had before.
+        ("Camera Battery LP-E6", "batteries"),
+        ("Camera Battery Charger NP-F550", "batteries"),
+        ("CCTV Camera Power Adapter 12V", "power-supplies"),
+        ("IP Camera Power Supply", "power-supplies"),
+        ("Pan Tilt Camera Mount for SG90 Servo", "servos"),
+        ("Camera Tripod Screw", "mechanical"),
+        ("Camera Slider Motorized", "motors"),
+        ("Security Camera Cable BNC", None),
+        ("Webcam Cover Slider", None),
+        ("Camera Housing", None),
+        ("Camera Flash Trigger", None),
+        ("Machine Vision Light Ring", None),
+        # "X for camera with Y" is an X, not a camera sold with Y.
+        ("Lens Cap for Camera with 1/4 Thread", None),
+        ("Battery Pack for Camera with USB-C", "batteries"),
+        ("12V Power Adapter for CCTV Camera with DC jack", "power-supplies"),
+        ("Mount for Camera with Pan Tilt Servo", "servos"),
+        ("Power Adapter for Camera with 12V", "power-supplies"),
+        ("Tripod screw for camera with 1/4 thread", "mechanical"),
+        # "for <up to four words> camera", not a fixed list of camera kinds.
+        ("Mount for Action Camera with Screw", "mechanical"),
+        ("Battery for Action Camera with Charger", "batteries"),
+        ("Hard Case for Dash Cam", None),
+        ("Waterproof Case for GoPro Camera", None),
+        ("Battery for Canon Camera", "batteries"),
+        ("Tripod for Smartphones and Mirrorless Cameras", None),
+        ("USB Data Cable Compatible with Canon, Nikon and Sony Cameras", None),
+        # Either word order, and plurals.
+        ("Rechargeable Sony Cameras Battery 7.4V", "batteries"),
+        ("Camera Mounts", None),
+        ("Camera Brackets 2 pcs", "mechanical"),
+        ("Camera Holders", None),
+        ("Camera Housings", None),
+        ("Camera Pole Mount", None),
+        ("Camera Wall Bracket", "mechanical"),
+        ("Light and Camera Clip Mount", None),
+        ("DSLR Camera Quick Release Bracket", "mechanical"),
+        ("Camera Charging Cable USB", None),
+        ("Camera Power Bank", None),
+        ("Camera Pan Tilt Servo Mount", "servos"),
+        ("Camera Module with Holder", "modules"),
+        ("Camera Cleaning Kit", None),
+        ("Camera Flash Speedlite", None),
+        ("Camera Backpack", None),
+    ],
+)
+def test_camera_accessories_are_not_cameras(title, expected):
+    assert get_profile("electronics").resolve_category_slug(None, title) == expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "IP Camera 1080p PoE",
+        "Car Dash Camera Full HD",
+        "Dashcam with G-Sensor",
+        "OV2640 Camera",
+        # The accessory words, in real cameras: a veto is a phrase, not a word.
+        "PoE Camera Power over Ethernet",
+        "Wireless Camera Battery Powered",
+        "Solar Battery Security Camera 4G",
+        "IP Camera with Power Adapter",
+        "Wall Mount IP Camera",
+        "Waterproof Case Camera",
+        "USB Camera with 1.5m Cable",
+        "Covert Camera Mini",
+        "Camera with Flash Memory",
+        "Camera Module with Motorized Lens",
+        "Endoscope Camera 5mm Semi Rigid Cable 5 Meter",
+        # Named first, sold with the accessory: a camera (accepted ambiguity).
+        "Camera with Power Adapter Cable",
+        "Doorbell Camera Rechargeable Battery",
+        "Mini Camera USB Charging 1080P",
+        "Dome Camera with Ceiling Mount",
+        "Body Worn Camera with Strap Clip",
+        "Endoscope Camera 5 Meter Cable Length - Waterproof USB OTG Borescope",
+    ],
+)
+def test_cameras_that_say_so_are_cameras(title):
+    """A dash cam is a camera."""
+    assert get_profile("electronics").resolve_category_slug(None, title) == "cameras"
+
+
+def test_a_veto_lets_the_text_fall_through_to_later_rules(other_domain):
+    """ "!word" in a rule's keywords stops that rule, not the search."""
+    profile = DomainProfile(
+        slug="vetotest",
+        name_en="Veto",
+        name_ar="فيتو",
+        category_rules=[("widgets", ["widget", "!spare"]), ("parts", ["spare"])],
+    )
+    assert profile.resolve_category_slug(None, "Blue widget") == "widgets"
+    assert profile.resolve_category_slug(None, "Widget spare spring") == "parts"
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        [("widgets", ["!spare"])],
+        [("widgets", [])],
+        [("widgets", ["widget", ""])],
+        [("widgets", ["widget", "!"])],
+    ],
+)
+def test_a_rule_with_nothing_to_match_is_refused(rules):
+    """An empty pattern matches every text, so such a rule would take the whole
+    catalogue; it is an error when the rules are compiled."""
+    profile = DomainProfile(slug="emptyrule", name_en="E", name_ar="ف", category_rules=rules)
+    with pytest.raises(ValueError, match="widgets"):
+        profile.resolve_category_slug(None, "anything")
+
+
+def test_raspberry_pi_cameras_stay_with_dev_boards():
+    """Dev boards come ahead of cameras: a Raspberry Pi camera is filed with the
+    Pi, as an ESP32-CAM is with ESP32 (existing policy)."""
+    electronics = get_profile("electronics")
+    assert electronics.resolve_category_slug(None, "Raspberry Pi Camera Module V3") == "dev-boards"
+
+
+@pytest.mark.parametrize("domain", sorted(PROFILES))
+def test_every_profiles_rules_compile(domain):
+    """A rule with nothing to match is refused when compiled; compile them all
+    here so a bad rule fails the suite, not the first listing that reaches it."""
+    PROFILES[domain].resolve_category_slug(None, "anything")
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        # Shop tags keep the leaf they had before the camera rule.
+        (["Camera Accessories"], "accessories"),
+        (["Camera Modules"], "modules"),
+    ],
+)
+def test_camera_shop_tags_keep_their_leaf(tags, expected):
+    assert get_profile("electronics").resolve_category_slug(tags, None) == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # Accepted ambiguities (see `_FOR_A_CAMERA`): real cameras inference
+        # does not file, because the shape is an accessory's. Pinned so that
+        # changing them is a decision.
+        ("Dash Cam for Car Front and Rear Camera", None),
+        ("Dome Camera Ceiling Mount", None),
+        ("Bullet Camera Metal Bracket", "mechanical"),
+    ],
+)
+def test_accepted_camera_ambiguities(title, expected):
+    assert get_profile("electronics").resolve_category_slug(None, title) == expected
+
+
+def test_a_closed_part_before_a_gap_is_refused():
+    """ "\\b" closes only the last part of "a ... b"; anywhere else it is an error."""
+    profile = DomainProfile(
+        slug="gapclosed",
+        name_en="Gap",
+        name_ar="فجوة",
+        category_rules=[("parts", [r"for\b ... widget"])],
+    )
+    with pytest.raises(ValueError, match="last part"):
+        profile.resolve_category_slug(None, "anything")
+
+
+def test_a_gap_keyword_allows_a_few_words_between():
+    """ "a ... b" is a, up to four words, then b; whole words at the joins."""
+    profile = DomainProfile(
+        slug="gaptest",
+        name_en="Gap",
+        name_ar="فجوة",
+        category_rules=[("parts", ["for ... widget"])],
+    )
+    assert profile.resolve_category_slug(None, "Spring for widget") == "parts"
+    assert profile.resolve_category_slug(None, "Spring for the big blue widgets") == "parts"
+    assert profile.resolve_category_slug(None, "Spring for one two three four five widget") is None
+    assert profile.resolve_category_slug(None, "Spring format widget") is None
+
+
+def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
+    """One shop's "Security Camera" tag also holds an RFID card copier and
+    barcode modules; only a title that says camera is a camera."""
+    electronics = get_profile("electronics")
+    assert electronics.resolve_category_slug(["Security Camera"], "RFID Card Copier") is None
+    assert (
+        electronics.resolve_category_slug(["Devices", "Security Camera"], "Indoor Wi-Fi Camera")
+        == "cameras"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tags", "title"),
+    [
+        # Kits name their parts; the kit is what they are.
+        (None, "Educational Solar Robot Kit 6 in 1"),
+        (None, "Humanoid Robot Kit 17DOF with Servo Motors"),
+        (None, "Kids Electric Circuit Kit - 56 Parts DIY STEM Toys"),
+        (None, "DIY Wood Traffic Lights - Science Toy"),
+        (None, "Digital Logic Design Kit - Faculty of Engineering"),
+        (None, "Electronics Kit - Engineering Institute, Spring Term"),
+        (["Project Kits"], "Smart City Kit"),
+        # Ahead of the parts the kit names.
+        (None, "Educational Robot Kit with LED Eyes"),
+        # A starter or learning kit is a kit, whatever board it is built on.
+        (None, "Arduino Starter Kit UNO R3"),
+        (None, "Arduino Learning Kit 36 PCS"),
+        # A kit sold soldered, or with a solderless breadboard, is a kit.
+        (None, "Electronics Starter Kit (soldered)"),
+        (None, "Starter Kit with Solderless Breadboard"),
+        # Board bundles named "starter kit" too, by the same policy.
+        (None, "ESP32 Starter Kit with Sensors"),
+    ],
+)
+def test_educational_and_robot_kits(tags, title):
+    assert get_profile("electronics").resolve_category_slug(tags, title) == "kits"
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # A printer's board set, not a course box.
+        ("3D Printer Electronics Kit", "printers-3d"),
+        # "kit" alone is never enough.
+        ("O-Ring Service Kit NBR-70 (30 Sizes)", None),
+        # A soldering iron's starter bundle is not a teaching kit.
+        ("Soldering Starter Kit 60W", "soldering"),
+        ("Solder Iron Starter Kit", "soldering"),
+        ("Solder Starter Kit 60W", "soldering"),
+        # Neither "for kids" nor a bare "stem" makes a kit.
+        ("Wired Headphones for Kids", None),
+        ("Valve Stem Seal Set", None),
+    ],
+)
+def test_kit_alone_does_not_make_a_teaching_kit(title, expected):
+    assert get_profile("electronics").resolve_category_slug(None, title) == expected
+
+
+def test_photography_is_its_own_department():
+    """Studio lights and tripods are not electronics accessories. Filled by
+    crosswalk only: inference runs under a supplier's default domain, and no
+    supplier defaults to photography, so it carries no keyword rules."""
+    photography = get_profile("photography")
+    assert photography.slug == "photography"
+    leaves = {slug for slug, _en, _ar, parent in photography.taxonomy if parent}
+    assert leaves == {"photo-lights", "tripods", "camera-bags", "camera-accessories"}
+    assert photography.category_rules == []
+    electronics = {slug for slug, *_ in get_profile("electronics").taxonomy}
+    assert {"cameras", "kits"} <= electronics
+
+
 def test_electronics_ranks_its_identifier_first():
     assert get_profile("electronics").search_attributes[0] == "part_number"
 

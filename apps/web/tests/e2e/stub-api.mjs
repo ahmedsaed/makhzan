@@ -60,6 +60,32 @@ const CATEGORIES = [
     parent: "electronics:components",
     count: 80,
   },
+  // Two more Electronics groups, for the department page's tiles and shortcuts
+  // (department-icons.spec.ts): Tools & Equipment has two categories, so they
+  // are shortcuts; Accessories & Other has one, so it is not repeated as one.
+  // Counts stay small, so Electronics stays under the directory's 10% "major" line.
+  ...[
+    ["tools", "Tools & Equipment", null, 0],
+    ["measurement", "Measurement & Test", "tools", 6],
+    ["soldering", "Soldering", "tools", 3],
+    ["other", "Accessories & Other", null, 0],
+    ["accessories", "Accessories", "other", 4],
+    // Three more single-category groups, so the phone's group row overflows.
+    ["power", "Power", null, 0],
+    ["batteries", "Batteries & Chargers", "power", 2],
+    ["boards-modules", "Boards & Modules", null, 0],
+    ["sensors", "Sensors", "boards-modules", 2],
+    ["prototyping", "Prototyping", null, 0],
+    ["prototyping-supplies", "Breadboards & Wires", "prototyping", 1],
+  ].map(([slug, name_en, parent, count]) => ({
+    ref: `electronics:${slug}`,
+    domain: "electronics",
+    slug,
+    name_en,
+    name_ar: null,
+    parent: parent ? `electronics:${parent}` : null,
+    count,
+  })),
   {
     // The collision the whole ref scheme exists for: the same slug in another
     // domain is a different category.

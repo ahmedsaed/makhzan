@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import type { Category } from "@/lib/api";
-import { asPhrase, insideOf, totalOf, departmentSummaries, departmentTree } from "@/lib/departments";
+import {
+  asPhrase,
+  departmentLabel,
+  insideOf,
+  totalOf,
+  departmentSummaries,
+  departmentTree,
+} from "@/lib/departments";
+
+describe("department labels", () => {
+  // Photography's drawn tile is checked with every department's in
+  // tests/category-icons.test.tsx; here only its label.
+  it("labels the photography department from its slug", () => {
+    expect(departmentLabel("photography")).toBe("Photography");
+  });
+});
 
 const cat = (
   domain: string,
@@ -60,7 +75,11 @@ describe("what's inside a department", () => {
 
 describe("departments are listed by size", () => {
   it("orders departments largest first and drops empty ones", () => {
-    const departments = departmentSummaries([...FLAT, ...SEALS, cat("garden", "mowers", "Mowers", null, 0)]);
+    const departments = departmentSummaries([
+      ...FLAT,
+      ...SEALS,
+      cat("garden", "mowers", "Mowers", null, 0),
+    ]);
     expect(departments.map((t) => [t.domain, t.count])).toEqual([
       ["seals-bearings", 1490],
       ["timber", 120],
@@ -76,18 +95,10 @@ describe("a department's tree", () => {
   });
 
   it("lists groups by size and leaves out empty ones", () => {
-    const { groups, group, children, top } = departmentTree(SEALS);
+    const { groups, group, children } = departmentTree(SEALS);
     expect(groups.map((g) => g.slug)).toEqual(["seals", "transmission"]);
     expect(group).toBeNull();
     expect(children).toEqual([]);
-    // Nothing selected: the department's biggest categories stand in.
-    expect(top.map((c) => c.slug)).toEqual([
-      "seals-other",
-      "o-rings",
-      "bearings",
-      "oil-seals",
-      "couplings",
-    ]);
   });
 
   it("selects a leaf's group and lists that group's categories", () => {
@@ -100,9 +111,9 @@ describe("a department's tree", () => {
     expect(departmentTree(SEALS, "seals-bearings:seals").group?.slug).toBe("seals");
   });
 
-  it("adds no biggest-categories row to a flat department", () => {
-    const { groups, top } = departmentTree(FLAT);
+  it("treats a flat department's categories as its groups", () => {
+    const { groups, group } = departmentTree(FLAT, "timber:oak");
     expect(groups.map((g) => g.slug)).toEqual(["oak", "teak"]);
-    expect(top).toEqual([]);
+    expect(group?.slug).toBe("oak");
   });
 });
