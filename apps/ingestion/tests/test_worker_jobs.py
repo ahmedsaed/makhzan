@@ -296,3 +296,20 @@ async def test_a_daily_run_finding_its_source_busy_comes_back_later(worker):
     again = await worker.crawl_source({"redis": redis}, "shop-a", 1)
     assert again["status"] == "success"
     assert len(redis.named("rebuild_and_reindex")) == 1
+
+
+async def test_the_heavy_jobs_hand_freed_memory_back_even_when_they_fail(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_release_freed_memory", lambda: calls.append("trim"))
+
+    async def boom(ctx):
+        raise RuntimeError("rebuild failed")
+
+    monkeypatch.setattr(main, "_rebuild_and_reindex", boom)
+    with pytest.raises(RuntimeError):
+        await main.rebuild_and_reindex({})
+    assert calls == ["trim"]
+
+
+def test_releasing_freed_memory_never_raises():
+    main._release_freed_memory()

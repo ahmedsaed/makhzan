@@ -14,6 +14,8 @@ not kept from visitors' reports. Run the worker:  arq worker.main.WorkerSettings
 """
 
 import asyncio
+import ctypes
+import gc
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -322,6 +324,22 @@ async def request_ai_candidates(ctx: dict) -> None:
         log.exception("could not queue the AI candidates job")
 
 
+def _release_freed_memory() -> None:
+    """Hand memory the last heavy job freed back to the system.
+
+    A rebuild peaks near 1 GB (every listing and product loaded at once), and
+    Python and glibc keep that heap after the job returns: the worker sat at
+    ~850 MB while idle. `malloc_trim` returns what isn't fragmented, about half
+    (measured: 735 MB -> 380 MB after two rebuild rounds), for ~30 ms. A no-op
+    where glibc isn't there.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 async def ai_candidates(ctx: dict) -> list[dict]:
     """Arq task: the AI producers after a rebuild (makhzan_schemas.ai.candidates).
 
@@ -330,9 +348,12 @@ async def ai_candidates(ctx: dict) -> list[dict]:
     Runs whatever the AI mode: scoring goes on while it is off (P4). Production
     runs no model; this only queues pairs for the broker's workers.
     """
-    async with SessionLocal() as session:
-        summary = await ai_producers.daily(session)
-        await session.commit()
+    try:
+        async with SessionLocal() as session:
+            summary = await ai_producers.daily(session)
+            await session.commit()
+    finally:
+        _release_freed_memory()
     for line in summary:
         log.info("ai_candidates: %s", line)
     return summary
@@ -345,6 +366,13 @@ async def rebuild_and_reindex(ctx: dict) -> str:
     Without it the crawl updates the database but search goes stale. Afterwards
     it queues `ai_candidates`, which reads the groups this rebuild committed.
     """
+    try:
+        return await _rebuild_and_reindex(ctx)
+    finally:
+        _release_freed_memory()
+
+
+async def _rebuild_and_reindex(ctx: dict) -> str:
     async with _REBUILD_LOCK:
         async with SessionLocal() as session:
             await rebuild_products(session, reidentify=True)
