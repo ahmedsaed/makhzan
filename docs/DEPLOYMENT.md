@@ -197,7 +197,9 @@ crawler report from `scripts/status.py`, read from the live database.
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
 | Review visitors' reports | `./makhzan reports` lists new ones, oldest first, each with the offers as the page showed them; `./makhzan reports show 12` adds the reporter's email; `./makhzan reports accept 12 13` / `reject 14` set `status` and `reviewed_at`. Nothing else happens on accept yet: correct the page by hand. |
 | Erase reporters' data past its time | Automatic: the worker's `purge_reports` cron, every 10 minutes, erases an email 90 days after its report was sent (reviewed or not) and an address hash 24 hours after it, as /privacy says. By hand: `./makhzan reports purge` |
-| Pause / resume the daily crawl | `./makhzan crawl off` (or `on`); sets `CRAWL_ENABLED` in `.env.prod` and recreates the worker, which states the flag in the database for /how-we-crawl |
+| Pause / resume the daily crawl | `./makhzan crawl off [--note why]` (or `on`), or the admin dashboard: a database flag (`worker_state` `crawl_pause`) the worker reads before every daily job and every page, so nothing is recreated and a run in flight stops at its next page. `CRAWL_ENABLED` in `.env.prod` stays as the harder switch; `crawl on` clears it too (`docs/admin.md`) |
+| Pause / resume one shop | `./makhzan shop pause ID [--note why]` / `resume ID`, or the admin dashboard: `sources.paused_at`, which the sync never writes, so it survives deploys |
+| The admin dashboard | `ADMIN_BIND=<tailscale ip>:8200` in `.env.prod`, `./makhzan admin password`, then deploy: `docs/admin.md` |
 | Back up the DB | `./makhzan backup` → `backups/makhzan-<ts>.dump`, read back before it is kept |
 | Restore the DB | `./makhzan restore <file>`: see [Backup and restore](#backup-and-restore) |
 | Logs | `docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f api` |

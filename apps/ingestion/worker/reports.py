@@ -37,7 +37,9 @@ import asyncio
 import getpass
 import sys
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 
@@ -45,6 +47,8 @@ from makhzan_schemas import overrides as rulings
 from makhzan_schemas import reports as rules
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.models import GroupingOverride, Report
+
+from worker import recheck
 
 REASON_TEXT = {
     "offers_not_same": "These offers aren't the same product",
@@ -169,46 +173,131 @@ def who(by: str | None) -> str:
         return "cli"
 
 
+@dataclass
+class Reviewed:
+    """What closing one report did: the CLI prints it, the admin dashboard shows it."""
+
+    report_id: int
+    status: str
+    #: Why it was not closed: no such report, or an accept no ruling could act on.
+    refused: str | None = None
+    #: An accept's rulings (`overrides.Added`), created, already there, or in conflict.
+    added: list = field(default_factory=list)
+    #: A reject's withdrawn rulings.
+    withdrawn: int = 0
+    #: An accepted wrong price or stock report: listings marked to be read first.
+    rechecks: int = 0
+    #: Rejecting one accepted before: its listings' re-check markers cleared.
+    rechecks_cleared: int = 0
+
+
+async def review_reports(
+    session,
+    ids: Sequence[int],
+    status: str,
+    *,
+    by: str,
+    audit: Callable[[Any, Reviewed], Awaitable[None]] | None = None,
+) -> list[Reviewed]:
+    """Accept or reject reports, each committed on its own; what `reports accept|reject` does.
+
+    Accepting a grouping report records its rulings (`overrides.accept_report`);
+    one no ruling could act on is refused, not shown accepted with nothing
+    behind it. Rejecting withdraws whatever rulings the report had made.
+
+    Each report's verdict, its rulings and, when `audit` is given (the admin
+    dashboard), the audit row it writes are one transaction. A refusal is
+    passed to `audit` too, and committed on its own.
+    """
+    out: list[Reviewed] = []
+    for report_id in ids:
+        pairs = None
+        was = await session.scalar(select(Report.status).where(Report.id == report_id))
+        if status == "accepted":
+            # The rulings first: a report no ruling could act on is
+            # refused, not shown accepted with nothing behind it.
+            found = await session.get(Report, report_id)
+            if found is not None:
+                try:
+                    pairs = await rulings.report_pairs(session, found)
+                except rulings.ReportRefused as refused:
+                    out.append(Reviewed(report_id, status, refused=str(refused)))
+                    if audit is not None:
+                        await audit(session, out[-1])
+                        await session.commit()
+                    continue
+        report = await rules.review(session, report_id, status, commit=False)
+        if report is None:
+            out.append(Reviewed(report_id, status, refused="no such report"))
+            if audit is not None:
+                await audit(session, out[-1])
+                await session.commit()
+            continue
+        done = Reviewed(report_id, status)
+        if status == "accepted":
+            done.added = await rulings.accept_report(session, report, created_by=by, pairs=pairs)
+            if report.reason == RECHECK_REASON:
+                # Owner decision (2026-11-17): the offers the visitor ticked are
+                # read first by their shop's next run (worker/recheck.py).
+                done.rechecks = await recheck.request(session, _ticked_ids(report))
+        else:
+            done.withdrawn = await rulings.withdraw_report(
+                session, report_id, removed_by=f"{by} (report rejected)"
+            )
+            if report.reason == RECHECK_REASON and was == "accepted":
+                # The accept that marked them is withdrawn: so are its re-checks.
+                done.rechecks_cleared = await recheck.clear(session, _ticked_ids(report))
+        if audit is not None:
+            await audit(session, done)
+        await session.commit()
+        out.append(done)
+    return out
+
+
 async def _review(ids: Sequence[int], status: str, by: str | None = None) -> int:
-    missing = 0
     async with SessionLocal() as session:
-        for report_id in ids:
-            pairs = None
-            if status == "accepted":
-                # The rulings first: a report no ruling could act on is
-                # refused, not shown accepted with nothing behind it.
-                found = await session.get(Report, report_id)
-                if found is not None:
-                    try:
-                        pairs = await rulings.report_pairs(session, found)
-                    except rulings.ReportRefused as refused:
-                        print(
-                            f"{rules.reference(report_id)} not accepted: {refused}. "
-                            "Reject it, or rule by hand with `overrides add`.",
-                            file=sys.stderr,
-                        )
-                        missing += 1
-                        continue
-            report = await rules.review(session, report_id, status)
-            if report is None:
-                print(f"No report {rules.reference(report_id)}.", file=sys.stderr)
-                missing += 1
-                continue
-            print(f"{rules.reference(report_id)} {status}.")
-            if status == "accepted":
-                added_all = await rulings.accept_report(
-                    session, report, created_by=who(by), pairs=pairs
-                )
-                for added in added_all:
-                    print("  " + ruling_line(added))
-            else:
-                withdrawn = await rulings.withdraw_report(
-                    session, report_id, removed_by=f"{who(by)} (report rejected)"
-                )
-                if withdrawn:
-                    print(f"  withdrew {withdrawn} grouping override(s) it had made")
-            await session.commit()
+        outcomes = await review_reports(session, ids, status, by=who(by))
+    missing = 0
+    for done in outcomes:
+        ref = rules.reference(done.report_id)
+        if done.refused == "no such report":
+            print(f"No report {ref}.", file=sys.stderr)
+            missing += 1
+        elif done.refused:
+            print(
+                f"{ref} not accepted: {done.refused}. "
+                "Reject it, or rule by hand with `overrides add`.",
+                file=sys.stderr,
+            )
+            missing += 1
+        else:
+            print(f"{ref} {status}.")
+            for added in done.added:
+                print("  " + ruling_line(added))
+            if done.withdrawn:
+                print(f"  withdrew {done.withdrawn} grouping override(s) it had made")
+            if done.rechecks:
+                print(f"  marked {done.rechecks} listing(s) to be re-read first by their shop")
+            if done.rechecks_cleared:
+                print(f"  cleared the re-check on {done.rechecks_cleared} listing(s)")
     return 1 if missing else 0
+
+
+#: The report reason whose acceptance asks for an early re-read.
+RECHECK_REASON = "wrong_price_stock"
+
+
+def _ticked_ids(report: Report) -> list:
+    """The listing ids a report names (ticked or picked), those that parse."""
+    import uuid
+
+    out = []
+    for value in report.offer_ids or []:
+        try:
+            out.append(uuid.UUID(str(value)))
+        except ValueError:
+            continue
+    return out
 
 
 def override_lines(row: GroupingOverride) -> list[str]:
@@ -220,6 +309,8 @@ def override_lines(row: GroupingOverride) -> list[str]:
     ]
     if row.removed_at is not None:
         lines.append(f"    removed {row.removed_at:%Y-%m-%d %H:%M} UTC by {row.removed_by}")
+        if row.remove_note:
+            lines.append(f"    why removed: {row.remove_note}")
     elif row.status is None:
         lines.append("    not yet checked: applies at the next regroup")
     else:

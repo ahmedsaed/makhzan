@@ -66,7 +66,12 @@ def worker(monkeypatch):
         return True
 
     monkeypatch.setattr(main, "_run_source", run_source)
+
+    async def not_paused(source_id):
+        return None
+
     monkeypatch.setattr(main, "source_enabled", enabled)
+    monkeypatch.setattr(main, "source_paused", not_paused)
     monkeypatch.setattr(main, "_SOURCE_LOCKS", {})
     monkeypatch.setattr(main, "CRAWL_ENABLED", True)
     return main
@@ -264,6 +269,33 @@ async def test_a_rebuild_queues_the_ai_producers_once_per_window(monkeypatch):
     assert len(redis.named("ai_candidates")) == 1
     names = {getattr(f, "name", None) for f in main.WorkerSettings.functions}
     assert "ai_candidates" in names
+
+
+async def test_a_daily_run_finding_its_source_busy_comes_back_later(worker):
+    """A "Run now" or a probe from the dashboard holds the source's lock. The
+    daily job id is taken for the day, so skipping would cost the shop its day:
+    the job queues itself again, a bounded number of times."""
+    redis = FakeRedis()
+    lock = worker._SOURCE_LOCKS.setdefault("shop-a", asyncio.Lock())
+    async with lock:
+        summary = await worker.crawl_source({"redis": redis}, "shop-a")
+        assert summary["status"] == "deferred"
+        (job_id,) = redis.named("crawl_source")
+        _, args, kwargs = redis.jobs[job_id]
+        assert args == ("shop-a", 1)
+        assert kwargs["_defer_by"] == worker.BUSY_RETRY_AFTER
+        assert job_id.endswith(":busy1")
+        # It changed nothing: no rebuild until the re-queued job runs.
+        assert redis.named("rebuild_and_reindex") == []
+
+        last = await worker.crawl_source({"redis": redis}, "shop-a", worker.BUSY_RETRIES)
+        assert last == {"source": "shop-a", "status": "skipped", "reason": "busy all day"}
+        assert len(redis.named("crawl_source")) == 1
+
+    # Free again: the re-queued job runs the source.
+    again = await worker.crawl_source({"redis": redis}, "shop-a", 1)
+    assert again["status"] == "success"
+    assert len(redis.named("rebuild_and_reindex")) == 1
 
 
 async def test_the_heavy_jobs_hand_freed_memory_back_even_when_they_fail(monkeypatch):

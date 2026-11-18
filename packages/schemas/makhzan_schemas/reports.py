@@ -144,9 +144,17 @@ async def count_new(session: AsyncSession) -> int:
 
 
 async def review(
-    session: AsyncSession, report_id: int, status: str, *, now: datetime | None = None
+    session: AsyncSession,
+    report_id: int,
+    status: str,
+    *,
+    now: datetime | None = None,
+    commit: bool = True,
 ) -> Report | None:
     """Close a report as `accepted` or `rejected`, and commit. None if there is no such report.
+
+    `commit=False` leaves the commit to the caller, which then writes the
+    rulings and its audit row in the same transaction.
 
     Reviewing again changes the verdict and its time: a mistake can be put
     right. It has no bearing on how long the email is kept.
@@ -158,5 +166,8 @@ async def review(
         return None
     report.status = status
     report.reviewed_at = now or datetime.now(UTC)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return report

@@ -49,6 +49,8 @@ def wire(monkeypatch):
         if request.url.path == "/robots.txt":
             if state.get("robots_redirect"):
                 return httpx.Response(301, headers={"Location": state["robots_redirect"]})
+            if state.get("robots_status"):
+                return httpx.Response(state["robots_status"])
             return httpx.Response(200, text=state["robots"])
         return httpx.Response(200, json=[])
 
@@ -60,6 +62,10 @@ def wire(monkeypatch):
         return real(**kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", client)
+    # The crawler's robots.txt cache, fresh for each test (no copies kept).
+    monkeypatch.setattr(
+        robots_mod, "ROBOTS", robots_mod.RobotsCache(store=robots_mod.RobotsStore())
+    )
     monkeypatch.setenv("SITE_URL", "https://makhzan.test")
     monkeypatch.setenv(botauth.KEY_ENV, RFC_JWK_D)
     state["clock"] = clock
@@ -85,7 +91,7 @@ async def test_each_column_is_the_crawlers_own_request_for_that_identity(wire):
     # Each cell: the status and the HTTP version the server answered with.
     row = rows[0]
     assert {k: c.text() for k, c in row.cells.items()} == {
-        "robots": "200 h1.1",
+        "robots": "fetched",  # the crawler's cache read it
         "browser": "200 h1.1",
         "makhzanbot": "200 h1.1",
         "signed": "200 h1.1",
@@ -101,20 +107,43 @@ async def test_a_page_robots_txt_disallows_is_not_asked(wire):
     gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
     rows, _ = await probe_mod.probe([probe_mod.Target("shop", "https://shop.test/a")], gate=gate)
     assert [r.url.path for _, r in wire["sent"]] == ["/robots.txt"]
-    assert rows[0].cells["robots"].text() == "200 h1.1 DISALLOWS this page"
+    assert rows[0].cells["robots"].text() == "fetched; DISALLOWS this page"
     assert rows[0].cells["browser"].text() == "not asked"
 
 
-async def test_a_redirecting_robots_txt_is_not_followed_and_the_page_not_asked(wire):
-    """The probe does not follow redirects, so it has not read the rules a run
-    would obey; it asks for nothing it has not cleared."""
-    wire["robots_redirect"] = "https://elsewhere.test/robots.txt"
+async def test_robots_txt_is_read_as_a_run_reads_it_redirects_included(wire):
+    """Through the crawler's own cache: a redirecting robots.txt is followed as a
+    run follows it (each hop paced), and the rules where it leads are obeyed."""
+    wire["robots_redirect"] = "https://shop.test/real-robots.txt"
     clock = wire["clock"]
     gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
     rows, _ = await probe_mod.probe([probe_mod.Target("shop", "https://shop.test/a")], gate=gate)
-    assert [r.url.path for _, r in wire["sent"]] == ["/robots.txt"]
-    assert "redirects (not followed)" in rows[0].cells["robots"].text()
+    paths = [r.url.path for _, r in wire["sent"]]
+    assert paths[:2] == ["/robots.txt", "/real-robots.txt"]
+    assert rows[0].cells["robots"].text() == "fetched"
+    assert rows[0].cells["browser"].status == 200
+
+
+async def test_an_unreadable_robots_txt_with_no_copy_refuses_the_host(wire):
+    """RobotsUnavailable, as a run gets it: the page is not asked."""
+    wire["robots_status"] = 503
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    rows, _ = await probe_mod.probe([probe_mod.Target("shop", "https://shop.test/a")], gate=gate)
+    assert rows[0].cells["robots"].text().startswith("unavailable")
     assert rows[0].cells["browser"].text() == "not asked"
+    assert {r.url.path for _, r in wire["sent"]} == {"/robots.txt"}
+
+
+async def test_a_cached_robots_txt_sends_nothing_and_its_crawl_delay_paces_the_probe(wire):
+    wire["robots"] = "User-agent: *\nCrawl-delay: 30\nAllow: /\n"
+    clock = wire["clock"]
+    await robots_mod.ROBOTS.allowed("https://shop.test/a")  # a run read it already
+    sent_before = len(wire["sent"])
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    await probe_mod.probe([probe_mod.Target("shop", "https://shop.test/a")], gate=gate)
+    assert [r.url.path for _, r in wire["sent"][sent_before:]][0] == "/a"  # no robots.txt
+    assert http_mod._pace_of("https://shop.test") == 30.0
 
 
 async def test_without_a_key_the_signed_column_is_skipped_and_said_so(wire, monkeypatch):
@@ -172,6 +201,89 @@ async def test_the_probe_url_is_the_first_request_a_run_sends(monkeypatch, adapt
     except Exception:  # noqa: BLE001 — an empty page may not parse; the URL is what counts
         pass
     assert sent and sent[0] == adapter.probe_url()
+
+
+async def test_a_pending_retry_after_keeps_the_probe_off_the_host(wire):
+    """The probe goes through the crawl's gate: a host holding us off is not asked."""
+    import time
+
+    http_mod._NOT_BEFORE["https://shop.test"] = time.monotonic() + 120
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    target = probe_mod.Target("shop", "https://shop.test/products.json")
+    rows, notes = await probe_mod.probe([target], gate=gate)
+    assert wire["sent"] == []
+    assert all(cell.error == "not asked" for cell in rows[0].cells.values())
+    assert any("Retry-After" in note for note in notes)
+    assert "Retry-After" in probe_mod.refusal(target.url)
+
+
+async def test_every_probe_request_takes_the_crawls_turn_and_a_429_binds_it(wire, monkeypatch):
+    turns: list[str] = []
+    real = http_mod.take_turn
+
+    async def recording(host, **kw):
+        turns.append(host)
+        await real(host, **kw)
+
+    monkeypatch.setattr(probe_mod, "take_turn", recording)
+    monkeypatch.setattr(robots_mod, "take_turn", recording)  # robots.txt, through the cache
+    state_handler = wire
+
+    def throttled(request: httpx.Request) -> httpx.Response:
+        state_handler["sent"].append((0, request))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /\n")
+        return httpx.Response(429, headers={"Retry-After": "60"})
+
+    transport = httpx.MockTransport(throttled)
+    original = httpx.AsyncClient
+
+    def client(**kwargs):
+        kwargs["transport"] = transport
+        return original(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    target = probe_mod.Target("shop", "https://shop.test/products.json")
+    rows, _ = await probe_mod.probe([target], gate=gate, sign=False)
+    assert turns and set(turns) == {"https://shop.test"}
+    assert len(turns) == len(wire["sent"])
+    # robots.txt, then browser got the 429; makhzanbot was not asked after it.
+    assert [r.url.path for _, r in wire["sent"]] == ["/robots.txt", "/products.json"]
+    assert rows[0].cells["browser"].status == 429
+    assert rows[0].cells["makhzanbot"].error == "not asked"
+    # The 429 now holds the host for the crawl as well.
+    assert http_mod._NOT_BEFORE["https://shop.test"] > 0
+    assert probe_mod.refusal(target.url) is not None
+
+
+async def test_the_no_db_probe_keeps_no_robots_copy_in_the_database(wire, monkeypatch, tmp_path):
+    import argparse
+
+    from makhzan_schemas.db import SessionLocal
+    from makhzan_schemas.models import RobotsCopy
+    from sqlalchemy import func, select
+
+    # As in a fresh process: the cache stores copies in the database.
+    monkeypatch.setattr(
+        robots_mod, "ROBOTS", robots_mod.RobotsCache(store=robots_mod.DatabaseRobotsStore())
+    )
+    clock = wire["clock"]
+    real_gate = probe_mod._Gate
+    monkeypatch.setattr(
+        probe_mod, "_Gate", lambda gap: real_gate(gap, clock=clock, sleep=clock.sleep)
+    )
+    sites = tmp_path / "probe-sites.txt"
+    sites.write_text("shop|https://shop.test/a\n")
+    args = argparse.Namespace(
+        sites=str(sites), no_db=True, source=None, no_ip=True, delay=15.0, no_sign=True
+    )
+    assert await probe_mod.main_async(args) == 0
+    assert any(r.url.path == "/robots.txt" for _, r in wire["sent"])
+    async with SessionLocal() as session:
+        assert await session.scalar(select(func.count()).select_from(RobotsCopy)) == 0
 
 
 def test_the_sites_list_is_read_as_label_and_url(tmp_path):

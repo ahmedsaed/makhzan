@@ -36,7 +36,9 @@ from sqlalchemy import func as sql_func
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
+from worker.admin_jobs import admin_job, close_interrupted_jobs
 from worker.indexer import get_client, reindex_all
+from worker.pause import paused_reason, paused_sources
 from worker import pipeline as _pipeline
 from worker.pipeline import run_partition as _run_partition
 from worker.pipeline import run_source as _run_source
@@ -94,6 +96,7 @@ async def startup(ctx: dict) -> None:
     await load_adapters()
     async with SessionLocal() as session:
         await close_interrupted_runs(session)
+        await close_interrupted_jobs(session)
         # The API reports the crawl flag from here, not from its own
         # environment: `./makhzan crawl off` recreates this container alone.
         await crawl.record_crawl_enabled(session, CRAWL_ENABLED)
@@ -184,13 +187,39 @@ async def source_enabled(source_id: str) -> bool:
     return bool(enabled)
 
 
-async def crawl_source(ctx: dict, source_id: str) -> dict:
+async def source_paused(source_id: str) -> str | None:
+    """Why the daily run of `source_id` must not start, if the crawl or the shop is paused.
+
+    Read as the job starts, like `source_enabled`: the pause (the admin
+    dashboard, `./makhzan crawl off`, `./makhzan shop pause`) may have been set
+    after the job was queued.
+    """
+    async with SessionLocal() as session:
+        return await paused_reason(session, source_id)
+
+
+#: When the daily run finds its source busy (a run by hand, the dashboard's
+#: "Run now" or "Probe"), it queues itself again this much later, at most
+#: `BUSY_RETRIES` times, instead of losing the day: the day's job id is taken.
+BUSY_RETRY_AFTER = timedelta(minutes=10)
+BUSY_RETRIES = 6
+
+
+async def crawl_source(ctx: dict, source_id: str, busy_retry: int = 0) -> dict:
     """Arq task: one source's daily run, enqueued by `refresh_all`.
 
     Its own job, with its own timeout: one slow host no longer holds the others
     or the rebuild. However it ends — done, failed, or cancelled at the timeout
     — it asks for the rebuild, so search catches up with whatever it committed.
+
+    If a run of the source is already going (`_SOURCE_LOCKS`), the job queues
+    itself again `BUSY_RETRY_AFTER` later rather than skipping: the day's job
+    id is deduplicated, so a skip would cost the shop its day. Re-queued, not
+    waited for, so a busy source holds no worker slot and no job timeout while
+    the other run finishes. A deferred job asks for no rebuild: it changed
+    nothing, and the job it queued will ask when it runs.
     """
+    deferred = False
     try:
         if not CRAWL_ENABLED:
             # A job queued before `./makhzan crawl off` and still waiting for a
@@ -198,11 +227,28 @@ async def crawl_source(ctx: dict, source_id: str) -> dict:
             return {"source": source_id, "status": "skipped", "reason": "CRAWL_ENABLED is off"}
         if not await source_enabled(source_id):
             return {"source": source_id, "status": "skipped", "reason": "retired or disabled"}
+        if paused := await source_paused(source_id):
+            return {"source": source_id, "status": "skipped", "reason": paused}
+        lock = _SOURCE_LOCKS.get(source_id)
+        if lock is not None and lock.locked():
+            if busy_retry >= BUSY_RETRIES:
+                return {"source": source_id, "status": "skipped", "reason": "busy all day"}
+            today = datetime.now(timezone.utc).date()
+            await ctx["redis"].enqueue_job(
+                "crawl_source",
+                source_id,
+                busy_retry + 1,
+                _job_id=f"{crawl_job_id(source_id, today)}:busy{busy_retry + 1}",
+                _defer_by=BUSY_RETRY_AFTER,
+            )
+            deferred = True
+            return {"source": source_id, "status": "deferred", "reason": "a run of it is going"}
         return await _exclusive(
             source_id, source_id, lambda: _run_source(source_id, get(source_id))
         )
     finally:
-        await request_rebuild(ctx)
+        if not deferred:
+            await request_rebuild(ctx)
 
 
 async def run_source(ctx: dict, source_id: str, limit: int | None = None) -> dict:
@@ -354,14 +400,26 @@ async def refresh_all(ctx: dict) -> list[dict]:
     recorded on its own run; the rest carry on. The job id names the source and
     the day, so a source is never queued twice for one day, and `_exclusive`
     keeps a run started by hand from overlapping it.
+
+    Two pauses a person sets in the database are honoured on top of
+    `CRAWL_ENABLED` (`worker.pause`): the crawl-wide one queues nothing, and a
+    paused shop is left out, as if disabled, without touching sources.toml.
     """
     if not CRAWL_ENABLED:
         return [{"status": "skipped", "reason": "CRAWL_ENABLED is off"}]
+    async with SessionLocal() as session:
+        pause = await crawl.crawl_pause(session)
+        paused = await paused_sources(session)
+    if pause is not None:
+        return [{"status": "skipped", "reason": f"crawl paused by {pause.get('by') or '?'}"}]
 
     await load_adapters()
     today = datetime.now(timezone.utc).date()
     queued = []
     for adapter in all_enabled():
+        if adapter.source_id in paused:
+            queued.append({"source": adapter.source_id, "status": "skipped", "reason": "paused"})
+            continue
         job = await ctx["redis"].enqueue_job(
             "crawl_source", adapter.source_id, _job_id=crawl_job_id(adapter.source_id, today)
         )
@@ -401,6 +459,9 @@ class WorkerSettings:
         func(crawl_source, timeout=JOB_TIMEOUT, max_tries=1),
         func(rebuild_and_reindex, timeout=REBUILD_TIMEOUT, max_tries=1),
         func(ai_candidates, timeout=AI_CANDIDATES_TIMEOUT, max_tries=1),
+        # The admin dashboard's jobs (worker/admin_jobs.py): a `limit=` run,
+        # the probe, a regroup dry run. Never retried: a person asked once.
+        func(admin_job, timeout=JOB_TIMEOUT, max_tries=1),
         run_source,
         run_partition,
     ]

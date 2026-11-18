@@ -71,13 +71,12 @@ async def record_crawl_enabled(session, enabled: bool) -> None:
     await session.commit()
 
 
-async def crawl_enabled_in(session) -> bool:
-    """Whether the worker runs the daily sweep, as the worker last said.
+async def worker_crawl_enabled(session) -> bool:
+    """`CRAWL_ENABLED` as the worker last stated it at startup.
 
-    `./makhzan crawl off` recreates the worker alone, so the API's own
-    `CRAWL_ENABLED` is whatever it was when the API was last created; the
-    worker's word is in the database. Before any worker has said (a fresh
-    database), the environment is the best guess there is.
+    The API's own `CRAWL_ENABLED` is whatever it was when the API was last
+    created; the worker's word is in the database. Before any worker has said
+    (a fresh database), the environment is the best guess there is.
     """
     from makhzan_schemas.models import WorkerState
 
@@ -85,6 +84,86 @@ async def crawl_enabled_in(session) -> bool:
     if state is None or not isinstance(state.value, dict) or "enabled" not in state.value:
         return crawl_enabled()
     return bool(state.value["enabled"])
+
+
+async def crawl_enabled_in(session) -> bool:
+    """Whether the worker runs the daily sweep: its `CRAWL_ENABLED`, and no pause.
+
+    Two switches, both off means no sweep: the environment the worker was
+    created with (`worker_crawl_enabled`), and the pause a person sets in the
+    database (`crawl_pause`: the admin dashboard, `./makhzan crawl off`),
+    which the worker reads each time it would start a run.
+    """
+    if not await worker_crawl_enabled(session):
+        return False
+    return await crawl_pause(session) is None
+
+
+#: `WorkerState` key of the crawl-wide pause a person sets.
+PAUSE_STATE_KEY = "crawl_pause"
+
+
+async def crawl_pause(session) -> dict | None:
+    """The crawl-wide pause, if one is set: `{"at": iso, "by": ..., "note": ...}`.
+
+    Set by the admin dashboard and `./makhzan crawl off`, cleared by their
+    "resume"/`on`. Unlike `CRAWL_ENABLED` it needs no container recreated:
+    `refresh_all` and `crawl_source` read it each time, and a full run in
+    flight reads it before every page and stops there, its cursors kept.
+    """
+    from makhzan_schemas.models import WorkerState
+
+    state = await session.get(WorkerState, PAUSE_STATE_KEY, populate_existing=True)
+    if state is None or not isinstance(state.value, dict) or not state.value.get("paused"):
+        return None
+    return state.value
+
+
+async def crawl_resumed_at(session):
+    """When the crawl-wide pause was last lifted, if ever (a datetime, or None)."""
+    from datetime import datetime
+
+    from makhzan_schemas.models import WorkerState
+
+    state = await session.get(WorkerState, PAUSE_STATE_KEY, populate_existing=True)
+    stamp = (state.value or {}).get("resumed_at") if state is not None else None
+    try:
+        return datetime.fromisoformat(stamp) if stamp else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def set_crawl_pause(session, paused: bool, *, by: str, note: str | None = None) -> dict:
+    """Pause or resume the whole crawl (flushed, not committed). Returns the stored value."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from makhzan_schemas.models import WorkerState
+
+    now = datetime.now(timezone.utc).isoformat()
+    before = await session.get(WorkerState, PAUSE_STATE_KEY, populate_existing=True)
+    earlier = before.value if before is not None and isinstance(before.value, dict) else {}
+    value = {
+        "paused": bool(paused),
+        "at": now,
+        "by": by,
+        "note": (note or "").strip() or None,
+        # When it was last lifted: the archive confirmation's hold window runs
+        # from here, so a long pause does not make the next run overdue.
+        "resumed_at": now if (not paused and earlier.get("paused")) else earlier.get("resumed_at"),
+    }
+    await session.execute(
+        insert(WorkerState)
+        .values(key=PAUSE_STATE_KEY, value=value)
+        .on_conflict_do_update(
+            index_elements=[WorkerState.key],
+            set_={"value": value, "updated_at": func.now()},
+        )
+    )
+    await session.flush()
+    return value
 
 
 def next_refresh(now: datetime, hour: int = REFRESH_HOUR) -> datetime:

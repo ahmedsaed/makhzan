@@ -14,10 +14,13 @@ dependencies = [
     "pydantic-settings>=2.3,<3.0",
     "meilisearch>=0.31,<1.0",
     "makhzan-schemas",
+    "fastapi (>=0.115,<1.0)",
+    "uvicorn (>=0.30,<1.0)",
+    "jinja2 (>=3.1,<4.0)",
 ]
 
 [tool.poetry]
-packages = [{ include = "worker" }]
+packages = [{ include = "worker" }, { include = "admin" }]
 
 # Source for the path dependency (editable within the monorepo).
 [tool.poetry.dependencies]

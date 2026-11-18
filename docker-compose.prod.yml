@@ -180,6 +180,49 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The internal admin dashboard (docs/admin.md): the ingestion image, which
+  # holds the status report and the CLI code it reuses, with its own app object
+  # and port. Reached only over Tailscale, like the broker: ADMIN_BIND is the
+  # server's Tailscale IP and port (default loopback). No public proxy, never
+  # behind the web's /api rewrite. It deploys and restarts nothing; its long
+  # jobs (a limit= run, the probe, a regroup dry run) go to the worker's queue.
+  # It mounts the private configuration read-only: the report loads the
+  # adapters and crosswalks. It holds no crawler signing key.
+  admin:
+    image: ${IMAGE_PREFIX}/ingestion:${IMAGE_TAG}
+    build:
+      context: .
+      dockerfile: apps/ingestion/Dockerfile
+      target: prod
+    <<: [*restart, *private-config]
+    environment:
+      MAKHZAN_SOURCES: /workspace/private/sources.toml
+      MAKHZAN_CROSSWALKS: /workspace/private/crosswalks
+      PYTHONPATH: /workspace/private
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      MEILI_URL: ${MEILI_URL:-http://search:7700}
+      # Only to count the index's documents: a key allowed `stats.get` alone,
+      # when MEILI_STATS_KEY is set; until then the master key, under this name.
+      MEILI_STATS_KEY: ${MEILI_STATS_KEY:-${MEILI_MASTER_KEY}}
+      SITE_URL: ${SITE_URL:-}
+      CRAWL_ENABLED: ${CRAWL_ENABLED:-true}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      ADMIN_SECRET: ${ADMIN_SECRET:-}
+      ADMIN_NAME: ${ADMIN_NAME:-admin}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
+      ADMIN_ALLOWED_HOSTS: ${ADMIN_ALLOWED_HOSTS:-}
+    command: ["uvicorn", "admin.app:app", "--host", "0.0.0.0", "--port", "8200"]
+    ports:
+      - "${ADMIN_BIND:-127.0.0.1:8200}:8200"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
   web:
     image: ${IMAGE_PREFIX}/web:${IMAGE_TAG}
     build:

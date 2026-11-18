@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Catalog · makhzan admin{% endblock %}
+{% block content %}
+<div class="vhead">
+  <div><h1>Catalog</h1><p>{{ k.index.products|num }} listed products in the database{% if k.index.indexed is not none %}, {{ k.index.indexed|num }} indexed{% else %} (search index unreachable){% endif %}. Price observations: {{ k.prices.day|num }} in 24 h, {{ k.prices.week|num }} in 7 d.</p></div>
+  <div class="toolbar">{{ m.post("/catalog/regroup-dry-run", "Regroup dry run", csrf, "btn primary") }}</div>
+</div>
+
+{% set d = k.dry_run %}
+{% if d %}
+<section class="result" aria-live="polite">
+  <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+    <h3>Regroup dry run · asked {{ d.created_at|age }} by {{ d.actor }} {{ m.job_chip(d) }}{% if d.finished_at and d.started_at %} · {{ (d.finished_at - d.started_at).total_seconds()|round|int }} s{% endif %} · nothing written</h3>
+    <span class="muted">The real regroup stays in the CLI: <span class="mono">./makhzan</span>, <span class="mono">make reindex</span></span></div>
+  {% if d.status == "done" and d.result %}{% set st = d.result.stats %}
+  <div class="kv">
+    <div><span>Listed</span><b>{{ st.products|num }}</b></div>
+    <div><span>Multi-shop</span><b>{{ st.multi_supplier|num }}</b></div>
+    <div><span>Kept</span><b>{{ st.kept|num }}</b></div>
+    <div><span>New</span><b>{{ st.created|num }}</b></div>
+    <div><span>Merged</span><b>{{ st.merged|num }}</b></div>
+    <div><span>Split</span><b>{{ st.split|num }}</b></div>
+    <div><span>Delisted</span><b>{{ st.emptied|num }}</b></div>
+    <div><span>Revived</span><b>{{ st.revived|num }}</b></div>
+    <div><span>Un-merged</span><b>{{ st.unmerged|num }}</b></div>
+  </div>
+  <p class="mono small muted" style="margin:0">{{ d.result.line }}</p>
+  <p class="small muted" style="margin:0">Counts only: the dry run rolls its transaction back, so it keeps no per-product list of what would merge or split.</p>
+  {% elif d.status == "failed" %}<p class="err">{{ d.error }}</p>
+  {% else %}<p class="muted">The worker reads every listing; this takes about a minute.</p>{% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <header><div><h2>Catalog by shop and department</h2><p>The status report's CATALOG table</p></div>
+    <form class="toolbar" method="get" action="/catalog">
+      <input type="hidden" name="q" value="{{ k.q }}"><input type="hidden" name="ushop" value="{{ k.uncat_shop }}"><input type="hidden" name="lookup" value="{{ k.lookup.q }}">
+      <label class="sr" for="catShop">Shop</label><select id="catShop" name="shop"><option value="">All shops</option>{% for s in k.shops %}<option {% if s == k.shop %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+      <label class="sr" for="catSort">Sort</label><select id="catSort" name="sort">{% for v, l in [("total", "Sort by total"), ("uncat", "Sort by uncategorised"), ("noprice", "Sort by no price"), ("shop", "Sort by shop")] %}<option value="{{ v }}" {% if v == k.sort %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+      <button class="btn sm" type="submit">Apply</button></form></header>
+  <div class="tw tall"><table><thead><tr><th>Shop</th><th>Department</th><th class="n">Total</th><th class="n">Archived</th><th class="n">Uncat</th><th class="n">No price</th><th class="n">On request</th><th>Verified</th></tr></thead><tbody>
+    {% for r in k.rows %}{% set days = r.verified|age_days %}
+    <tr><td class="mono">{{ r.shop }}</td><td>{{ r.domain }}</td><td class="n">{{ r.total|num }}</td>{{ m.n(r.archived) }}
+      <td class="n{% if not r.uncategorized %} zero{% endif %}">{% if r.uncategorized %}<span class="chip c-info plain">{{ r.uncategorized|num }}</span>{% else %}0{% endif %}</td>
+      {{ m.n(r.unpriced) }}{{ m.n(r.on_request) }}
+      <td>{% if days is not none and days >= 45 %}<span class="chip c-crit">{{ r.verified|age }}</span>{% elif days is not none and days >= 3 %}<span class="chip c-warn plain">{{ r.verified|age }}</span>{% else %}{{ r.verified|age }}{% endif %}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted">No listings.</td></tr>{% endfor %}
+  </tbody>
+  <tfoot><tr><th>{{ k.rows|length }} rows</th><th></th><th class="n">{{ k.totals.total|num }}</th><th class="n">{{ k.totals.archived|num }}</th><th class="n">{{ k.totals.uncategorized|num }}</th><th class="n">{{ k.totals.unpriced|num }}</th><th class="n">{{ k.totals.on_request|num }}</th><th></th></tr></tfoot></table></div>
+</section>
+
+<div class="grid2">
+  <section class="panel" id="uncat">
+    <header><div><h2>Uncategorised listings</h2><p>{{ k.uncat.total|num }} active listing{{ "" if k.uncat.total == 1 else "s" }} match{% if k.uncat.total > k.uncat.limit %}; showing the first {{ k.uncat.limit }}{% endif %}</p></div></header>
+    <form class="body toolbar" method="get" action="/catalog#uncat" style="border-bottom:1px solid var(--line)">
+      <input type="hidden" name="shop" value="{{ k.shop }}"><input type="hidden" name="sort" value="{{ k.sort }}"><input type="hidden" name="lookup" value="{{ k.lookup.q }}">
+      <label class="sr" for="uncatQ">Search uncategorised</label>
+      <input type="search" id="uncatQ" name="q" value="{{ k.q }}" placeholder="Search title or shop category" style="flex:1;min-width:160px">
+      <label class="sr" for="uncatShop">Shop</label>
+      <select id="uncatShop" name="ushop"><option value="">All shops</option>{% for s in k.uncat.shops %}<option {% if s == k.uncat_shop %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+      <button class="btn sm" type="submit">Search</button>
+    </form>
+    <div class="tw tall"><table><thead><tr><th>Listing</th><th>Shop</th><th>Shop category</th><th class="n">Price</th></tr></thead><tbody>
+      {% for u in k.uncat.rows %}
+      <tr><td class="wrap">{% if u.url %}<a href="{{ u.url }}" rel="noreferrer noopener" target="_blank">{{ u.title }}</a>{% else %}{{ u.title }}{% endif %}<div class="mono muted small">{{ u.id }}</div></td><td class="mono">{{ u.shop }}</td><td class="wrap">{{ u.category or "" }}</td><td class="n">{{ u.price|money(u.currency) }}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">No uncategorised listing matches.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="panel" id="lookup">
+    <header><div><h2>Product lookup</h2><p>A product id, a listing id, a makhzan URL holding either, or a shop URL</p></div></header>
+    <form class="body toolbar" method="get" action="/catalog#lookup" style="border-bottom:1px solid var(--line)">
+      <input type="hidden" name="shop" value="{{ k.shop }}"><input type="hidden" name="sort" value="{{ k.sort }}"><input type="hidden" name="q" value="{{ k.q }}"><input type="hidden" name="ushop" value="{{ k.uncat_shop }}">
+      <label class="sr" for="lookupQ">Product id or URL</label>
+      <input type="text" id="lookupQ" name="lookup" value="{{ k.lookup.q }}" style="flex:1;min-width:180px" placeholder="e.g. a /products/… URL">
+      <button class="btn primary" type="submit">Look up</button>
+    </form>
+    <div class="body" style="display:flex;flex-direction:column;gap:12px">
+      {% set L = k.lookup %}
+      {% if L.error %}<p class="err">{{ L.error }}</p>
+      {% elif L.product %}{% set p = L.product %}
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h3>{{ p.title_en or p.title_ar or "(untitled)" }}</h3><span class="mono muted">{{ p.id }}{% if L.category %} · {{ L.category }}{% endif %}</span></div>
+        {% if L.redirected_from %}<p class="muted small" style="margin:0">{{ L.redirected_from }} was merged into this product.</p>{% endif %}
+        {% if p.delisted_at %}<p class="small"><span class="chip c-neutral">no longer listed since {{ p.delisted_at|dt("%d %b %Y") }}</span></p>{% endif %}
+        <div class="tw"><table><thead><tr><th>Listing</th><th>Shop</th><th class="n">Price</th><th>Stock</th><th>Matched by</th></tr></thead><tbody>
+          {% for l in L.listings %}
+          <tr><td class="wrap">{{ l.title_en or l.title_ar or "(untitled)" }}<div class="mono muted small">{{ l.id }}{% if l.part_number %} · {{ l.part_number }}{% endif %}</div></td>
+            <td class="mono">{{ l.supplier.slug if l.supplier else l.source }}</td><td class="n">{{ l.price|money(l.currency) }}</td>
+            <td>{% if l.status != "active" %}<span class="chip c-neutral">{{ l.status }}</span>{% elif l.stock_signal == "in_stock" %}<span class="chip c-ok">in stock</span>{% else %}<span class="chip c-neutral">{{ l.stock_signal|replace("_", " ") }}</span>{% endif %}</td>
+            <td>{% if l.matched_via == "ai" %}AI <span class="mono">#{{ l.matched_ai_decision_id }}</span>{% else %}rules{% endif %}</td></tr>
+          {% endfor %}
+        </tbody></table></div>
+        <div><h3 style="margin-bottom:6px">Events</h3>
+          {% if L.events %}<div class="tw"><table><tbody>
+          {% for e in L.events %}
+          <tr><td>{{ e.created_at|dt("%d %b %Y") }}</td><td><span class="chip {{ {'merge': 'c-info', 'split': 'c-warn'}.get(e.kind|string, 'c-neutral') }}">{{ e.kind }}</span></td>
+            <td class="wrap small">{% if e.product_id != p.id %}<span class="mono">{{ e.product_id|short }}</span> → this{% elif e.other_id %}→ <span class="mono">{{ e.other_id|short }}</span>{% endif %}
+              {% if e.detail.overrides %} · override {% for o in e.detail.overrides %}#{{ o }} {% endfor %}{% endif %}{% if e.detail.ai_decisions %} · AI decision {% for o in e.detail.ai_decisions %}#{{ o }} {% endfor %}{% endif %}</td></tr>
+          {% endfor %}</tbody></table></div>{% else %}<p class="muted small">No identity events.</p>{% endif %}
+        </div>
+        <div class="toolbar"><a class="btn sm" href="/overrides">Add an override for a pair</a>{% if L.site_url %}<a class="btn sm" href="{{ L.site_url }}/products/{{ p.id }}" target="_blank" rel="noreferrer noopener">Open public page</a>{% endif %}</div>
+      {% else %}<p class="muted">Paste an id or URL above.</p>{% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

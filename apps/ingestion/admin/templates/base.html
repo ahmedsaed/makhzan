@@ -1,0 +1,49 @@
+{%- import "_macros.html" as m -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}makhzan admin{% endblock %}</title>
+<link rel="stylesheet" href="/static/admin.css?v={{ static_v }}">
+<script src="/static/admin.js?v={{ static_v }}" defer></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail" aria-label="Admin navigation">
+    {{ m.brand() }}
+    {{ m.navlinks(nav, view, counts) }}
+    <div class="rail-foot">
+      <div>Signed in as <b>{{ actor }}</b><br>from <span class="mono">{{ client }}</span></div>
+      <div class="toolbar">
+        <a class="btn sm" href="/activity">Activity</a>
+        <form class="inline" method="post" action="/logout">{{ m.csrf_field(csrf) }}<button class="btn sm" type="submit">Sign out</button></form>
+      </div>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    {{ m.brand() }}
+    <details>
+      <summary class="btn">Menu</summary>
+      <div class="menu">
+        {{ m.navlinks(nav, view, counts) }}
+        <div class="toolbar" style="margin-top:8px">
+          <a class="btn sm" href="/activity">Activity</a>
+          <form class="inline" method="post" action="/logout">{{ m.csrf_field(csrf) }}<button class="btn sm" type="submit">Sign out</button></form>
+        </div>
+      </div>
+    </details>
+  </header>
+
+  <main>
+    <div class="page">
+      {% if flash %}<div class="flash {{ flash.k }}" role="status">{{ flash.m }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+<div class="toasts" id="toasts" aria-live="polite" role="status"></div>
+</body>
+</html>

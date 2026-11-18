@@ -4,7 +4,9 @@
 #   ./makhzan status         # containers, health, crawl flag, crawler progress
 #   ./makhzan freshness [--days N]  # requests, staleness, changes found (read-only)
 #   ./makhzan deploy         # update, pull images, migrate, restart (deploy.sh)
-#   ./makhzan crawl off|on   # pause / resume the daily crawl, surviving deploys
+#   ./makhzan crawl off|on [--note ..]  # pause / resume the daily crawl (database flag)
+#   ./makhzan shop [pause|resume ID [--note ..]]  # pause one shop, surviving syncs and deploys
+#   ./makhzan admin password  # set the admin dashboard's password (docs/admin.md)
 #   ./makhzan logs [service] # follow logs (default: ingestion)
 #   ./makhzan stop|start [service]   # whole stack, or one service
 #   ./makhzan backup|migrate
@@ -25,7 +27,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -83,6 +85,13 @@ cmd_status() {
   fi
   echo
   echo "==> Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"
+  "${COMPOSE[@]}" exec -T ingestion python -m worker.pause crawl 2>/dev/null | sed 's/^/    /' || true
+  local admin="${ADMIN_BIND:-127.0.0.1:8200}"
+  if curl -fsS --max-time 5 -o /dev/null "http://${admin}/login" 2>/dev/null; then
+    echo "==> Admin dashboard: answers on ${admin}"
+  else
+    echo "==> Admin dashboard: http://${admin}/login is NOT answering"
+  fi
   local broker="${BROKER_BIND:-127.0.0.1:8100}"
   if curl -fsS --max-time 5 "http://${broker}/ai/v1/health" >/dev/null 2>&1; then
     echo "==> AI broker: /ai/v1/health answers on ${broker}"
@@ -91,9 +100,9 @@ cmd_status() {
   fi
   echo
 
-  # status.py is not baked into the image; stream it in from the checkout. The
-  # container already has the schema package and .env.prod's connection details.
-  "${COMPOSE[@]}" exec -T ingestion python - "$@" < scripts/status.py
+  # The report is in the image (worker/status.py), shared with the admin
+  # dashboard; the container has .env.prod's connection details.
+  "${COMPOSE[@]}" exec -T ingestion python -m worker.status "$@"
 }
 
 # Like status.py, streamed in from the checkout; it opens a READ ONLY
@@ -130,27 +139,94 @@ cmd_ai() {
 }
 
 cmd_crawl() {
-  local value
   case "${1:-}" in
-    on) value=true ;;
-    off) value=false ;;
-    "") echo "Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"; return ;;
-    *) echo "usage: makhzan crawl [on|off]" >&2; exit 1 ;;
+    on|off) ;;
+    "") echo "Crawl: worker says $(crawl_effective); .env.prod says CRAWL_ENABLED=$(crawl_configured)"
+        "${COMPOSE[@]}" exec -T ingestion python -m worker.pause crawl; return ;;
+    *) echo "usage: makhzan crawl [on|off] [--note why]" >&2; exit 1 ;;
   esac
 
-  if grep -q '^CRAWL_ENABLED=' .env.prod; then
-    sed -i "s/^CRAWL_ENABLED=.*/CRAWL_ENABLED=${value}/" .env.prod
-  else
-    printf '\nCRAWL_ENABLED=%s\n' "$value" >> .env.prod
-  fi
+  # The pause is a database flag (worker_state "crawl_pause", worker/pause.py),
+  # the same one the admin dashboard flips: the worker reads it before every
+  # daily job and every page of a full run, so nothing is recreated and a run
+  # in flight stops at its next page, cursors kept.
+  # Not fatal: for `on`, the .env.prod switch below must still be cleared when
+  # the worker is down (it is often down precisely because the crawl was off).
+  local paused_ok=0
+  "${COMPOSE[@]}" exec -T ingestion python -m worker.pause crawl "$@" --by "$(id -un)" \
+    || paused_ok=$?
 
-  # The worker reads its environment at creation, so restarting is not enough.
-  # A run in progress is cut short; progress is saved per page, so it resumes.
-  # The API need not be recreated: it reports the flag the worker states in the
-  # database at startup (worker_state), not its own copy of .env.prod.
-  echo "==> CRAWL_ENABLED=${value}; recreating the ingestion worker"
-  "${COMPOSE[@]}" up -d --force-recreate --no-deps ingestion
-  echo "==> Worker now says: $(crawl_effective)"
+  # CRAWL_ENABLED in .env.prod is the older, harder switch: read only when the
+  # worker's container is created. `on` clears it too, so `on` always means on.
+  # Every value the worker reads as off (makhzan_schemas.crawl.crawl_enabled:
+  # 0, false, no, off, any case, spaces around) counts.
+  if [ "$1" = on ] && grep -qiE '^CRAWL_ENABLED=[[:space:]]*(0|false|no|off)[[:space:]]*$' .env.prod; then
+    # I: the key was matched case-insensitively above; rewrite it the same way.
+    sed -i "s/^CRAWL_ENABLED=.*/CRAWL_ENABLED=true/I" .env.prod
+    echo "==> .env.prod had CRAWL_ENABLED off; set it true and recreating the ingestion worker"
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps ingestion
+    echo "==> Worker now says: $(crawl_effective)"
+    if [ "$paused_ok" -ne 0 ]; then
+      # The worker is up now: clear the database pause too.
+      "${COMPOSE[@]}" exec -T ingestion python -m worker.pause crawl on --by "$(id -un)" \
+        && paused_ok=0
+    fi
+  fi
+  if [ "$paused_ok" -ne 0 ]; then
+    echo "could not set the database pause (is the ingestion worker running?)" >&2
+    exit "$paused_ok"
+  fi
+}
+
+# Append a line to .env.prod, after a newline if the file does not end in one:
+# otherwise the new line would be glued onto the last setting.
+env_append() {
+  if [ -s .env.prod ] && [ "$(tail -c1 .env.prod | od -An -c | tr -d ' ')" != '\n' ]; then
+    printf '\n' >> .env.prod
+  fi
+  printf '%s\n' "$1" >> .env.prod
+}
+
+# One shop's pause (sources.paused_at, worker/pause.py), over sources.toml's
+# `enabled`; the sync never writes it, so it survives deploys.
+cmd_shop() {
+  if [ $# -eq 0 ]; then
+    "${COMPOSE[@]}" exec -T ingestion python -m worker.pause shop
+  else
+    "${COMPOSE[@]}" exec -T ingestion python -m worker.pause shop "$@" --by "$(id -un)"
+  fi
+}
+
+# The admin dashboard's password (docs/admin.md). Asked here, twice, hashed in
+# the container (scrypt; the password is never written anywhere), and the hash
+# written into .env.prod with, the first time, the session secret. Recreating
+# the admin service ends every session.
+cmd_admin() {
+  if [ "${1:-}" != password ]; then
+    echo "usage: makhzan admin password" >&2
+    exit 1
+  fi
+  local pw pw2 out
+  # IFS= keeps leading and trailing spaces: the password is exactly what was typed.
+  IFS= read -rsp "New admin password: " pw; echo
+  IFS= read -rsp "Again: " pw2; echo
+  if [ "$pw" != "$pw2" ]; then echo "The two did not match." >&2; exit 1; fi
+  local secret_flag=()
+  grep -q '^ADMIN_SECRET=.\+' .env.prod || secret_flag=(--secret)
+  out="$(printf '%s' "$pw" | "${COMPOSE[@]}" run --rm --no-deps -T admin python -m admin.password --stdin "${secret_flag[@]}")" || exit 1
+  unset pw pw2
+  local line key
+  while IFS= read -r line; do
+    key="${line%%=*}"
+    case "$key" in ADMIN_PASSWORD_HASH|ADMIN_SECRET) ;; *) continue ;; esac
+    if grep -q "^${key}=" .env.prod; then
+      sed -i "s|^${key}=.*|${line}|" .env.prod
+    else
+      env_append "$line"
+    fi
+  done <<<"$out"
+  "${COMPOSE[@]}" up -d --force-recreate --no-deps admin
+  echo "==> Admin password set; the dashboard was recreated (existing sessions ended)."
 }
 
 cmd="$1"; shift
@@ -159,6 +235,8 @@ case "$cmd" in
   freshness) cmd_freshness "$@" ;;
   deploy) exec ./scripts/deploy.sh "$@" ;;
   crawl) cmd_crawl "$@" ;;
+  shop) cmd_shop "$@" ;;
+  admin) cmd_admin "$@" ;;
   logs) "${COMPOSE[@]}" logs -f --tail 200 "${@:-ingestion}" ;;
   stop) "${COMPOSE[@]}" stop "$@" ;;
   start) "${COMPOSE[@]}" up -d "$@" ;;

@@ -65,19 +65,36 @@ async def _status(as_json: bool) -> int:
     return 0
 
 
-async def _worker_add(name: str, models: list[str]) -> int:
+class Refused(ValueError):
+    """An AI action that cannot be done as asked; the message says why."""
+
+
+async def add_worker(session, name: str, models: list[str]) -> str:
+    """Register a worker (flushed, not committed) and return its token, shown once.
+
+    Only the token's sha256 is stored (P3). Raises `Refused` for an unknown
+    model key or a name already taken.
+    """
     unknown = [m for m in models if m not in MODELS]
     if unknown:
-        print(f"Unknown model key {', '.join(unknown)} (known: {sorted(MODELS)}).", file=sys.stderr)
-        return 1
+        raise Refused(f"Unknown model key {', '.join(unknown)} (known: {sorted(MODELS)}).")
+    if not models:
+        raise Refused("Name at least one model key.")
+    if await session.scalar(select(AiWorker.id).where(AiWorker.name == name)) is not None:
+        raise Refused(f"A worker named {name!r} exists; revoke it or pick another name.")
     token = core.new_token()
+    session.add(AiWorker(name=name, token_sha256=core.token_sha256(token), models=models))
+    await session.flush()
+    return token
+
+
+async def _worker_add(name: str, models: list[str]) -> int:
     async with SessionLocal() as session:
-        if await session.scalar(select(AiWorker.id).where(AiWorker.name == name)) is not None:
-            print(
-                f"A worker named {name!r} exists; revoke it or pick another name.", file=sys.stderr
-            )
+        try:
+            token = await add_worker(session, name, models)
+        except Refused as refused:
+            print(str(refused), file=sys.stderr)
             return 1
-        session.add(AiWorker(name=name, token_sha256=core.token_sha256(token), models=models))
         await session.commit()
     print(f"Worker {name} may lease jobs for: {', '.join(models)}.")
     print("Its token, shown only now (store it in the worker's token_file):")
@@ -98,15 +115,26 @@ async def _worker_list() -> int:
     return 0
 
 
+async def revoke_worker(session, name: str) -> AiWorker:
+    """Refuse a worker's token from now on (flushed, not committed). Its leases
+    expire and requeue. Raises `Refused` if there is no such worker."""
+    worker = await session.scalar(select(AiWorker).where(AiWorker.name == name))
+    if worker is None:
+        raise Refused(f"No worker named {name!r}.")
+    if worker.revoked_at is None:
+        worker.revoked_at = await session.scalar(select(func.now()))
+        await session.flush()
+    return worker
+
+
 async def _worker_revoke(name: str) -> int:
     async with SessionLocal() as session:
-        worker = await session.scalar(select(AiWorker).where(AiWorker.name == name))
-        if worker is None:
-            print(f"No worker named {name!r}.", file=sys.stderr)
+        try:
+            await revoke_worker(session, name)
+        except Refused as refused:
+            print(str(refused), file=sys.stderr)
             return 1
-        if worker.revoked_at is None:
-            worker.revoked_at = await session.scalar(select(func.now()))
-            await session.commit()
+        await session.commit()
     print(f"Revoked {name}: its token is refused from now on. Its leases expire and requeue.")
     return 0
 
@@ -136,13 +164,16 @@ async def _mode(value: str | None) -> int:
     return 0
 
 
-async def _redecide(policy: str) -> int:
-    """What `policy` would decide from each standing decision's stored scores."""
+async def redecide(session, policy: str) -> dict:
+    """What `policy` would decide from each standing decision's stored scores. Writes nothing.
+
+    `{"policy", "thresholds", "active", "total", "counts": {key: n}, "examples": {key: [ids]}}`,
+    where a key is `unchanged <outcome>`, `<before> -> <after>`, `needs <stage>
+    scores first` or `unregistered pipeline`. Raises `Refused` for an unknown policy.
+    """
     if policy not in POLICIES:
-        print(f"No policy {policy!r} (known: {sorted(POLICIES)}).", file=sys.stderr)
-        return 1
-    async with SessionLocal() as session:
-        rows = list(await session.scalars(select(AiDecision).where(AiDecision.state == STANDING)))
+        raise Refused(f"No policy {policy!r} (known: {sorted(POLICIES)}).")
+    rows = list(await session.scalars(select(AiDecision).where(AiDecision.state == STANDING)))
     counts: Counter = Counter()
     examples: dict[str, list[int]] = {}
     for d in rows:
@@ -162,11 +193,28 @@ async def _redecide(policy: str) -> int:
             key = f"{d.outcome} -> {step.outcome}"
         counts[key] += 1
         examples.setdefault(key, []).append(d.id)
+    return {
+        "policy": policy,
+        "thresholds": POLICIES[policy],
+        "active": ACTIVE,
+        "total": len(rows),
+        "counts": dict(sorted(counts.items())),
+        "examples": {k: v[:5] for k, v in examples.items()},
+    }
+
+
+async def _redecide(policy: str) -> int:
+    async with SessionLocal() as session:
+        try:
+            result = await redecide(session, policy)
+        except Refused as refused:
+            print(str(refused), file=sys.stderr)
+            return 1
     print(f"Standing decisions under policy {policy} {POLICIES[policy]} (active: {ACTIVE}):")
-    if not rows:
+    if not result["total"]:
         print("  none")
-    for key, n in sorted(counts.items()):
-        ids = examples.get(key, [])[:5]
+    for key, n in result["counts"].items():
+        ids = result["examples"].get(key, [])
         sample = f"  e.g. #{', #'.join(map(str, ids))}" if ids and "unchanged" not in key else ""
         print(f"  {key:<32} {n}{sample}")
     print("Dry run: nothing written. Applying a new policy is a change of policy.ACTIVE.")
@@ -261,24 +309,36 @@ async def _flags_list(everything: bool) -> int:
     return 0
 
 
+async def dismiss_flags(session, ids: Sequence[int], *, note: str, by: str) -> list[int]:
+    """Dismiss open flags with a note (flushed, not committed). Returns the ids
+    that were not open flags, which are left alone."""
+    if not note.strip():
+        raise Refused("A note must say why.")
+    missing = []
+    now = await session.scalar(select(func.now()))
+    for flag_id in ids:
+        flag = await session.get(AiFlag, flag_id, with_for_update=True)
+        if flag is None or flag.status != "open":
+            missing.append(flag_id)
+            continue
+        flag.status, flag.resolved_at, flag.resolved_by, flag.note = "dismissed", now, by, note
+    await session.flush()
+    return missing
+
+
 async def _flags_dismiss(ids: Sequence[int], note: str, by: str) -> int:
-    missing = 0
     async with SessionLocal() as session:
-        now = await session.scalar(select(func.now()))
-        for flag_id in ids:
-            flag = await session.get(AiFlag, flag_id, with_for_update=True)
-            if flag is None or flag.status != "open":
-                print(f"#{flag_id}: no open flag.", file=sys.stderr)
-                missing += 1
-                continue
-            flag.status, flag.resolved_at, flag.resolved_by, flag.note = (
-                "dismissed",
-                now,
-                by,
-                note,
-            )
-            print(f"#{flag_id}: dismissed by {by}.")
+        try:
+            missing = await dismiss_flags(session, ids, note=note, by=by)
+        except Refused as refused:
+            print(str(refused), file=sys.stderr)
+            return 1
         await session.commit()
+    for flag_id in ids:
+        if flag_id in missing:
+            print(f"#{flag_id}: no open flag.", file=sys.stderr)
+        else:
+            print(f"#{flag_id}: dismissed by {by}.")
     return 1 if missing else 0
 
 

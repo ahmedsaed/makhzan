@@ -16,7 +16,8 @@ scope — see `docs/PLAN.md`.
 ```
 apps/web         Next.js consumer frontend (pnpm, shadcn/Base UI, English only, dark mode)
 apps/api         FastAPI read-only API over Postgres + Meilisearch
-apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue
+apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue;
+                  admin/ is the internal dashboard (Tailscale only, docs/admin.md)
 packages/schemas  SQLAlchemy models, Alembic migrations, taxonomy, grouping, search contract
 scripts/          Operational scripts (deploy, backup, probes)
 config/           sources.example.toml only; the real configuration is ../makhzan-config (private)
@@ -41,6 +42,9 @@ make reindex                    # rebuild products + search index
 make status                     # crawler progress, recent runs, catalog health
 make freshness                  # requests, staleness, changes found, false archivals (read-only)
 ./makhzan status                # the same report, plus containers/health/crawl flag, from production
+./makhzan crawl off|on          # the crawl-wide pause (database flag, no recreate)
+./makhzan shop pause|resume ID  # one shop's pause, over sources.toml's `enabled`
+make admin                      # the admin dashboard on :8200 (docs/admin.md)
 make ai ARGS="status"           # AI matching: workers, mode, backlog, decisions (./makhzan ai ...)
 make broker                     # the AI broker on :8100
 ```
@@ -50,7 +54,7 @@ it happened, so the run's `stats.cycle` records when it started, finished, how
 long it took and over how many partitions. That is what makes past sweeps
 comparable — the cycle in flight tells you nothing on its own.
 
-`stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries and robots.txt included, and the gaps between them per host, measured at `worker/http.py`'s `take_turn`, the per-host gate that holds every request to the source's pace — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint. That holds only because nothing reaches a shop any other way: the client does not follow redirects itself (`make_client`), `_request` follows each hop through `take_turn`, robots-checked and logged, and every per-host table keys on `host_of()`, which folds case and default ports so robots.txt and the pages share one gate. It and `stats.requests` go on the run's row with every per-page commit (the pipeline's `checkpoint`), not only when the run ends, so a run a deploy cuts off still publishes what it sent.
+`stats.pacing` (`makhzan_schemas/crawl.py`) is what each run actually sent — requests, retries and robots.txt included, and the gaps between them per host, measured at `worker/http.py`'s `take_turn`, the per-host gate that holds every request to the source's pace — and is published to shops on `/how-we-crawl#activity`, so never add errors or status codes to that endpoint. That holds only because nothing reaches a shop any other way: the client does not follow redirects itself (`make_client`), `_request` follows each hop through `take_turn`, robots-checked and logged, and every per-host table keys on `host_of()`, which folds case and default ports so robots.txt and the pages share one gate. It and `stats.requests` go on the run's row with every per-page commit (the pipeline's `checkpoint`), not only when the run ends, so a run a deploy cuts off still publishes what it sent. The one exception is the probe (`worker.probe`, from `./makhzan probe` or the admin dashboard's Probe): its requests pass the same `take_turn` gate but belong to no run, so `stats.pacing` and /how-we-crawl do not count them; the dashboard's job keeps their pacing on its `admin_actions` row, and the command-line probe records them nowhere.
 
 `make status` is the first thing to run when a sweep looks stuck or a catalog
 looks wrong: it reports per-source partition progress and resume points, each
@@ -59,6 +63,27 @@ their errors, uncategorized/unpriced counts per supplier, the review
 queue, and whether the search index has drifted from the database.
 Before investigating a line that looks wrong, read `docs/status-known-normals.md`
 in the private configuration: what status shows that is normal, and when it is not.
+
+**The status report is one module, `worker/status.py`**, so the admin
+dashboard renders exactly what the terminal prints: each section is a
+`collect_<section>()` returning data and a printer of the same name.
+`scripts/status.py` only runs it. Add a section as both, never as SQL in the
+dashboard.
+
+**The admin dashboard** (`apps/ingestion/admin`, `docs/admin.md`) is its own
+compose service from the ingestion image, bound to `ADMIN_BIND` on the
+server's Tailscale address like the broker, one password (`./makhzan admin
+password`). Every action calls the CLI's own function (`worker.reports`,
+`worker.overrides`, `worker.ai`, `worker.pause`) and is audited in
+`admin_actions`; jobs that take time or talk to shops (a `limit=` run, the
+probe, a regroup dry run) are queued to the worker (`worker/admin_jobs.py`),
+never run in the page's process. It deploys and restarts nothing.
+
+**Pausing lives in the database** (`worker/pause.py`): the crawl-wide
+`worker_state["crawl_pause"]` over `CRAWL_ENABLED`, and `sources.paused_at`
+over sources.toml's `enabled` (the sync never writes it). `refresh_all` and
+`crawl_source` skip a paused shop, and a full run checks before every page and
+stops there, cursors kept; `limit=` runs and the probe still work.
 
 ## How ingestion works
 
@@ -157,6 +182,14 @@ route), not `last_verified_at` (its price and details were read). They differ
 for a shop that lists out-of-stock products by id alone: that keeps the listing
 alive without re-pricing it, and the site shows `last_verified_at` as "checked".
 
+**A re-check a person asked for is read first** (`worker/recheck.py`): an
+accepted wrong price or stock report sets `listings.recheck_requested_at`; the
+next full run reads the listing by id first where the adapter can
+(`rechecks_by_id`, WooCommerce's `include`, `stats.requests.recheck`), else at
+its partition's turn. Only a read that writes price and stock clears it
+(`_upsert_listing`); the details stage never does, since `fetch_details` writes
+neither (owner). Paused shops and `limit=` runs ask nothing.
+
 **Archive candidates are asked about first** (`pipeline.Confirmer`, T4/T12 in
 `docs/crawler-scheduling.md`). A multi-day offset sweep skips listings (48 of
 173 that shop 1 archived in one cycle came back under the same id), so at cycle
@@ -166,8 +199,11 @@ product page of each one the sitemap still lists (20 a run). Returned is kept,
 asked-and-absent, or returned but not upserted, is archived. A failed or
 unfinished check archives nothing more and holds the cycle open (cursors
 exhausted, untouched) for the next run: at most 2 failed runs, 3 runs held for
-room, or one cycle, then the rest archives as before. Hold time is not
-`cycle_seconds`. Sitemap presence is never a sighting. Requests count as
+room, or one cycle (counted from the sweep's end, or from the shop's or the
+crawl's last resume if later: `sources.resumed_at`, `crawl_pause.resumed_at`),
+then the rest archives as before. A pause holds the cycle without counting as
+any of these. Hold time is not `cycle_seconds`, nor is time a pause held the
+cycle after its sweep finished; a pause during the sweep still counts in it. Sitemap presence is never a sighting. Requests count as
 `stats.requests.confirm`, against the run's page ceiling.
 
 **A short page can end a partition** (`worker/sources/short_page.py`, T1):

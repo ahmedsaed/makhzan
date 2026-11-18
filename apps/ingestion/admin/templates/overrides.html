@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Overrides · makhzan admin{% endblock %}
+{% macro side(listing, lid) -%}
+{% if listing %}<span class="mono">{{ lid|short }}</span> <span class="muted">{{ listing.supplier.slug if listing.supplier else listing.source }}</span>
+<div class="small ink2" style="white-space:normal">{{ (listing.title_en or listing.title_ar or "(untitled)")|truncate(70) }}{% if listing.status != "active" %} <span class="chip c-neutral plain">{{ listing.status }}</span>{% endif %}</div>
+{% else %}<span class="mono">{{ lid|short }}</span> <span class="muted">(gone)</span>{% endif %}
+{%- endmacro %}
+{% block content %}
+<div class="vhead">
+  <div><h1>Overrides</h1><p>Grouping rulings, keyed by listing pair. Status is as of the last regroup{% if v.last_regroup %} ({{ v.last_regroup|dt }} UTC){% endif %}.</p></div>
+  <div class="toolbar"><a class="btn primary" href="#add">Add override</a></div>
+</div>
+
+<details class="panel" id="add" {% if not v.rows %}open{% endif %}>
+  <summary class="body" style="cursor:pointer"><h2 style="display:inline">Add override</h2> <span class="muted small">Takes effect at the next regroup. The same shop never merges, forced or not.</span></summary>
+  <form method="post" action="/overrides/add" class="body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+    {{ m.csrf_field(csrf) }}
+    <label class="f" for="ovA">Listing A<input type="text" id="ovA" name="a" class="mono" placeholder="full listing id" required pattern="[0-9a-fA-F-]{36}"></label>
+    <label class="f" for="ovB">Listing B<input type="text" id="ovB" name="b" class="mono" placeholder="full listing id" required pattern="[0-9a-fA-F-]{36}"></label>
+    <label class="f" for="ovKind">Kind<select id="ovKind" name="kind"><option value="never_merge">never_merge</option><option value="must_merge">must_merge</option></select></label>
+    <label class="check" for="ovForced"><input type="checkbox" id="ovForced" name="forced"> Forced (must_merge only: lifts value, form and price vetoes for this pair)</label>
+    <label class="f" for="ovNote" style="grid-column:1/-1">Note (required)<textarea id="ovNote" name="note" required placeholder="Why these two are, or are not, the same product"></textarea></label>
+    <div class="toolbar" style="grid-column:1/-1;justify-content:flex-end"><button class="btn primary" type="submit">Save override</button></div>
+  </form>
+</details>
+
+<section class="panel">
+  <header><div><h2>Rulings</h2><p>Newest first, removed ones included</p></div>
+    <div class="legend"><span class="chip c-ok">in effect</span><span class="chip c-crit">BLOCKED</span><span class="chip c-neutral">inactive</span><span class="chip c-info">not yet checked</span><span class="chip c-neutral plain">removed</span></div></header>
+  <div class="tw"><table><thead><tr><th>Id</th><th>Kind</th><th>Listing A</th><th>Listing B</th><th>Status</th><th>Note</th><th>By</th><th>When</th><th></th></tr></thead><tbody>
+    {% for o in v.rows %}
+    <tr id="ov-{{ o.id }}"><td class="mono">#{{ o.id }}</td>
+      <td><span class="mono">{{ o.kind }}</span>{% if o.forced %} <span class="chip c-warn plain">forced</span>{% endif %}<div class="muted small">{{ "report R-" ~ o.report_id if o.report_id else "manual" }}</div></td>
+      <td>{{ side(v.listings.get(o.listing_a), o.listing_a) }}</td><td>{{ side(v.listings.get(o.listing_b), o.listing_b) }}</td>
+      <td class="wrap" style="min-width:180px">
+        {% if o.removed_at %}<span class="chip c-neutral plain">removed</span><div class="muted small">{{ o.removed_at|dt("%d %b") }} by {{ o.removed_by }}{% if o.remove_note %}: {{ o.remove_note }}{% endif %}</div>
+        {% elif o.status is none %}<span class="chip c-info">not yet checked</span><div class="muted small">applies at the next regroup</div>
+        {% elif o.status == "in_effect" %}<span class="chip c-ok">in effect</span>
+        {% elif o.status == "blocked" %}<span class="chip c-crit">BLOCKED</span><div class="muted small">{% if o.blocked_by %}by <span class="mono">{{ o.blocked_by|short }}</span>{% endif %}{% if o.blocked_reason %}: {{ o.blocked_reason }}{% endif %}</div>
+        {% else %}<span class="chip c-neutral">{{ o.status }}</span>{% if o.status == "inactive" %}<div class="muted small">a listing is not active</div>{% endif %}{% endif %}</td>
+      <td class="wrap" style="min-width:160px">{{ o.note or "" }}</td><td>{{ o.created_by }}</td><td>{{ o.created_at|dt("%d %b %Y") }}</td>
+      <td>{% if not o.removed_at and removing != o.id %}<a class="btn sm danger" href="/overrides?remove={{ o.id }}#ov-{{ o.id }}">Remove</a>{% endif %}</td></tr>
+    {% if removing == o.id and not o.removed_at %}
+    <tr><td colspan="9" style="white-space:normal">
+      <form method="post" action="/overrides/{{ o.id }}/remove" class="inline-confirm">{{ m.csrf_field(csrf) }}
+        <label class="f" for="rm-{{ o.id }}">Why remove #{{ o.id }}? (required; removal is soft and the next regroup cites it)<textarea id="rm-{{ o.id }}" name="note" required autofocus></textarea></label>
+        <div class="toolbar"><button class="btn primary" type="submit">Remove override</button><a class="btn" href="/overrides">Cancel</a></div></form></td></tr>
+    {% endif %}
+    {% else %}<tr><td colspan="9" class="muted">No grouping overrides.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

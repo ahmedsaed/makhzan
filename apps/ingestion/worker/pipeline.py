@@ -22,7 +22,7 @@ import os
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -62,6 +62,8 @@ from worker.http import (
 )
 from worker.identity import Identity, identity_for, using_identity
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
+from worker import recheck
+from worker.pause import paused_reason
 from worker.sources.base import CONTACT_PART, ConfirmStopped, SourceAdapter, SupplierInfo
 
 #: How long one source's job may take before arq cancels it (worker.main).
@@ -164,6 +166,8 @@ async def _upsert_listing(
         status=ListingStatus.ACTIVE,
         last_verified_at=now,
         last_seen_at=now,
+        # Read in full: whatever re-check a person asked for is answered.
+        recheck_requested_at=None,
     )
     fields = apply_details(fields)
     if existing is not None and not (attributes or {}).get("adapter_part_number"):
@@ -543,6 +547,8 @@ async def _mark_out_of_stock(
         listing.status = ListingStatus.ACTIVE
         listing.last_seen_at = now
         listing.attributes = _without_stock_counts(listing.attributes)
+        # Its stock was read (none): that answers a re-check a person asked for.
+        listing.recheck_requested_at = None
     if record_history and listings:
         await _record_changes(session, list(listings), now)
     return len(listings)
@@ -681,8 +687,13 @@ async def _sweep_partition(
     deadline: float | None = None,
     halt: list[str] | None = None,
     categories: Counter | None = None,
+    stop_check: Callable[[], Awaitable[bool]] | None = None,
 ) -> bool:
     """Sweep one partition from its cursor, committing after every page.
+
+    `stop_check` is asked before every page; True stops the sweep there, its
+    cursor kept, like the deadline: how a pause (`worker.pause`) reaches a run
+    already going.
 
     `categories` counts category changes to stored listings (`_ingest_item`).
 
@@ -733,6 +744,8 @@ async def _sweep_partition(
             return False  # the run's adaptive budget is spent
         if deadline is not None and _clock() >= deadline:
             return False  # the run's time budget is spent; the cursor resumes here
+        if stop_check is not None and await stop_check():
+            return False  # paused by a person; the cursor resumes here when resumed
 
         log = current_request_log()
         before = _requests_logged(log)
@@ -851,12 +864,24 @@ class ConfirmFetcher(CycleFetcher):
     it has not asked about unasked.
     """
 
-    def __init__(self, pace, *, limit: int | None, may_send: Callable[[], str | None]) -> None:
+    def __init__(
+        self,
+        pace,
+        *,
+        limit: int | None,
+        may_send: Callable[[], str | None],
+        poll_pause: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
         super().__init__(pace, retries=1)
         self.limit = limit
         self._may_send = may_send
+        self._poll_pause = poll_pause
 
     async def get(self, label: str, url: str, params: dict | None = None):
+        if self._poll_pause is not None:
+            # Re-read the pause: a person may have paused the shop meanwhile,
+            # and `may_send` then says so.
+            await self._poll_pause()
         if (why := self._may_send()) is not None:
             raise ConfirmStopped(why)
         if self.limit is not None and self.requests.total() >= self.limit:
@@ -885,9 +910,11 @@ class Confirmer:
     A hold is bounded three ways, and past any of them the unasked candidates
     archive as they always have: `CONFIRM_MAX_FAILED_RUNS` runs whose asking
     failed, `CONFIRM_MAX_HELD_RUNS` runs held for want of room to ask, and one
-    cycle of time from when the sweep finished (`target_cycle_days`, else as
-    long as the cycle took, at least `CONFIRM_MIN_WAIT`). Confirmation only
-    ever *prevents* an archive.
+    cycle of time (`target_cycle_days`, else as long as the cycle took, at
+    least `CONFIRM_MIN_WAIT`) from when the sweep finished, or from when a
+    person last resumed the shop or the crawl, if later. A run held because the
+    shop was paused counts against none of the three. Confirmation only ever
+    *prevents* an archive.
 
     Its requests count against the run's ceiling as if it were one more
     partition: at most `max_pages_per_run`, and within what the run's adaptive
@@ -906,8 +933,11 @@ class Confirmer:
         already_sent: Callable[[], bool],
         may_send: Callable[[], str | None],
         budget_left: Callable[[], int | None] = lambda: None,
+        poll_pause: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         self.session, self.run, self.adapter = session, run, adapter
+        #: Re-reads the pause and returns why, if the shop or crawl was paused.
+        self._poll_pause = poll_pause
         self.supplier_id, self.cat_index, self.errors = supplier_id, cat_index, errors
         self._already_sent = already_sent
         #: Why no request may go out now (the host refused the run, its time
@@ -917,6 +947,15 @@ class Confirmer:
         self._budget_left = budget_left
         self.requests: Counter = Counter()
         self.report: dict = {}
+
+    def _paused(self, why: str, offered: list[Listing]) -> tuple[list[uuid.UUID], bool]:
+        """Hold the cycle for a paused shop: nothing asked, nothing archived, no attempt counted.
+
+        `_held_runs` skips a report marked `paused`, so a pause never brings the
+        candidates nearer to archiving unconfirmed.
+        """
+        self.report.update(paused=why[:200], held=len(offered))
+        return [], True
 
     def _limit(self) -> int | None:
         limits = [n for n in (self.adapter.max_pages_per_run, self._budget_left()) if n is not None]
@@ -952,11 +991,19 @@ class Confirmer:
             report["held"] = len(offered)
             return [], True
 
+        if self._poll_pause is not None and (why := await self._poll_pause()):
+            return self._paused(why, offered)
         if refused := self._may_send():
             return failed(refused)
 
+        async def poll() -> bool:
+            return bool(self._poll_pause and await self._poll_pause())
+
         fetcher = ConfirmFetcher(
-            lambda: _pace(self.adapter), limit=self._limit(), may_send=self._may_send
+            lambda: _pace(self.adapter),
+            limit=self._limit(),
+            may_send=self._may_send,
+            poll_pause=poll if self._poll_pause is not None else None,
         )
         if self._already_sent():
             await asyncio.sleep(await _pace(self.adapter))
@@ -1016,6 +1063,12 @@ class Confirmer:
         report.update(kept=len(kept), absent=len(absent))
         if not_kept := (returned - upserted) & set(by_external):
             report["returned_not_kept"] = len(not_kept)
+        if unasked and self._poll_pause is not None and (why := await self._poll_pause()):
+            # Paused while asking: what was answered stands, the rest waits for
+            # the shop to be resumed, and the hold counts as no attempt.
+            report["paused"] = why[:200]
+            report["held"] = len(unasked)
+            return absent, True
         if unasked:
             report["attempt"] = held_runs + 1
             if not overdue and held_runs + 1 < CONFIRM_MAX_HELD_RUNS:
@@ -1026,11 +1079,102 @@ class Confirmer:
         return absent + unasked + beyond, False
 
 
-async def _held_runs(session: AsyncSession, source_id: str, swept_at: datetime) -> tuple[int, int]:
-    """(failed, held for room): earlier runs that held this cycle since its sweep finished.
+async def _recheck_first(
+    session: AsyncSession,
+    run: IngestionRun,
+    adapter: SourceAdapter,
+    supplier_id: uuid.UUID,
+    cat_index: dict,
+    *,
+    errors: list[str],
+    may_send: Callable[[], str | None],
+    poll_pause: Callable[[], Awaitable[bool]],
+    already_sent: bool,
+    halt: list[str],
+) -> tuple[dict, Counter]:
+    """Re-read the listings a person asked to be read first, by id, before the sweep.
+
+    Its own host refusing it (robots.txt unreadable, a Retry-After longer than
+    the crawler waits) goes into `halt`, as it would from a page, so the run
+    stops there with that reason instead of trying every partition.
+
+    Only for an adapter that can re-read by id (`recheck.how` is `by_id`):
+    through `confirm_listed` and a `ConfirmFetcher`, so the host's pace,
+    robots.txt, the run's time budget, a pause and the run's page ceiling
+    (`max_pages_per_run`) all bind it. What comes back is upserted (which
+    clears its marker); one asked and not returned is cleared too, the
+    cycle's archiving deciding the rest; one never asked stays marked.
+    Returns `stats.recheck` and the requests sent, under `recheck`.
+    """
+    listings = await recheck.due(session, adapter.source_id)
+    if not listings:
+        return {}, Counter()
+    fetcher = ConfirmFetcher(
+        lambda: _pace(adapter),
+        limit=adapter.max_pages_per_run,
+        may_send=may_send,
+        poll_pause=poll_pause,
+    )
+    if already_sent:
+        await asyncio.sleep(await _pace(adapter))
+    try:
+        answer = await adapter.confirm_listed(listings, fetcher)
+    except Exception as exc:  # noqa: BLE001 — a failed re-check must not stop the sweep
+        message = f"{type(exc).__name__}: {exc}"
+        errors.append(f"re-check first: {message}"[:300])
+        if _refused_by_own_host(exc, adapter):
+            halt.append(str(exc))
+        sent = Counter({recheck.LABEL: fetcher.requests.total()}) if fetcher.requests else Counter()
+        return {"asked": len(listings), "failed": message[:200]}, sent
+    sent = Counter({recheck.LABEL: fetcher.requests.total()}) if fetcher.requests else Counter()
+    if answer is None:
+        return {}, sent
+    read = 0
+    for raw in answer.items:
+        try:
+            await _ingest_item(
+                session, run, adapter, supplier_id, cat_index, raw, via=recheck.LABEL
+            )
+            read += 1
+        except Exception as exc:  # noqa: BLE001 — one bad item must not stop the rest
+            run.items_failed += 1
+            errors.append(f"re-check {raw.external_id}: {exc}"[:300])
+    by_external = {str(row.external_id): row for row in listings}
+    now = datetime.now(timezone.utc)
+    for external_id in answer.seen:
+        if (row := by_external.get(external_id)) is not None:
+            row.last_seen_at = now
+    returned = {str(raw.external_id) for raw in answer.items}
+    absent = answer.absent & set(by_external)
+    report = {"asked": len(listings), "read": read}
+    if getattr(adapter, "hides_out_of_stock", False):
+        # A shop whose Store API hides out-of-stock products omits them from
+        # `include` too: not returned may well mean out of stock, which is the
+        # very report. That is no answer, so the marker stays for the
+        # unlisted pass or the sweep to read.
+        not_answered = absent
+        report["absent"] = 0
+        report["hidden_kept"] = len(absent)
+    else:
+        not_answered = set()
+        report["absent"] = len(absent)
+    answered = (returned | absent | answer.seen) & set(by_external) - not_answered
+    await recheck.clear(session, [by_external[e].id for e in answered])
+    report["unasked"] = len(by_external) - len(answered) - len(not_answered)
+    if answer.notes.get("stopped"):
+        report["stopped"] = answer.notes["stopped"]
+    return report, sent
+
+
+async def _held_runs(
+    session: AsyncSession, source_id: str, swept_at: datetime
+) -> tuple[int, int, int]:
+    """(failed, held for room, held by a pause): earlier runs that held this cycle.
 
     Read off the runs' `stats.archive_confirm`. Every run finishing after the
     sweep did belongs to the hold, the one that finished the sweep included.
+    A run held because a person paused the shop is counted apart: it is never
+    an attempt, only evidence that the cycle was held.
     """
     rows = (
         await session.execute(
@@ -1042,15 +1186,26 @@ async def _held_runs(session: AsyncSession, source_id: str, swept_at: datetime) 
             )
         )
     ).scalars()
-    failed = held = 0
+    failed = held = paused = 0
     for report in rows:
         if not isinstance(report, dict) or not report.get("held"):
             continue
-        if report.get("failed"):
+        if report.get("paused"):
+            paused += 1  # held because a person paused the shop: no attempt
+        elif report.get("failed"):
             failed += 1
         else:
             held += 1
-    return failed, held
+    return failed, held, paused
+
+
+async def _resumed_at(session: AsyncSession, source_id: str) -> datetime | None:
+    """When the shop, or the whole crawl, was last resumed by a person, if ever."""
+    from makhzan_schemas import crawl
+
+    shop = await session.scalar(select(Source.resumed_at).where(Source.source_id == source_id))
+    stamps = [t for t in (shop, await crawl.crawl_resumed_at(session)) if t is not None]
+    return max(stamps) if stamps else None
 
 
 async def _finish_cycle_if_swept(
@@ -1086,7 +1241,9 @@ async def _finish_cycle_if_swept(
         return 0, {}
     # When the sweep finished: no cursor is touched while a cycle is held.
     swept_at = max(c.updated_at for c in cursors)
-    held_before = False
+    # A sweep that ended in an earlier run was held, whatever held it: a run
+    # stopped by a pause skips this step and leaves no report to say so.
+    held_before = pages_this_run == 0
 
     starts = [c.cycle_started_at for c in cursors if c.cycle_started_at is not None]
     cycle_started = min(starts) if starts else datetime.now(timezone.utc)
@@ -1115,9 +1272,15 @@ async def _finish_cycle_if_swept(
                 wait = timedelta(days=adapter.target_cycle_days)
             else:
                 wait = max(CONFIRM_MIN_WAIT, swept_at - cycle_started)
-            overdue = datetime.now(timezone.utc) - swept_at > wait
-            failed_runs, held_runs = await _held_runs(session, adapter.source_id, swept_at)
-            held_before = bool(failed_runs or held_runs)
+            # The window runs from the sweep's end, or from the last resume if
+            # later: time a person kept the shop paused is not time it was asked.
+            resumed = await _resumed_at(session, adapter.source_id)
+            since = max(swept_at, resumed) if resumed else swept_at
+            overdue = datetime.now(timezone.utc) - since > wait
+            failed_runs, held_runs, paused_runs = await _held_runs(
+                session, adapter.source_id, swept_at
+            )
+            held_before = held_before or bool(failed_runs or held_runs or paused_runs)
             ids, hold = await confirm(
                 list(candidates), overdue=overdue, failed_runs=failed_runs, held_runs=held_runs
             )
@@ -1142,9 +1305,10 @@ async def _finish_cycle_if_swept(
     # otherwise you can only ever see the cycle in flight and never judge whether
     # it is behaving normally.
     finished = datetime.now(timezone.utc)
-    # A cycle held open for confirmation ended, as a sweep, when its pages did:
-    # `cycle_seconds` is the public cycle length, and waiting on a shop's
-    # answer is not sweeping it.
+    # A cycle held open after its sweep (for confirmation, or by a pause)
+    # ended, as a sweep, when its pages did: `cycle_seconds` is the public
+    # cycle length, and waiting is not sweeping it. A pause *during* the sweep
+    # is not taken out: the clock runs from the first page to the last.
     swept = min(swept_at, finished) if held_before else finished
     cycle = {
         "cycle_started_at": cycle_started.isoformat(),
@@ -1167,7 +1331,8 @@ async def _archive(session: AsyncSession, where: list) -> int:
         await session.execute(
             update(Listing)
             .where(*where)
-            .values(status=ListingStatus.ARCHIVED)
+            # Archived, it can never be read first: any re-check asked for goes.
+            .values(status=ListingStatus.ARCHIVED, recheck_requested_at=None)
             .returning(Listing.id, Listing.price, Listing.currency, Listing.stock_signal)
         )
     ).all()
@@ -1448,6 +1613,8 @@ async def _logged_run(
     deadline = _clock() + JOB_TIMEOUT * RUN_TIME_SHARE
     #: Why the run stopped early, if it did: its own host refused it.
     halt: list[str] = []
+    #: Why a person paused it mid-run, if they did (the crawl or the shop).
+    paused: list[str] = []
 
     async with SessionLocal() as session:
         run = IngestionRun(source=source_id, source_type=adapter.source_type)
@@ -1467,9 +1634,22 @@ async def _logged_run(
             adapter.resume_from(await _last_source_report(session, source_id))
         run_page_budget = budget.get("pages")
 
+        # Paused before it began (a run enqueued by hand on a paused shop):
+        # nothing is sent at all, the cycle's reference data included.
+        if limit is None and (reason := await paused_reason(session, source_id)):
+            paused.append(reason)
         # Before any page: the adapter reads it while turning pages into listings.
-        cycle_requests = await _load_cycle_data(
-            session, adapter, supplier_id, ephemeral=limit is not None, errors=errors, halt=halt
+        cycle_requests = (
+            Counter()
+            if paused
+            else await _load_cycle_data(
+                session,
+                adapter,
+                supplier_id,
+                ephemeral=limit is not None,
+                errors=errors,
+                halt=halt,
+            )
         )
         fetch_failed = False
         observed: Counter = Counter()
@@ -1480,6 +1660,22 @@ async def _logged_run(
         categories: Counter = Counter()
         #: Requests outside the sweep and the details stage (confirmation), by label.
         sent_extra: Counter = Counter()
+
+        async def pause_check() -> bool:
+            """Whether the crawl or this shop was paused since the run began.
+
+            Asked before every page of a full run, never of a `limit=` run
+            (those are for looking at a paused shop). Once paused, the run
+            stays stopped: resuming takes effect at the next run.
+            """
+            if limit is None and not paused:
+                if reason := await paused_reason(session, source_id):
+                    paused.append(reason)
+            return bool(paused)
+
+        async def pause_reason() -> str | None:
+            """`pause_check`, as the reason (for the confirmation's report)."""
+            return paused[0] if await pause_check() else None
 
         def checkpoint(more: Counter | None = None) -> None:
             """Put what the run has sent so far on its row, for the next commit.
@@ -1520,6 +1716,48 @@ async def _logged_run(
         if halt:
             fetch_failed, stopped = True, f"refused by its host: {halt[0]}"
             partitions = []
+
+        # Listings a person asked to be read first, where the adapter can read
+        # them by id: before the sweep, within the run's pace and ceiling.
+        recheck_report: dict = {}
+        if (
+            limit is None
+            and not halt
+            and not paused
+            and recheck.how(adapter) == recheck.BY_ID
+            and _clock() < deadline
+        ):
+            recheck_report, recheck_sent = await _recheck_first(
+                session,
+                run,
+                adapter,
+                supplier_id,
+                cat_index,
+                errors=errors,
+                may_send=lambda: (
+                    f"refused by its host: {halt[0]}"
+                    if halt
+                    else (
+                        "time budget spent"
+                        if _clock() >= deadline
+                        else (paused[0] if paused else None)
+                    )
+                ),
+                poll_pause=pause_check,
+                already_sent=bool(cycle_requests),
+                halt=halt,
+            )
+            if halt:
+                # The host refused the re-check: every page would be refused too.
+                fetch_failed, stopped = True, f"refused by its host: {halt[0]}"
+                partitions = []
+            if recheck_sent:
+                sent_extra.update(recheck_sent)
+                if run_page_budget is not None:
+                    # Within the run's ceiling: the sweep gets what is left.
+                    run_page_budget = max(0, run_page_budget - recheck_sent.total())
+            checkpoint()
+            await session.commit()
         for i, partition in enumerate(partitions):
             if limit is not None and run.items_seen >= limit:
                 break
@@ -1527,6 +1765,8 @@ async def _logged_run(
                 break
             if _clock() >= deadline:
                 stopped = "time budget spent; the cursors resume next run"
+                break
+            if await pause_check():
                 break
             if i:
                 # Partitions share one host. The pause between pages ends at a
@@ -1552,6 +1792,7 @@ async def _logged_run(
                 deadline=deadline,
                 halt=halt,
                 categories=categories,
+                stop_check=pause_check,
             )
             fetch_failed = fetch_failed or failed
             if halt:
@@ -1560,10 +1801,16 @@ async def _logged_run(
                 stopped = f"refused by its host: {halt[0]}"
                 break
 
+        if paused and stopped is None:
+            stopped = f"{paused[0]}; the cursors resume once it is resumed"
         archived, cycle = 0, {}
         confirm: Confirmer | None = None
-        if limit is None:
+        if limit is None and not paused:
             # Never on a `limit=` run: it archives nothing, so has nothing to ask.
+            # Nor on a paused one: its refusal to ask would count as a failed
+            # confirmation (`_held_runs`), and after CONFIRM_MAX_FAILED_RUNS of
+            # those the candidates archive unconfirmed, while the shop is the
+            # very one a person paused. The cycle simply stays held, unattempted.
             if type(adapter).confirm_listed is not SourceAdapter.confirm_listed:
                 confirm = Confirmer(
                     session,
@@ -1576,11 +1823,16 @@ async def _logged_run(
                     may_send=lambda: (
                         f"refused by its host: {halt[0]}"
                         if halt
-                        else ("time budget spent" if _clock() >= deadline else None)
+                        else (
+                            "time budget spent"
+                            if _clock() >= deadline
+                            else (paused[0] if paused else None)
+                        )
                     ),
                     budget_left=lambda: (
                         None if run_page_budget is None else run_page_budget - tally["pages"]
                     ),
+                    poll_pause=pause_reason,
                 )
             archived, cycle = await _finish_cycle_if_swept(
                 session,
@@ -1596,7 +1848,7 @@ async def _logged_run(
 
         details_requests: Counter = Counter()
         details: dict = {}
-        if limit is None and not fetch_failed and _clock() < deadline:
+        if limit is None and not fetch_failed and not paused and _clock() < deadline:
             # After the sweep and its archiving, so only listings the shop still
             # sells are read. A `limit=` run is a quick test: it never costs a
             # shop product-page requests. Nor does a run whose sweep failed: a
@@ -1610,6 +1862,7 @@ async def _logged_run(
                     pace=lambda: _pace(adapter),
                     already_sent=bool(tally["pages"] or cycle_requests or sent_extra),
                     checkpoint=checkpoint,
+                    stop=pause_check,
                 )
             except Exception as exc:  # noqa: BLE001 — the sweep's stats must survive
                 # Whatever went wrong reading details, the run's own record
@@ -1617,6 +1870,9 @@ async def _logged_run(
                 await session.rollback()
                 errors.append(f"details: {exc}")
 
+        if paused and stopped is None:
+            # First seen after the sweep: by the confirmation or the details stage.
+            stopped = f"{paused[0]}; stopped after the sweep, the rest waits for a resume"
         stats: dict = {}
         if errors:
             stats["errors"] = errors
@@ -1634,6 +1890,8 @@ async def _logged_run(
             stats["budget"] = budget
         if archived:
             stats["archived"] = archived
+        if recheck_report:
+            stats["recheck"] = recheck_report
         if cycle:
             stats["cycle"] = cycle
         if not_products:
