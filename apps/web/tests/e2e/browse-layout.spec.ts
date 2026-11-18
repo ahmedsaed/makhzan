@@ -1004,3 +1004,107 @@ test.describe("the phone sheet, grabbed mid-glide", () => {
     expect(y).toBeGreaterThan(0);
   });
 });
+
+// A press during the 250ms rise (review of 9eb9b52): it read the rise's own
+// part-way transform as where the finger took the sheet, so a tap glided it shut.
+test.describe("the phone sheet, pressed during its rise", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  const isOpen = (sheet: Locator) => sheet.evaluate((el) => (el as HTMLDialogElement).open);
+
+  /**
+   * Open the sheet and, a frame into its rise, tap `target` (pointerdown and
+   * pointerup, no move); then record the sheet's height above rest every frame
+   * until the rise is over. Dispatched in one script, so the tap lands inside
+   * the 250ms rise every time.
+   */
+  async function tapDuringRise(page: Page, target: "handle" | "heading") {
+    await page.goto("/departments/electronics/resistors");
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    const result = await page.locator("[data-browse-pill]").evaluate(async (pill, on) => {
+      const dialog = document.querySelector<HTMLDialogElement>("dialog[data-browse-sheet]")!;
+      const el =
+        on === "handle"
+          ? dialog.querySelector<HTMLElement>("[data-sheet-handle]")!
+          : dialog.querySelector<HTMLElement>("h2")!;
+      const frame = () => new Promise((done) => requestAnimationFrame(done));
+      const y = () => new DOMMatrix(getComputedStyle(dialog).transform).m42;
+      (pill as HTMLElement).click();
+      await frame();
+      const box = el.getBoundingClientRect();
+      const tap = (type: string) =>
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            pointerId: 7,
+            pointerType: "touch",
+            clientX: box.left + 20,
+            clientY: box.top + box.height / 2,
+          }),
+        );
+      const rising = dialog.getAnimations().length > 0;
+      const atPress = y();
+      tap("pointerdown");
+      tap("pointerup");
+      const ys = [atPress, y()];
+      for (let i = 0; i < 30; i++) {
+        await frame();
+        ys.push(y());
+      }
+      return { rising, ys, inline: dialog.style.transform };
+    }, target);
+    return { sheet, ...result };
+  }
+
+  for (const target of ["handle", "heading"] as const) {
+    test(`a tap on the ${target} mid-rise leaves it open, rising without a jump`, async ({
+      page,
+    }) => {
+      const { sheet, rising, ys, inline } = await tapDuringRise(page, target);
+      expect(rising).toBe(true);
+      expect(ys[0]).toBeGreaterThan(80); // pressed early enough to matter
+      // Only ever up: never pushed back down, never snapped.
+      for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeLessThanOrEqual(ys[i - 1] + 0.5);
+      expect(ys.at(-1)).toBe(0);
+      expect(inline).toBe("");
+      await page.waitForTimeout(400);
+      expect(await isOpen(sheet)).toBe(true);
+      expect(await sheet.evaluate((el) => el.hasAttribute("data-closing"))).toBe(false);
+    });
+  }
+
+  test("a drag released during the close still closes, the close undisturbed", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
+    const handle = sheet.locator("[data-sheet-handle]");
+    const box = (await handle.boundingBox())!;
+    const at = (type: string, y: number) =>
+      handle.evaluate(
+        (el, [t, cx, cy]) =>
+          el.dispatchEvent(
+            new PointerEvent(t as string, {
+              bubbles: true,
+              pointerId: 9,
+              pointerType: "touch",
+              clientX: cx as number,
+              clientY: cy as number,
+            }),
+          ),
+        [type, box.x + 20, y] as const,
+      );
+    const y0 = box.y + 10;
+    // A short drag, still held, then Escape, then the finger lets go.
+    await at("pointerdown", y0);
+    await at("pointermove", y0 + 20);
+    await at("pointermove", y0 + 40);
+    await page.keyboard.press("Escape");
+    expect(await sheet.evaluate((el) => el.hasAttribute("data-closing"))).toBe(true);
+    await at("pointerup", y0 + 40);
+    // The release starts no spring-back over the sinking.
+    expect(await sheet.evaluate((el) => (el as HTMLElement).style.transition)).toBe("");
+    await expect.poll(() => isOpen(sheet)).toBe(false);
+    await expect(page.locator("[data-browse-pill]")).toBeFocused();
+  });
+});
