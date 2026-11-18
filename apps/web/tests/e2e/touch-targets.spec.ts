@@ -78,6 +78,10 @@ test("a department page's controls", async ({ page }) => {
   await page.goto("/departments/electronics/resistors");
   await page.locator("[data-browse-pill]").click();
   const sheet = page.locator("dialog[data-browse-sheet]");
+  // Measured once its 250ms rise is over, not while it moves.
+  await sheet.evaluate((el) =>
+    Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))),
+  );
   await expectTappable(page, {
     "sheet close": sheet.getByRole("button", { name: "Close" }),
     "sheet group": sheet.locator("[data-tree-group='electronics:components']"),

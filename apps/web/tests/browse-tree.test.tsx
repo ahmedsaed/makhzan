@@ -48,6 +48,12 @@ const SEALS = [
   cat("seals-bearings", "couplings", "Couplings", "transmission", 40),
 ];
 
+/** A group's categories: the region its control names. */
+function regionOf(node: Element): HTMLElement {
+  const control = node.querySelector("button[aria-controls]")!;
+  return document.getElementById(control.getAttribute("aria-controls")!)!;
+}
+
 function tree(selected: string | null, categories = ELECTRONICS, department = "electronics") {
   return render(
     <BrowseTree
@@ -76,15 +82,15 @@ describe("the browse tree", () => {
       "Power2,212",
       "Accessories & Other1,202",
     ]);
-    for (const list of document.querySelectorAll("[data-tree-node] > ul")) {
-      expect(list).toHaveAttribute("hidden");
-    }
+    const nodes = document.querySelectorAll("[data-tree-node]");
+    expect(nodes.length).toBeGreaterThan(0);
+    for (const node of nodes) expect(regionOf(node)).toHaveAttribute("hidden");
   });
 
   it("expands the current group and marks the current category, outlined and bold", () => {
     tree("electronics:resistors");
     const components = document.querySelector("[data-tree-node='electronics:components']")!;
-    expect(components.querySelector("ul")).not.toHaveAttribute("hidden");
+    expect(regionOf(components)).not.toHaveAttribute("hidden");
     const here = screen.getByRole("link", { name: /^Resistors/ });
     expect(here).toHaveAttribute("aria-current", "page");
     expect(here).toHaveAttribute("href", "/departments/electronics/resistors");
@@ -94,7 +100,7 @@ describe("the browse tree", () => {
     expect(here.className).not.toMatch(/\bbg-chip-on\b/);
     // Other groups stay collapsed; empty categories are left out.
     const power = document.querySelector("[data-tree-node='electronics:power']")!;
-    expect(power.querySelector("ul")).toHaveAttribute("hidden");
+    expect(regionOf(power)).toHaveAttribute("hidden");
     expect(screen.queryByRole("link", { name: /^Empty/ })).toBeNull();
   });
 
@@ -166,6 +172,108 @@ describe("the browse tree", () => {
     expect(screen.getByRole("button", { name: /Subcategories of Power/ }).className).toMatch(
       /size-11/,
     );
+  });
+});
+
+describe("the sheet's tree (option A of the sheet-motion mockup)", () => {
+  function sheetTree(selected: string | null, categories = ELECTRONICS) {
+    return render(
+      <BrowseTree
+        department="electronics"
+        categories={categories}
+        selected={selected}
+        density="sheet"
+      />,
+    );
+  }
+
+  it("makes a group two separate tinted buttons, its name and a funnel", () => {
+    sheetTree("electronics:resistors");
+    const node = document.querySelector("[data-tree-node='electronics:power']")!;
+    const name = node.querySelector("[data-tree-group]")!;
+    const funnel = node.querySelector("button[data-funnel]")!;
+    expect(name.tagName).toBe("A");
+    expect(funnel.tagName).toBe("BUTTON");
+    // Separate elements, neither inside the other, 6px apart with no divider.
+    expect(name.contains(funnel) || funnel.contains(name)).toBe(false);
+    expect(funnel.parentElement!.className).toMatch(/\bgap-1\.5\b/);
+    for (const el of [name, funnel]) {
+      expect(el.className).toMatch(/\bbg-tint\b/);
+      expect(el.className).toMatch(/\brounded-md\b/);
+    }
+    expect(name.className).toMatch(/\bmin-h-11\b/);
+    expect(funnel.className).toMatch(/\bsize-11\b/);
+    expect(funnel.querySelector("svg[data-icon='funnel']")).not.toBeNull();
+    expect(funnel).toHaveAccessibleName("Subcategories of Power");
+    expect(funnel).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("fills the funnel solid while its group is open", () => {
+    sheetTree("electronics:resistors");
+    const funnel = (ref: string) =>
+      document.querySelector(`[data-tree-node='${ref}'] button[data-funnel]`)!;
+    expect(funnel("electronics:components")).toHaveAttribute("aria-expanded", "true");
+    expect(funnel("electronics:components").className).toMatch(/\bbg-chip-on\b/);
+    expect(funnel("electronics:power").className).not.toMatch(/\bbg-chip-on\b/);
+    fireEvent.click(funnel("electronics:power"));
+    expect(funnel("electronics:power").className).toMatch(/\bbg-chip-on\b/);
+  });
+
+  it("keeps a closed group's categories in the page, inert, folded by grid rows", () => {
+    sheetTree("electronics:resistors");
+    const power = document.querySelector("[data-tree-node='electronics:power']")!;
+    const fold = regionOf(power);
+    expect(fold).toHaveAttribute("data-fold");
+    expect(fold.className).toMatch(/grid-rows-\[0fr\]/);
+    expect(fold.className).toMatch(/transition-\[grid-template-rows\]/);
+    // Crawlable: the links are there, only unreachable while folded.
+    expect(fold.querySelector("a[href='/departments/electronics/solar']")).not.toBeNull();
+    expect(fold.firstElementChild).toHaveAttribute("inert");
+    fireEvent.click(power.querySelector("button[data-funnel]")!);
+    expect(fold.className).toMatch(/grid-rows-\[1fr\]/);
+    expect(fold.firstElementChild).not.toHaveAttribute("inert");
+  });
+
+  it("gives categories and 'All of' the same button, the current one outlined", () => {
+    sheetTree("electronics:resistors");
+    const all = screen.getByRole("link", { name: /^All of Electronics/ });
+    const resistors = screen.getByRole("link", { name: /^Resistors/ });
+    for (const el of [all, resistors]) expect(el.className).toMatch(/\bbg-tint\b/);
+    expect(resistors.className).toMatch(/outline-chip-on/);
+    expect(resistors.className).not.toMatch(/\bbg-chip-on\b/);
+  });
+
+  it("outlines the group's name button on the group's own page", () => {
+    sheetTree("electronics:power");
+    const name = document.querySelector("[data-tree-group='electronics:power']")!;
+    expect(name).toHaveAttribute("aria-current", "page");
+    expect(name.className).toMatch(/outline-chip-on/);
+  });
+
+  it("keeps a single-link group's two buttons, the funnel disabled", () => {
+    sheetTree(null);
+    const other = document.querySelector("[data-tree-group='electronics:other']")!;
+    expect(other).toHaveAttribute("href", "/departments/electronics/accessories");
+    const row = other.closest("li")!;
+    const funnel = row.querySelector("button")!;
+    expect(funnel).toBeDisabled();
+    expect(funnel).toHaveAccessibleName("No subcategories in Accessories & Other");
+    expect(funnel).not.toHaveAttribute("aria-expanded");
+    expect(funnel).not.toHaveAttribute("aria-controls");
+    expect(funnel.className).toMatch(/\bsize-11\b/);
+    expect(funnel.className).toMatch(/\btext-ink-3\b/);
+    expect(funnel.className).toMatch(/\bcursor-default\b/);
+    expect(funnel.querySelector("svg[data-icon='funnel']")).not.toBeNull();
+    // The same shape as a group that opens: name button, then a 6px gap.
+    expect(funnel.parentElement!.className).toMatch(/\bgap-1\.5\b/);
+    fireEvent.click(funnel);
+    expect(document.querySelectorAll("[aria-expanded='true']")).toHaveLength(0);
+  });
+
+  it("leaves the desktop sidebar as it was", () => {
+    tree("electronics:resistors");
+    expect(document.querySelector("button[data-funnel]")).toBeNull();
+    expect(document.querySelector(".bg-tint")).toBeNull();
   });
 });
 

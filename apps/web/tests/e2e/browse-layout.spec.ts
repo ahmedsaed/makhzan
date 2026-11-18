@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
  * Layout B on the department, group and category pages (docs/DESIGN.md,
@@ -11,6 +11,13 @@ import { expect, test, type Page } from "@playwright/test";
 
 const sidebar = (page: Page, department = "Electronics") =>
   page.getByRole("complementary").getByRole("navigation", { name: `Browse ${department}` });
+
+/** Wait until the sheet's own animations (its rise, its sinking) have run out. */
+async function settled(sheet: Locator) {
+  await sheet.evaluate((el) =>
+    Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))),
+  );
+}
 
 async function noPageOverflow(page: Page) {
   const overflow = await page.evaluate(
@@ -278,6 +285,7 @@ test.describe("on a phone", () => {
     await expect(here).toHaveAttribute("aria-current", "page");
     await expect(here).toBeFocused();
     // It rises from the bottom.
+    await settled(sheet);
     const box = (await sheet.boundingBox())!;
     expect(Math.round(box.y + box.height)).toBe(844);
     // The page behind does not scroll.
@@ -317,6 +325,7 @@ test.describe("on a phone", () => {
     const pill = page.locator("[data-browse-pill]");
     await pill.click();
     const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
     const close = (await sheet.getByRole("button", { name: "Close" }).boundingBox())!;
     // A real mouse press and release on the button inside the swipe handle.
     await page.mouse.move(close.x + close.width / 2, close.y + close.height / 2);
@@ -355,6 +364,7 @@ test.describe("on a phone", () => {
     await page.goto("/departments/electronics/resistors");
     await page.locator("[data-browse-pill]").click();
     const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
     const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
     const x = handle.x + handle.width / 2;
     const y = handle.y + 10;
@@ -389,6 +399,7 @@ test.describe("on a phone", () => {
     await page.goto("/departments/electronics/resistors");
     await page.locator("[data-browse-pill]").click();
     const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
     const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
     const x = handle.x + handle.width / 2;
     await page.mouse.move(x, handle.y + 10);
@@ -399,9 +410,10 @@ test.describe("on a phone", () => {
     await page.mouse.move(x, handle.y + 50, { steps: 2 });
     await page.mouse.up();
     await expect(sheet).toBeVisible();
-    // The pointer was captured, so the release ended the gesture: no stale offset.
+    // The pointer was captured, so the release ended the gesture: no stale
+    // offset once the spring-back has settled, and the mouse no longer moves it.
     await page.mouse.move(x, 760);
-    expect(await sheet.evaluate((el) => (el as HTMLElement).style.transform)).toBe("");
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLElement).style.transform)).toBe("");
   });
 
   test("turning the phone on its side closes the sheet and frees the page", async ({ page }) => {
@@ -522,4 +534,254 @@ test.describe("both themes", () => {
       await context.close();
     });
   }
+});
+
+// The owner's sheet-motion mockup, option A with the funnel (18 November 2026).
+test.describe("the phone sheet, option A", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  async function openSheet(page: Page) {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    return page.locator("dialog[data-browse-sheet]");
+  }
+
+  test("a group is two separate tinted buttons, 44px, 6px apart", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    const node = sheet.locator("[data-tree-node='electronics:tools']");
+    const name = node.locator("[data-tree-group]");
+    const funnel = node.locator("button[data-funnel]");
+    const n = (await name.boundingBox())!;
+    const f = (await funnel.boundingBox())!;
+    expect(Math.round(n.height)).toBe(44);
+    expect(Math.round(f.height)).toBe(44);
+    expect(Math.round(f.width)).toBe(44);
+    expect(Math.round(f.x - (n.x + n.width))).toBe(6);
+    const style = (el: Locator) =>
+      el.evaluate((e) => {
+        const s = getComputedStyle(e);
+        return { bg: s.backgroundColor, radius: s.borderTopLeftRadius };
+      });
+    const ns = await style(name);
+    const fs = await style(funnel);
+    expect(ns.bg).toBe(fs.bg);
+    expect(ns.bg).not.toMatch(/rgba\(0, 0, 0, 0\)/);
+    expect(ns.radius).toBe("8px");
+    expect(fs.radius).toBe("8px");
+    await expect(funnel.locator("svg[data-icon='funnel'] path")).toHaveCount(1);
+    await expect(funnel).toHaveAccessibleName("Subcategories of Tools & Equipment");
+  });
+
+  test("an open group's funnel fills solid in chip-on", async ({ page }) => {
+    const sheet = await openSheet(page);
+    const chipOn = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.className = "bg-chip-on";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+    const components = sheet.locator(
+      "[data-tree-node='electronics:components'] button[data-funnel]",
+    );
+    await expect(components).toHaveAttribute("aria-expanded", "true");
+    await expect
+      .poll(() => components.evaluate((e) => getComputedStyle(e).backgroundColor))
+      .toBe(chipOn);
+    const power = sheet.locator("[data-tree-node='electronics:tools'] button[data-funnel]");
+    expect(await power.evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe(chipOn);
+    await power.click();
+    await expect(power).toHaveAttribute("aria-expanded", "true");
+    await expect
+      .poll(() => power.evaluate((e) => getComputedStyle(e).backgroundColor))
+      .toBe(chipOn);
+  });
+
+  test("a group opens by grid rows, its categories in the page all along", async ({ page }) => {
+    const sheet = await openSheet(page);
+    const fold = sheet.locator("[data-tree-node='electronics:tools'] [data-fold]");
+    expect(await fold.evaluate((e) => getComputedStyle(e).transitionProperty)).toContain(
+      "grid-template-rows",
+    );
+    expect(await fold.evaluate((e) => getComputedStyle(e).transitionDuration)).toBe("0.25s");
+    expect(await fold.evaluate((e) => e.getBoundingClientRect().height)).toBe(0);
+    await expect(fold.locator("a[href='/departments/electronics/soldering']")).toHaveCount(1);
+    await sheet.locator("[data-tree-node='electronics:tools'] button[data-funnel]").click();
+    await expect
+      .poll(() => fold.evaluate((e) => e.getBoundingClientRect().height))
+      .toBeGreaterThan(40);
+    await expect(fold.locator("a[href='/departments/electronics/soldering']")).toBeVisible();
+  });
+
+  test("a single-link group keeps both buttons, the funnel disabled", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    // Accessories & Other holds one category: its name goes straight there.
+    const name = sheet.locator("[data-tree-group='electronics:other']");
+    await expect(name).toHaveAttribute("href", "/departments/electronics/accessories");
+    const funnel = name.locator("xpath=ancestor::li[1]").locator("button");
+    await expect(funnel).toBeDisabled();
+    await expect(funnel).toHaveAccessibleName("No subcategories in Accessories & Other");
+    await expect(funnel).not.toHaveAttribute("aria-expanded");
+    // The same widths as a group that opens.
+    const otherName = (await name.boundingBox())!;
+    const otherFunnel = (await funnel.boundingBox())!;
+    const tools = sheet.locator("[data-tree-node='electronics:tools']");
+    const toolsName = (await tools.locator("[data-tree-group]").boundingBox())!;
+    const toolsFunnel = (await tools.locator("button[data-funnel]").boundingBox())!;
+    expect(Math.abs(otherName.width - toolsName.width)).toBeLessThan(1);
+    expect(Math.abs(otherFunnel.width - toolsFunnel.width)).toBeLessThan(1);
+    expect(Math.abs(otherFunnel.x - toolsFunnel.x)).toBeLessThan(1);
+    // Dimmed, no pointer, and out of the tab order.
+    expect(await funnel.evaluate((e) => getComputedStyle(e).cursor)).toBe("default");
+    await funnel.evaluate((e) => (e as HTMLElement).focus());
+    await expect(funnel).not.toBeFocused();
+    // A tap does nothing: still open, still here, nothing expanded.
+    await funnel.click({ force: true });
+    expect(await sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(true);
+    await expect(page).toHaveURL("/departments/electronics/resistors");
+    await expect(sheet.locator("[aria-expanded='true']")).toHaveCount(1); // Components, the page's own
+  });
+
+  test("it rises over 250ms, then rests open", async ({ page }) => {
+    const sheet = await openSheet(page);
+    const running = await sheet.evaluate((el) =>
+      el.getAnimations().map((a) => (a.effect as KeyframeEffect).getTiming().duration),
+    );
+    expect(running).toContain(250);
+    await settled(sheet);
+    expect(await sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(true);
+    expect(await sheet.evaluate((el) => getComputedStyle(el).transform)).toBe("none");
+    expect(await sheet.evaluate((el) => el.getAnimations().length)).toBe(0);
+  });
+
+  test("it sinks over 200ms before it closes", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    await sheet.getByRole("button", { name: "Close" }).click();
+    // Still open while it slides away.
+    const during = await sheet.evaluate((el) => ({
+      open: (el as HTMLDialogElement).open,
+      closing: el.hasAttribute("data-closing"),
+      durations: el.getAnimations().map((a) => (a.effect as KeyframeEffect).getTiming().duration),
+    }));
+    expect(during).toEqual({ open: true, closing: true, durations: [200] });
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
+    expect(await sheet.evaluate((el) => el.hasAttribute("data-closing"))).toBe(false);
+    await expect(page.locator("[data-browse-pill]")).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
+  });
+
+  test("Escape slides it away too", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    await page.keyboard.press("Escape");
+    expect(await sheet.evaluate((el) => el.hasAttribute("data-closing"))).toBe(true);
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
+    await expect(page.locator("[data-browse-pill]")).toBeFocused();
+  });
+
+  test("under reduced motion it opens and closes at once", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const sheet = await openSheet(page);
+    const durations = await sheet.evaluate((el) =>
+      el.getAnimations().map((a) => (a.effect as KeyframeEffect).getTiming().duration),
+    );
+    for (const d of durations) expect(d).toBeLessThan(1);
+    await sheet.getByRole("button", { name: "Close" }).click();
+    // No wait for an animation: closed by the time the click returns.
+    expect(await sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
+    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
+  });
+
+  test("a swipe past the threshold glides out, then closes", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + 10;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 10; step++) {
+      await page.mouse.move(x, y + step * 20);
+      // The sheet follows the finger.
+      if (step === 5) {
+        expect(await sheet.evaluate((el) => (el as HTMLElement).style.transform)).toBe(
+          "translateY(100px)",
+        );
+      }
+    }
+    await page.mouse.up();
+    const glide = await sheet.evaluate((el) => ({
+      open: (el as HTMLDialogElement).open,
+      transition: (el as HTMLElement).style.transition,
+    }));
+    expect(glide.open).toBe(true);
+    const ms = Number(
+      /transform (\d+)ms cubic-bezier\(0\.25, 0\.6, 0\.4, 1\)/.exec(glide.transition)?.[1],
+    );
+    expect(ms).toBeGreaterThanOrEqual(120);
+    expect(ms).toBeLessThanOrEqual(240);
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
+    await expect(page.locator("[data-browse-pill]")).toBeFocused();
+  });
+
+  test("a short, slow swipe springs back with an overshoot", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + 10;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + 40, { steps: 8 });
+    await page.waitForTimeout(120); // held still: no flick
+    await page.mouse.up();
+    const back = await sheet.evaluate((el) => (el as HTMLElement).style.transition);
+    expect(back).toBe("transform 380ms cubic-bezier(0.3, 1.35, 0.5, 1)");
+    expect(await sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(true);
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLElement).style.transform)).toBe("");
+    expect(await sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(true);
+  });
+
+  test("a quick flick closes even a short swipe", async ({ page }) => {
+    const sheet = await openSheet(page);
+    await settled(sheet);
+    const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + 10;
+    // Dispatched a frame apart: 60px at about 0.9px/ms, under the 80px threshold.
+    await sheet.locator("[data-sheet-handle]").evaluate(
+      (el, [px, py]) => {
+        const at = (type: string, cy: number) =>
+          el.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              pointerId: 7,
+              pointerType: "touch",
+              clientX: px,
+              clientY: cy,
+            }),
+          );
+        at("pointerdown", py);
+        return new Promise<void>((done) => {
+          let cy = py;
+          const step = () => {
+            cy += 15;
+            at("pointermove", cy);
+            if (cy < py + 60) requestAnimationFrame(step);
+            else {
+              at("pointerup", cy);
+              done();
+            }
+          };
+          requestAnimationFrame(step);
+        });
+      },
+      [x, y],
+    );
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
+  });
 });

@@ -57,6 +57,10 @@ const PAIRS: [string, string][] = [
   ["warn-ink", "warn"],
   ["age-muted", "surface"],
   ["chip-on-ink", "chip-on"],
+  // The phone sheet's tinted buttons: names in ink, counts in ink-2 (ink-3
+  // falls short of 4.5:1 on the light tint).
+  ["ink", "tint"],
+  ["ink-2", "tint"],
   // Text over the background pattern, should a stroke pass behind a glyph.
   ["ink", "pattern"],
   ["ink-2", "pattern"],
