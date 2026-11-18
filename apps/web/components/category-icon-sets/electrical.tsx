@@ -99,7 +99,7 @@ export const ELECTRICAL_ICONS: Record<string, Glyph> = {
     kind: "group",
     body: (
       <>
-        <path d="M9 14.5c0-1.7-3.5-3-3.5-6.5a6.5 6.5 0 0 1 13 0c0 3.5-3.5 4.8-3.5 6.5z" />
+        <path d="M9 14.5c0-1.7-3-3-3-6.5a6 6 0 0 1 12 0c0 3.5-3 4.8-3 6.5z" />
         <path d="M9 17.5h6M10 20.5h4" />
       </>
     ),

@@ -95,9 +95,9 @@ export const MATERIALS_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <path d="M3 12.5h18l-3 6.5H6z" />
-        <path d="M8 12.5v-3h6l2 3" />
-        <path d="M3 21.5q1.5-1.25 3 0t3 0 3 0 3 0 3 0" />
+        <path d="M3 12h18l-3 6.5H6z" />
+        <path d="M8 12V9h6l2 3" />
+        <path d="M3 21.25q1.5-1.25 3 0t3 0 3 0 3 0 3 0" />
       </>
     ),
   },
