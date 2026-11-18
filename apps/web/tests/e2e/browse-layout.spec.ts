@@ -167,14 +167,70 @@ test.describe("on a phone", () => {
     await expect(bar).not.toHaveAttribute("data-more-end");
   });
 
-  test("opens the Price panel within a narrow screen", async ({ page }) => {
-    await page.setViewportSize({ width: 320, height: 700 });
+  for (const width of [320, 390]) {
+    test(`the Price panel is drawn and usable at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto("/departments/seals-bearings?in_stock=all");
+      await page.locator("[data-price-chip] summary").click();
+      const panel = page.getByRole("form", { name: "Price, EGP" });
+      const f = (await panel.boundingBox())!;
+      expect(f.x).toBeGreaterThanOrEqual(15);
+      expect(f.x + f.width).toBeLessThanOrEqual(width - 15);
+      // Drawn, not just laid out: the chip bar's fade is a mask, which would
+      // clip the panel (toBeVisible cannot see that). What is at its centre?
+      const hit = await page.evaluate(
+        ([x, y]) => Boolean(document.elementFromPoint(x, y)?.closest("form[aria-label]")),
+        [f.x + f.width / 2, f.y + f.height / 2],
+      );
+      expect(hit).toBe(true);
+      // And it works by pointer, at the coordinates a finger would use.
+      const min = (await panel.getByLabel("Min, EGP").boundingBox())!;
+      await page.mouse.click(min.x + min.width / 2, min.y + min.height / 2);
+      await page.keyboard.type("40");
+      const apply = (await panel.getByRole("button", { name: "Apply" }).boundingBox())!;
+      await page.mouse.click(apply.x + apply.width / 2, apply.y + apply.height / 2);
+      await expect(page).toHaveURL(/min_price=40/);
+      await noPageOverflow(page);
+    });
+  }
+
+  test("the Price panel follows its chip when the bar scrolls", async ({ page }) => {
     await page.goto("/departments/electronics/resistors");
+    // A panel narrower than the row, so where it sits depends on the chip.
+    await page.addStyleTag({ content: "form[aria-label='Price, EGP'] { width: 12rem; }" });
     await page.locator("[data-price-chip] summary").click();
-    const f = (await page.getByRole("form", { name: "Price, EGP" }).boundingBox())!;
-    expect(f.x).toBeGreaterThanOrEqual(15);
-    expect(f.x + f.width).toBeLessThanOrEqual(305);
-    await noPageOverflow(page);
+    const bar = page.getByRole("navigation", { name: "Quick filters" });
+    await bar.evaluate((el) => {
+      el.style.scrollBehavior = "auto";
+      el.scrollLeft = el.scrollWidth;
+    });
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const panel = document.querySelector<HTMLElement>("form[aria-label='Price, EGP']")!;
+          const chip = document.querySelector("[data-price-chip] summary")!;
+          const row = panel.offsetParent!.getBoundingClientRect();
+          const want = Math.max(
+            0,
+            Math.min(chip.getBoundingClientRect().left - row.left, row.width - panel.offsetWidth),
+          );
+          return Math.abs(panel.getBoundingClientRect().left - row.left - want) < 1.5;
+        }),
+      )
+      .toBe(true);
+  });
+
+  test("the fade follows a chip that changes width", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const bar = page.getByRole("navigation", { name: "Quick filters" });
+    await bar.evaluate((el) => (el.scrollLeft = el.scrollWidth));
+    await expect(bar).not.toHaveAttribute("data-more-end");
+    // A chip grows (a price set names itself) while the bar keeps its size.
+    await bar.evaluate((el) => {
+      (el.firstElementChild as HTMLElement).style.paddingRight = "200px";
+      el.scrollLeft = 0;
+    });
+    await expect(bar).toHaveAttribute("data-more-end", "true");
   });
 
   test("there is no category row, only the Browse pill", async ({ page }) => {
@@ -238,6 +294,20 @@ test.describe("on a phone", () => {
     expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
   });
 
+  test("closes on a mouse click on Close", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const pill = page.locator("[data-browse-pill]");
+    await pill.click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    const close = (await sheet.getByRole("button", { name: "Close" }).boundingBox())!;
+    // A real mouse press and release on the button inside the swipe handle.
+    await page.mouse.move(close.x + close.width / 2, close.y + close.height / 2);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(sheet).toBeHidden();
+    await expect(pill).toBeFocused();
+  });
+
   test("closes on a tap outside it", async ({ page }) => {
     await page.goto("/departments/electronics/resistors");
     await page.locator("[data-browse-pill]").click();
@@ -270,8 +340,6 @@ test.describe("on a phone", () => {
     await expect(page).toHaveURL("/departments/electronics/ics");
     await expect(sheet).toBeHidden();
     await expect(page.locator("[data-browse-pill]")).toHaveText(/Integrated Circuits\s*· Browse/);
-    // A navigation, not a dismissal: focus is not pulled back to the pill.
-    await expect(page.locator("[data-browse-pill]")).not.toBeFocused();
   });
 
   test("returns focus to the pill after a tap outside", async ({ page }) => {

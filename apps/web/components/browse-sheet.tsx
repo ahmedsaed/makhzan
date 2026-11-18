@@ -18,11 +18,10 @@ import { cn } from "@/lib/utils";
  * The sheet is a modal `<dialog>`: the browser makes the rest of the page
  * inert (the focus trap), gives it `aria-modal`, and closes it on Escape. It
  * is named by its heading, locks the page's scroll while open, and closes on a
- * swipe down, a tap outside it, Escape or the choice of a link. A dismissal
- * returns focus to the pill; choosing a link does not, since the page is
- * leaving. Widening the window past `md` (a phone turned on its side, a
- * resized window) closes it too: the sheet is hidden there and the sidebar
- * shows, and a hidden modal would leave the page inert and unscrollable.
+ * swipe down, a tap outside it, Escape or the choice of a link; the browser
+ * returns focus to the pill. Widening the window past `md` (a phone turned on
+ * its side, a resized window) closes it too: the sheet is hidden there and the
+ * sidebar shows, and a hidden modal would leave the page inert and unscrollable.
  *
  * With JavaScript off the pill is a link to `#browse-tree`, the page's own
  * tree, which then shows on a phone too (`target:` in department-browse).
@@ -43,9 +42,6 @@ export function BrowseSheet({
   const [shown, setShown] = useState(true);
   const [drag, setDrag] = useState(0);
   const start = useRef<number | null>(null);
-  // Set when a link in the sheet is chosen: the close that follows is a
-  // navigation, not a dismissal, so focus is not pulled back to the pill.
-  const leaving = useRef(false);
   const headingId = useId();
 
   const close = useCallback(() => dialog.current?.close(), []);
@@ -78,18 +74,13 @@ export function BrowseSheet({
       document.documentElement.style.removeProperty("overflow");
       setDrag(0);
       start.current = null;
-      if (!leaving.current) pill.current?.focus();
-      leaving.current = false;
     };
     // From `md` the sheet is hidden and the sidebar shows: close it, or the
     // page behind would stay inert under a modal nobody can see.
     const wide =
       typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 48rem)") : null;
     const onWide = () => {
-      if (wide?.matches && sheet.open) {
-        leaving.current = true; // the pill is hidden there; nothing to return to
-        sheet.close();
-      }
+      if (wide?.matches && sheet.open) sheet.close();
     };
     sheet.addEventListener("close", onClose);
     wide?.addEventListener("change", onWide);
@@ -114,13 +105,20 @@ export function BrowseSheet({
 
   // Swipe down on the handle or the heading to close.
   const onPointerDown = (event: React.PointerEvent) => {
-    // Captured, so a release outside the handle (a mouse dragged off it) still
-    // ends the gesture here rather than leaving a stale start point.
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // A press on the Close button is a click, never the start of a swipe.
+    if ((event.target as HTMLElement).closest("button")) return;
     start.current = event.clientY;
   };
   const onPointerMove = (event: React.PointerEvent) => {
-    if (start.current !== null) setDrag(Math.max(0, event.clientY - start.current));
+    if (start.current === null) return;
+    const moved = event.clientY - start.current;
+    // Captured once it is plainly a drag, so a release outside the handle (a
+    // mouse dragged off it) still ends the gesture here rather than leaving a
+    // stale start point; not on the press, which would swallow a click.
+    if (Math.abs(moved) > 4 && !event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    setDrag(Math.max(0, moved));
   };
   const onPointerUp = (event: React.PointerEvent) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -159,10 +157,7 @@ export function BrowseSheet({
           // A tap on the backdrop lands on the dialog itself, outside its panel.
           if (event.target === event.currentTarget) close();
           // Choosing a link closes the sheet as the page navigates.
-          else if ((event.target as HTMLElement).closest("a")) {
-            leaving.current = true;
-            close();
-          }
+          else if ((event.target as HTMLElement).closest("a")) close();
         }}
         style={drag ? { transform: `translateY(${drag}px)` } : undefined}
         className="m-0 mt-auto max-h-[85svh] w-full max-w-none overflow-hidden rounded-t-card border-t border-line bg-surface p-0 text-ink backdrop:bg-ink/40 md:hidden"

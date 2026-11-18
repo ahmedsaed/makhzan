@@ -115,7 +115,8 @@ the page container on desktop; each section is left out when its fetch fails.
   category pages the tree navigates instead, so there is no category filter and no
   rail, and **Price** is a chip, third, before "2+ shops", that opens Min and Max under
   itself (an empty one is left out of the URL). On a phone the chip bar scrolls sideways
-  and fades at an edge only while that edge hides chips.
+  and fades at an edge only while that edge hides chips, and not while Price is open, since
+  the fade would clip its panel.
 - "Top categories for “query”" above the results.
 - A toolbar: the count, "N more out of stock" and "N more out of date" (one click on
   either shows them), sort (best match, price low first, most shops, recently checked)
@@ -391,8 +392,8 @@ department), and opens the same tree as a bottom sheet (`components/browse-sheet
 the current group expanded, the current category outlined and bold, 44px rows. The sheet
 is a modal `<dialog>` named by its heading, so focus stays in it while it is open; it
 locks the page's scroll, closes on a swipe down, a tap outside it, Escape or the choice of
-a link, and returns focus to the pill after a dismissal (not after a link, since the page is
-leaving). It also closes when the window widens past `md`, where the sidebar takes over. The pill slides away while the page scrolls down
+a link, and returns focus to the pill. It also closes when the window widens past `md`,
+where the sidebar takes over. The pill slides away while the page scrolls down
 and comes back on any scroll up or on keyboard focus; under `prefers-reduced-motion` it
 just shows and hides. The results end with room for it, so it never covers the last card.
 It is outlined, with no shadow. With JavaScript off it is a link to the page's own tree,
