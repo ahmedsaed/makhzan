@@ -604,8 +604,12 @@ makhzan draws its own icons for a department's groups and categories
 (`apps/web/components/category-icons.tsx`; option 3 of the icon pilot, approved
 18 November 2026). The style guide, which a test holds every icon to (S7):
 
-- **A 24 × 24 grid with a 2-unit margin.** Drawn inside the 20 × 20 live area; only
-  a schematic symbol's leads may run on to the edge, as a wire would.
+- **A 24 × 24 grid with a 2-unit margin.** Drawn inside the 20 × 20 live area, curves
+  and arcs included (the test samples them, not just their end points). Only a
+  category's leads may run on to the edge, as a wire would, and the owner's ruling
+  (November 2026) is that a lead is any straight run that leaves the object: a
+  schematic symbol's wire, but also a hose, cable, pipe stub, port or spray. A group
+  is an object and keeps to the live area; a curve never reaches the margin.
 - **One stroke: 1.5 units, round caps and joins.** 1.25px at 20px, 2px at 32px. No
   hairlines, no mixed weights. A dot is a zero-length segment, as heavy as a line.
 - **No fills; `currentColor`.** Outline only, in the colour of the text around it:
@@ -620,24 +624,23 @@ makhzan draws its own icons for a department's groups and categories
 
 Icons are keyed by category ref, `domain:slug`, never a bare slug (slugs repeat across
 departments); a group is a top-level category, so it is keyed by its ref too. Each
-department's set lives in `components/category-icon-sets/<department>.tsx`. Drawn so far:
-Electronics in full (8 groups and 34 categories, plus Cameras & Imaging and Educational &
-Robot Kits), Photography's 2 groups and 4 categories (both drawn ahead of the taxonomy that
-adds them; an icon for a ref no taxonomy has yet is allowed, a category without an icon is
-not), Electrical (10 + 37), Tools (5 + 31) and Seals & Bearings (6 + 20). Photography's
-categories have no schematic symbols, so they are the things themselves (a softbox, a
-tripod, a bag, a lens). The remaining departments (automotive, chemicals, cleaning, garden,
-machinery, materials, piping, rigging, safety, security, timber, welding) show their
-categories plain in the browse tree. A department's set is a batch: one drawn department
-is all or nothing, and a new category in a drawn department fails the test until its icon
-is added. No two icons in the registry may be the same drawing unless the test's allow-list
-says they mean the same thing (today only the four "Other ..." categories of Tools).
+department's set lives in `components/category-icon-sets/<department>.tsx`. Every
+department with a profile is drawn in full: each group and category in its taxonomy has
+an icon, and a group's tile falls back to the department's tile icon only for a ref with
+no drawing. Electronics includes Cameras & Imaging and Educational & Robot Kits;
+Photography's categories have no schematic symbols, so they are the things themselves (a
+softbox, a tripod, a bag, a lens). A department's set is a batch: a new category in a
+department fails the test until its icon is added, and so does an icon for a ref no
+taxonomy has (none may be drawn ahead). No two icons in the registry may be the same
+drawing unless the test's allow-list says they mean the same thing (today six "Other ..."
+refs: the four Tools "Other" categories, Machinery's "Other Pumps" and Garden's "Other
+Garden Power Tools").
 
 **Department tiles** (`components/department-icon.tsx`, drawings in
 `category-icon-sets/departments.tsx`) are drawn in the same style, one object per
-department, for tiles and list rows; every department has one, and a group in a department
-whose set is not drawn shows it too. `tests/icon-gallery.test.tsx` writes the contact sheet
-for review when `GALLERY_OUT` is set.
+department, for tiles and list rows; every department has one, and the tests hold them to
+the same live-area and attribute rules as the category icons.
+`tests/icon-gallery.test.tsx` writes the contact sheet for review when `GALLERY_OUT` is set.
 
 ### Brand
 
@@ -697,4 +700,4 @@ Each is meant to be checked by a test.
 - **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px (checked at 320, 375 and 390px on department pages). A row that scrolls sideways inside itself (the chip bar) is not page scroll; it keeps its items' 44px inside its own box. The phone's Browse pill and every row of its sheet are 44px.
 - **S5** Photos are contained in a white frame in both themes; never cropped.
 - **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.
-- **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. A department with a drawn set has an icon for every group and category in its taxonomy; one without shows its categories plain. An icon may be drawn ahead of the taxonomy that adds its category.
+- **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. Every group and category in a department's taxonomy has an icon, and no icon exists for a ref no taxonomy has. Shapes, curves and arcs stay inside the live area (a category's straight leads may reach the edge), and the 17 department tiles are held to the same.

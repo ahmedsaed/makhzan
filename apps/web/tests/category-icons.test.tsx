@@ -1,7 +1,7 @@
 /**
  * Rule S7 from docs/DESIGN.md: every category icon is drawn to the set's style,
- * and Electronics, the first department with a drawn set, has one for every
- * group and category in its taxonomy.
+ * every department's taxonomy has an icon for each group and category, and no
+ * icon is drawn for a ref no taxonomy has.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,15 +27,78 @@ function svgOf(ref: string): SVGSVGElement {
   return doc.documentElement as unknown as SVGSVGElement;
 }
 
-/** Every point a path's commands land on (arc and curve end points, not their bulge). */
-function pathPoints(d: string): [number, number][] {
+const SAMPLES = 24;
+
+/** Points along an SVG arc (endpoint form, SVG 1.1 implementation notes F.6.5). */
+function arcPoints(
+  [x1, y1]: [number, number],
+  [rx0, ry0, rot, large, sweep, x2, y2]: number[],
+): [number, number][] {
+  let rx = Math.abs(rx0);
+  let ry = Math.abs(ry0);
+  if (rx === 0 || ry === 0 || (x1 === x2 && y1 === y2)) return [[x2, y2]];
+  const phi = (rot * Math.PI) / 180;
+  const [cp, sp] = [Math.cos(phi), Math.sin(phi)];
+  const dx = (x1 - x2) / 2;
+  const dy = (y1 - y2) / 2;
+  const x1p = cp * dx + sp * dy;
+  const y1p = -sp * dx + cp * dy;
+  const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+  if (lambda > 1) {
+    rx *= Math.sqrt(lambda);
+    ry *= Math.sqrt(lambda);
+  }
+  const num = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
+  const den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+  const k = (large === sweep ? -1 : 1) * Math.sqrt(Math.max(0, num / den));
+  const cxp = (k * rx * y1p) / ry;
+  const cyp = (-k * ry * x1p) / rx;
+  const cx = cp * cxp - sp * cyp + (x1 + x2) / 2;
+  const cy = sp * cxp + cp * cyp + (y1 + y2) / 2;
+  const angle = (ux: number, uy: number, vx: number, vy: number) =>
+    Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+  const t1 = angle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
+  let dt = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+  if (!sweep && dt > 0) dt -= 2 * Math.PI;
+  if (sweep && dt < 0) dt += 2 * Math.PI;
+  return Array.from({ length: SAMPLES }, (_, n) => {
+    const t = t1 + (dt * (n + 1)) / SAMPLES;
+    return [
+      cp * rx * Math.cos(t) - sp * ry * Math.sin(t) + cx,
+      sp * rx * Math.cos(t) + cp * ry * Math.sin(t) + cy,
+    ] as [number, number];
+  });
+}
+
+/** Points along a Bezier of any order, by de Casteljau. */
+function bezierPoints(control: [number, number][]): [number, number][] {
+  return Array.from({ length: SAMPLES }, (_, n) => {
+    const t = (n + 1) / SAMPLES;
+    let pts = control;
+    while (pts.length > 1) {
+      pts = pts
+        .slice(1)
+        .map((p, j) => [pts[j][0] + (p[0] - pts[j][0]) * t, pts[j][1] + (p[1] - pts[j][1]) * t]);
+    }
+    return pts[0];
+  });
+}
+
+/**
+ * Points along a path's real geometry: line ends, and samples along every cubic,
+ * quadratic and arc segment, so a bulge that leaves the live area is seen.
+ */
+function pathPoints(d: string): [number, number, boolean][] {
   const tokens = d.match(/[a-zA-Z]|-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?/g) ?? [];
-  const points: [number, number][] = [];
+  const points: [number, number, boolean][] = [];
   let x = 0;
   let y = 0;
   let startX = 0;
   let startY = 0;
   let command = "";
+  // The last control point, which S and T reflect.
+  let lastCtrl: [number, number] | null = null;
+  let lastKind = "";
   let i = 0;
   const num = () => Number(tokens[i++]);
   const arity: Record<string, number> = {
@@ -57,25 +120,141 @@ function pathPoints(d: string): [number, number][] {
     if (!(lower in arity)) throw new Error(`unknown path command ${command} in ${d}`);
     if (lower === "z") {
       [x, y] = [startX, startY];
+      lastKind = "";
       continue;
     }
     const args = Array.from({ length: arity[lower] }, num);
     if (args.some(Number.isNaN)) throw new Error(`bad path data: ${d}`);
-    if (lower === "h") x = rel ? x + args[0] : args[0];
-    else if (lower === "v") y = rel ? y + args[0] : args[0];
-    else {
-      const [ex, ey] = args.slice(-2);
-      x = rel ? x + ex : ex;
-      y = rel ? y + ey : ey;
+    const ox = rel ? x : 0;
+    const oy = rel ? y : 0;
+    const from: [number, number] = [x, y];
+    let kind = "";
+    if (lower === "h") {
+      x = ox + args[0];
+      points.push([x, y, false]);
+    } else if (lower === "v") {
+      y = oy + args[0];
+      points.push([x, y, false]);
+    } else if (lower === "c" || lower === "s") {
+      const [c1, c2, end]: [number, number][] =
+        lower === "c"
+          ? [
+              [ox + args[0], oy + args[1]],
+              [ox + args[2], oy + args[3]],
+              [ox + args[4], oy + args[5]],
+            ]
+          : [
+              lastKind === "c" && lastCtrl ? [2 * x - lastCtrl[0], 2 * y - lastCtrl[1]] : [x, y],
+              [ox + args[0], oy + args[1]],
+              [ox + args[2], oy + args[3]],
+            ];
+      points.push(
+        ...bezierPoints([from, c1, c2, end]).map(([a, b]): [number, number, boolean] => [
+          a,
+          b,
+          true,
+        ]),
+      );
+      [x, y] = end;
+      lastCtrl = c2;
+      kind = "c";
+    } else if (lower === "q" || lower === "t") {
+      const [c1, end]: [number, number][] =
+        lower === "q"
+          ? [
+              [ox + args[0], oy + args[1]],
+              [ox + args[2], oy + args[3]],
+            ]
+          : [
+              lastKind === "q" && lastCtrl ? [2 * x - lastCtrl[0], 2 * y - lastCtrl[1]] : [x, y],
+              [ox + args[0], oy + args[1]],
+            ];
+      points.push(
+        ...bezierPoints([from, c1, end]).map(([a, b]): [number, number, boolean] => [a, b, true]),
+      );
+      [x, y] = end;
+      lastCtrl = c1;
+      kind = "q";
+    } else if (lower === "a") {
+      const end: [number, number] = [ox + args[5], oy + args[6]];
+      points.push(
+        ...arcPoints(from, [...args.slice(0, 5), ...end]).map(
+          ([a, b]): [number, number, boolean] => [a, b, true],
+        ),
+      );
+      [x, y] = end;
+    } else {
+      x = ox + args[0];
+      y = oy + args[1];
+      points.push([x, y, false]);
+      if (lower === "m") {
+        [startX, startY] = [x, y];
+        // Coordinates after a moveto are implicit linetos.
+        command = rel ? "l" : "L";
+      }
     }
-    if (lower === "m") {
-      [startX, startY] = [x, y];
-      // Coordinates after a moveto are implicit linetos.
-      command = rel ? "l" : "L";
-    }
-    points.push([x, y]);
+    lastKind = kind;
   }
   return points;
+}
+
+const ATTRIBUTES = [
+  "d",
+  "x",
+  "y",
+  "width",
+  "height",
+  "rx",
+  "ry",
+  "cx",
+  "cy",
+  "r",
+  "x1",
+  "y1",
+  "x2",
+  "y2",
+];
+
+/**
+ * Every place a shape's geometry (curves and arcs sampled) leaves the live area. A
+ * straight segment's end may reach `lead` (a lead runs on to the edge); a curve or arc
+ * may not, so a bulge or a wave cannot hide in the margin.
+ */
+function outsideLiveArea(
+  svg: Element,
+  [lo, hi]: [number, number],
+  lead: [number, number] = [lo, hi],
+): string[] {
+  const out: string[] = [];
+  const check = (what: string, ...values: number[]) => {
+    if (!values.every((v) => v >= lo - 1e-6 && v <= hi + 1e-6)) out.push(what);
+  };
+  const n = (el: Element, ...names: string[]) => names.map((a) => Number(el.getAttribute(a)));
+  for (const rect of svg.querySelectorAll("rect")) {
+    const [x, y, w, h] = n(rect, "x", "y", "width", "height");
+    check(`rect ${x},${y} ${w}×${h}`, x, y, x + w, y + h);
+  }
+  for (const circle of svg.querySelectorAll("circle")) {
+    const [cx, cy, r] = n(circle, "cx", "cy", "r");
+    check(`circle at ${cx},${cy}`, cx - r, cy - r, cx + r, cy + r);
+  }
+  for (const ellipse of svg.querySelectorAll("ellipse")) {
+    const [cx, cy, rx, ry] = n(ellipse, "cx", "cy", "rx", "ry");
+    check(`ellipse at ${cx},${cy}`, cx - rx, cy - ry, cx + rx, cy + ry);
+  }
+  for (const line of svg.querySelectorAll("line")) {
+    const [x1, y1, x2, y2] = n(line, "x1", "y1", "x2", "y2");
+    check(`line ${x1},${y1} ${x2},${y2}`, x1, y1, x2, y2);
+  }
+  for (const path of svg.querySelectorAll("path")) {
+    for (const [x, y, curved] of pathPoints(path.getAttribute("d") ?? "")) {
+      const [a, b] = curved ? [lo, hi] : lead;
+      if (![x, y].every((v) => v >= a - 1e-6 && v <= b + 1e-6)) {
+        out.push(`${curved ? "curve" : "point"} ${x.toFixed(2)},${y.toFixed(2)}`);
+      }
+    }
+  }
+  return out;
 }
 
 describe("S7 · every category icon follows the style guide", () => {
@@ -101,47 +280,18 @@ describe("S7 · every category icon follows the style guide", () => {
       expect(["path", "rect", "circle", "line", "ellipse"], ref).toContain(shape.tagName);
       for (const { name, value } of [...shape.attributes]) {
         // Nothing may restyle a stroke: weight, caps, colour and fill all come from the <svg>.
-        expect(
-          ["d", "x", "y", "width", "height", "rx", "ry", "cx", "cy", "r", "x1", "y1", "x2", "y2"],
-          `${ref}: <${shape.tagName} ${name}="${value}">`,
-        ).toContain(name);
+        expect(ATTRIBUTES, `${ref}: <${shape.tagName} ${name}="${value}">`).toContain(name);
       }
-      const fill = shape.getAttribute("fill");
-      expect(fill === null || fill === "none" || fill === "currentColor").toBe(true);
     }
   });
 
   it.each(ENTRIES)(
     "%s stays on the grid: shapes in the 2-unit margin, leads to the edge",
     (ref, glyph) => {
-      const svg = svgOf(ref);
-      const LIVE: [number, number] = [2, 22];
-      // A category's schematic leads may run to the edge, as a wire would; an object may not.
-      const reach: [number, number] = glyph.kind === "category" ? [0, 24] : LIVE;
-      const inside = ([lo, hi]: [number, number], ...values: number[]) =>
-        values.every((v) => v >= lo - 1e-6 && v <= hi + 1e-6);
-
-      for (const rect of svg.querySelectorAll("rect")) {
-        const [x, y, w, h] = ["x", "y", "width", "height"].map((a) => Number(rect.getAttribute(a)));
-        expect(inside(LIVE, x, y, x + w, y + h), `${ref}: rect ${x},${y} ${w}×${h}`).toBe(true);
-      }
-      for (const circle of svg.querySelectorAll("circle")) {
-        const [cx, cy, r] = ["cx", "cy", "r"].map((a) => Number(circle.getAttribute(a)));
-        expect(inside(LIVE, cx - r, cy - r, cx + r, cy + r), `${ref}: circle at ${cx},${cy}`).toBe(
-          true,
-        );
-      }
-      for (const ellipse of svg.querySelectorAll("ellipse")) {
-        const [cx, cy, rx, ry] = ["cx", "cy", "rx", "ry"].map((a) =>
-          Number(ellipse.getAttribute(a)),
-        );
-        expect(inside(LIVE, cx - rx, cy - ry, cx + rx, cy + ry), `${ref}: ellipse`).toBe(true);
-      }
-      for (const path of svg.querySelectorAll("path")) {
-        for (const [x, y] of pathPoints(path.getAttribute("d") ?? "")) {
-          expect(inside(reach, x, y), `${ref}: point ${x.toFixed(2)},${y.toFixed(2)}`).toBe(true);
-        }
-      }
+      // A category's leads (a wire, hose, cable, pipe stub, port or spray leaving the
+      // object) may run to the edge; a group, an object, may not.
+      const lead: [number, number] = glyph.kind === "category" ? [0, 24] : [2, 22];
+      expect(outsideLiveArea(svgOf(ref), [2, 22], lead), ref).toEqual([]);
     },
   );
 });
@@ -318,7 +468,7 @@ describe("S7 · department tile icons follow the style guide", () => {
     expect(domains.length).toBeGreaterThanOrEqual(16);
   });
 
-  it.each([...domains, "photography"])("%s has a drawn tile icon", (domain) => {
+  it.each(domains)("%s has a drawn tile icon", (domain) => {
     const Icon = departmentIcon(domain);
     const html = renderToStaticMarkup(<Icon />);
     const svg = new DOMParser().parseFromString(html, "image/svg+xml").documentElement;
@@ -331,10 +481,15 @@ describe("S7 · department tile icons follow the style guide", () => {
     expect(svg.getAttribute("stroke-width")).toBe("1.5");
     expect(svg.getAttribute("stroke-linecap")).toBe("round");
     expect(svg.getAttribute("stroke-linejoin")).toBe("round");
-    for (const shape of svg.querySelectorAll("*")) {
+    const shapes = [...svg.querySelectorAll("*")];
+    expect(shapes.length).toBeGreaterThan(0);
+    for (const shape of shapes) {
       expect(["path", "rect", "circle", "line", "ellipse"]).toContain(shape.tagName);
-      expect(shape.hasAttribute("fill") || shape.hasAttribute("stroke")).toBe(false);
-      expect(shape.hasAttribute("style") || shape.hasAttribute("transform")).toBe(false);
+      for (const { name, value } of [...shape.attributes]) {
+        expect(ATTRIBUTES, `${domain}: <${shape.tagName} ${name}="${value}">`).toContain(name);
+      }
     }
+    // A tile is an object, so nothing reaches the margin.
+    expect(outsideLiveArea(svg, [2, 22]), domain).toEqual([]);
   });
 });
