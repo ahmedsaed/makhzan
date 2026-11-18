@@ -412,3 +412,13 @@ to change.
 | **A listing that leaves electronics.** AI decisions act only while both listings are in electronics: the regroup ignores a decision when either listing is outside the served departments, so its merge comes apart at the next regroup. (Record this with the cross-department experiment's tracker note.) | `policy.DOMAINS`, `decisions.load_ai_same` |
 | **No time fit.** A lease returns up to `max_jobs` in priority order; the broker does not size it to the worker's remaining window. A worker that runs out of window releases its unfinished job gracefully (no attempt charged) and another worker or window picks it up. The `none_fit` answer and the `nothing_fits` flag are gone. | `broker.lease` |
 | **The broker is reached only over Tailscale**, by the server's Tailscale IP and a port (`BROKER_BIND`); no public reverse-proxy hostname. Plain HTTP on the tailnet (WireGuard encrypts it). This replaces P2's "own reverse-proxy hostname"; the rest of P2 (a separate service, never under `/api`) stands. | `docker-compose.prod.yml`, `docs/ai/broker-deploy.md` |
+
+### Backlog groupings review (owner, 2026-11-19)
+
+The overnight backlog (92,833 pairs, policy p1) was imported into a local copy of the 2026-11-17 production database and regrouped with AI decisions read (`regroup-dry-run --ai`): 4,532 of 6,311 standing "same" decisions take effect; multi-shop products go from 1,048 to 3,143, all in electronics; no rules-made product splits.
+
+The owner reviewed a sample of 40 AI-made groups (20 random, the 10 largest, 10 joining listings that share no identifier; 142 listings), each shown with every member, its photos, specs, and both judges' scores. **Verdict: 40 of 40 all correct.** The weakest, a membrane 4x4 keypad grouped with hard-key 4x4 keypads, was judged acceptable to merge (owner). With the 40/40 validation of 2026-11-17, 80 of 80 checked merges are correct (95% lower bound about 96%).
+
+Answers: `ml/out/labels/ai-groups-review/answers.json` (git-ignored).
+
+**Owner decision:** import the backlog into production and preview the regroup there; switching `ai_matching` to `live` waits for a separate owner OK.

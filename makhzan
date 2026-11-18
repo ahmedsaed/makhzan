@@ -16,6 +16,7 @@
 #   ./makhzan reports [list|show ID|accept ID..|reject ID..]  # review "Report a problem"
 #   ./makhzan overrides [list|add A B --kind never|must --note ..|remove ID..]  # grouping rulings
 #   ./makhzan ai [status|worker add|list|revoke|admin-token|mode|redecide|revoke|backlog|jobs|flags]
+#   ./makhzan ai import DIR [--dry-run|--verify]   # DIR where you typed it; copied to the worker
 #                            # AI matching (worker/ai.py, docs/ai/broker-api.md)
 #
 # Run it on the server, or from a laptop: without a .env.prod here it re-runs
@@ -27,7 +28,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -45,6 +46,15 @@ if [ ! -f .env.prod ]; then
   : "${DEPLOY_HOST:?no .env.prod here, so this is not the server; set DEPLOY_HOST (e.g. in .env.local) to run it there}"
   DEPLOY_USER="${DEPLOY_USER:-ahmed}"
   DEPLOY_PATH="${DEPLOY_PATH:-~/Documents/Projects/makhzan}"
+  if [ "${1:-}" = ai ] && [ "${2:-}" = import ]; then
+    # The scores are files on this laptop: copied to the server first, never
+    # looked up there by the same name (scripts/lib/ai_import.sh).
+    . scripts/lib/ops.sh
+    . scripts/lib/ai_import.sh
+    shift 2
+    ai_import_remote "${DEPLOY_USER}@${DEPLOY_HOST}" "${DEPLOY_PATH}" "$@"
+    exit $?
+  fi
   # -t so `logs` can be interrupted and colours survive. The path is left
   # unquoted on purpose so the remote shell expands a leading ~.
   exec ssh -t "${DEPLOY_USER}@${DEPLOY_HOST}" "cd ${DEPLOY_PATH} && ./makhzan $(printf '%q ' "$@")"
@@ -116,6 +126,14 @@ cmd_freshness() {
 # and reads it when its container is created, so a new token replaces the old
 # one by rewriting that line and recreating the broker. The token is shown once.
 cmd_ai() {
+  if [ "${1:-}" = "import" ]; then
+    # The scores are files on this machine, copied into a fresh folder in the
+    # worker container and removed afterwards (scripts/lib/ai_import.sh).
+    . scripts/lib/ai_import.sh
+    shift
+    ai_import_local "$@"
+    return
+  fi
   if [ "${1:-}" != "admin-token" ]; then
     "${COMPOSE[@]}" exec -T ingestion python -m worker.ai "$@"
     return

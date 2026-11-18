@@ -622,10 +622,53 @@ lease_s  = 900
 heartbeat_s = 60
 ```
 
+## 6.1 Importing a locally scored backlog
+
+`./makhzan ai import DIR [--dry-run | --verify]`
+(`python -m worker.ai_import`; `make ai ARGS="import DIR"` locally) stores a
+backlog run's `scores-*.jsonl` and writes the decisions they make.
+
+- DIR is a folder on the machine the command is typed on, resolved against
+  the operator's directory. From a laptop the files are copied to a fresh
+  temporary folder on the server first (a same-named server path is never
+  read); on the server, streamed as the container's own user into a fresh
+  folder in the worker container. Both are removed afterwards, a failed
+  removal only warning, and a folder with no `scores-*.jsonl` is refused
+  before anything is touched (`scripts/lib/ai_import.sh`).
+- Every line must name the code's judge (model version, weights revision,
+  prompt version, hash version), carry a `scored_at`, and be well formed, or
+  the whole import is refused, naming the line.
+- Each request is re-rendered from the listing as it is now and kept only
+  when its `request_sha256` matches; the rest are skipped and reported with
+  the pairs and listings involved. A stale listing is "stranded" when the
+  candidates trigger has already recorded its current text, so no trigger
+  will offer it again, or when `ai_listing_state` is empty (the trigger's
+  first run records and offers nothing).
+- Scores go in idempotently on (judge, request hash); a request already
+  stored keeps its row, and a differing p is counted.
+- Each pair no person has ruled on (`grouping_overrides`; those are counted)
+  gets `transition()` over the stored scores. Each pair whose transition
+  decides goes to `flow.write_decision`: the decision, its evidence and
+  request hashes, and a person's revocation holding are exactly what the
+  broker would write. Each pair is counted by what `write_decision` returned
+  (written, blocked by a revocation, listing gone). A pair it does not decide
+  is counted by the stage it owes, when it has fresh scores up to that stage,
+  or as having no fresh score. Any such pair, or a stale listing, makes the
+  report recommend `./makhzan ai backlog`, which offers them again; the
+  import queues nothing itself.
+- `--dry-run` rolls back and writes no decision. `--verify` checks the stored
+  scores and standing decisions against the files and changes nothing: a
+  score stored before the import keeps its own p, and a pair a revocation
+  blocks is expected; both are counted, not reported as mismatches.
+
 ## 7. What is not here yet
 
-- The worker (phase 3) and its images, and the tooling that pushes a locally
-  reviewed backlog's scores and decisions to production.
+- Queueing the pairs an import leaves undecided (stale, or owing a stage).
+  `ai_candidates` runs after every rebuild whatever the AI mode, so
+  production may already hold its baseline. A stale listing whose current
+  text the trigger has already recorded is not offered again until it
+  changes once more. `worker.ai_import` counts these and recommends
+  `./makhzan ai backlog`; it queues nothing.
 - Applying a new policy: `redecide` is a dry run only.
 - Writing `ai_decisions.effect` after each regroup (the columns exist; nothing
   writes them yet), and citing revoked decisions on the regroup that undoes
