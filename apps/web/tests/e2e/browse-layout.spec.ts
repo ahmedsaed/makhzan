@@ -97,14 +97,18 @@ test.describe("the sidebar, from a tablet up", () => {
     );
   });
 
-  test("shows an undrawn department's categories plain", async ({ page }) => {
+  test("draws a drawn department's icons, keyed by ref", async ({ page }) => {
+    // Seals & Bearings has its set now; a department still undrawn shows plain
+    // categories, which tests/browse-tree.test.tsx covers.
     await page.goto("/departments/seals-bearings/seals");
     const tree = sidebar(page, "Seals & Bearings");
     // Seals & Gaskets is open; Bearings & Transmission's categories are collapsed.
     await expect(tree.locator("[data-tree-category]:visible")).toHaveCount(4);
-    await expect(tree.locator("[data-tree-category] svg")).toHaveCount(0);
-    await expect(tree.locator("[data-tree-group] svg")).toHaveCount(2);
-    await expect(tree.locator("[data-tree-group] svg[data-icon]")).toHaveCount(0);
+    // The fixture's group refs are not the taxonomy's, so they keep the department icon.
+    await expect(tree.locator("[data-tree-group] svg[data-department-icon]")).toHaveCount(2);
+    await expect(
+      tree.locator("[data-tree-category] svg[data-icon='seals-bearings:o-rings']"),
+    ).toHaveCount(1);
   });
 
   test("stays in view while the products scroll, and scrolls by itself", async ({ page }) => {
