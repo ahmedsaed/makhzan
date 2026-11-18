@@ -40,12 +40,12 @@ const ELECTRONICS = [
 ];
 
 const UNDRAWN = [
-  cat("welding", "seals", "Seals & Gaskets", null, 0),
-  cat("welding", "o-rings", "O-Rings", "seals", 400),
-  cat("welding", "gaskets", "Gaskets", "seals", 90),
-  cat("welding", "transmission", "Bearings & Transmission", null, 0),
-  cat("welding", "bearings", "Bearings", "transmission", 300),
-  cat("welding", "couplings", "Couplings", "transmission", 40),
+  cat("undrawn-dept", "seals", "Seals & Gaskets", null, 0),
+  cat("undrawn-dept", "o-rings", "O-Rings", "seals", 400),
+  cat("undrawn-dept", "gaskets", "Gaskets", "seals", 90),
+  cat("undrawn-dept", "transmission", "Bearings & Transmission", null, 0),
+  cat("undrawn-dept", "bearings", "Bearings", "transmission", 300),
+  cat("undrawn-dept", "couplings", "Couplings", "transmission", 40),
 ];
 
 /** A group's categories: the region its control names. */
@@ -149,7 +149,7 @@ describe("the browse tree", () => {
   });
 
   it("leaves an undrawn department's categories plain, its groups with the department icon", () => {
-    tree("welding:o-rings", UNDRAWN, "welding");
+    tree("undrawn-dept:o-rings", UNDRAWN, "undrawn-dept");
     expect(document.querySelectorAll("[data-tree-category] svg")).toHaveLength(0);
     const groups = document.querySelectorAll("[data-tree-group]");
     for (const group of groups) {

@@ -257,11 +257,11 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
 
   it("knows which departments are drawn", () => {
     expect([...DEPARTMENTS_WITH_ICONS].sort()).toEqual(
-      ["electrical", "electronics", "photography", "seals-bearings", "tools"].sort(),
+      ["electrical", "electronics", "machinery", "photography", "seals-bearings", "tools"].sort(),
     );
     expect(hasCategoryIcons("electronics")).toBe(true);
     expect(hasCategoryIcons("seals-bearings")).toBe(true);
-    expect(hasCategoryIcons("welding")).toBe(false);
+    expect(hasCategoryIcons("undrawn-dept")).toBe(false);
   });
 
   it("renders nothing for a category it has not drawn", () => {
@@ -288,6 +288,7 @@ const SAME_GLYPH_ALLOWED: string[][] = [
     "tools:power-tools-other",
     "tools:measurement-other",
     "tools:consumables-other",
+    "machinery:general-pumps",
   ],
 ];
 

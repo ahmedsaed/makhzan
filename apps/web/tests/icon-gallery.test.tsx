@@ -20,6 +20,7 @@ const SECTIONS: [string, string][] = [
   ["electrical", "Electrical"],
   ["tools", "Tools"],
   ["seals-bearings", "Seals & Bearings"],
+  ["machinery", "Machinery"],
 ];
 
 const TILES = [
@@ -72,6 +73,15 @@ const WEAK: Record<string, string> = {
   "seals-bearings:sight-glasses": "A window with a level line; reads as a gauge more than glass.",
   "seals-bearings:gaskets": "A flat square gasket; the real ones come in every shape.",
   "seals-bearings:o-rings": "Two circles: near the gasket and the bearing.",
+  "machinery:machinery-accessories": "A drawer chest; says storage more than accessories.",
+  "machinery:pump-controllers": "A control box with a dial; generic.",
+  "machinery:machine-tools": "A lathe bed and headstock; reads as abstract blocks.",
+  "machinery:concrete-mixers": "A barrel on legs; a drum mixer is hard to draw small.",
+  "machinery:concrete-vibrators": "A poker head on a hose; the waves carry it.",
+  "machinery:concrete-saws": "A blade over a slab; close to the saws icon in tools.",
+  "machinery:concrete-tools": "A trowel; the category also holds floats and screeds.",
+  "machinery:hydraulic-components": "A hydraulic pump symbol; obscure outside the trade.",
+  "machinery:machine-connectors": "A fitting between two pipe stubs; close to a fuse.",
 };
 
 function cell(ref: string, label: string): string {
