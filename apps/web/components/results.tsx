@@ -1,6 +1,7 @@
 import { Chip, ChipBar } from "@/components/chips";
 import { FilterRail, FilterSheet } from "@/components/filter-panel";
 import { Link } from "@/components/link";
+import { PriceChip } from "@/components/price-chip";
 import { ResultList, ViewToggle } from "@/components/result-list";
 import { ResultsFilters } from "@/components/results-filters";
 import { SortSelect } from "@/components/sort-select";
@@ -37,6 +38,10 @@ export type Locked = ("domain" | "category" | "shop")[];
  *
  * `top` is an optional block above the results (search's "Top categories");
  * from `lg` it spans the page above the rail.
+ *
+ * `variant="browse"` is the department, group and category pages' (layout B):
+ * no category filter and no rail, since the page's own tree navigates, and
+ * Price as a chip in the toolbar beside the three toggles.
  */
 export function Results({
   pathname,
@@ -48,6 +53,7 @@ export function Results({
   shopName,
   hideShop,
   top,
+  variant = "search",
   className,
 }: {
   pathname: string;
@@ -61,6 +67,8 @@ export function Results({
   /** One shop's own page: results leave its name out (see ResultRow). */
   hideShop?: boolean;
   top?: React.ReactNode;
+  /** `browse`: the department pages' toolbar, with no rail and a Price chip. */
+  variant?: "search" | "browse";
   className?: string;
 }) {
   const { result } = data;
@@ -104,12 +112,84 @@ export function Results({
   if (picked) {
     active.push({ label: names.get(picked) ?? picked, href: links.clear("category") });
   }
-  if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+  const priced = query.minPrice !== undefined || query.maxPrice !== undefined;
+  // On a browse page the Price chip itself shows and clears the price.
+  if (priced && variant === "search") {
     active.push({ label: priceLabel(query), href: links.clear("min_price", "max_price") });
   }
   const sheetCount = [picked, query.minPrice ?? query.maxPrice].filter(
     (v) => v !== undefined,
   ).length;
+
+  const toolbar = (
+    <ResultsToolbar
+      pathname={pathname}
+      raw={raw}
+      query={query}
+      total={total}
+      hidden={hidden}
+      links={links}
+    />
+  );
+  const list =
+    total === 0 ? (
+      <NoResults
+        query={query}
+        links={links}
+        hidden={hidden}
+        shopName={shopName}
+        removable={removable}
+      />
+    ) : (
+      <>
+        <ResultList
+          hits={result.hits}
+          now={now}
+          hideShop={hideShop}
+          className="-mx-4 mt-3 md:mx-0 lg:data-[view=list]:overflow-hidden lg:data-[view=list]:rounded-card lg:data-[view=list]:border-x"
+        />
+        <Pagination offset={query.offset} total={total} links={links} />
+      </>
+    );
+
+  if (variant === "browse") {
+    return (
+      <div className={cn("flex flex-col gap-3", className)}>
+        {/* Positioned, so the Price panel is placed against this row and the
+            chip bar's sideways scrolling never clips it. */}
+        <div className="relative">
+          <ChipBar>
+            <Chip href={links.inStock} active={query.inStockOnly}>
+              In stock
+            </Chip>
+            <Chip href={links.fresh} active={query.freshOnly}>
+              Checked recently
+            </Chip>
+            <Chip href={links.twoShops} active={Boolean(query.minSuppliers)}>
+              2+ shops
+            </Chip>
+            <PriceChip
+              action={pathname}
+              hidden={flatParams(raw, ["min_price", "max_price", "offset"])}
+              min={query.minPrice}
+              max={query.maxPrice}
+              label={priced ? priceLabel(query) : undefined}
+              clearHref={links.clear("min_price", "max_price")}
+            />
+            {active.map((chip) => (
+              <Chip key={chip.href} href={chip.href} active>
+                {chip.label} ✕
+              </Chip>
+            ))}
+          </ChipBar>
+        </div>
+        <div className="min-w-0">
+          {toolbar}
+          {list}
+        </div>
+      </div>
+    );
+  }
 
   return (
     // One grid, two orders: on a phone chips → top → results; from `lg` the
@@ -146,34 +226,8 @@ export function Results({
       </FilterRail>
 
       <div className="min-w-0 lg:col-start-2 lg:row-start-3">
-        <ResultsToolbar
-          pathname={pathname}
-          raw={raw}
-          query={query}
-          total={total}
-          hidden={hidden}
-          links={links}
-        />
-
-        {total === 0 ? (
-          <NoResults
-            query={query}
-            links={links}
-            hidden={hidden}
-            shopName={shopName}
-            removable={removable}
-          />
-        ) : (
-          <>
-            <ResultList
-              hits={result.hits}
-              now={now}
-              hideShop={hideShop}
-              className="-mx-4 mt-3 md:mx-0 lg:data-[view=list]:overflow-hidden lg:data-[view=list]:rounded-card lg:data-[view=list]:border-x"
-            />
-            <Pagination offset={query.offset} total={total} links={links} />
-          </>
-        )}
+        {toolbar}
+        {list}
       </div>
     </div>
   );
@@ -325,11 +379,14 @@ function NoResults({
   // shows them.
   const { outOfStock, stale, both } = hidden;
   if (outOfStock + stale + both > 0) {
-    const button =
-      "inline-flex h-11 items-center rounded-control px-4 text-sm font-semibold";
+    const button = "inline-flex h-11 items-center rounded-control px-4 text-sm font-semibold";
     const matched = outOfStock + stale + both;
     const state =
-      stale + both === 0 ? "only-out-of-stock" : outOfStock + both === 0 ? "only-stale" : "only-hidden";
+      stale + both === 0
+        ? "only-out-of-stock"
+        : outOfStock + both === 0
+          ? "only-stale"
+          : "only-hidden";
     return (
       <div data-state={state} className="mt-4 rounded-card border border-line bg-surface px-5 py-8">
         <p className="font-display text-base font-bold text-ink">
@@ -349,10 +406,7 @@ function NoResults({
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           {outOfStock > 0 && (
-            <Link
-              href={links.showOutOfStock}
-              className={cn(button, "bg-action text-action-ink")}
-            >
+            <Link href={links.showOutOfStock} className={cn(button, "bg-action text-action-ink")}>
               Show {formatCount(outOfStock)} out of stock
             </Link>
           )}
