@@ -98,10 +98,9 @@ export function departmentSummaries(categories: Category[], limit = 4): Departme
 export type DepartmentNode = Category & { total: number };
 
 /**
- * One department's tree as its page shows it: the top-level groups, the selected
- * group and its categories, and — when nothing is selected — the department's
- * biggest categories. Empty branches are left out: a tile that leads to
- * nothing is a dead end.
+ * One department's tree as its browse tree shows it (components/browse-tree.tsx):
+ * the top-level groups by size, and the selected group with its categories.
+ * Empty branches are left out: a link that leads to nothing is a dead end.
  *
  * `selected` is the category the page is narrowed to; its group is the
  * top-level category above it, or itself when it is top level.
@@ -123,9 +122,5 @@ export function departmentTree(categories: Category[], selected: string | null =
   const groups = withTotals(categories.filter((category) => !category.parent));
   const group = root ? (groups.find((node) => node.ref === root.ref) ?? null) : null;
   const children = group ? withTotals(categories.filter((c) => c.parent === group.ref)) : [];
-  // A flat department has nothing to add here: its groups already are its categories.
-  const nested = groups.some((node) => categories.some((c) => c.parent === node.ref));
-  const top = !group && nested ? withTotals(leavesOf(categories)).slice(0, 8) : [];
-
-  return { groups, group, children, top };
+  return { groups, group, children };
 }

@@ -70,8 +70,25 @@ test("a department page's controls", async ({ page }) => {
     "out of stock link": page.getByRole("link", { name: "2 more out of stock" }),
     sort: page.getByRole("combobox"),
     "list view": page.getByRole("button", { name: "List view" }),
-    "group tile": page.getByRole("navigation", { name: "Groups" }).getByRole("link").first(),
+    "Price chip": page.locator("[data-price-chip] summary"),
+    "Browse pill": page.locator("[data-browse-pill]"),
   });
+
+  // The sheet's rows: a group, its chevron, and a category.
+  await page.goto("/departments/electronics/resistors");
+  await page.locator("[data-browse-pill]").click();
+  const sheet = page.locator("dialog[data-browse-sheet]");
+  // Measured once its 250ms rise is over, not while it moves.
+  await sheet.evaluate((el) =>
+    Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))),
+  );
+  await expectTappable(page, {
+    "sheet close": sheet.getByRole("button", { name: "Close" }),
+    "sheet group": sheet.locator("[data-tree-group='electronics:components']"),
+    "sheet chevron": sheet.getByRole("button", { name: /Subcategories of Components/ }),
+    "sheet category": sheet.getByRole("link", { name: /^Resistors/ }),
+  });
+  await page.keyboard.press("Escape");
 
   await page.goto("/departments/seals-bearings/oil-seals");
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link");

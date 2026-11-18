@@ -20,7 +20,10 @@ test("all departments lists every department by size", async ({ page }) => {
   await page.goto("/departments");
   await expect(page.getByRole("heading", { level: 1, name: "All 11 departments" })).toBeVisible();
   await expect(page.locator("[data-department]")).toHaveCount(11);
-  await expect(page.locator("[data-department]").last()).toHaveAttribute("data-department", "cleaning");
+  await expect(page.locator("[data-department]").last()).toHaveAttribute(
+    "data-department",
+    "cleaning",
+  );
   await expect(page).toHaveTitle(/All departments/);
 });
 
@@ -101,14 +104,18 @@ test("all departments does not scroll sideways at 320px", async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
-test("a department page fills a wide screen", async ({ page }) => {
+test("a department page puts its tree beside the products on a wide screen", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/departments/seals-bearings");
-  // The group tiles lie on their side across the page, not a strip of squares.
-  const groups = page.getByRole("navigation", { name: "Groups" });
-  expect((await groups.boundingBox())?.width).toBeGreaterThan(1000);
-  const tile = await groups.getByRole("link").first().boundingBox();
-  expect(tile!.width).toBeGreaterThan(tile!.height * 3);
+  // Layout B: the tree on the left, the products straight away on the right.
+  const tree = page.getByRole("complementary").getByRole("navigation", {
+    name: "Browse Seals & Bearings",
+  });
+  await expect(tree).toBeVisible();
+  const side = await tree.boundingBox();
+  const list = await page.locator("[data-result=row]").first().boundingBox();
+  expect(side!.x + side!.width).toBeLessThan(list!.x);
+  expect(list!.width).toBeGreaterThan(700);
   // The search sits beside the name rather than under it.
   const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
   const search = await page
@@ -117,20 +124,28 @@ test("a department page fills a wide screen", async ({ page }) => {
   expect(Math.abs(heading!.y - search!.y)).toBeLessThan(40);
 });
 
-test("a department page shows its groups, its biggest categories and results", async ({ page }) => {
+test("a department page shows its tree and results", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/departments/seals-bearings");
   await expect(page).toHaveTitle(/Seals & Bearings/);
   await expect(page.getByRole("heading", { level: 1, name: "Seals & Bearings" })).toBeVisible();
 
-  // The empty Filtration group is not a tile: it would lead nowhere. On a
-  // desktop a group tile also says how big it is and what is inside.
-  const groups = page.getByRole("navigation", { name: "Groups" }).getByRole("link");
-  await expect(groups).toHaveText([/^Seals & Gaskets/, /^Bearings & Transmission/]);
-  await expect(groups.first()).toContainText("1,240");
-  await expect(groups.first()).toContainText("O-Rings, oil seals, gaskets");
-  await expect(page.getByRole("navigation", { name: "Categories" }).getByRole("link")).toHaveCount(
-    6,
+  // "All of" is current; the empty Filtration group is not listed, it would
+  // lead nowhere. Each group has its count.
+  const tree = page.getByRole("complementary").getByRole("navigation", {
+    name: "Browse Seals & Bearings",
+  });
+  await expect(tree.getByRole("link", { name: /^All of Seals & Bearings/ })).toHaveAttribute(
+    "aria-current",
+    "page",
   );
+  await expect(tree.locator("[data-tree-group]")).toHaveText([
+    /^Seals & Gaskets\s*1,240$/,
+    /^Bearings & Transmission\s*340$/,
+  ]);
+  // No category tiles, chips or shortcuts any more: the tree navigates.
+  await expect(page.getByRole("navigation", { name: "Categories" })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Groups" })).toHaveCount(0);
 
   // In stock is on by default, and what it hides is counted and one click away.
   await expect(page.getByRole("link", { name: "In stock" })).toHaveAttribute(
@@ -164,28 +179,51 @@ test("a group page narrows to the products filed under its categories", async ({
   await expect(page.locator("[data-result=row]").first()).toContainText("Ball Bearing");
 });
 
-test("the department's filters list its own categories, and narrow in place", async ({ page }) => {
+test("a browse page has no filter rail: Price is a chip in the toolbar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/departments/seals-bearings?in_stock=all");
-  const rail = page.getByRole("complementary", { name: "Filters" });
-  await expect(rail.getByRole("radio")).toHaveCount(4);
-  await expect(rail).toContainText("Bearings");
-  await expect(rail).not.toContainText("Integrated Circuits");
+  // The sidebar navigates, so there is no category facet and no rail.
+  await expect(page.getByRole("complementary", { name: "Filters" })).toHaveCount(0);
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await expect(page.locator("summary", { hasText: "Category, price" })).toHaveCount(0);
 
-  await rail.getByRole("radio", { name: /O-Rings/ }).check();
-  await expect(page).toHaveURL(/\/departments\/seals-bearings\?.*category=seals-bearings%3Ao-rings/);
-  await expect(page.locator("[data-result=row]")).toHaveCount(1);
-  await page.getByRole("link", { name: "O-Rings ✕" }).click();
+  const chip = page.locator("[data-price-chip]");
+  await chip.locator("summary").click();
+  const form = page.getByRole("form", { name: "Price, EGP" });
+  await expect(form).toBeVisible();
+  await form.getByLabel("Max, EGP").fill("100");
+  await form.getByRole("button", { name: "Apply" }).click();
+  await expect(page).toHaveURL(/max_price=100/);
+  // The page's other parameters ride along.
+  await expect(page).toHaveURL(/in_stock=all/);
+  await expect(chip.locator("summary")).toHaveText(/Up to EGP 100/);
+  await expect(page.locator("[data-result=row]")).not.toHaveCount(4);
+
+  // Clear brings everything back.
+  await chip.locator("summary").click();
+  await page.getByRole("link", { name: "Clear" }).click();
+  await expect(page).not.toHaveURL(/max_price/);
   await expect(page.locator("[data-result=row]")).toHaveCount(4);
 });
 
-test("a category from another department is ignored, not shown under this one", async ({ page }) => {
+test("the search page keeps its filter rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/search?q=relay");
+  await expect(page.getByRole("complementary", { name: "Filters" })).toBeVisible();
+  await expect(page.locator("[data-price-chip]")).toHaveCount(0);
+});
+
+test("a category from another department is ignored, not shown under this one", async ({
+  page,
+}) => {
   await page.goto("/departments/seals-bearings?category=electronics:ics");
   await expect(page.locator("[data-result=row]")).toHaveCount(2);
 });
 
 test("bad parameters degrade instead of failing", async ({ page }) => {
-  let response = await page.goto("/departments/seals-bearings?sort=title:asc&offset=-3&min_price=x");
+  let response = await page.goto(
+    "/departments/seals-bearings?sort=title:asc&offset=-3&min_price=x",
+  );
   expect(response?.status()).toBe(200);
   await expect(page.locator("[data-result=row]")).toHaveCount(2);
 
@@ -232,24 +270,31 @@ test("searching a department for nothing says everything in it", async ({ page }
   );
 });
 
-test("a category narrows the department page", async ({ page }) => {
+test("the tree narrows the department page", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/departments/seals-bearings");
-  await page
-    .getByRole("navigation", { name: "Groups" })
-    .getByRole("link", { name: "Bearings & Transmission" })
-    .click();
+  const tree = page.getByRole("complementary").getByRole("navigation", {
+    name: "Browse Seals & Bearings",
+  });
+  await tree.getByRole("link", { name: /^Bearings & Transmission/ }).click();
   await expect(page).toHaveURL("/departments/seals-bearings/transmission");
-  await expect(page.getByRole("navigation", { name: "Categories" }).getByRole("link")).toHaveText([
-    "Bearings 300",
-    "Couplings 40",
+  // The current group is expanded and marked; its categories carry counts.
+  await expect(tree.locator("[data-tree-group='seals-bearings:transmission']")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(tree.locator("[data-tree-category]:visible")).toHaveText([
+    /^Bearings\s*300$/,
+    /^Couplings\s*40$/,
   ]);
 
-  await page
-    .getByRole("navigation", { name: "Categories" })
-    .getByRole("link", { name: /Bearings/ })
-    .click();
+  await tree.getByRole("link", { name: /^Bearings\s*300/ }).click();
   await expect(page).toHaveURL("/departments/seals-bearings/bearings");
   await expect(page.getByRole("heading", { level: 1, name: "Bearings" })).toBeVisible();
+  await expect(tree.getByRole("link", { name: /^Bearings\s*300/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(
     "Departments›Seals & Bearings›Bearings & Transmission›Bearings",
   );

@@ -32,6 +32,8 @@
   --badge-ink: #9a3412;
   --chip-on: #15171c;
   --chip-on-ink: #ffffff;
+  /* the phone sheet's buttons: one step off the surface */
+  --tint: #efefea;
   --warn: #fef9c3;
   --warn-line: #e5d36a;
   --warn-ink: #574500;
@@ -73,6 +75,7 @@
   --badge-ink: #fdba8c;
   --chip-on: #ececea;
   --chip-on-ink: #121316;
+  --tint: #25282e;
   --warn: #2a2710;
   --warn-line: #57501c;
   --warn-ink: #f3e08a;
@@ -129,6 +132,7 @@
   --color-badge-ink: var(--badge-ink);
   --color-chip-on: var(--chip-on);
   --color-chip-on-ink: var(--chip-on-ink);
+  --color-tint: var(--tint);
   --color-warn: var(--warn);
   --color-warn-line: var(--warn-line);
   --color-warn-ink: var(--warn-ink);
@@ -272,12 +276,88 @@
       display: none;
     }
   }
+
+  /* A phone's chip bar that scrolls sideways (components/fading-chip-bar.tsx)
+   * fades out over 2rem on each edge that hides chips, and only there. Black
+   * and transparent are mask alpha, not colours. */
+  @media (width < 40rem) {
+    [data-scroll-fade][data-more-end] {
+      mask-image: linear-gradient(to right, black calc(100% - 2rem), transparent);
+    }
+    [data-scroll-fade][data-more-start] {
+      mask-image: linear-gradient(to left, black calc(100% - 2rem), transparent);
+    }
+    [data-scroll-fade][data-more-start][data-more-end] {
+      mask-image: linear-gradient(
+        to right,
+        transparent,
+        black 2rem,
+        black calc(100% - 2rem),
+        transparent
+      );
+    }
+    /* A mask clips everything drawn inside the bar, positioned or not, so
+     * while a panel from it is open (Price) the bar gives up its fade,
+     * whichever edges it was fading (important: it must outrank the
+     * two-edge rule's three attributes). */
+    [data-scroll-fade]:has(details[open]) {
+      -webkit-mask-image: none !important;
+      mask-image: none !important;
+    }
+  }
+}
+
+/* The phone's Browse sheet (components/browse-sheet.tsx; the owner's sheet-motion
+ * mockup, option A). It rises over 250ms and its backdrop fades in with it; it
+ * sinks over 200ms when closed (`data-closing`, after which the component calls
+ * close()). A swipe moves it by inline transform, and thins the backdrop
+ * through --sheet-backdrop, which the ::backdrop inherits. The ::after fills
+ * the gap under the sheet when the spring-back overshoots upward. Under
+ * reduced motion the rule below makes every one of these instant, and the
+ * component does not wait for them. */
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes sheet-backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes sheet-backdrop-out {
+  to {
+    opacity: 0;
+  }
+}
+[data-browse-sheet][open] {
+  animation: sheet-in 250ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+[data-browse-sheet]::backdrop {
+  opacity: var(--sheet-backdrop, 1);
+  transition: opacity var(--sheet-backdrop-ms, 0ms) linear;
+}
+[data-browse-sheet][open]::backdrop {
+  animation: sheet-backdrop-in 250ms ease-out;
+}
+[data-browse-sheet][data-closing] {
+  animation: sheet-out 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+[data-browse-sheet][data-closing]::backdrop {
+  animation: sheet-backdrop-out 200ms ease-in forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* ::backdrop is not matched by *: the Browse sheet's would still fade. */
   *,
   *::before,
-  *::after {
+  *::after,
+  *::backdrop {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }

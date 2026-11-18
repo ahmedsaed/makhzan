@@ -120,6 +120,10 @@ export function departmentSearch(url) {
   if (params.get("fresh") === "true") {
     hits = hits.filter((h) => Date.now() / 1000 - h.last_verified_at < 46 * 86400);
   }
+  // Price filters the cheapest offer, as the API does (the toolbar's Price chip).
+  const minPrice = Number(params.get("min_price") ?? 0);
+  const maxPrice = Number(params.get("max_price") ?? Infinity);
+  hits = hits.filter((h) => h.min_price >= minPrice && h.min_price <= maxPrice);
   // The API refuses more than 50 (and the page must never send it).
   const minSuppliers = Number(params.get("min_suppliers") ?? 0);
   if (minSuppliers > 50) return { status: 422, body: { detail: "min_suppliers ≤ 50" } };

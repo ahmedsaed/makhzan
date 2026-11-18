@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { balancedColumns } from "@/app/(site)/departments/_components/browse-tile";
 import type { Category } from "@/lib/api";
 import { categoryLimit, departmentDirectory } from "@/lib/department-directory";
 
@@ -106,16 +105,5 @@ describe("the departments directory", () => {
   it("says what share of the catalogue each department holds", () => {
     const total = seals.count + piping.count + timber.count;
     expect(seals.share).toBeCloseTo(seals.count / total);
-  });
-});
-
-describe("tile rows on desktop", () => {
-  it("balances rows instead of leaving one tile alone", () => {
-    expect(balancedColumns(8, 5)).toBe(4);
-    expect(balancedColumns(5, 5)).toBe(5);
-    expect(balancedColumns(6, 4)).toBe(3);
-    expect(balancedColumns(3, 4)).toBe(3);
-    expect(balancedColumns(10, 6)).toBe(5);
-    expect(balancedColumns(0, 4)).toBe(1);
   });
 });

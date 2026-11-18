@@ -1,4 +1,5 @@
-import { Package, type LucideIcon } from "lucide-react";
+import { Package } from "lucide-react";
+import type { ComponentType } from "react";
 
 import { Link } from "@/components/link";
 import { PhotoFrame } from "@/components/photo-frame";
@@ -31,7 +32,11 @@ export function ObjectTile({
   /** A representative product photo; `icon` stands in without one. */
   image?: string | null;
   /** A neutral line icon for when there is no photo yet. */
-  icon?: LucideIcon;
+  icon?: ComponentType<{
+    className?: string;
+    strokeWidth?: number;
+    "aria-hidden"?: boolean | "true" | "false";
+  }>;
   count?: number;
   hint?: string;
   current?: boolean;
