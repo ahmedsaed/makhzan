@@ -165,6 +165,31 @@ def test_cameras_and_imaging(tags, title, expected):
         ("Mount for Camera with Pan Tilt Servo", "servos"),
         ("Power Adapter for Camera with 12V", "power-supplies"),
         ("Tripod screw for camera with 1/4 thread", "mechanical"),
+        # "for <up to four words> camera", not a fixed list of camera kinds.
+        ("Mount for Action Camera with Screw", "mechanical"),
+        ("Battery for Action Camera with Charger", "batteries"),
+        ("Hard Case for Dash Cam", None),
+        ("Waterproof Case for GoPro Camera", None),
+        ("Battery for Canon Camera", "batteries"),
+        ("Tripod for Smartphones and Mirrorless Cameras", None),
+        ("USB Data Cable Compatible with Canon, Nikon and Sony Cameras", None),
+        # Either word order, and plurals.
+        ("Rechargeable Sony Cameras Battery 7.4V", "batteries"),
+        ("Camera Mounts", None),
+        ("Camera Brackets 2 pcs", "mechanical"),
+        ("Camera Holders", None),
+        ("Camera Housings", None),
+        ("Camera Pole Mount", None),
+        ("Camera Wall Bracket", "mechanical"),
+        ("Light and Camera Clip Mount", None),
+        ("DSLR Camera Quick Release Bracket", "mechanical"),
+        ("Camera Charging Cable USB", None),
+        ("Camera Power Bank", None),
+        ("Camera Pan Tilt Servo Mount", "servos"),
+        ("Camera Module with Holder", "modules"),
+        ("Camera Cleaning Kit", None),
+        ("Camera Flash Speedlite", None),
+        ("Camera Backpack", None),
     ],
 )
 def test_camera_accessories_are_not_cameras(title, expected):
@@ -192,6 +217,9 @@ def test_camera_accessories_are_not_cameras(title, expected):
         "Endoscope Camera 5mm Semi Rigid Cable 5 Meter",
         # Named first, sold with the accessory: a camera (accepted ambiguity).
         "Camera with Power Adapter Cable",
+        "Doorbell Camera Rechargeable Battery",
+        "Body Worn Camera with Strap Clip",
+        "Endoscope Camera 5 Meter Cable Length - Waterproof USB OTG Borescope",
     ],
 )
 def test_cameras_that_say_so_are_cameras(title):
@@ -213,7 +241,12 @@ def test_a_veto_lets_the_text_fall_through_to_later_rules(other_domain):
 
 @pytest.mark.parametrize(
     "rules",
-    [[("widgets", ["!spare"])], [("widgets", [])]],
+    [
+        [("widgets", ["!spare"])],
+        [("widgets", [])],
+        [("widgets", ["widget", ""])],
+        [("widgets", ["widget", "!"])],
+    ],
 )
 def test_a_rule_with_nothing_to_match_is_refused(rules):
     """An empty pattern matches every text, so such a rule would take the whole
@@ -235,6 +268,32 @@ def test_every_profiles_rules_compile(domain):
     """A rule with nothing to match is refused when compiled; compile them all
     here so a bad rule fails the suite, not the first listing that reaches it."""
     PROFILES[domain].resolve_category_slug(None, "anything")
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        # Shop tags keep the leaf they had before the camera rule.
+        (["Camera Accessories"], "accessories"),
+        (["Camera Modules"], "modules"),
+    ],
+)
+def test_camera_shop_tags_keep_their_leaf(tags, expected):
+    assert get_profile("electronics").resolve_category_slug(tags, None) == expected
+
+
+def test_a_gap_keyword_allows_a_few_words_between():
+    """ "a ... b" is a, up to four words, then b; whole words at the joins."""
+    profile = DomainProfile(
+        slug="gaptest",
+        name_en="Gap",
+        name_ar="فجوة",
+        category_rules=[("parts", ["for ... widget"])],
+    )
+    assert profile.resolve_category_slug(None, "Spring for widget") == "parts"
+    assert profile.resolve_category_slug(None, "Spring for the big blue widgets") == "parts"
+    assert profile.resolve_category_slug(None, "Spring for one two three four five widget") is None
+    assert profile.resolve_category_slug(None, "Spring format widget") is None
 
 
 def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
@@ -264,7 +323,7 @@ def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
         # A starter or learning kit is a kit, whatever board it is built on.
         (None, "Arduino Starter Kit UNO R3"),
         (None, "Arduino Learning Kit 36 PCS"),
-        # ...but a kit sold soldered, or with a solderless breadboard, is.
+        # A kit sold soldered, or with a solderless breadboard, is a kit.
         (None, "Electronics Starter Kit (soldered)"),
         (None, "Starter Kit with Solderless Breadboard"),
         # Board bundles named "starter kit" too, by the same policy.
@@ -282,9 +341,11 @@ def test_educational_and_robot_kits(tags, title):
         ("3D Printer Electronics Kit", "printers-3d"),
         # "kit" alone is never enough.
         ("O-Ring Service Kit NBR-70 (30 Sizes)", None),
+        # A soldering iron's starter bundle is not a teaching kit.
         ("Soldering Starter Kit 60W", "soldering"),
+        ("Solder Iron Starter Kit", "soldering"),
+        ("Solder Starter Kit 60W", "soldering"),
         # Neither "for kids" nor a bare "stem" makes a kit.
-        # A soldering iron's starter bundle is not a teaching kit...
         ("Wired Headphones for Kids", None),
         ("Valve Stem Seal Set", None),
     ],

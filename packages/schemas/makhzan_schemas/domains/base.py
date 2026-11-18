@@ -26,7 +26,10 @@ from makhzan_schemas.identifiers import Identifier, IdentifierRule, stated_ident
 TaxonomyNode = tuple[str, str, str, str | None]
 #: (leaf_slug, keywords) — ORDER IS PRIORITY, most specific first. A keyword
 #: written "!word" is a veto: the rule does not fire on a text containing it,
-#: and the text falls through to the rules below.
+#: and the text falls through to the rules below. A keyword written "a ... b"
+#: matches "a", then up to `MAX_GAP_WORDS` words, then "b" ("for ... camera"
+#: is "for camera", "for Canon camera", "for smartphones and mirrorless
+#: cameras"), for either kind.
 CategoryRule = tuple[str, list[str]]
 
 #: Fallback domain for anything that predates the domain column.
@@ -166,6 +169,10 @@ def _compiled_rules(
         for slug, kws in profile.category_rules:
             wanted = [kw for kw in kws if not kw.startswith("!")]
             vetoes = [kw[1:] for kw in kws if kw.startswith("!")]
+            if any(not kw.strip() for kw in wanted + vetoes):
+                # "" or a bare "!" is an empty pattern: as a keyword it matches
+                # every text, as a veto it refuses every one.
+                raise ValueError(f"{profile.slug} rule for {slug!r} has an empty keyword")
             if not wanted:
                 # An empty pattern matches every text: the rule would take the
                 # whole catalogue.
@@ -185,11 +192,24 @@ def _compiled_rules(
     return cached
 
 
+#: How many words a "a ... b" keyword lets stand between its parts.
+MAX_GAP_WORDS = 4
+_GAP = rf"(?:\s+\S+){{0,{MAX_GAP_WORDS}}}\s+"
+
+
 def _keyword_pattern(keyword: str) -> str:
-    """A rule keyword as a regex: left word boundary always; right only for "\\b"."""
-    if keyword.endswith("\\b"):
-        return rf"(?<![a-z0-9]){re.escape(keyword[:-2])}(?![a-z0-9])"
-    return rf"(?<![a-z0-9]){re.escape(keyword)}"
+    """A rule keyword as a regex: left word boundary always; right only for "\\b".
+
+    "a ... b" joins its parts with up to `MAX_GAP_WORDS` words between them;
+    the left boundary applies to the first part, a "\\b" to the last.
+    """
+    parts = keyword.split(" ... ")
+    last = parts[-1]
+    closed = last.endswith("\\b")
+    if closed:
+        parts[-1] = last[:-2]
+    body = _GAP.join(re.escape(part) for part in parts)
+    return rf"(?<![a-z0-9]){body}" + (r"(?![a-z0-9])" if closed else "")
 
 
 PROFILES: dict[str, DomainProfile] = {}

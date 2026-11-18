@@ -87,6 +87,19 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("accessories", "Accessories", "إكسسوارات", "other"),
 ]
 
+#: Vetoes for both camera rules: a title naming something *for* a camera, or
+#: compatible with one, whatever stands between ("Battery for Canon Camera",
+#: "Tripod for Smartphones and Mirrorless Cameras", "Hard Case for Dash Cam").
+#: "a ... b" allows up to four words between (`base.MAX_GAP_WORDS`).
+_FOR_A_CAMERA = [
+    "!for ... camera",
+    r"!for ... cam\b",
+    "!for ... webcam",
+    "!for ... dslr",
+    "!for ... gopro",
+    "!compatible with ... camera",
+]
+
 # --- Resolver rules: (leaf_slug, [keywords]) — ORDER = priority, specific first #
 # Keywords match at a left word boundary (so "led" doesn't fire inside
 # "assembled") against normalized (decoded, lowercased) text. Trailing text is
@@ -95,17 +108,6 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
 #
 # A leaf may appear twice when part of its vocabulary must outrank another leaf
 # and part must not (see 3D printers below).
-#: Vetoes for both camera rules: a title that is something *for* a camera.
-_FOR_A_CAMERA = [
-    "!for camera",
-    "!for cameras",
-    "!for cctv camera",
-    "!for ip camera",
-    "!for security camera",
-    "!for dslr",
-    "!for webcam",
-]
-
 CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # Kits name their parts ("Educational Robot Kit with LED Eyes", "Solar Robot
     # Kit", "Arduino Learning Kit"), so the phrases that say a listing *is* a kit
@@ -141,9 +143,10 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
         ],
     ),
     # "Starter kit" is a kit too, a board bundle included (an ESP32 or Raspberry
-    # Pi starter kit), except a soldering iron's starter bundle. Not "soldered"
-    # or "solderless": a kit sold soldered, or with a solderless breadboard.
-    ("kits", ["starter kit", r"!soldering\b"]),
+    # Pi starter kit), except a soldering iron's starter bundle ("Soldering
+    # Starter Kit", "Solder Iron Starter Kit"). Whole words, so a kit sold
+    # "soldered", or with a "solderless" breadboard, is still a kit.
+    ("kits", ["starter kit", r"!soldering\b", r"!solder\b"]),
     ("resistors", ["resistor"]),
     ("potentiometers", ["potentiometer", "trimmer", "rheostat"]),
     ("capacitors", ["capacitor"]),
@@ -203,9 +206,19 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # for Camera with 12V", "Tripod Screw for Camera with 1/4 Thread". Both
     # rules refuse the "for ... camera" shape; "Camera with Power Adapter Cable"
     # stays a camera, an ambiguity accepted.
+    # The accessory vetoes this rule can carry without losing a camera sold with
+    # the thing: a holder, a cleaning kit. Not a power adapter, cable, mount or
+    # strap, which real cameras come with.
     (
         "cameras",
-        ["camera with", "camera battery powered", "camera, battery powered", *_FOR_A_CAMERA],
+        [
+            "camera with",
+            "camera battery powered",
+            "camera, battery powered",
+            *_FOR_A_CAMERA,
+            "!holder",
+            "!cleaning kit",
+        ],
     ),
     (
         "cameras",
@@ -218,22 +231,42 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "dash cam",
             "machine vision",
             *_FOR_A_CAMERA,
+            # Both orders: "Camera Battery", "Sony Cameras Battery", and the
+            # accessory named after the camera ("Camera Clip Mount", "Camera
+            # Brackets 2 pcs", "Camera Pan Tilt Servo Mount"). Not "camera ...
+            # battery": "Doorbell Camera Rechargeable Battery" is a camera.
             r"!camera battery\b",
+            r"!cameras battery\b",
             r"!camera batteries\b",
+            "!camera ... mount",
+            "!camera ... bracket",
+            "!camera ... holder",
+            "!camera ... housing",
+            r"!bracket\b",
+            r"!brackets\b",
+            "!quick release",
+            r"!power bank\b",
+            r"!charging\b",
+            r"!speedlite\b",
+            r"!camera flash\b",
+            r"!backpack\b",
+            "!cleaning kit",
+            # Shop tags, as category strings: what a shop files under "Camera
+            # Accessories" or (plural) "Camera Modules" stays in accessories or
+            # modules, as it did before this rule.
+            "!camera accessor",
+            r"!camera modules\b",
             r"!battery charger\b",
             r"!charger\b",
             r"!power adapter\b",
             r"!power supply\b",
             r"!power supplies\b",
-            r"!camera mount\b",
             r"!mounting bracket\b",
-            r"!camera bracket\b",
             r"!camera tripod\b",
             r"!tripod screw\b",
             r"!slider\b",
             r"!camera cable\b",
             r"!ribbon cable\b",
-            r"!camera housing\b",
             r"!camera cover\b",
             r"!webcam cover\b",
             r"!lens cover\b",
@@ -244,7 +277,6 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             r"!ring light\b",
             r"!fill light\b",
             r"!video light\b",
-            r"!camera holder\b",
             r"!camera case\b",
             r"!carrying case\b",
             r"!camera stand\b",
