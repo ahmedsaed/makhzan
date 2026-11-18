@@ -174,23 +174,6 @@ function taxonomyOf(domain: string): [string, string | null][] | null {
   return rows;
 }
 
-/**
- * Icons drawn ahead of the taxonomy that adds their categories
- * (feat/taxonomy-gaps). Each must still be missing from its taxonomy: when
- * that branch lands the test below fails until its refs are pruned from here,
- * so the list cannot outlive its reason.
- */
-const AHEAD_OF_TAXONOMY = [
-  "electronics:cameras",
-  "electronics:kits",
-  "photography:lighting",
-  "photography:camera-gear",
-  "photography:photo-lights",
-  "photography:tripods",
-  "photography:camera-bags",
-  "photography:camera-accessories",
-];
-
 describe("S7 · a drawn department has an icon for every group and category", () => {
   const departments = [...DEPARTMENTS_WITH_ICONS].map((domain) => ({
     domain,
@@ -211,9 +194,7 @@ describe("S7 · a drawn department has an icon for every group and category", ()
     },
   );
 
-  // Every department with any icon drawn, checked against its taxonomy when
-  // its profile is in this checkout. A department drawn ahead of its taxonomy
-  // (photography, before feat/taxonomy-gaps merges) is checked once it lands.
+  // Every department with any icon drawn, checked against its taxonomy.
   const rows = departments.flatMap(({ domain, taxonomy }) =>
     (taxonomy ?? []).map(([slug, parent]) => [`${domain}:${slug}`, parent] as const),
   );
@@ -225,20 +206,10 @@ describe("S7 · a drawn department has an icon for every group and category", ()
     expect(glyph?.kind).toBe(parent === null ? "group" : "category");
   });
 
-  it("allows only the listed icons ahead of the taxonomy", () => {
-    // An icon for a ref the taxonomy does not have yet is not an error, but
-    // only when it is listed, so a mistyped ref cannot hide here.
+  it("draws no icon for a ref the taxonomy does not have", () => {
+    // A mistyped or retired ref would otherwise sit in the registry unseen.
     const known = new Set<string>(rows.map(([ref]) => ref));
-    const ahead = Object.keys(CATEGORY_ICONS).filter((ref) => !known.has(ref));
-    for (const ref of ahead) expect(AHEAD_OF_TAXONOMY, ref).toContain(ref);
-  });
-
-  it.each(AHEAD_OF_TAXONOMY)("%s is drawn, and still ahead of its taxonomy", (ref) => {
-    expect(categoryGlyph(ref)).not.toBeNull();
-    const known = new Set<string>(rows.map(([r]) => r));
-    expect(known.has(ref), `${ref} is in the taxonomy now: prune it from AHEAD_OF_TAXONOMY`).toBe(
-      false,
-    );
+    expect(Object.keys(CATEGORY_ICONS).filter((ref) => !known.has(ref))).toEqual([]);
   });
 });
 

@@ -24,7 +24,12 @@ from makhzan_schemas.identifiers import Identifier, IdentifierRule, stated_ident
 #: (slug, name_en, name_ar, parent_slug) — parents are browse groups, leaves are
 #: what the resolver assigns.
 TaxonomyNode = tuple[str, str, str, str | None]
-#: (leaf_slug, keywords) — ORDER IS PRIORITY, most specific first.
+#: (leaf_slug, keywords) — ORDER IS PRIORITY, most specific first. A keyword
+#: written "!word" is a veto: the rule does not fire on a text containing it,
+#: and the text falls through to the rules below. A keyword written "a ... b"
+#: matches "a", then up to `MAX_GAP_WORDS` words, then "b" ("for ... camera"
+#: is "for camera", "for Canon camera", "for smartphones and mirrorless
+#: cameras"), for either kind.
 CategoryRule = tuple[str, list[str]]
 
 #: Fallback domain for anything that predates the domain column.
@@ -129,14 +134,14 @@ class DomainProfile:
         cats = [_normalize(c) for c in (category_strings or [])]
         meaningful = [c for c in cats if c and c not in self.generic_categories]
 
-        for slug, pattern in _compiled_rules(self):
-            if any(pattern.search(cat) for cat in meaningful):
+        for slug, pattern, veto in _compiled_rules(self):
+            if any(_fires(pattern, veto, cat) for cat in meaningful):
                 return slug
 
         if title:
             normalized_title = _normalize(title)
-            for slug, pattern in _compiled_rules(self):
-                if pattern.search(normalized_title):
+            for slug, pattern, veto in _compiled_rules(self):
+                if _fires(pattern, veto, normalized_title):
                     return slug
         return None
 
@@ -148,25 +153,67 @@ def _normalize(text: str) -> str:
 # Compiled per profile and cached: keyword at a left word boundary (not preceded
 # by a letter/digit), trailing text free. Kills matches like "led" inside
 # "assembled" while still catching plurals ("resistors").
-_RULE_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+_RULE_CACHE: dict[str, list[tuple[str, re.Pattern[str], re.Pattern[str] | None]]] = {}
 
 
-def _compiled_rules(profile: DomainProfile) -> list[tuple[str, re.Pattern[str]]]:
+def _fires(pattern: re.Pattern[str], veto: re.Pattern[str] | None, text: str) -> bool:
+    return bool(pattern.search(text)) and not (veto and veto.search(text))
+
+
+def _compiled_rules(
+    profile: DomainProfile,
+) -> list[tuple[str, re.Pattern[str], re.Pattern[str] | None]]:
     cached = _RULE_CACHE.get(profile.slug)
     if cached is None:
-        cached = [
-            (slug, re.compile("|".join(_keyword_pattern(kw) for kw in kws)))
-            for slug, kws in profile.category_rules
-        ]
+        cached = []
+        for slug, kws in profile.category_rules:
+            wanted = [kw for kw in kws if not kw.startswith("!")]
+            vetoes = [kw[1:] for kw in kws if kw.startswith("!")]
+            if any(not kw.strip() for kw in wanted + vetoes):
+                # "" or a bare "!" is an empty pattern: as a keyword it matches
+                # every text, as a veto it refuses every one.
+                raise ValueError(f"{profile.slug} rule for {slug!r} has an empty keyword")
+            if not wanted:
+                # An empty pattern matches every text: the rule would take the
+                # whole catalogue.
+                raise ValueError(
+                    f"{profile.slug} rule for {slug!r} has no keyword to match, only vetoes"
+                    if vetoes
+                    else f"{profile.slug} rule for {slug!r} has no keywords"
+                )
+            cached.append(
+                (
+                    slug,
+                    re.compile("|".join(_keyword_pattern(kw) for kw in wanted)),
+                    re.compile("|".join(_keyword_pattern(kw) for kw in vetoes)) if vetoes else None,
+                )
+            )
         _RULE_CACHE[profile.slug] = cached
     return cached
 
 
+#: How many words a "a ... b" keyword lets stand between its parts.
+MAX_GAP_WORDS = 4
+_GAP = rf"(?:\s+\S+){{0,{MAX_GAP_WORDS}}}\s+"
+
+
 def _keyword_pattern(keyword: str) -> str:
-    """A rule keyword as a regex: left word boundary always; right only for "\\b"."""
-    if keyword.endswith("\\b"):
-        return rf"(?<![a-z0-9]){re.escape(keyword[:-2])}(?![a-z0-9])"
-    return rf"(?<![a-z0-9]){re.escape(keyword)}"
+    """A rule keyword as a regex: left word boundary always; right only for "\\b".
+
+    "a ... b" joins its parts with up to `MAX_GAP_WORDS` words between them;
+    the left boundary applies to the first part, a "\\b" to the last.
+    """
+    parts = keyword.split(" ... ")
+    if any(part.endswith("\\b") for part in parts[:-1]):
+        # Only the last part can be closed on the right; elsewhere "\\b" would
+        # be matched as two literal characters.
+        raise ValueError(f"keyword {keyword!r}: only its last part may end in \\b")
+    last = parts[-1]
+    closed = last.endswith("\\b")
+    if closed:
+        parts[-1] = last[:-2]
+    body = _GAP.join(re.escape(part) for part in parts)
+    return rf"(?<![a-z0-9]){body}" + (r"(?![a-z0-9])" if closed else "")
 
 
 PROFILES: dict[str, DomainProfile] = {}

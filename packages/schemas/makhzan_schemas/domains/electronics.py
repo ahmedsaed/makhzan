@@ -62,6 +62,7 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("wireless", "Communication & Wireless", "الاتصالات واللاسلكي", "boards-modules"),
     ("displays", "Displays", "الشاشات", "boards-modules"),
     ("modules", "Modules", "الوحدات", "boards-modules"),
+    ("cameras", "Cameras & Imaging", "الكاميرات والتصوير", "boards-modules"),
     # Power
     ("power-supplies", "Power Supplies & Converters", "مصادر الطاقة والمحوّلات", "power"),
     ("batteries", "Batteries & Chargers", "البطاريات والشواحن", "power"),
@@ -81,8 +82,31 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("measurement", "Measurement & Test", "القياس والاختبار", "tools"),
     # Prototyping
     ("prototyping-supplies", "Breadboards & Wires", "لوحات التجارب والأسلاك", "prototyping"),
+    ("kits", "Educational & Robot Kits", "الأطقم التعليمية والروبوتات", "prototyping"),
     # Other
     ("accessories", "Accessories", "إكسسوارات", "other"),
+]
+
+#: Vetoes for both camera rules: a title naming something *for* a camera, or
+#: compatible with one, whatever stands between ("Battery for Canon Camera",
+#: "Tripod for Smartphones and Mirrorless Cameras", "Hard Case for Dash Cam").
+#: "a ... b" allows up to four words between (`base.MAX_GAP_WORDS`).
+#:
+#: Accepted ambiguities, pinned by tests so a change to them is deliberate:
+#: - "for ... camera" cannot tell an accessory for a camera from a camera for
+#:   a place: "Dash Cam for Car Front and Rear Camera" is not a camera by
+#:   inference. "Camera with Power Adapter Cable" is, though it could be a cable.
+#: - Without "with", an accessory word after the camera wins: "Dome Camera
+#:   Ceiling Mount" and "Bullet Camera Metal Bracket" are not cameras by
+#:   inference, while "Dome Camera with Ceiling Mount" is.
+#: All of these matter only on an inference miss; a crosswalk decides first.
+_FOR_A_CAMERA = [
+    "!for ... camera",
+    r"!for ... cam\b",
+    "!for ... webcam",
+    "!for ... dslr",
+    "!for ... gopro",
+    "!compatible with ... camera",
 ]
 
 # --- Resolver rules: (leaf_slug, [keywords]) — ORDER = priority, specific first #
@@ -94,6 +118,44 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
 # A leaf may appear twice when part of its vocabulary must outrank another leaf
 # and part must not (see 3D printers below).
 CATEGORY_RULES: list[tuple[str, list[str]]] = [
+    # Kits name their parts ("Educational Robot Kit with LED Eyes", "Solar Robot
+    # Kit", "Arduino Learning Kit"), so the phrases that say a listing *is* a kit
+    # come first of all. A starter or learning kit is a kit whatever board it is
+    # built on. Never bare "kit" (a mainboard kit, an O-ring service kit, a
+    # developer kit), never bare "STEM" (a valve stem seal), and no "for kids"
+    # (headphones for kids).
+    (
+        "kits",
+        [
+            "educational kit",
+            "educational robot",
+            "educational toy",
+            "stem kit",
+            "stem educat",
+            "stem learning",
+            "stem toy",
+            "stem project",
+            "stem programming",
+            "stem robot",
+            "stem electronics",
+            "science toy",
+            "learning kit",
+            "robot kit",
+            "robotic kit",
+            "robotics kit",
+            "robot arm kit",
+            "robotic arm kit",
+            "project kit",
+            "lab kit",
+            "logic kit",
+            "digital logic design",
+        ],
+    ),
+    # "Starter kit" is a kit too, a board bundle included (an ESP32 or Raspberry
+    # Pi starter kit), except a soldering iron's starter bundle ("Soldering
+    # Starter Kit", "Solder Iron Starter Kit"). Whole words, so a kit sold
+    # "soldered", or with a "solderless" breadboard, is still a kit.
+    ("kits", ["starter kit", r"!soldering\b", r"!solder\b"]),
     ("resistors", ["resistor"]),
     ("potentiometers", ["potentiometer", "trimmer", "rheostat"]),
     ("capacitors", ["capacitor"]),
@@ -133,6 +195,106 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "pi pico",
             "rp2040",
             "fpga",
+        ],
+    ),
+    # A thermal camera is a test instrument, and "thermal" alone filed it with
+    # fans and heatsinks.
+    ("measurement", ["thermal camera", "thermal imag"]),
+    # Ahead of wireless: a "Wi-Fi Camera" or "WiFi Endoscope" is a camera that
+    # happens to connect wirelessly. Behind dev boards: an ESP32-CAM is a board.
+    # Being this early, it must not take what is merely *for* a camera: a camera
+    # battery, a CCTV power adapter, a pan-tilt camera mount, a tripod screw or a
+    # motorised slider. Its vetoes hand those to the leaves below. They are
+    # phrases, closed on the right, because the single words are common in real
+    # camera titles too: "PoE Camera Power over Ethernet", "Wall Mount IP
+    # Camera", "Covert Camera", "Camera Module with Motorized Lens".
+    #
+    # A camera sold *with* an accessory says so, and is still a camera ("IP
+    # Camera with Power Adapter", "USB Camera with 1.5m Cable") -- unless the
+    # title is an accessory *for* a camera that has the thing: "Power Adapter
+    # for Camera with 12V", "Tripod Screw for Camera with 1/4 Thread". Both
+    # rules refuse the "for ... camera" shape; "Camera with Power Adapter Cable"
+    # stays a camera, an ambiguity accepted.
+    # The accessory vetoes this rule can carry without losing a camera sold with
+    # the thing: a holder, a cleaning kit. Not a power adapter, cable, mount or
+    # strap, which real cameras come with.
+    (
+        "cameras",
+        [
+            "camera with",
+            "camera battery powered",
+            "camera, battery powered",
+            *_FOR_A_CAMERA,
+            "!holder",
+            "!cleaning kit",
+        ],
+    ),
+    (
+        "cameras",
+        [
+            "camera",
+            "webcam",
+            "endoscope",
+            "borescope",
+            "dashcam",
+            "dash cam",
+            "machine vision",
+            *_FOR_A_CAMERA,
+            # Both orders: "Camera Battery", "Sony Cameras Battery", and the
+            # accessory named after the camera ("Camera Clip Mount", "Camera
+            # Brackets 2 pcs", "Camera Pan Tilt Servo Mount"). Not "camera ...
+            # battery": "Doorbell Camera Rechargeable Battery" is a camera.
+            r"!camera battery\b",
+            r"!cameras battery\b",
+            r"!camera batteries\b",
+            "!camera ... mount",
+            "!camera ... bracket",
+            "!camera ... holder",
+            "!camera ... housing",
+            r"!bracket\b",
+            r"!brackets\b",
+            "!quick release",
+            r"!power bank\b",
+            r"!charging cable\b",
+            r"!charging dock\b",
+            r"!speedlite\b",
+            r"!camera flash\b",
+            r"!backpack\b",
+            "!cleaning kit",
+            # Shop tags, as category strings: what a shop files under "Camera
+            # Accessories" or (plural) "Camera Modules" stays in accessories or
+            # modules, as it did before this rule.
+            "!camera accessor",
+            r"!camera modules\b",
+            r"!battery charger\b",
+            r"!charger\b",
+            r"!power adapter\b",
+            r"!power supply\b",
+            r"!power supplies\b",
+            r"!mounting bracket\b",
+            r"!camera tripod\b",
+            r"!tripod screw\b",
+            r"!slider\b",
+            r"!camera cable\b",
+            r"!ribbon cable\b",
+            r"!camera cover\b",
+            r"!webcam cover\b",
+            r"!lens cover\b",
+            r"!lens cap\b",
+            r"!flash trigger\b",
+            r"!flash light\b",
+            r"!light ring\b",
+            r"!ring light\b",
+            r"!fill light\b",
+            r"!video light\b",
+            r"!camera case\b",
+            r"!carrying case\b",
+            r"!camera stand\b",
+            r"!bag\b",
+            r"!bags\b",
+            r"!strap\b",
+            r"!straps\b",
+            r"!cage\b",
         ],
     ),
     (
@@ -224,6 +386,9 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
     # Last of the printing leaves: "Extrusion Nozzle for 3D Printer" and "PLA
     # Filament Roll for 3D Printer" name a printer only as what they fit.
     ("printers-3d", ["3d printer"]),
+    # A course's parts box ("Electronics Kit – <faculty>"), but only once the
+    # printers have spoken: "3D Printer Electronics Kit" is a printer's board set.
+    ("kits", ["electronics kit", "electronic kit"]),
     (
         "mechanical",
         [
@@ -292,6 +457,11 @@ _GENERIC = {
     # alike; read as a category it filed all 94 under one leaf. The title can
     # tell them apart.
     "3d printer filament",
+    # Likewise a tag that names a camera but holds a mixed bag: one shop's tag
+    # of this name carries Wi-Fi cameras beside an RFID card copier, a CCTV
+    # power supply and barcode and palm-vein modules. Read as a category it
+    # filed them all as cameras; the cameras' own titles say "camera".
+    "security camera",
 }
 
 # Generic descriptors that don't distinguish products — dropped from title signatures.

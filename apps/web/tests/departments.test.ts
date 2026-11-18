@@ -3,11 +3,20 @@ import { describe, expect, it } from "vitest";
 import type { Category } from "@/lib/api";
 import {
   asPhrase,
+  departmentLabel,
   insideOf,
   totalOf,
   departmentSummaries,
   departmentTree,
 } from "@/lib/departments";
+
+describe("department labels", () => {
+  // Photography's drawn tile is checked with every department's in
+  // tests/category-icons.test.tsx; here only its label.
+  it("labels the photography department from its slug", () => {
+    expect(departmentLabel("photography")).toBe("Photography");
+  });
+});
 
 const cat = (
   domain: string,
