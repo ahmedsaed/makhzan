@@ -112,10 +112,8 @@ export const PIPING_ICONS: Record<string, Glyph> = {
     kind: "category",
     body: (
       <>
-        <rect x="2.5" y="4" width="19" height="7" rx="1" />
-        <path d="M5.5 4v7M18.5 4v7" />
-        <path d="M9 11l3.5 9h7L16 11M12 20h9" />
-        <path d="M13.5 15h4" />
+        <path d="M3.5 5.5h17M5 5.5l2.5 14h9L19 5.5" />
+        <path d="M8.5 5.5l1 14M12 5.5v14M15.5 5.5l-1 14M6.5 12h11" />
       </>
     ),
   },

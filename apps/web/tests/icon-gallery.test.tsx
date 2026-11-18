@@ -163,14 +163,14 @@ const WEAK: Record<string, string> = {
   "piping:gate-valves":
     "A wedge in a boxy body under a handwheel; apart from the globe by shape only.",
   "piping:globe-valves": "A round body with a disc under a handwheel; see gate valves.",
-  "piping:strainers": "A Y-shaped branch off a flanged body; may still read as a tool.",
+  "piping:strainers": "A basket strainer; may read as a colander (a redraw read worse, so kept).",
   "electrical:disconnectors":
     "A rotary handle on a plate; a knife switch is the other common form.",
   "electrical:signal-conditioning": "A sine turning into a square wave in a module; generic.",
   "machinery:machine-connectors": "A plug entering a socket; generic.",
   "machinery:hydraulic-components":
     "A valve block with two cartridges and ports; obscure outside the trade.",
-  "chemicals:rust-removers": "A rusted sheet peeling; the product itself is not shown.",
+  "chemicals:rust-removers": "A bolt with flaking rust; may read as a plain bolt (a redraw read worse, so kept).",
   "chemicals:adhesive-tapes": "A strip with a torn end and a peel curl; no roll.",
   "materials:metal-stock": "An angle profile standing for all stock.",
   "materials:polyester-resins": "A boat hull for fibreglass; says boats.",
@@ -200,14 +200,12 @@ const WEAK: Record<string, string> = {
 const REDRAWN = new Set([
   "piping:gate-valves",
   "piping:globe-valves",
-  "piping:strainers",
   "piping:flexible-joints",
   "electrical:circuit-breakers",
   "electrical:disconnectors",
   "electrical:signal-conditioning",
   "machinery:machine-connectors",
   "machinery:hydraulic-components",
-  "chemicals:rust-removers",
   "chemicals:adhesive-tapes",
   "materials:metal-stock",
   "materials:polyester-resins",
