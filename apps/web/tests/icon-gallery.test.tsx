@@ -27,6 +27,7 @@ const SECTIONS: [string, string][] = [
   ["safety", "Safety"],
   ["automotive", "Automotive"],
   ["timber", "Timber"],
+  ["piping", "Piping"],
 ];
 
 const TILES = [
@@ -144,6 +145,18 @@ const WEAK: Record<string, string> = {
   "timber:engineered-wood": "A slab with edge layers; close to rubber sheet in materials.",
   "timber:wood-oils-waxes": "A shallow tin of wax.",
   "timber:wood-fillers": "A putty knife with a dab.",
+  "piping:flange-gaskets": "Two flanges bolted round a gasket; reads as a clamp at small sizes.",
+  "piping:line-fittings": "A bare tee outline standing for all fittings.",
+  "piping:butterfly-valves": "A pipe section with a tilted disc and a lever.",
+  "piping:ball-valves": "A ball between pipe stubs with an L-handle.",
+  "piping:globe-valves":
+    "The bowtie valve symbol with a ring; only a trade reader tells it from the gate.",
+  "piping:gate-valves": "The bowtie valve symbol with a stem; see globe valves.",
+  "piping:check-valves": "A flow arrow in a body.",
+  "piping:sheet-gaskets": "A sheet with a folded corner and a cut ring.",
+  "piping:spiral-wound-gaskets": "A spiral; says spiral, and the gasket is a ring.",
+  "piping:strainers": "A basket with mesh; reads as a colander.",
+  "piping:flexible-joints": "Bellows between pipe stubs; close to a fuse symbol.",
 };
 
 function cell(ref: string, label: string): string {

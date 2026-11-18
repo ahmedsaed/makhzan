@@ -265,6 +265,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
         "machinery",
         "materials",
         "photography",
+        "piping",
         "safety",
         "seals-bearings",
         "timber",
