@@ -151,32 +151,71 @@ const DOMAINS = join(__dirname, "../../../packages/schemas/makhzan_schemas/domai
 /**
  * (slug, parent slug or null) for every category in a department's Python
  * taxonomy, or null when the department's profile is not in this checkout.
+ *
+ * Read from the source, so the web suite needs no Python. The regex is
+ * cross-checked against the block's tuple lines: if a tuple is ever written
+ * in a shape it does not read (a trailing comment, a split line), the counts
+ * differ and this throws, rather than the coverage test passing on fewer rows.
  */
 function taxonomyOf(domain: string): [string, string | null][] | null {
   const path = join(DOMAINS, `${domain.replace(/-/g, "_")}.py`);
   if (!existsSync(path)) return null;
   const source = readFileSync(path, "utf8");
-  const block = source.slice(
-    source.indexOf("TAXONOMY"),
-    source.indexOf("]\n", source.indexOf("TAXONOMY")),
-  );
-  return [
+  const at = source.search(/^TAXONOMY\b/m);
+  if (at === -1) throw new Error(`${path}: no TAXONOMY`);
+  const block = source.slice(at, source.indexOf("\n]", at));
+  const rows = [
     ...block.matchAll(/\(\s*"([a-z0-9-]+)",\s*"[^"]*",\s*"[^"]*",\s*(None|"([a-z0-9-]+)")\s*\)/g),
-  ].map((m) => [m[1], m[3] ?? null]);
+  ].map((m): [string, string | null] => [m[1], m[3] ?? null]);
+  const tupleLines = block.split("\n").filter((line) => /^\s*\(/.test(line)).length;
+  if (rows.length !== tupleLines) {
+    throw new Error(`${path}: read ${rows.length} categories from ${tupleLines} tuple lines`);
+  }
+  return rows;
 }
 
+/**
+ * Icons drawn ahead of the taxonomy that adds their categories
+ * (feat/taxonomy-gaps). Each must still be missing from its taxonomy: when
+ * that branch lands the test below fails until its refs are pruned from here,
+ * so the list cannot outlive its reason.
+ */
+const AHEAD_OF_TAXONOMY = [
+  "electronics:cameras",
+  "electronics:kits",
+  "photography:lighting",
+  "photography:camera-gear",
+  "photography:photo-lights",
+  "photography:tripods",
+  "photography:camera-bags",
+  "photography:camera-accessories",
+];
+
 describe("S7 · a drawn department has an icon for every group and category", () => {
+  const departments = [...DEPARTMENTS_WITH_ICONS].map((domain) => ({
+    domain,
+    taxonomy: taxonomyOf(domain),
+  }));
+
   it("reads Electronics' taxonomy", () => {
     const taxonomy = taxonomyOf("electronics")!;
     expect(taxonomy.length).toBeGreaterThanOrEqual(40);
     expect(taxonomy.filter(([, parent]) => parent === null)).toHaveLength(8);
   });
 
+  it.each(departments.filter((d) => d.taxonomy !== null).map((d) => [d.domain, d.taxonomy!]))(
+    "reads at least one category from %s's profile, so the check below is not vacuous",
+    (_, taxonomy) => {
+      expect(taxonomy.length).toBeGreaterThan(0);
+      expect(taxonomy.some(([, parent]) => parent === null)).toBe(true);
+    },
+  );
+
   // Every department with any icon drawn, checked against its taxonomy when
   // its profile is in this checkout. A department drawn ahead of its taxonomy
   // (photography, before feat/taxonomy-gaps merges) is checked once it lands.
-  const rows = [...DEPARTMENTS_WITH_ICONS].flatMap((domain) =>
-    (taxonomyOf(domain) ?? []).map(([slug, parent]) => [`${domain}:${slug}`, parent] as const),
+  const rows = departments.flatMap(({ domain, taxonomy }) =>
+    (taxonomy ?? []).map(([slug, parent]) => [`${domain}:${slug}`, parent] as const),
   );
 
   it.each(rows)("%s is drawn", (ref, parent) => {
@@ -186,24 +225,20 @@ describe("S7 · a drawn department has an icon for every group and category", ()
     expect(glyph?.kind).toBe(parent === null ? "group" : "category");
   });
 
-  it("allows icons drawn ahead of the taxonomy, and says which they are", () => {
-    // An icon for a ref the taxonomy does not have yet is not an error: the
-    // icons for feat/taxonomy-gaps' categories are drawn before it merges.
-    // Only a category without an icon is (above).
+  it("allows only the listed icons ahead of the taxonomy", () => {
+    // An icon for a ref the taxonomy does not have yet is not an error, but
+    // only when it is listed, so a mistyped ref cannot hide here.
     const known = new Set<string>(rows.map(([ref]) => ref));
     const ahead = Object.keys(CATEGORY_ICONS).filter((ref) => !known.has(ref));
-    const expected = [
-      "electronics:cameras",
-      "electronics:kits",
-      "photography:lighting",
-      "photography:camera-gear",
-      "photography:photo-lights",
-      "photography:tripods",
-      "photography:camera-bags",
-      "photography:camera-accessories",
-    ];
-    // Once a taxonomy lands, its refs leave this list; nothing else may be in it.
-    for (const ref of ahead) expect(expected, ref).toContain(ref);
+    for (const ref of ahead) expect(AHEAD_OF_TAXONOMY, ref).toContain(ref);
+  });
+
+  it.each(AHEAD_OF_TAXONOMY)("%s is drawn, and still ahead of its taxonomy", (ref) => {
+    expect(categoryGlyph(ref)).not.toBeNull();
+    const known = new Set<string>(rows.map(([r]) => r));
+    expect(known.has(ref), `${ref} is in the taxonomy now: prune it from AHEAD_OF_TAXONOMY`).toBe(
+      false,
+    );
   });
 });
 

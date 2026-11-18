@@ -128,6 +128,18 @@ describe("a department's tree", () => {
     expect(tree.top.map((c) => c.slug)).toEqual(["resistors", "capacitors"]);
   });
 
+  it("keeps a group's only category when the group holds products of its own", () => {
+    const tree = departmentTree([
+      cat("electronics", "components", "Components", null, 0),
+      cat("electronics", "resistors", "Resistors", "components", 300),
+      cat("electronics", "capacitors", "Capacitors", "components", 100),
+      // 50 filed on the group itself: "Accessories" is not the whole of it.
+      cat("electronics", "other", "Accessories & Other", null, 50),
+      cat("electronics", "accessories", "Accessories", "other", 200),
+    ]);
+    expect(tree.top.map((c) => c.slug)).toEqual(["resistors", "accessories", "capacitors"]);
+  });
+
   it("keeps the eight biggest, rather than reaching past one it leaves out", () => {
     const tree = departmentTree([
       cat("electronics", "components", "Components", null, 0),

@@ -134,10 +134,13 @@ export function departmentTree(categories: Category[], selected: string | null =
   for (const node of withTotals(categories)) {
     live.set(node.parent, (live.get(node.parent) ?? 0) + 1);
   }
-  // The page shows group tiles only when there are two or more.
-  const tiles = new Set(groups.length > 1 ? groups.map((g) => g.ref) : []);
+  // The page shows group tiles only when there are two or more. A group's only
+  // category repeats its tile only when the two counts agree: no profile or
+  // crosswalk files a product on a group today (November 2026, all 16
+  // departments), but one that did would make the category a part of the group.
+  const tiles = new Map(groups.length > 1 ? groups.map((g) => [g.ref, g.total]) : []);
   const repeatsGroup = (node: DepartmentNode) =>
-    !node.parent || (tiles.has(node.parent) && live.get(node.parent) === 1);
+    !node.parent || (tiles.get(node.parent) === node.total && live.get(node.parent) === 1);
   const top =
     !group && nested
       ? withTotals(leavesOf(categories))
