@@ -282,6 +282,14 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
     expect(hasCategoryIcons("undrawn-dept")).toBe(false);
   });
 
+  it("has a drawn set for every department with a profile", () => {
+    // Every vertical is drawn now; a new one fails here until its set exists.
+    const profiles = readdirSync(DOMAINS)
+      .filter((f) => f.endsWith(".py") && !["__init__.py", "base.py"].includes(f))
+      .map((f) => f.replace(/\.py$/, "").replace(/_/g, "-"));
+    for (const domain of profiles) expect(hasCategoryIcons(domain), domain).toBe(true);
+  });
+
   it("renders nothing for a category it has not drawn", () => {
     expect(renderToStaticMarkup(<CategoryIcon iconRef="electronics:not-drawn" />)).toBe("");
   });

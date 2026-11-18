@@ -242,7 +242,7 @@ figcaption code{font-size:11px;color:var(--ink-3);overflow-wrap:anywhere}
 figcaption em{font-style:normal;color:var(--warn);font-size:11.5px}
 </style></head><body><div class="page">
 <header><div><h1>Category icons, all departments</h1>
-<p>Checkpoint sheet: electrical, tools, seals &amp; bearings, and every department tile. Each icon at 24 px and 48 px. Orange-bordered cells are the ones I think are weak, with why.</p></div>
+<p>Every department&#39;s icons and every department tile. Each icon at 24 px and 48 px. Orange-bordered cells are the ones I think are weak, with why.</p></div>
 <button id="t" type="button">Light</button></header>
 <section><h2>Department tiles <small>17</small></h2><div class="grid">${tiles}</div></section>
 ${sections}

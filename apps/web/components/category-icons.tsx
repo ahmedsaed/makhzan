@@ -41,8 +41,9 @@ export type { Glyph, GlyphKind };
  * is a top-level category, so its key is its ref too.
  *
  * Shown in the department pages' browse tree (components/browse-tree.tsx).
- * A department either has a drawn set or it does not. Without one, its
- * categories show plain, with no icon at all (a column of one repeated
+ * Every department with a profile has a drawn set now (the tests fail for a new
+ * one that has none). A department without one would show its
+ * categories plain, with no icon at all (a column of one repeated
  * stand-in says nothing), and its groups keep the department's line icon
  * (components/department-icon.tsx) until its set is drawn. A category added
  * to a drawn department later (a new electronics leaf) shows plain until its
