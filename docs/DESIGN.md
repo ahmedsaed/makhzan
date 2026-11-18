@@ -387,14 +387,13 @@ On a phone (below `sm`) the group tiles and the categories are each **one row th
 scrolls sideways** (the owner, 18 November 2026: wrapped, they pushed the products a
 long way down). `components/scroll-row.tsx`: native momentum scrolling, snapping to
 items, no scrollbar, and no page-level sideways scroll (S4). The selected group or
-category is scrolled into view on load, without moving the page. Three cues say the row
-goes on: the next item shows partly; the edge that hides content fades out over 2.5rem,
-only that edge, and sharp again at the row's end; and a small round chevron (`surface`,
-`line-strong` outline, `ink-2`) sits on that edge, gone once the row reaches it, which
-scrolls about one screen when tapped in a 44px target. The chevrons are pointer helpers,
-`aria-hidden` and out of the tab order: the row is a `nav` of links, every one reachable
-by keyboard and screen reader, and a focused link is scrolled clear of the edges. Under
-`prefers-reduced-motion` every scroll is instant and nothing nudges. All departments (`/departments`) is a directory, full width, largest department
+category is scrolled into view on load, without moving the page. Two cues say the row
+goes on: the next item shows partly, and the edge that hides content fades out over
+2.5rem, only that edge, sharp again once the row reaches it. There are no chevron
+buttons (the owner, 18 November 2026, after trying them): the row is a `nav` of links
+and nothing else, every one reachable by keyboard and screen reader, and a focused link
+is scrolled clear of the fades. Under `prefers-reduced-motion` every scroll is instant
+and nothing nudges. All departments (`/departments`) is a directory, full width, largest department
 first. A department with 10% or more of all products (three today) is a full-width block listing every
 group with up to six of its categories, as links with counts, in columns. The rest
 share a grid of cards (2, 3, then 4 across), each listing its biggest categories:
@@ -648,7 +647,7 @@ Each is meant to be checked by a test.
 - **S1** Colours come only from the tokens above; no literal colours in components.
 - **S2** Text meets 4.5:1 against its background in both themes (3:1 at 24px and up).
 - **S3** Prices use tabular figures; part numbers use the monospace face.
-- **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px. A row that scrolls sideways inside itself (the phone's group and category rows, the chip bar) is not page scroll; it keeps its items' 44px inside its own box.
+- **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px. A row that scrolls sideways inside itself (the phone's group and category rows, the chip bar) is not page scroll; it keeps its items' 44px inside its own box. Its only scroll cues are the partly shown next item and a fade on each edge that hides content (never a chevron button).
 - **S5** Photos are contained in a white frame in both themes; never cropped.
 - **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.
-- **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. A department with a drawn set has an icon for every group and category in its taxonomy; one without has plain category chips.
+- **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. A department with a drawn set has an icon for every group and category in its taxonomy; one without has plain category chips. An icon may be drawn ahead of the taxonomy that adds its category.

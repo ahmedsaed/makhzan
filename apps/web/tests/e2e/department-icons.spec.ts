@@ -143,40 +143,67 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
     await expect.poll(() => inView(chip)).toBe(true);
   });
 
-  test("a chevron shows only where there is more, and scrolls a screen", async ({ page }) => {
+  test("an edge fades only while it hides content", async ({ page }) => {
     await page.goto("/departments/electronics");
     const row = page.getByRole("navigation", { name: "Categories" });
-    const wrap = row.locator("..");
-    const end = wrap.locator("[data-scroll-chevron=end]");
-    const start = wrap.locator("[data-scroll-chevron=start]");
+    const mask = () => row.evaluate((el) => getComputedStyle(el).maskImage);
 
-    // At the start: more to the right only, faded on that edge only.
-    await expect(end).toBeVisible();
-    await expect(start).toHaveCount(0);
+    // At the start: more to the right only, so only the right edge fades.
     await expect(row).toHaveAttribute("data-more-end", "true");
     await expect(row).not.toHaveAttribute("data-more-start");
-    // A finger's worth to tap, and hidden from assistive technology (the links are the list).
-    const box = await end.boundingBox();
-    expect(box!.height).toBeGreaterThanOrEqual(44);
-    expect(box!.width).toBeGreaterThanOrEqual(44);
-    await expect(end).toHaveAttribute("aria-hidden", "true");
+    expect(await mask()).toMatch(/^linear-gradient\((to right|90deg)/);
 
-    await end.click();
-    await expect.poll(() => row.evaluate((el) => el.scrollLeft)).toBeGreaterThan(100);
-    await expect(start).toBeVisible();
+    // In the middle: both edges.
+    await row.evaluate((el) => {
+      el.style.scrollBehavior = "auto";
+      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+    });
     await expect(row).toHaveAttribute("data-more-start", "true");
+    await expect(row).toHaveAttribute("data-more-end", "true");
+    expect(await mask()).toMatch(
+      /^linear-gradient\((to right|90deg), (transparent|rgba\(0, 0, 0, 0\))/,
+    );
 
-    // At the end the right chevron and fade go.
-    await row.evaluate((el) => el.scrollTo({ left: el.scrollWidth, behavior: "instant" }));
-    await expect(end).toHaveCount(0);
+    // At the end: the right edge is sharp again, the left one fades.
+    await row.evaluate((el) => (el.scrollLeft = el.scrollWidth));
     await expect(row).not.toHaveAttribute("data-more-end");
-    await expect(start).toBeVisible();
+    await expect(row).toHaveAttribute("data-more-start", "true");
+    expect(await mask()).toMatch(/^linear-gradient\((to left|270deg)/);
   });
 
-  test("a row that fits shows no chevron", async ({ page }) => {
+  test("there are no chevron buttons, only the links", async ({ page }) => {
+    // The owner, 2026-11-18: the fade and the partly shown next item are the cues.
+    await page.goto("/departments/electronics");
+    for (const name of ["Groups", "Categories"]) {
+      const row = page.getByRole("navigation", { name });
+      await expect(row.locator("button")).toHaveCount(0);
+      // Nor beside the row, where an edge control would sit.
+      const besideButtons = await row.evaluate(
+        (el) =>
+          [...el.parentElement!.children].filter((c) => c !== el && c.matches("button")).length,
+      );
+      expect(besideButtons).toBe(0);
+    }
+  });
+
+  test("the next item shows partly, as the hint that the row goes on", async ({ page }) => {
+    await page.goto("/departments/electronics/components");
+    const cut = await page.getByRole("navigation", { name: "Categories" }).evaluate((el) => {
+      const right = el.getBoundingClientRect().right;
+      return [...el.querySelectorAll("a")].some((a) => {
+        const box = a.getBoundingClientRect();
+        return box.left < right - 8 && box.right > right;
+      });
+    });
+    expect(cut).toBe(true);
+  });
+
+  test("a row that fits does not fade", async ({ page }) => {
     await page.goto("/departments/seals-bearings");
     const groups = page.getByRole("navigation", { name: "Groups" });
-    await expect(groups.locator("..").locator("[data-scroll-chevron]")).toHaveCount(0);
+    await expect(groups).not.toHaveAttribute("data-more-end");
+    await expect(groups).not.toHaveAttribute("data-more-start");
+    expect(await groups.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
   });
 
   test("keyboard focus brings a link into view", async ({ page }) => {
@@ -192,8 +219,8 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
     await page.goto("/departments/electronics");
     const row = page.getByRole("navigation", { name: "Categories" });
     expect(await row.evaluate((el) => getComputedStyle(el).scrollBehavior)).toBe("auto");
-    // The chevron's scroll lands at once rather than gliding.
-    await row.locator("..").locator("[data-scroll-chevron=end]").click();
+    // Focus scrolls the row at once rather than gliding.
+    await row.getByRole("link").last().focus();
     expect(await row.evaluate((el) => el.scrollLeft)).toBeGreaterThan(100);
   });
 });
@@ -204,7 +231,7 @@ test("from a tablet up, the rows wrap as before", async ({ page }) => {
   const row = page.getByRole("navigation", { name: "Categories" });
   expect(await row.evaluate((el) => getComputedStyle(el).flexWrap)).toBe("wrap");
   expect(await row.evaluate((el) => getComputedStyle(el).overflowX)).toBe("visible");
-  await expect(row.locator("..").locator("[data-scroll-chevron]")).toBeHidden();
+  expect(await row.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
   const groups = page.getByRole("navigation", { name: "Groups" });
   expect(await groups.evaluate((el) => getComputedStyle(el).display)).toBe("grid");
 });
