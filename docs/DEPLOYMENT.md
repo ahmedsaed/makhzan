@@ -91,7 +91,7 @@ Edit `.env.prod`:
 - `IMAGE_PREFIX=ghcr.io/<owner>/makhzan`, `IMAGE_TAG=latest`
 - strong `POSTGRES_PASSWORD` + `MEILI_MASTER_KEY` (`openssl rand -base64 32`);
   keep the password in `DATABASE_URL` in sync
-- `WEB_PORT` — the host port your proxy targets (the API stays internal)
+- `WEB_PORT` — the host port your proxy targets (the API stays internal); `WEB_BIND` — the address it is published on (default `127.0.0.1`; `172.17.0.1` when the proxy is a container)
 - `NEXT_PUBLIC_API_URL` — leave `/api` (the web app rewrites it to the API);
   `API_INTERNAL_URL` (default `http://api:8000`) is the internal rewrite target
 - `SITE_URL` — the site's public origin, e.g. `https://makhzan.merope.dev`.
