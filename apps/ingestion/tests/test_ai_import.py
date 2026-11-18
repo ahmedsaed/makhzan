@@ -7,17 +7,27 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from makhzan_schemas import overrides as rulings
+from makhzan_schemas.ai import flow
 from makhzan_schemas.ai.pipelines import pipeline
 from makhzan_schemas.ai.policy import MODELS
 from makhzan_schemas.ai.render import load_shown, render
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType
-from makhzan_schemas.models import AiDecision, AiModelVersion, AiScore, Listing, Supplier
+from makhzan_schemas.models import (
+    AiDecision,
+    AiListingState,
+    AiModelVersion,
+    AiScore,
+    GroupingOverride,
+    Listing,
+    Supplier,
+)
 from makhzan_schemas.overrides import pair
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from worker import ai_import
 from worker.ai_import import ImportRefused, import_scores, verify
@@ -55,7 +65,7 @@ async def _listing(shop: Supplier, title: str) -> uuid.UUID:
     return listing.id
 
 
-async def _lines(x, y, stage, ab: float, ba: float, **override) -> list[dict]:
+async def _lines(x, y, stage, ab: float, ba: float, *, drop=(), **override) -> list[dict]:
     """Both orders of one stage, as the backlog driver writes them."""
     a, b = pair(x, y)
     async with SessionLocal() as session:
@@ -88,14 +98,16 @@ async def _lines(x, y, stage, ab: float, ba: float, **override) -> list[dict]:
             "source": "test",
         }
         line.update(override)
+        for key in drop:
+            line.pop(key, None)
         out.append(line)
     return out
 
 
-def _write(directory, kev: list[dict], pplx: list[dict]):
+def _write(directory, kev: list, pplx: list):
     for name, rows in (("kev", kev), ("pplx", pplx)):
         with (directory / f"scores-{name}.jsonl").open("w") as handle:
-            handle.writelines(json.dumps(r) + "\n" for r in rows)
+            handle.writelines((r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows)
     return directory
 
 
@@ -103,9 +115,14 @@ def _quiet(*_):
     pass
 
 
-async def _count(model) -> int:
+async def _count(model, *where) -> int:
     async with SessionLocal() as session:
-        return await session.scalar(select(func.count()).select_from(model))
+        return await session.scalar(select(func.count()).select_from(model).where(*where))
+
+
+def _of_pair(x, y):
+    a, b = pair(x, y)
+    return (AiDecision.listing_a == a, AiDecision.listing_b == b)
 
 
 async def _scenario(tmp_path):
@@ -127,12 +144,16 @@ async def test_import_stores_scores_and_decides_through_the_pipeline(tmp_path):
     directory, (one, two, three) = await _scenario(tmp_path)
     report = await import_scores(directory, log=_quiet)
     assert report.inserted == 10 and report.already_stored == 0
-    assert dict(report.decided) == {"same": 1, "not_same": 2}
-    assert dict(report.decided_by) == {"kev": 1, "pplx": 2}
+    assert dict(report.planned) == dict(report.written) == {"same": 1, "not_same": 2}
+    assert dict(report.written_by) == {"kev": 1, "pplx": 2}
+    assert report.recommendation is None
     async with SessionLocal() as session:
         judges = (await session.scalars(select(AiModelVersion))).all()
-        assert {(j.model, j.model_version, j.prompt_version) for j in judges} == {
-            (s.model, s.model_version, s.prompt_version) for s in (KEV, PPLX)
+        assert {
+            (j.model, j.model_version, j.prompt_version, j.weights_revision) for j in judges
+        } == {
+            (s.model, s.model_version, s.prompt_version, MODELS[s.model].weights_revision)
+            for s in (KEV, PPLX)
         }
         decisions = {
             (d.listing_a, d.listing_b): d for d in (await session.scalars(select(AiDecision)))
@@ -150,6 +171,14 @@ async def test_import_stores_scores_and_decides_through_the_pipeline(tmp_path):
     no = decisions[pair(one, three)]
     assert (no.outcome, no.decided_by, no.scores["kev"]["min"]) == ("not_same", "kev", 0.01)
     assert decisions[pair(two, three)].outcome == "not_same"
+    checked = await verify(directory)
+    assert checked.mismatches == [] and dict(checked.written) == {"same": 1, "not_same": 2}
+
+
+async def test_one_pair_a_chunk_decides_the_same(tmp_path):
+    directory, _ = await _scenario(tmp_path)
+    report = await import_scores(directory, chunk=1, log=_quiet)
+    assert dict(report.written) == {"same": 1, "not_same": 2}
     assert (await verify(directory)).mismatches == []
 
 
@@ -170,7 +199,8 @@ async def test_a_second_run_changes_nothing(tmp_path):
 async def test_a_dry_run_writes_nothing(tmp_path):
     directory, _ = await _scenario(tmp_path)
     report = await import_scores(directory, dry_run=True, log=_quiet)
-    assert report.inserted == 10 and dict(report.decided) == {"same": 1, "not_same": 2}
+    assert report.inserted == 10 and dict(report.planned) == {"same": 1, "not_same": 2}
+    assert not report.written
     assert await _count(AiScore) == 0
     assert await _count(AiDecision) == 0
     assert await _count(AiModelVersion) == 0
@@ -185,22 +215,46 @@ async def test_a_listing_whose_text_changed_is_skipped_and_counted(tmp_path):
     report = await import_scores(directory, log=_quiet)
     # Every line of the two pairs that show `one` is stale: 4 Kev, 2 pplx.
     assert dict(report.stale) == {"kev": 4, "pplx": 2}
+    assert report.stale_pairs == 2 and report.stale_listings == [str(one)]
+    # No baseline yet: the first trigger run would record its new text, so it is stranded.
+    assert report.baseline["verdict"] == "none" and report.stranded_listings == 1
+    assert "./makhzan ai backlog" in report.recommendation
     assert report.inserted == 4
     assert report.unsettled == 2
-    assert dict(report.decided) == {"not_same": 1}
-    async with SessionLocal() as session:
-        assert (
-            await session.scalar(
-                select(func.count())
-                .select_from(AiDecision)
-                .where(
-                    AiDecision.listing_a.in_(pair(one, two)),
-                    AiDecision.listing_b.in_(pair(one, two)),
-                )
-            )
-            == 0
-        )
+    assert dict(report.written) == {"not_same": 1}
+    assert await _count(AiDecision, *_of_pair(one, two)) == 0
     assert (await verify(directory)).mismatches == []
+
+
+async def test_a_listing_that_is_gone_is_skipped_and_counted(tmp_path):
+    directory, (_, _, three) = await _scenario(tmp_path)
+    async with SessionLocal() as session:
+        await session.delete(await session.get(Listing, three))
+        await session.commit()
+    report = await import_scores(directory, log=_quiet)
+    # one-three and two-three by Kev, two-three by pplx.
+    assert report.missing_listing == 6
+    assert report.stale_listings == [str(three)]
+    assert dict(report.written) == {"same": 1}
+    assert (await verify(directory)).mismatches == []
+
+
+async def test_a_change_no_judge_sees_keeps_the_scores(tmp_path):
+    directory, (one, two, _) = await _scenario(tmp_path)
+    async with SessionLocal() as session:
+        listing = await session.get(Listing, one)
+        listing.title_ar = "وحدة استشعار مثال"  # under an English title: no prompt shows it
+        await session.commit()
+    report = await import_scores(directory, log=_quiet)
+    assert report.content_hash_differs == 6 and not report.stale
+    assert dict(report.written) == {"same": 1, "not_same": 2}
+    async with SessionLocal() as session:
+        decision = await session.scalar(select(AiDecision).where(*_of_pair(one, two)))
+        shown = await load_shown(session, (one,))
+    # The decision carries the listing's current content hash, as write_decision does.
+    a, _ = pair(one, two)
+    current = decision.content_sha256_a if a == one else decision.content_sha256_b
+    assert current == shown[one].content_sha256
 
 
 async def test_a_request_two_lines_share_is_stored_once(tmp_path):
@@ -211,25 +265,122 @@ async def test_a_request_two_lines_share_is_stored_once(tmp_path):
     assert report.repeated_in_files == 1 and report.inserted == 10
 
 
+async def test_a_score_already_stored_wins_and_is_counted(tmp_path):
+    directory, (one, two, _) = await _scenario(tmp_path)
+    first = json.loads((directory / "scores-pplx.jsonl").read_text().splitlines()[0])
+    async with SessionLocal() as session:
+        judge = (await ai_import.judges_for(session))["pplx"]
+        session.add(
+            AiScore(
+                model_version_id=judge,
+                listing_a=uuid.UUID(first["listing_a"]),
+                listing_b=uuid.UUID(first["listing_b"]),
+                reading_order=first["order"],
+                request_sha256=bytes.fromhex(first["request_sha256"]),
+                content_sha256_a=bytes.fromhex(first["content_sha256_a"]),
+                content_sha256_b=bytes.fromhex(first["content_sha256_b"]),
+                p=0.98,  # a broker result, before the import: the file says 0.99
+            )
+        )
+        await session.commit()
+    report = await import_scores(directory, log=_quiet)
+    assert report.already_stored == 1 and report.already_stored_p_differs == 1
+    assert report.inserted == 9
+    checked = await verify(directory)
+    assert checked.mismatches == [] and checked.held_before_import_p_differs == 1
+
+
+async def test_verify_catches_a_stored_score_that_differs_from_the_file(tmp_path):
+    directory, _ = await _scenario(tmp_path)
+    await import_scores(directory, log=_quiet)
+    async with SessionLocal() as session:
+        target = await session.scalar(select(AiScore.id).order_by(AiScore.id).limit(1))
+        await session.execute(update(AiScore).where(AiScore.id == target).values(p=0.5))
+        await session.commit()
+    report = await verify(directory)
+    assert any("stored p 0.5" in m for m in report.mismatches)
+
+
+async def test_a_revoked_pair_is_blocked_and_verify_accepts_it(tmp_path):
+    directory, (one, two, _) = await _scenario(tmp_path)
+    await import_scores(directory, log=_quiet)
+    async with SessionLocal() as session:
+        decision = await session.scalar(select(AiDecision).where(*_of_pair(one, two)))
+        _, _, refused = await flow.revoke_decision(session, decision.id, by="test", note="wrong")
+        assert refused is None
+        await session.commit()
+    again = await import_scores(directory, log=_quiet)
+    assert again.blocked_by_revocation == 1 and again.revoked_pairs == 1
+    assert dict(again.written) == {"not_same": 2}
+    assert await _count(AiDecision, *_of_pair(one, two), AiDecision.state == "standing") == 0
+    checked = await verify(directory)
+    assert checked.mismatches == [] and checked.blocked_by_revocation == 1
+
+
+async def test_a_pair_a_person_ruled_on_is_not_decided(tmp_path):
+    directory, (one, two, _) = await _scenario(tmp_path)
+    a, b = pair(one, two)
+    async with SessionLocal() as session:
+        session.add(
+            GroupingOverride(
+                listing_a=a,
+                listing_b=b,
+                kind=rulings.NEVER,
+                source="manual",
+                note="test",
+                created_by="test",
+            )
+        )
+        await session.commit()
+    report = await import_scores(directory, log=_quiet)
+    assert report.ruled == 1 and dict(report.written) == {"not_same": 2}
+    assert report.inserted == 10  # the scores are kept as evidence
+    assert await _count(AiDecision, *_of_pair(one, two)) == 0
+    checked = await verify(directory)
+    assert checked.mismatches == [] and checked.ruled == 1
+
+
 @pytest.mark.parametrize(
-    "override",
+    "change",
     [
         {"model_version": "kev-4b@000000000000+kev-0000000+T1.0"},
+        {"weights_revision": "0" * 40},
+        {"drop": ("weights_revision",)},
         {"prompt_version": "K2-150@00000000"},
         {"hash_version": 1},
         {"model": "other"},
         {"prompt_variant": "K1-full"},
         {"p": 1.5},
+        {"p": True},
+        {"listing_a": "not-a-uuid"},
+        {"shown_as_a": "nope"},
+        {"scored_at": "yesterday"},
+        {"scored_at": "2026-01-02T00:00:00"},
+        {"request_sha256": "abc"},
     ],
 )
-async def test_a_line_of_another_judge_refuses_the_whole_import(tmp_path, override):
+async def test_a_bad_line_refuses_the_whole_import(tmp_path, change):
     shops = [await _shop(f"shop-{c}") for c in "ab"]
     one = await _listing(shops[0], "Example part P-1")
     two = await _listing(shops[1], "Example part P-1 module")
-    _write(tmp_path, await _lines(one, two, KEV, 0.9, 0.9, **override), [])
-    with pytest.raises(ImportRefused):
+    _write(tmp_path, await _lines(one, two, KEV, 0.9, 0.9, **change), [])
+    with pytest.raises(ImportRefused, match=r"scores-kev\.jsonl:1"):
         await import_scores(tmp_path, log=_quiet)
     assert await _count(AiScore) == 0
+
+
+@pytest.mark.parametrize("text", ["[1, 2]", '"a string"', "{not json"])
+async def test_a_line_that_is_not_a_json_object_is_refused_with_its_number(tmp_path, text):
+    directory, _ = await _scenario(tmp_path)
+    kev = (directory / "scores-kev.jsonl").read_text().splitlines()
+    (directory / "scores-kev.jsonl").write_text("\n".join([kev[0], text, *kev[1:]]) + "\n")
+    with pytest.raises(ImportRefused, match=r"scores-kev\.jsonl:2"):
+        await import_scores(directory, log=_quiet)
+
+
+async def test_an_empty_folder_is_refused(tmp_path):
+    with pytest.raises(ImportRefused, match="no scores"):
+        await import_scores(tmp_path, log=_quiet)
 
 
 async def test_the_import_refuses_another_policy(tmp_path):
@@ -238,15 +389,48 @@ async def test_the_import_refuses_another_policy(tmp_path):
         await import_scores(directory, policy="p0", log=_quiet)
 
 
+async def test_the_baseline_is_read_and_compared_with_the_dump(tmp_path):
+    directory, (one, _, _) = await _scenario(tmp_path)
+    baseline = datetime(2026, 1, 5, tzinfo=UTC)
+    async with SessionLocal() as session:
+        shown = await load_shown(session, (one,))
+        listing = await session.get(Listing, one)
+        listing.title_en = "Example sensor module XY-1 v2"
+        await session.flush()
+        changed = (await load_shown(session, (one,)))[one].content_sha256
+        # The trigger already recorded the new text: nothing will offer it again.
+        session.add(
+            AiListingState(
+                listing_id=one,
+                content_sha256=changed,
+                candidates_sha256=changed,
+                candidates_at=baseline,
+            )
+        )
+        await session.commit()
+    assert changed != shown[one].content_sha256
+    after = await import_scores(
+        directory, dry_run=True, snapshot_at=baseline - timedelta(days=1), log=_quiet
+    )
+    assert after.baseline["verdict"] == "after_snapshot"
+    assert after.stranded_listings == 1
+    before = await import_scores(
+        directory, dry_run=True, snapshot_at=baseline + timedelta(days=1), log=_quiet
+    )
+    assert before.baseline["verdict"] == "before_snapshot"
+    unknown = await import_scores(directory, dry_run=True, log=_quiet)
+    assert unknown.baseline["verdict"] == "unknown"
+    # Read-only: the state is as it was.
+    async with SessionLocal() as session:
+        state = await session.get(AiListingState, one)
+        assert state.candidates_at == baseline
+
+
 async def test_verify_reports_a_decision_that_is_missing(tmp_path):
     directory, (one, two, _) = await _scenario(tmp_path)
     await import_scores(directory, log=_quiet)
     async with SessionLocal() as session:
-        row = await session.scalar(
-            select(AiDecision)
-            .where(AiDecision.listing_a == pair(one, two)[0])
-            .where(AiDecision.listing_b == pair(one, two)[1])
-        )
+        row = await session.scalar(select(AiDecision).where(*_of_pair(one, two)))
         await session.delete(row)
         await session.commit()
     report = await verify(directory)
@@ -257,7 +441,15 @@ async def test_the_cli_runs_the_import(tmp_path, capsys):
     directory, _ = await _scenario(tmp_path)
     args = ai_import._parser().parse_args([str(directory), "--dry-run"])
     assert await ai_import.main(args) == 0
-    assert json.loads(capsys.readouterr().out.split("rolled back\n", 1)[1])["decisions"] == {
+    out = capsys.readouterr().out
+    assert json.loads(out.split("rolled back\n", 1)[1])["decisions_planned"] == {
         "same": 1,
         "not_same": 2,
     }
+
+
+def test_the_snapshot_time_needs_a_time_zone():
+    with pytest.raises(SystemExit):
+        ai_import._parser().parse_args(["x", "--snapshot-at", "2026-11-17T13:10"])
+    args = ai_import._parser().parse_args(["x", "--snapshot-at", "2026-11-17T13:10+02:00"])
+    assert args.snapshot_at.utcoffset() == timedelta(hours=2)

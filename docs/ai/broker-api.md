@@ -624,27 +624,50 @@ heartbeat_s = 60
 
 ## 6.1 Importing a locally scored backlog
 
-`./makhzan ai import DIR [--dry-run | --verify]` (`python -m worker.ai_import`;
-`make ai ARGS="import DIR"` locally) stores a backlog run's `scores-*.jsonl`
-and writes the decisions they make. Every line must name the code's judge
-(model version, weights revision, prompt version, hash version), or the
-whole import is refused. Each request is re-rendered from the listing as it
-is now and kept only when its `request_sha256` matches; the rest are counted
-as stale and skipped. Scores go in idempotently on (judge, request hash);
-then every pair whose stages are all scored goes through `flow.advance`, so
-the decisions, their evidence and request hashes, and a person's
-revocations are exactly what the broker would write. `--dry-run` rolls back
-and writes no decision; `--verify` checks stored scores and standing
-decisions against the files and changes nothing. `./makhzan` copies the
-files into the worker container first.
+`./makhzan ai import DIR [--dry-run | --verify] [--snapshot-at TIME]`
+(`python -m worker.ai_import`; `make ai ARGS="import DIR"` locally) stores a
+backlog run's `scores-*.jsonl` and writes the decisions they make.
+
+- DIR is a folder on the machine the command is typed on, resolved against
+  the operator's directory. From a laptop the files are copied to a fresh
+  temporary folder on the server first (a same-named server path is never
+  read); on the server, into a fresh folder in the worker container. Both are
+  removed afterwards, and a folder with no `scores-*.jsonl` is refused before
+  anything is touched (`scripts/lib/ai_import.sh`).
+- It first reads the candidates trigger's baseline (read-only):
+  `min(ai_listing_state.candidates_at)`, compared with `--snapshot-at`, the
+  time of the dump the backlog was scored from.
+- Every line must name the code's judge (model version, weights revision,
+  prompt version, hash version) and be well formed, or the whole import is
+  refused, naming the line.
+- Each request is re-rendered from the listing as it is now and kept only
+  when its `request_sha256` matches; the rest are skipped and reported with
+  the pairs and listings involved, and the listings no trigger will offer
+  again ("stranded"). It then recommends `./makhzan ai backlog`; it queues
+  nothing itself.
+- Scores go in idempotently on (judge, request hash); a request already
+  stored keeps its row, and a differing p is counted.
+- Each pair whose stages are all scored, and that no person has ruled on
+  (`grouping_overrides`; those are counted), gets `transition()` over the
+  stored scores and `flow.write_decision`: the decision, its evidence and
+  request hashes, and a person's revocation holding are exactly what the
+  broker would write. Each pair is counted by what `write_decision` returned
+  (written, blocked by a revocation, listing gone).
+- `--dry-run` rolls back and writes no decision. `--verify` checks the stored
+  scores and standing decisions against the files and changes nothing: a
+  score stored before the import keeps its own p, and a pair a revocation
+  blocks is expected; both are counted, not reported as mismatches.
 
 ## 7. What is not here yet
 
-- A way to queue the pairs an import skips as stale (`worker.ai_import`
-  counts them and queues nothing). In production the first daily trigger
-  run records a baseline of content hashes, so a listing whose text changed
-  between the backlog's dump and the import is not offered again until it
-  changes once more.
+- Queueing the pairs an import skips as stale. `ai_candidates` runs after
+  every rebuild whatever the AI mode, so production may already hold its
+  baseline (the first run records every listing's content hash and offers
+  nothing). A listing that changed between the backlog's dump and that
+  baseline was recorded at its new text and is not offered again until it
+  changes once more; one that changed after the baseline is offered by the
+  daily trigger as usual. `worker.ai_import` reports both and recommends
+  `./makhzan ai backlog`; it queues nothing.
 - Applying a new policy: `redecide` is a dry run only.
 - Writing `ai_decisions.effect` after each regroup (the columns exist; nothing
   writes them yet), and citing revoked decisions on the regroup that undoes
