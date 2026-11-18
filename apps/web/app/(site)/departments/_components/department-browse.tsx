@@ -5,7 +5,7 @@ import { Link } from "@/components/link";
 import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
 import { Container } from "@/components/section";
-import { departmentIcon } from "@/components/department-icon";
+import { hasCategoryIcons, tileIcon } from "@/components/category-icons";
 import { categoryNameOf, type Category } from "@/lib/api";
 import { objectImage } from "@/lib/content/category-images";
 import { formatCount } from "@/lib/format";
@@ -18,18 +18,26 @@ import {
   type RawParams,
   type ResultsQuery,
 } from "@/lib/results-query";
-import { asPhrase, totalOf, departmentLabel, departmentTree, type DepartmentNode } from "@/lib/departments";
+import {
+  asPhrase,
+  totalOf,
+  departmentLabel,
+  departmentTree,
+  type DepartmentNode,
+} from "@/lib/departments";
 import { cn } from "@/lib/utils";
 
-import { balancedColumns, BrowseTile } from "./browse-tile";
+import { balancedColumns, BrowseTile, CategoryChip, ShortcutPill } from "./browse-tile";
 
 export type { RawParams };
 
 /**
  * A department, or one of its categories: the same page, narrowed. The header names
- * it and offers "Search in {department}"; the groups are object tiles, the selected
- * group's categories smaller ones; and the results start straight away, so no
- * page here is a dead-end list of links.
+ * it and offers "Search in {department}"; the groups are object tiles; the selected
+ * group's categories are chips, and on the department's own page its biggest
+ * categories are light shortcut pills; and the results start straight away, so
+ * no page here is a dead-end list of links. Icons come from
+ * components/category-icons.tsx, keyed by ref.
  *
  * The results are the search page's (components/results.tsx), on the same URL
  * contract (lib/results-query.ts), with the department — and on a category page the
@@ -99,19 +107,20 @@ export async function DepartmentBrowse({
         .slice(0, 3)
         .map((c) => c.name),
     ) || undefined;
-  const tile = (node: DepartmentNode, size: "md" | "sm") => (
+  const tile = (node: DepartmentNode) => (
     <BrowseTile
       key={node.ref}
       href={routes.category(node.ref)}
       label={categoryNameOf(node)}
       image={objectImage(node.ref)}
-      icon={departmentIcon(department)}
+      icon={tileIcon(node.ref, department)}
       count={node.total}
-      hint={size === "md" ? inside(node) : undefined}
-      current={node.ref === (size === "md" ? tree.group?.ref : selected?.ref)}
-      size={size}
+      hint={inside(node)}
+      current={node.ref === tree.group?.ref}
     />
   );
+  // A department without a drawn set gets plain chips, not one stand-in repeated.
+  const withIcon = hasCategoryIcons(department);
   const names = new Map(categories.map((c) => [c.ref, categoryNameOf(c)]));
 
   return (
@@ -139,7 +148,7 @@ export async function DepartmentBrowse({
               BALANCED,
             )}
           >
-            {tree.groups.map((group) => tile(group, "md"))}
+            {tree.groups.map(tile)}
           </nav>
         )}
       </DepartmentHeader>
@@ -150,13 +159,35 @@ export async function DepartmentBrowse({
             <h2 id="shelf-heading" className="font-sans text-[13px] font-semibold text-ink-2">
               {shelfTitle}
             </h2>
-            <nav
-              aria-label="Categories"
-              style={columns(shelf.length, 4, 6)}
-              className={cn("grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8", BALANCED)}
-            >
-              {shelf.map((node) => tile(node, "sm"))}
-            </nav>
+            {tree.group ? (
+              <nav aria-label="Categories" className="flex flex-wrap gap-2">
+                {shelf.map((node) => (
+                  <CategoryChip
+                    key={node.ref}
+                    href={routes.category(node.ref)}
+                    iconRef={node.ref}
+                    label={categoryNameOf(node)}
+                    count={node.total}
+                    current={node.ref === selected?.ref}
+                    withIcon={withIcon}
+                  />
+                ))}
+              </nav>
+            ) : (
+              <nav aria-label="Categories" className="flex flex-wrap gap-x-1.5 gap-y-3">
+                {shelf.map((node) => (
+                  <ShortcutPill
+                    key={node.ref}
+                    href={routes.category(node.ref)}
+                    iconRef={node.ref}
+                    label={categoryNameOf(node)}
+                    group={node.parent ? (names.get(node.parent) ?? null) : null}
+                    count={node.total}
+                    withIcon={withIcon}
+                  />
+                ))}
+              </nav>
+            )}
           </section>
         )}
 

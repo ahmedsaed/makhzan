@@ -125,7 +125,25 @@ export function departmentTree(categories: Category[], selected: string | null =
   const children = group ? withTotals(categories.filter((c) => c.parent === group.ref)) : [];
   // A flat department has nothing to add here: its groups already are its categories.
   const nested = groups.some((node) => categories.some((c) => c.parent === node.ref));
-  const top = !group && nested ? withTotals(leavesOf(categories)).slice(0, 8) : [];
+  // A shortcut that leads where a group tile already does is the same thing
+  // shown twice ("Accessories & Other" 1,202 and its only category "Accessories"
+  // 1,202): a top-level leaf, or a group's only non-empty category, is left out.
+  // The eight biggest are taken first, so leaving one out shortens the shelf
+  // rather than pulling in a smaller category (the approved mockup).
+  const live = new Map<string | null, number>();
+  for (const node of withTotals(categories)) {
+    live.set(node.parent, (live.get(node.parent) ?? 0) + 1);
+  }
+  // The page shows group tiles only when there are two or more.
+  const tiles = new Set(groups.length > 1 ? groups.map((g) => g.ref) : []);
+  const repeatsGroup = (node: DepartmentNode) =>
+    !node.parent || (tiles.has(node.parent) && live.get(node.parent) === 1);
+  const top =
+    !group && nested
+      ? withTotals(leavesOf(categories))
+          .slice(0, 8)
+          .filter((node) => !repeatsGroup(node))
+      : [];
 
   return { groups, group, children, top };
 }

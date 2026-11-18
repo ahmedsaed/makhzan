@@ -73,6 +73,21 @@ test("a department page's controls", async ({ page }) => {
     "group tile": page.getByRole("navigation", { name: "Groups" }).getByRole("link").first(),
   });
 
+  // The shortcut pills are drawn 32px tall and wrap onto rows; each must still
+  // take a 44px tap, the first row and the last.
+  const shortcuts = page.getByRole("navigation", { name: "Categories" }).getByRole("link");
+  await expectTappable(page, {
+    "first shortcut pill": shortcuts.first(),
+    "last shortcut pill": shortcuts.last(),
+  });
+
+  await page.goto("/departments/electronics/components");
+  const chips = page.getByRole("navigation", { name: "Categories" }).getByRole("link");
+  await expectTappable(page, {
+    "first category chip": chips.first(),
+    "last category chip": chips.last(),
+  });
+
   await page.goto("/departments/seals-bearings/oil-seals");
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link");
   await expect(crumbs).toHaveCount(3);

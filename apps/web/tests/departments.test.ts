@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { Category } from "@/lib/api";
-import { asPhrase, insideOf, totalOf, departmentSummaries, departmentTree } from "@/lib/departments";
+import {
+  asPhrase,
+  insideOf,
+  totalOf,
+  departmentSummaries,
+  departmentTree,
+} from "@/lib/departments";
 
 const cat = (
   domain: string,
@@ -60,7 +66,11 @@ describe("what's inside a department", () => {
 
 describe("departments are listed by size", () => {
   it("orders departments largest first and drops empty ones", () => {
-    const departments = departmentSummaries([...FLAT, ...SEALS, cat("garden", "mowers", "Mowers", null, 0)]);
+    const departments = departmentSummaries([
+      ...FLAT,
+      ...SEALS,
+      cat("garden", "mowers", "Mowers", null, 0),
+    ]);
     expect(departments.map((t) => [t.domain, t.count])).toEqual([
       ["seals-bearings", 1490],
       ["timber", 120],
@@ -98,6 +108,37 @@ describe("a department's tree", () => {
 
   it("selects a group by itself", () => {
     expect(departmentTree(SEALS, "seals-bearings:seals").group?.slug).toBe("seals");
+  });
+
+  it("does not repeat a group that holds a single category as a shortcut", () => {
+    // The icon pilot: "Accessories & Other" 1,202 and its only category
+    // "Accessories" 1,202 were the same thing, shown twice.
+    const tree = departmentTree([
+      cat("electronics", "components", "Components", null, 0),
+      cat("electronics", "resistors", "Resistors", "components", 300),
+      cat("electronics", "capacitors", "Capacitors", "components", 100),
+      cat("electronics", "other", "Accessories & Other", null, 0),
+      cat("electronics", "accessories", "Accessories", "other", 200),
+      // An empty sibling does not make the group's one category less alone.
+      cat("electronics", "spares", "Spares", "other", 0),
+      cat("electronics", "loose", "Loose Parts", null, 250),
+    ]);
+    expect(tree.groups.map((g) => g.slug)).toEqual(["components", "loose", "other"]);
+    // Nor does a top-level leaf, which is a group tile itself.
+    expect(tree.top.map((c) => c.slug)).toEqual(["resistors", "capacitors"]);
+  });
+
+  it("keeps the eight biggest, rather than reaching past one it leaves out", () => {
+    const tree = departmentTree([
+      cat("electronics", "components", "Components", null, 0),
+      ...Array.from({ length: 9 }, (_, i) =>
+        cat("electronics", `c${i}`, `C${i}`, "components", 1000 - i * 10),
+      ),
+      cat("electronics", "other", "Accessories & Other", null, 0),
+      cat("electronics", "accessories", "Accessories", "other", 995),
+    ]);
+    expect(tree.top).toHaveLength(7);
+    expect(tree.top.map((c) => c.slug)).not.toContain("accessories");
   });
 
   it("adds no biggest-categories row to a flat department", () => {
