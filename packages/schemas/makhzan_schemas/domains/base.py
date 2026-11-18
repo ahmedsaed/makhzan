@@ -24,7 +24,9 @@ from makhzan_schemas.identifiers import Identifier, IdentifierRule, stated_ident
 #: (slug, name_en, name_ar, parent_slug) — parents are browse groups, leaves are
 #: what the resolver assigns.
 TaxonomyNode = tuple[str, str, str, str | None]
-#: (leaf_slug, keywords) — ORDER IS PRIORITY, most specific first.
+#: (leaf_slug, keywords) — ORDER IS PRIORITY, most specific first. A keyword
+#: written "!word" is a veto: the rule does not fire on a text containing it,
+#: and the text falls through to the rules below.
 CategoryRule = tuple[str, list[str]]
 
 #: Fallback domain for anything that predates the domain column.
@@ -129,14 +131,14 @@ class DomainProfile:
         cats = [_normalize(c) for c in (category_strings or [])]
         meaningful = [c for c in cats if c and c not in self.generic_categories]
 
-        for slug, pattern in _compiled_rules(self):
-            if any(pattern.search(cat) for cat in meaningful):
+        for slug, pattern, veto in _compiled_rules(self):
+            if any(_fires(pattern, veto, cat) for cat in meaningful):
                 return slug
 
         if title:
             normalized_title = _normalize(title)
-            for slug, pattern in _compiled_rules(self):
-                if pattern.search(normalized_title):
+            for slug, pattern, veto in _compiled_rules(self):
+                if _fires(pattern, veto, normalized_title):
                     return slug
         return None
 
@@ -148,16 +150,29 @@ def _normalize(text: str) -> str:
 # Compiled per profile and cached: keyword at a left word boundary (not preceded
 # by a letter/digit), trailing text free. Kills matches like "led" inside
 # "assembled" while still catching plurals ("resistors").
-_RULE_CACHE: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+_RULE_CACHE: dict[str, list[tuple[str, re.Pattern[str], re.Pattern[str] | None]]] = {}
 
 
-def _compiled_rules(profile: DomainProfile) -> list[tuple[str, re.Pattern[str]]]:
+def _fires(pattern: re.Pattern[str], veto: re.Pattern[str] | None, text: str) -> bool:
+    return bool(pattern.search(text)) and not (veto and veto.search(text))
+
+
+def _compiled_rules(
+    profile: DomainProfile,
+) -> list[tuple[str, re.Pattern[str], re.Pattern[str] | None]]:
     cached = _RULE_CACHE.get(profile.slug)
     if cached is None:
-        cached = [
-            (slug, re.compile("|".join(_keyword_pattern(kw) for kw in kws)))
-            for slug, kws in profile.category_rules
-        ]
+        cached = []
+        for slug, kws in profile.category_rules:
+            wanted = [kw for kw in kws if not kw.startswith("!")]
+            vetoes = [kw[1:] for kw in kws if kw.startswith("!")]
+            cached.append(
+                (
+                    slug,
+                    re.compile("|".join(_keyword_pattern(kw) for kw in wanted)),
+                    re.compile("|".join(_keyword_pattern(kw) for kw in vetoes)) if vetoes else None,
+                )
+            )
         _RULE_CACHE[profile.slug] = cached
     return cached
 

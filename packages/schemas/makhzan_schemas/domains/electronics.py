@@ -96,6 +96,41 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
 # A leaf may appear twice when part of its vocabulary must outrank another leaf
 # and part must not (see 3D printers below).
 CATEGORY_RULES: list[tuple[str, list[str]]] = [
+    # Kits name their parts ("Educational Robot Kit with LED Eyes", "Solar Robot
+    # Kit", "Arduino Learning Kit"), so the phrases that say a listing *is* a kit
+    # come first of all. A starter or learning kit is a kit whatever board it is
+    # built on. Never bare "kit" (a mainboard kit, an O-ring service kit, a
+    # developer kit), never bare "STEM" (a valve stem seal), and no "for kids"
+    # (headphones for kids).
+    (
+        "kits",
+        [
+            "educational kit",
+            "educational robot",
+            "educational toy",
+            "stem kit",
+            "stem educat",
+            "stem learning",
+            "stem toy",
+            "stem project",
+            "stem programming",
+            "stem robot",
+            "stem electronics",
+            "science toy",
+            "learning kit",
+            "robot kit",
+            "robotic kit",
+            "robotics kit",
+            "robot arm kit",
+            "robotic arm kit",
+            "project kit",
+            "lab kit",
+            "logic kit",
+            "digital logic design",
+        ],
+    ),
+    # "Starter kit" is a kit too, except a soldering iron's starter bundle.
+    ("kits", ["starter kit", "!solder"]),
     ("resistors", ["resistor"]),
     ("potentiometers", ["potentiometer", "trimmer", "rheostat"]),
     ("capacitors", ["capacitor"]),
@@ -137,38 +172,53 @@ CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "fpga",
         ],
     ),
-    # Kits name their parts ("Solar Robot Kit", "Robot Arm Kit with 4 Servos"), so
-    # the phrases that say a listing *is* a kit go ahead of the parts' own leaves.
-    # Behind dev boards, though: an Arduino starter kit is filed with Arduino.
-    # Never bare "kit": a mainboard kit, an O-ring service kit and a developer
-    # kit are not teaching kits.
-    (
-        "kits",
-        [
-            "educational kit",
-            "educational robot",
-            "educational toy",
-            r"stem\b",
-            "science toy",
-            "learning kit",
-            "robot kit",
-            "robotic kit",
-            "robotics kit",
-            "robot arm kit",
-            "robotic arm kit",
-            "project kit",
-            "lab kit",
-            "logic kit",
-            "digital logic design",
-            "for kids",
-        ],
-    ),
     # A thermal camera is a test instrument, and "thermal" alone filed it with
     # fans and heatsinks.
     ("measurement", ["thermal camera", "thermal imag"]),
     # Ahead of wireless: a "Wi-Fi Camera" or "WiFi Endoscope" is a camera that
     # happens to connect wirelessly. Behind dev boards: an ESP32-CAM is a board.
-    ("cameras", ["camera", "webcam", "endoscope", "borescope", "machine vision"]),
+    # Being this early, it must not take what is merely *for* a camera: a camera
+    # battery, a CCTV power adapter, a pan-tilt servo mount, a tripod screw or a
+    # motorised slider. The vetoes hand those to the leaves below.
+    (
+        "cameras",
+        [
+            "camera",
+            "webcam",
+            "endoscope",
+            "borescope",
+            "dashcam",
+            "dash cam",
+            "machine vision",
+            "!batter",
+            "!charger",
+            "!power",
+            "!adapter",
+            "!supply",
+            "!mount",
+            "!tripod",
+            "!screw",
+            "!slider",
+            "!cable",
+            "!housing",
+            "!cover",
+            "!flash",
+            "!light ring",
+            "!ring light",
+            "!fill light",
+            "!video light",
+            "!bracket",
+            "!holder",
+            "!lens cap",
+            "!servo",
+            "!motor",
+            "!bag",
+            "!strap",
+            "!cage",
+            r"!stand\b",
+            "!case",
+        ],
+    ),
     (
         "wireless",
         [

@@ -142,6 +142,49 @@ def test_cameras_and_imaging(tags, title, expected):
     assert get_profile("electronics").resolve_category_slug(tags, title) == expected
 
 
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # Things merely *for* a camera keep the leaf they had before.
+        ("Camera Battery LP-E6", "batteries"),
+        ("Camera Battery Charger NP-F550", "batteries"),
+        ("CCTV Camera Power Adapter 12V", "power-supplies"),
+        ("IP Camera Power Supply", "power-supplies"),
+        ("Pan Tilt Camera Mount for SG90 Servo", "servos"),
+        ("Camera Tripod Screw", "mechanical"),
+        ("Camera Slider Motorized", "motors"),
+        ("Security Camera Cable BNC", None),
+        ("Webcam Cover Slider", None),
+        ("Camera Housing", None),
+        ("Camera Flash Trigger", None),
+        ("Machine Vision Light Ring", None),
+    ],
+)
+def test_camera_accessories_are_not_cameras(title, expected):
+    assert get_profile("electronics").resolve_category_slug(None, title) == expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["IP Camera 1080p PoE", "Car Dash Camera Full HD", "Dashcam with G-Sensor", "OV2640 Camera"],
+)
+def test_cameras_that_say_so_are_cameras(title):
+    """A dash cam is a camera."""
+    assert get_profile("electronics").resolve_category_slug(None, title) == "cameras"
+
+
+def test_a_veto_lets_the_text_fall_through_to_later_rules(other_domain):
+    """ "!word" in a rule's keywords stops that rule, not the search."""
+    profile = DomainProfile(
+        slug="vetotest",
+        name_en="Veto",
+        name_ar="فيتو",
+        category_rules=[("widgets", ["widget", "!spare"]), ("parts", ["spare"])],
+    )
+    assert profile.resolve_category_slug(None, "Blue widget") == "widgets"
+    assert profile.resolve_category_slug(None, "Widget spare spring") == "parts"
+
+
 def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
     """One shop's "Security Camera" tag also holds an RFID card copier and
     barcode modules; only a title that says camera is a camera."""
@@ -164,6 +207,11 @@ def test_a_mixed_security_camera_tag_does_not_file_its_contents_as_cameras():
         (None, "Digital Logic Design Kit - Faculty of Engineering"),
         (None, "Electronics Kit - Engineering Institute, Spring Term"),
         (["Project Kits"], "Smart City Kit"),
+        # Ahead of the parts the kit names.
+        (None, "Educational Robot Kit with LED Eyes"),
+        # A starter or learning kit is a kit, whatever board it is built on.
+        (None, "Arduino Starter Kit UNO R3"),
+        (None, "Arduino Learning Kit 36 PCS"),
     ],
 )
 def test_educational_and_robot_kits(tags, title):
@@ -173,13 +221,14 @@ def test_educational_and_robot_kits(tags, title):
 @pytest.mark.parametrize(
     ("title", "expected"),
     [
-        # Filed with what it is built on, as before.
-        ("Arduino Starter Kit UNO R3", "dev-boards"),
         # A printer's board set, not a course box.
         ("3D Printer Electronics Kit", "printers-3d"),
         # "kit" alone is never enough.
         ("O-Ring Service Kit NBR-70 (30 Sizes)", None),
         ("Soldering Starter Kit 60W", "soldering"),
+        # Neither "for kids" nor a bare "stem" makes a kit.
+        ("Wired Headphones for Kids", None),
+        ("Valve Stem Seal Set", None),
     ],
 )
 def test_kit_alone_does_not_make_a_teaching_kit(title, expected):
