@@ -22,13 +22,14 @@ import { departmentIcon } from "@/components/department-icon";
  * departments ("tools:measurement" is not "electronics:measurement"). A group
  * is a top-level category, so its key is its ref too.
  *
+ * Shown in the department pages' browse tree (components/browse-tree.tsx).
  * A department either has a drawn set or it does not. Without one, its
- * category chips carry no icon at all (a row of one repeated stand-in said
- * nothing), and its group tiles keep the department's line icon
+ * categories show plain, with no icon at all (a column of one repeated
+ * stand-in says nothing), and its groups keep the department's line icon
  * (components/department-icon.tsx) until its set is drawn. A category added
- * to a drawn department later (a new electronics leaf) shows a plain chip
- * until its icon is added here; tests/category-icons.test.tsx fails until
- * then, so it cannot be forgotten.
+ * to a drawn department later (a new electronics leaf) shows plain until its
+ * icon is added here; tests/category-icons.test.tsx fails until then, so it
+ * cannot be forgotten.
  *
  * Icons may run ahead of the taxonomy: electronics:cameras, electronics:kits
  * and the photography department are drawn for feat/taxonomy-gaps before it
@@ -636,12 +637,12 @@ export function CategoryIcon({ iconRef, className }: { iconRef: string; classNam
   );
 }
 
-/** What a tile's frame takes: a lucide icon, or one of these. */
+/** A group's icon: a lucide icon, or one of these. */
 export type TileIcon = ComponentType<{ className?: string; strokeWidth?: number }>;
 
 const TILE_ICONS = new Map<string, TileIcon>(
   Object.keys(CATEGORY_ICONS).map((ref) => {
-    // The set's own stroke weight stands: a tile's `strokeWidth` is for lucide.
+    // The set's own stroke weight stands: a caller's `strokeWidth` is for lucide.
     const Drawn: TileIcon = ({ className }) => <CategoryIcon iconRef={ref} className={className} />;
     Drawn.displayName = `CategoryIcon(${ref})`;
     return [ref, Drawn];
@@ -649,8 +650,8 @@ const TILE_ICONS = new Map<string, TileIcon>(
 );
 
 /**
- * The icon a group (or department) tile shows without a photo: the drawn one,
- * else the department's line icon, so a tile is never empty.
+ * A group's icon in the browse tree: the drawn one, else the department's line
+ * icon, so a group row never goes without one.
  */
 export function tileIcon(ref: string, domain: string): TileIcon {
   return TILE_ICONS.get(ref) ?? departmentIcon(domain);
