@@ -49,18 +49,6 @@ export function TreeGroup({
     "aria-label": `Subcategories of ${name}`,
     onClick: () => setOpen((was) => !was),
   };
-  const list = (
-    <ul
-      role="list"
-      className={cn(
-        "ms-[17px] mt-0.5 flex flex-col gap-0.5 border-s border-line ps-2",
-        // Room for the categories' focus rings inside the fold, which clips.
-        sheet && "mb-0.5 pe-1",
-      )}
-    >
-      {children}
-    </ul>
-  );
 
   if (!sheet) {
     return (
@@ -77,9 +65,14 @@ export function TreeGroup({
             />
           </button>
         </div>
-        <div id={id} hidden={!open}>
-          {list}
-        </div>
+        <ul
+          id={id}
+          role="list"
+          hidden={!open}
+          className="ms-[17px] mt-0.5 flex flex-col gap-0.5 border-s border-line ps-2"
+        >
+          {children}
+        </ul>
       </li>
     );
   }
@@ -118,7 +111,14 @@ export function TreeGroup({
                 : "opacity-0 duration-150 ease-in",
             )}
           >
-            {list}
+            {/* Padded on every side the fold clips, so a category's focus ring
+                (2px, 2px out) is never cut. */}
+            <ul
+              role="list"
+              className="ms-[17px] flex flex-col gap-0.5 border-s border-line py-1 ps-2 pe-1"
+            >
+              {children}
+            </ul>
           </div>
         </div>
       </div>

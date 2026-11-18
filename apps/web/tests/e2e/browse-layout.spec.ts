@@ -785,3 +785,145 @@ test.describe("the phone sheet, option A", () => {
     await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
   });
 });
+
+// Review follow-ups for the option A sheet.
+test.describe("the phone sheet, closing edge cases", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  const isOpen = (sheet: Locator) => sheet.evaluate((el) => (el as HTMLDialogElement).open);
+
+  test("after a double Escape the next opening stays open", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const pill = page.locator("[data-browse-pill]");
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await pill.click();
+    await settled(sheet);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => isOpen(sheet)).toBe(false);
+    await pill.click();
+    await page.waitForTimeout(600);
+    expect(await isOpen(sheet)).toBe(true);
+  });
+
+  test("widening past md mid-close leaves no close behind for the next opening", async ({
+    page,
+  }) => {
+    await page.goto("/departments/electronics/resistors");
+    const pill = page.locator("[data-browse-pill]");
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await pill.click();
+    await settled(sheet);
+    await sheet.getByRole("button", { name: "Close" }).click();
+    expect(await sheet.evaluate((el) => el.hasAttribute("data-closing"))).toBe(true);
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect.poll(() => isOpen(sheet)).toBe(false);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await pill.click();
+    await page.waitForTimeout(600);
+    expect(await isOpen(sheet)).toBe(true);
+  });
+
+  test("Escape during a swipe's glide lets the glide close it, with no jump", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
+    const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + 10;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 10; step++) await page.mouse.move(x, y + step * 20);
+    await page.mouse.up();
+    await page.keyboard.press("Escape");
+    // Still on its way out from where the finger left it: never back at the top.
+    const after = await sheet.evaluate((el) => ({
+      transform: (el as HTMLElement).style.transform,
+      closing: el.hasAttribute("data-closing"),
+    }));
+    expect(after.transform).toMatch(/^translateY\([1-9]\d*(\.\d+)?px\)$/);
+    expect(after.closing).toBe(false);
+    await expect.poll(() => isOpen(sheet)).toBe(false);
+  });
+
+  test("an open group's categories have room for a focus ring", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
+    const room = await sheet
+      .locator("[data-tree-node='electronics:components'] [data-fold] > div")
+      .evaluate((clip) => {
+        const box = clip.getBoundingClientRect();
+        const links = [...clip.querySelectorAll("a")].map((a) => a.getBoundingClientRect());
+        return {
+          top: links[0].top - box.top,
+          bottom: box.bottom - links[links.length - 1].bottom,
+          right: Math.min(...links.map((l) => box.right - l.right)),
+        };
+      });
+    // A 2px ring 2px out reaches 4px past the button.
+    expect(room.top).toBeGreaterThanOrEqual(4);
+    expect(room.bottom).toBeGreaterThanOrEqual(4);
+    expect(room.right).toBeGreaterThanOrEqual(4);
+  });
+
+  test("the current category shows the focus ring under keyboard focus", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const link = await linkColour(page);
+    const pill = page.locator("[data-browse-pill]");
+    await pill.focus();
+    await page.keyboard.press("Enter");
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
+    const here = sheet.getByRole("link", { name: /^Resistors/ });
+    await expect(here).toBeFocused();
+    // Move away and back by keyboard, so focus is plainly keyboard focus.
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(here).toBeFocused();
+    const ring = await here.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        colour: s.outlineColor,
+        offset: s.outlineOffset,
+        visible: el.matches(":focus-visible"),
+      };
+    });
+    expect(ring).toEqual({ colour: link, offset: "2px", visible: true });
+    // Unfocused, it is the current-place outline again.
+    await page.keyboard.press("Tab");
+    expect(await here.evaluate((el) => getComputedStyle(el).outlineOffset)).toBe("-2px");
+  });
+});
+
+test("the sidebar's current item shows the focus ring under keyboard focus", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/departments/electronics/resistors");
+  const link = await linkColour(page);
+  const here = sidebar(page).locator("[data-tree-category='electronics:resistors']");
+  // Reach it by keyboard from its group's chevron, through the categories before it.
+  await sidebar(page).locator("[data-tree-node='electronics:components'] button").focus();
+  for (let i = 0; i < 6 && !(await here.evaluate((el) => el === document.activeElement)); i++) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(here).toBeFocused();
+  const ring = await here.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { colour: s.outlineColor, offset: s.outlineOffset };
+  });
+  expect(ring).toEqual({ colour: link, offset: "2px" });
+});
+
+/** The `link` token as the browser computes it. */
+async function linkColour(page: Page) {
+  return page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.className = "text-link";
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  });
+}

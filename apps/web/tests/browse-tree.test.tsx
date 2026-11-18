@@ -82,15 +82,15 @@ describe("the browse tree", () => {
       "Power2,212",
       "Accessories & Other1,202",
     ]);
-    const nodes = document.querySelectorAll("[data-tree-node]");
-    expect(nodes.length).toBeGreaterThan(0);
-    for (const node of nodes) expect(regionOf(node)).toHaveAttribute("hidden");
+    const lists = document.querySelectorAll("[data-tree-node] > ul");
+    expect(lists.length).toBeGreaterThan(0);
+    for (const list of lists) expect(list).toHaveAttribute("hidden");
   });
 
   it("expands the current group and marks the current category, outlined and bold", () => {
     tree("electronics:resistors");
     const components = document.querySelector("[data-tree-node='electronics:components']")!;
-    expect(regionOf(components)).not.toHaveAttribute("hidden");
+    expect(components.querySelector("ul")).not.toHaveAttribute("hidden");
     const here = screen.getByRole("link", { name: /^Resistors/ });
     expect(here).toHaveAttribute("aria-current", "page");
     expect(here).toHaveAttribute("href", "/departments/electronics/resistors");
@@ -100,7 +100,7 @@ describe("the browse tree", () => {
     expect(here.className).not.toMatch(/\bbg-chip-on\b/);
     // Other groups stay collapsed; empty categories are left out.
     const power = document.querySelector("[data-tree-node='electronics:power']")!;
-    expect(regionOf(power)).toHaveAttribute("hidden");
+    expect(power.querySelector("ul")).toHaveAttribute("hidden");
     expect(screen.queryByRole("link", { name: /^Empty/ })).toBeNull();
   });
 
@@ -272,6 +272,13 @@ describe("the sheet's tree (option A of the sheet-motion mockup)", () => {
 
   it("leaves the desktop sidebar as it was", () => {
     tree("electronics:resistors");
+    // The region the chevron names is the categories' own list, as before.
+    for (const node of document.querySelectorAll("[data-tree-node]")) {
+      const region = regionOf(node);
+      expect(region.tagName).toBe("UL");
+      expect(region).toHaveAttribute("role", "list");
+      expect(region.parentElement).toBe(node);
+    }
     expect(document.querySelector("button[data-funnel]")).toBeNull();
     expect(document.querySelector(".bg-tint")).toBeNull();
   });

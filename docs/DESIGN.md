@@ -415,7 +415,9 @@ one equal to the group) keeps the same two buttons and widths: its name leads wh
 always did, and the funnel is a disabled button (dimmed: `ink-3` on a half-strength tint,
 no pointer, out of the tab order, no `aria-expanded`), named "No subcategories in
 {group}". The place you are is a 2px `chip-on` outline, never a fill, on whichever button
-it is; on a group's own page, its name button.
+it is; on a group's own page, its name button. Under keyboard focus the current item, in the
+sheet and the sidebar alike, shows the site's focus ring (`link`, 2px out) instead, since the
+two are the same CSS outline.
 
 The sheet rises over 250ms (`cubic-bezier(.2,.8,.2,1)`) as its backdrop fades in, and sinks
 over 200ms (`cubic-bezier(.4,0,1,1)`) before the dialog closes; Escape, a tap outside, Close

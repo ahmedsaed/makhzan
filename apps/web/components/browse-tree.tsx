@@ -50,7 +50,10 @@ export function BrowseTree({
       : "min-h-9 rounded-md py-1 text-sm hover:bg-ground",
   );
   // The place you are: a 2px outline, never a fill, on whichever button it is.
-  const current = "font-semibold outline-2 -outline-offset-2 outline-chip-on";
+  // Its outline would hide the keyboard's focus ring (the same property), so
+  // under focus it becomes the site's ring instead: the link colour, 2px out.
+  const current =
+    "font-semibold outline-2 -outline-offset-2 outline-chip-on focus-visible:outline-link focus-visible:outline-offset-2";
   const count = cn(
     "ms-auto shrink-0 ps-2 text-[13px] font-normal tabular",
     sheet ? "text-ink-2" : "text-ink-3",
