@@ -42,12 +42,24 @@ export function FadingChipBar({
       }
     };
     measure();
+    // The bar's own size, and each chip's: a chip that grows or shrinks (a
+    // price set, a font loading) changes what overflows without the bar
+    // resizing. Chips added or removed are observed as they come.
     const resize = new ResizeObserver(measure);
-    resize.observe(bar);
+    const observeAll = () => {
+      resize.disconnect();
+      resize.observe(bar);
+      for (const chip of bar.children) resize.observe(chip);
+      measure();
+    };
+    observeAll();
+    const mutations = new MutationObserver(observeAll);
+    mutations.observe(bar, { childList: true });
     bar.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       cancelAnimationFrame(frame);
       resize.disconnect();
+      mutations.disconnect();
       bar.removeEventListener("scroll", onScroll);
     };
   }, []);

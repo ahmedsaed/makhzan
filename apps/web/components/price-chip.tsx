@@ -56,10 +56,14 @@ export function PriceChip({
     document.addEventListener("click", onClick);
     const onResize = () => place(ref.current, form.current);
     window.addEventListener("resize", onResize);
+    // The chip moves when its bar scrolls sideways; the panel follows it.
+    const bar = ref.current?.closest("[data-scroll-fade]");
+    bar?.addEventListener("scroll", onResize, { passive: true });
     return () => {
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("click", onClick);
       window.removeEventListener("resize", onResize);
+      bar?.removeEventListener("scroll", onResize);
     };
   }, []);
 

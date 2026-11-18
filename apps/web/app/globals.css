@@ -292,6 +292,14 @@
         transparent
       );
     }
+    /* A mask clips everything drawn inside the bar, positioned or not, so
+     * while a panel from it is open (Price) the bar gives up its fade,
+     * whichever edges it was fading (important: it must outrank the
+     * two-edge rule's three attributes). */
+    [data-scroll-fade]:has(details[open]) {
+      -webkit-mask-image: none !important;
+      mask-image: none !important;
+    }
   }
 }
 
