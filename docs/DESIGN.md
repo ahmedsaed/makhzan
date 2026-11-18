@@ -113,7 +113,9 @@ the page container on desktop; each section is left out when its fetch fails.
   on by default) and **2+ shops**. On search and a shop's search a "Category, price"
   chip opens a sheet (a side rail on desktop) for the rest; on department, group and
   category pages the tree navigates instead, so there is no category filter and no
-  rail, and **Price** is a fourth chip that opens Min and Max.
+  rail, and **Price** is a chip, third, before "2+ shops", that opens Min and Max under
+  itself (an empty one is left out of the URL). On a phone the chip bar scrolls sideways
+  and fades at an edge only while that edge hides chips.
 - "Top categories for “query”" above the results.
 - A toolbar: the count, "N more out of stock" and "N more out of date" (one click on
   either shows them), sort (best match, price low first, most shops, recently checked)
@@ -372,7 +374,8 @@ One template, narrowed. From `md` the department's tree is a sidebar on the left
 17.5rem from `lg`), sticky and scrolling by itself when long
 (`components/browse-tree.tsx`): "Browse {department}", then "All of {department}" with
 its count, then the groups by size, each with its object icon and count, expandable in
-place by a chevron to its categories with their symbols and counts. The place you are is
+place by a chevron to its categories with their symbols and counts (the chevron is named
+"Subcategories of {group}" and says open or closed by `aria-expanded` alone). The place you are is
 outlined in `chip-on` and bold, never filled (`aria-current="page"`); its group starts
 expanded, the others collapsed. A group holding one category links straight to it (only
 when their counts agree: no product is filed on a group today, but one that was would make
@@ -388,7 +391,8 @@ department), and opens the same tree as a bottom sheet (`components/browse-sheet
 the current group expanded, the current category outlined and bold, 44px rows. The sheet
 is a modal `<dialog>` named by its heading, so focus stays in it while it is open; it
 locks the page's scroll, closes on a swipe down, a tap outside it, Escape or the choice of
-a link, and returns focus to the pill. The pill slides away while the page scrolls down
+a link, and returns focus to the pill after a dismissal (not after a link, since the page is
+leaving). It also closes when the window widens past `md`, where the sidebar takes over. The pill slides away while the page scrolls down
 and comes back on any scroll up or on keyboard focus; under `prefers-reduced-motion` it
 just shows and hides. The results end with room for it, so it never covers the last card.
 It is outlined, with no shadow. With JavaScript off it is a link to the page's own tree,

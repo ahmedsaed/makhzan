@@ -272,6 +272,27 @@
       display: none;
     }
   }
+
+  /* A phone's chip bar that scrolls sideways (components/fading-chip-bar.tsx)
+   * fades out over 2rem on each edge that hides chips, and only there. Black
+   * and transparent are mask alpha, not colours. */
+  @media (width < 40rem) {
+    [data-scroll-fade][data-more-end] {
+      mask-image: linear-gradient(to right, black calc(100% - 2rem), transparent);
+    }
+    [data-scroll-fade][data-more-start] {
+      mask-image: linear-gradient(to left, black calc(100% - 2rem), transparent);
+    }
+    [data-scroll-fade][data-more-start][data-more-end] {
+      mask-image: linear-gradient(
+        to right,
+        transparent,
+        black 2rem,
+        black calc(100% - 2rem),
+        transparent
+      );
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

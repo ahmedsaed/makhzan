@@ -111,7 +111,7 @@ export async function DepartmentBrowse({
         </aside>
 
         {/* Bottom padding on a phone, so the floating pill never covers the last card. */}
-        <div className="min-w-0 pb-24 md:pb-0">
+        <div data-browse-main className="min-w-0 pb-24 md:pb-0">
           <PageHeading
             department={department}
             heading={heading}

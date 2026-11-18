@@ -47,11 +47,11 @@ test.describe("the sidebar, from a tablet up", () => {
     await page.goto("/departments/electronics");
     const tree = sidebar(page);
     const toggle = tree.locator("[data-tree-node='electronics:components'] button");
-    await expect(toggle).toHaveAccessibleName("Show categories in Components");
+    await expect(toggle).toHaveAccessibleName("Subcategories of Components");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(toggle).toHaveAccessibleName("Hide categories in Components");
+    await expect(toggle).toHaveAccessibleName("Subcategories of Components");
     const ics = tree.locator("[data-tree-category='electronics:ics']");
     await expect(ics).toBeVisible();
     await expect(ics).toHaveText(/^Integrated Circuits\s*120$/);
@@ -108,6 +108,34 @@ test.describe("the sidebar, from a tablet up", () => {
     expect(await box.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
   });
 
+  test("opens the Price panel under its chip", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const chip = page.locator("[data-price-chip] summary");
+    await chip.click();
+    const panel = page.getByRole("form", { name: "Price, EGP" });
+    await expect(panel).toBeVisible();
+    const c = (await chip.boundingBox())!;
+    const f = (await panel.boundingBox())!;
+    expect(Math.abs(f.x - c.x)).toBeLessThan(2);
+    expect(f.y).toBeGreaterThan(c.y + c.height);
+  });
+
+  test("leaves an empty price out of the address", async ({ page }) => {
+    await page.goto("/departments/seals-bearings?in_stock=all");
+    await page.locator("[data-price-chip] summary").click();
+    const panel = page.getByRole("form", { name: "Price, EGP" });
+    await panel.getByLabel("Min, EGP").fill("40");
+    await panel.getByRole("button", { name: "Apply" }).click();
+    await expect(page).toHaveURL(/min_price=40/);
+    expect(page.url()).not.toMatch(/max_price/);
+    await page.locator("[data-price-chip] summary").click();
+    await panel.getByLabel("Min, EGP").fill("");
+    await panel.getByRole("button", { name: "Apply" }).click();
+    await expect(page).not.toHaveURL(/min_price/);
+    expect(page.url()).not.toMatch(/max_price/);
+    expect(page.url()).toMatch(/in_stock=all/);
+  });
+
   test("puts the filters in the toolbar, with no rail and no pill", async ({ page }) => {
     await page.goto("/departments/electronics/resistors");
     for (const name of ["In stock", "Checked recently", "2+ shops"]) {
@@ -121,6 +149,33 @@ test.describe("the sidebar, from a tablet up", () => {
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("the filter chips fade at the edge they hide, Price among the first", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const bar = page.getByRole("navigation", { name: "Quick filters" });
+    await expect(bar).toHaveAttribute("data-more-end", "true");
+    expect(await bar.evaluate((el) => getComputedStyle(el).maskImage)).toMatch(/^linear-gradient/);
+    // Price comes before "2+ shops" and starts on screen.
+    const order = await bar.evaluate((el) =>
+      [...el.children].map((c) => (c.querySelector("summary") ?? c).textContent?.trim()),
+    );
+    expect(order.slice(0, 4)).toEqual(["In stock", "Checked recently", "Price", "2+ shops"]);
+    const price = (await page.locator("[data-price-chip] summary").boundingBox())!;
+    expect(price.x).toBeLessThan(390 - 32);
+    // At the end the fade goes.
+    await bar.evaluate((el) => (el.scrollLeft = el.scrollWidth));
+    await expect(bar).not.toHaveAttribute("data-more-end");
+  });
+
+  test("opens the Price panel within a narrow screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-price-chip] summary").click();
+    const f = (await page.getByRole("form", { name: "Price, EGP" }).boundingBox())!;
+    expect(f.x).toBeGreaterThanOrEqual(15);
+    expect(f.x + f.width).toBeLessThanOrEqual(305);
+    await noPageOverflow(page);
+  });
 
   test("there is no category row, only the Browse pill", async ({ page }) => {
     await page.goto("/departments/electronics/resistors");
@@ -215,18 +270,68 @@ test.describe("on a phone", () => {
     await expect(page).toHaveURL("/departments/electronics/ics");
     await expect(sheet).toBeHidden();
     await expect(page.locator("[data-browse-pill]")).toHaveText(/Integrated Circuits\s*· Browse/);
+    // A navigation, not a dismissal: focus is not pulled back to the pill.
+    await expect(page.locator("[data-browse-pill]")).not.toBeFocused();
   });
 
-  test("the pill never covers the last product", async ({ page }) => {
+  test("returns focus to the pill after a tap outside", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    const pill = page.locator("[data-browse-pill]");
+    await pill.click();
+    await page.mouse.click(195, 40);
+    await expect(page.locator("dialog[data-browse-sheet]")).toBeHidden();
+    await expect(pill).toBeFocused();
+  });
+
+  test("a short drag released off the handle springs back", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    const handle = (await sheet.locator("[data-sheet-handle]").boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    await page.mouse.move(x, handle.y + 10);
+    await page.mouse.down();
+    await page.mouse.move(x, handle.y + 50, { steps: 4 });
+    // Released well away from the handle, over the list.
+    await page.mouse.move(x, 700, { steps: 2 });
+    await page.mouse.move(x, handle.y + 50, { steps: 2 });
+    await page.mouse.up();
+    await expect(sheet).toBeVisible();
+    // The pointer was captured, so the release ended the gesture: no stale offset.
+    await page.mouse.move(x, 760);
+    expect(await sheet.evaluate((el) => (el as HTMLElement).style.transform)).toBe("");
+  });
+
+  test("turning the phone on its side closes the sheet and frees the page", async ({ page }) => {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await expect(sheet).toBeVisible();
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect.poll(() => sheet.evaluate((el) => (el as HTMLDialogElement).open)).toBe(false);
+    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
+    // The sidebar shows, and works: nothing is left inert.
+    await sidebar(page).locator("[data-tree-category='electronics:ics']").click();
+    await expect(page).toHaveURL("/departments/electronics/ics");
+  });
+
+  test("the results leave room for the pill under the last product", async ({ page }) => {
     await page.goto("/departments/seals-bearings?in_stock=all");
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    await page.waitForTimeout(300);
-    // Scrolled to the bottom the pill may have slid away; bring it back to measure.
-    await page.mouse.wheel(0, -1);
-    await expect(page.locator("[data-browse-pill]")).toHaveAttribute("data-shown", "true");
+    // Scroll so the end of the results column meets the bottom of the screen:
+    // where the last card would sit under the pill if the column left no room.
+    await page.evaluate(() => {
+      const main = document.querySelector("[data-browse-main]")!;
+      const end = main.getBoundingClientRect().bottom + window.scrollY - window.innerHeight;
+      window.scrollTo(0, end);
+    });
+    const pill = page.locator("[data-browse-pill]");
+    await pill.focus(); // brings it back if the scroll hid it
+    await expect(pill).toHaveAttribute("data-shown", "true");
+    const main = (await page.locator("[data-browse-main]").boundingBox())!;
+    expect(Math.abs(main.y + main.height - 844)).toBeLessThan(2);
     const last = (await page.locator("[data-result=row]").last().boundingBox())!;
-    const pill = (await page.locator("[data-browse-pill]").boundingBox())!;
-    expect(last.y + last.height).toBeLessThanOrEqual(pill.y);
+    const box = (await pill.boundingBox())!;
+    expect(last.y + last.height).toBeLessThanOrEqual(box.y);
   });
 
   test("slides away while scrolling down and comes back on scroll up", async ({ page }) => {

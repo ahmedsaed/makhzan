@@ -14,7 +14,10 @@ import { cn } from "@/lib/utils";
  *
  * The panel is positioned against the toolbar's chip row (its nearest
  * positioned ancestor), not the chip, so the chip bar's sideways scrolling
- * never clips it. When a price is set the chip is on and names it.
+ * never clips it; on opening it is moved under the chip, as far as the row
+ * allows (`place`), so on a phone it stays the row's full width. When a price
+ * is set the chip is on and names it. An empty Min or Max is left out of the
+ * URL rather than sent as `min_price=`.
  */
 export function PriceChip({
   action,
@@ -34,6 +37,7 @@ export function PriceChip({
   clearHref: string;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  const form = useRef<HTMLFormElement>(null);
   const active = label !== undefined;
 
   useEffect(() => {
@@ -50,16 +54,31 @@ export function PriceChip({
     };
     window.addEventListener("keydown", onKey);
     document.addEventListener("click", onClick);
+    const onResize = () => place(ref.current, form.current);
+    window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("click", onClick);
+      window.removeEventListener("resize", onResize);
     };
   }, []);
+
+  // An empty field is not sent: `?min_price=&max_price=` says nothing.
+  const dropEmpty = (event: React.FormEvent<HTMLFormElement>) => {
+    for (const input of event.currentTarget.querySelectorAll("input")) {
+      if (input.value === "") input.disabled = true;
+    }
+  };
 
   const field =
     "h-11 w-full min-w-0 rounded-md border border-line-strong bg-surface px-3 text-base text-ink placeholder:text-ink-3 sm:h-9 sm:text-sm";
   return (
-    <details ref={ref} data-price-chip className="group">
+    <details
+      ref={ref}
+      data-price-chip
+      className="group"
+      onToggle={() => place(ref.current, form.current)}
+    >
       <summary
         className={cn(
           chipClass(active),
@@ -74,6 +93,8 @@ export function PriceChip({
         />
       </summary>
       <form
+        ref={form}
+        onSubmit={dropEmpty}
         action={action}
         method="get"
         aria-label="Price, EGP"
@@ -127,4 +148,15 @@ export function PriceChip({
       </form>
     </details>
   );
+}
+
+/** The panel under its chip, clamped to the row, which is never wider than the page. */
+function place(details: HTMLDetailsElement | null, panel: HTMLFormElement | null) {
+  const chip = details?.querySelector("summary");
+  const row = panel?.offsetParent;
+  if (!details?.open || !panel || !chip || !row) return;
+  const rowBox = row.getBoundingClientRect();
+  const from = chip.getBoundingClientRect().left - rowBox.left;
+  const room = rowBox.width - panel.offsetWidth;
+  panel.style.left = `${Math.max(0, Math.min(from, room))}px`;
 }

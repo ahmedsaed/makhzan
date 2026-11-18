@@ -1,4 +1,5 @@
 import { Chip, ChipBar } from "@/components/chips";
+import { FadingChipBar } from "@/components/fading-chip-bar";
 import { FilterRail, FilterSheet } from "@/components/filter-panel";
 import { Link } from "@/components/link";
 import { PriceChip } from "@/components/price-chip";
@@ -158,15 +159,15 @@ export function Results({
         {/* Positioned, so the Price panel is placed against this row and the
             chip bar's sideways scrolling never clips it. */}
         <div className="relative">
-          <ChipBar>
+          {/* Price before "2+ shops", so on a phone it shows rather than
+              sitting cut off at the bar's edge; the edge fades where the bar
+              hides chips. */}
+          <FadingChipBar>
             <Chip href={links.inStock} active={query.inStockOnly}>
               In stock
             </Chip>
             <Chip href={links.fresh} active={query.freshOnly}>
               Checked recently
-            </Chip>
-            <Chip href={links.twoShops} active={Boolean(query.minSuppliers)}>
-              2+ shops
             </Chip>
             <PriceChip
               action={pathname}
@@ -176,12 +177,15 @@ export function Results({
               label={priced ? priceLabel(query) : undefined}
               clearHref={links.clear("min_price", "max_price")}
             />
+            <Chip href={links.twoShops} active={Boolean(query.minSuppliers)}>
+              2+ shops
+            </Chip>
             {active.map((chip) => (
               <Chip key={chip.href} href={chip.href} active>
                 {chip.label} ✕
               </Chip>
             ))}
-          </ChipBar>
+          </FadingChipBar>
         </div>
         <div className="min-w-0">
           {toolbar}
