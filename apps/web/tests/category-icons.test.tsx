@@ -260,6 +260,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
       [
         "automotive",
         "chemicals",
+        "cleaning",
         "electrical",
         "electronics",
         "garden",

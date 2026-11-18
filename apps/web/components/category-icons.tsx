@@ -14,6 +14,7 @@ import { PIPING_ICONS } from "@/components/category-icon-sets/piping";
 import { RIGGING_ICONS } from "@/components/category-icon-sets/rigging";
 import { SECURITY_ICONS } from "@/components/category-icon-sets/security";
 import { GARDEN_ICONS } from "@/components/category-icon-sets/garden";
+import { CLEANING_ICONS } from "@/components/category-icon-sets/cleaning";
 import type { Glyph, GlyphKind } from "@/components/category-icon-sets/types";
 import { departmentIcon } from "@/components/department-icon";
 
@@ -56,6 +57,7 @@ export type { Glyph, GlyphKind };
 export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
   ...ELECTRICAL_ICONS,
   ...TOOLS_ICONS,
+  ...CLEANING_ICONS,
   ...GARDEN_ICONS,
   ...SECURITY_ICONS,
   ...RIGGING_ICONS,

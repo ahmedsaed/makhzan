@@ -31,6 +31,7 @@ const SECTIONS: [string, string][] = [
   ["rigging", "Rigging"],
   ["security", "Security"],
   ["garden", "Garden"],
+  ["cleaning", "Cleaning"],
 ];
 
 const TILES = [
@@ -180,6 +181,14 @@ const WEAK: Record<string, string> = {
   "garden:cutting-garden": "Pruning shears; the pivot and hook are hard to read.",
   "garden:mowers-trimmers": "A string trimmer; the mower is the power group's icon.",
   "garden:sprinklers": "A sprinkler head with fanned spray.",
+  "cleaning:cleaning-equipment": "A bucket standing for all equipment.",
+  "cleaning:cleaning-accessories":
+    "A squeegee-like head on a handle with bristles; reads as a brush.",
+  "cleaning:pressure-washers": "A unit with a hose and spray dots; the dots are faint.",
+  "cleaning:vacuum-cleaners": "A canister with hose and wand.",
+  "cleaning:floor-machines": "A motor over a pad with a handle; close to sanders in tools.",
+  "cleaning:foam-machines": "A tank with bubbles; close to foams in chemicals.",
+  "cleaning:washer-accessories": "A nozzle with spray lines.",
 };
 
 function cell(ref: string, label: string): string {
