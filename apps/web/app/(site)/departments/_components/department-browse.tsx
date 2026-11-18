@@ -145,7 +145,10 @@ export async function DepartmentBrowse({
           <ScrollRow
             label="Groups"
             style={columns(tree.groups.length, 4, 5)}
-            className={cn("gap-1.5 sm:grid sm:grid-cols-6 max-sm:[&>*]:w-[4.75rem]", BALANCED)}
+            className={cn(
+              "gap-1.5 max-sm:-my-1.5 max-sm:py-1.5 sm:grid sm:grid-cols-6 max-sm:[&>li]:w-[4.75rem]",
+              BALANCED,
+            )}
           >
             {tree.groups.map(tile)}
           </ScrollRow>

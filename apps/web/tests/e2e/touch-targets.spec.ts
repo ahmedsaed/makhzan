@@ -84,14 +84,14 @@ test("a department page's controls", async ({ page }) => {
   // The shortcut pills are drawn 32px tall in a row that scrolls sideways
   // (clipping is where an invisible extension gets lost); each must still take
   // a 44px tap, at the row's start and, once scrolled there, at its end.
-  const shortcutRow = page.getByRole("navigation", { name: "Categories" });
+  const shortcutRow = page.getByRole("navigation", { name: "Categories" }).getByRole("list");
   const shortcuts = shortcutRow.getByRole("link");
   await expectTappable(page, { "first shortcut pill": shortcuts.first() });
   await toRowEnd(shortcutRow);
   await expectTappable(page, { "last shortcut pill": shortcuts.last() });
 
   await page.goto("/departments/electronics/components");
-  const chipRow = page.getByRole("navigation", { name: "Categories" });
+  const chipRow = page.getByRole("navigation", { name: "Categories" }).getByRole("list");
   const chips = chipRow.getByRole("link");
   await expectTappable(page, { "first category chip": chips.first() });
   await toRowEnd(chipRow);

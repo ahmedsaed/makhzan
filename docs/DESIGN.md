@@ -374,8 +374,9 @@ selected one filled). On the department's own page "Biggest in {department}" lis
 eight biggest categories as light pills, "Resistors · Components | 2,704": a 32px pill
 outlined in `line` on no fill, its symbol, the group in `ink-3`, a hairline, the count.
 A shortcut that leads where a group tile already does is left out: a group's only
-category ("Accessories & Other" and its one category "Accessories" were the same thing
-twice) and a top-level leaf; the eight are taken first, so the shelf gets shorter rather
+category, when the two counts agree ("Accessories & Other" and its one category
+"Accessories" were the same thing twice; no product is filed on a group today, but one
+that was would make the category only part of it), and a top-level leaf; the eight are taken first, so the shelf gets shorter rather
 than reaching for a smaller category. In a department whose icons are not drawn yet the
 chips and pills carry no icon, plain, rather than one stand-in repeated. From `lg` the
 search sits beside the name and the tiles lie on their side (a small frame, the name,
@@ -385,13 +386,16 @@ the screen empty. From `sm` the categories wrap onto as many rows as they need.
 
 On a phone (below `sm`) the group tiles and the categories are each **one row that
 scrolls sideways** (the owner, 18 November 2026: wrapped, they pushed the products a
-long way down). `components/scroll-row.tsx`: native momentum scrolling, snapping to
-items, no scrollbar, and no page-level sideways scroll (S4). The selected group or
+long way down). `components/scroll-row.tsx`: a `nav` named "Groups" or "Categories"
+holding a list (`ul`/`li`, so a screen reader announces how many links it has), which
+scrolls with native momentum, no scrollbar and no page-level sideways scroll (S4). It
+snaps to items with `scroll-padding` the width of the fade, so an item never comes to
+rest under it, and is padded so a focused link's ring is not clipped by the scroller. The selected group or
 category is scrolled into view on load, without moving the page. Two cues say the row
 goes on: the next item shows partly, and the edge that hides content fades out over
 2.5rem, only that edge, sharp again once the row reaches it. There are no chevron
-buttons (the owner, 18 November 2026, after trying them): the row is a `nav` of links
-and nothing else, every one reachable by keyboard and screen reader, and a focused link
+buttons (the owner, 18 November 2026, after trying them): the row holds its links and
+nothing else, every one reachable by keyboard and screen reader, and a focused link
 is scrolled clear of the fades. Under `prefers-reduced-motion` every scroll is instant
 and nothing nudges. All departments (`/departments`) is a directory, full width, largest department
 first. A department with 10% or more of all products (three today) is a full-width block listing every

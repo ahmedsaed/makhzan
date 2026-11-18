@@ -81,6 +81,11 @@ test("a department without drawn icons has plain chips and pills", async ({ page
   await expect(shortcuts.locator("svg")).toHaveCount(0);
 });
 
+/** A row's list: the scroller, inside its labelled nav. */
+function rowOf(page: Page, name: string): Locator {
+  return page.getByRole("navigation", { name }).getByRole("list");
+}
+
 /** Whether every link in a row sits on one line. */
 async function oneLine(row: Locator): Promise<boolean> {
   return row.evaluate((el) => {
@@ -107,29 +112,37 @@ async function noPageOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
+const PHONE_PAGES = [
+  "/departments/electronics",
+  "/departments/electronics/components",
+  "/departments/seals-bearings/seals",
+];
+
 // The owner's decision of 2026-11-18: on a phone the group tiles and the
 // category chips are each one row scrolling sideways, so products start high.
 test.describe("on a phone, groups and categories are sideways rows", () => {
   test.use({ viewport: { width: 320, height: 700 } });
 
-  for (const path of [
-    "/departments/electronics",
-    "/departments/electronics/components",
-    "/departments/seals-bearings/seals",
-  ]) {
+  for (const path of PHONE_PAGES) {
     test(`${path}: one row each, and the page does not scroll sideways`, async ({ page }) => {
       await page.goto(path);
-      const groups = page.getByRole("navigation", { name: "Groups" });
-      const categories = page.getByRole("navigation", { name: "Categories" });
-      expect(await oneLine(groups)).toBe(true);
-      expect(await oneLine(categories)).toBe(true);
+      expect(await oneLine(rowOf(page, "Groups"))).toBe(true);
+      expect(await oneLine(rowOf(page, "Categories"))).toBe(true);
       await noPageOverflow(page);
     });
   }
 
+  test("each row is a list of links, so its size is announced", async ({ page }) => {
+    await page.goto("/departments/electronics/components");
+    const groups = rowOf(page, "Groups");
+    await expect(groups.getByRole("listitem")).toHaveCount(6);
+    await expect(groups.getByRole("listitem").first().getByRole("link")).toHaveCount(1);
+    await expect(rowOf(page, "Categories").getByRole("listitem")).toHaveCount(2);
+  });
+
   test("the selected group and category are scrolled into view", async ({ page }) => {
     await page.goto("/departments/electronics/prototyping-supplies");
-    const groups = page.getByRole("navigation", { name: "Groups" });
+    const groups = rowOf(page, "Groups");
     // The smallest group is the last tile, off the right edge until scrolled to.
     await expect(groups.getByRole("link").last()).toHaveAttribute("aria-current", "true");
     await expect.poll(() => inView(groups.getByRole("link").last())).toBe(true);
@@ -137,15 +150,43 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
     await page.goto("/departments/electronics/resistors");
-    const chip = page
-      .getByRole("navigation", { name: "Categories" })
-      .getByRole("link", { name: "Resistors 80" });
+    const chip = rowOf(page, "Categories").getByRole("link", { name: "Resistors 80" });
     await expect.poll(() => inView(chip)).toBe(true);
+  });
+
+  test("a focused tile's ring is not clipped by the scrolling row", async ({ page }) => {
+    await page.goto("/departments/electronics");
+    const row = rowOf(page, "Groups");
+    await page.keyboard.press("Tab");
+    const first = row.getByRole("link").first();
+    await first.focus();
+    const fits = await first.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const reach = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+      const box = el.getBoundingClientRect();
+      const clip = el.closest("[data-scroll-row]")!.getBoundingClientRect();
+      return {
+        ring: el.matches(":focus-visible") && reach > 0,
+        inside:
+          box.top - reach >= clip.top - 0.5 &&
+          box.bottom + reach <= clip.bottom + 0.5 &&
+          box.left - reach >= clip.left - 0.5,
+      };
+    });
+    expect(fits).toEqual({ ring: true, inside: true });
+  });
+
+  test("an item comes to rest clear of the fade", async ({ page }) => {
+    await page.goto("/departments/electronics");
+    const row = rowOf(page, "Categories");
+    // Snapping keeps scroll-padding the width of the 2.5rem fade.
+    expect(await row.evaluate((el) => getComputedStyle(el).scrollPaddingLeft)).toBe("40px");
+    expect(await row.evaluate((el) => getComputedStyle(el).scrollPaddingRight)).toBe("40px");
   });
 
   test("an edge fades only while it hides content", async ({ page }) => {
     await page.goto("/departments/electronics");
-    const row = page.getByRole("navigation", { name: "Categories" });
+    const row = rowOf(page, "Categories");
     const mask = () => row.evaluate((el) => getComputedStyle(el).maskImage);
 
     // At the start: more to the right only, so only the right edge fades.
@@ -156,6 +197,7 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
     // In the middle: both edges.
     await row.evaluate((el) => {
       el.style.scrollBehavior = "auto";
+      el.style.scrollSnapType = "none";
       el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
     });
     await expect(row).toHaveAttribute("data-more-start", "true");
@@ -175,20 +217,13 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
     // The owner, 2026-11-18: the fade and the partly shown next item are the cues.
     await page.goto("/departments/electronics");
     for (const name of ["Groups", "Categories"]) {
-      const row = page.getByRole("navigation", { name });
-      await expect(row.locator("button")).toHaveCount(0);
-      // Nor beside the row, where an edge control would sit.
-      const besideButtons = await row.evaluate(
-        (el) =>
-          [...el.parentElement!.children].filter((c) => c !== el && c.matches("button")).length,
-      );
-      expect(besideButtons).toBe(0);
+      await expect(page.getByRole("navigation", { name }).getByRole("button")).toHaveCount(0);
     }
   });
 
   test("the next item shows partly, as the hint that the row goes on", async ({ page }) => {
     await page.goto("/departments/electronics/components");
-    const cut = await page.getByRole("navigation", { name: "Categories" }).evaluate((el) => {
+    const cut = await rowOf(page, "Categories").evaluate((el) => {
       const right = el.getBoundingClientRect().right;
       return [...el.querySelectorAll("a")].some((a) => {
         const box = a.getBoundingClientRect();
@@ -200,7 +235,7 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
 
   test("a row that fits does not fade", async ({ page }) => {
     await page.goto("/departments/seals-bearings");
-    const groups = page.getByRole("navigation", { name: "Groups" });
+    const groups = rowOf(page, "Groups");
     await expect(groups).not.toHaveAttribute("data-more-end");
     await expect(groups).not.toHaveAttribute("data-more-start");
     expect(await groups.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
@@ -208,7 +243,7 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
 
   test("keyboard focus brings a link into view", async ({ page }) => {
     await page.goto("/departments/electronics");
-    const last = page.getByRole("navigation", { name: "Categories" }).getByRole("link").last();
+    const last = rowOf(page, "Categories").getByRole("link").last();
     expect(await inView(last)).toBe(false);
     await last.focus();
     await expect.poll(() => inView(last)).toBe(true);
@@ -217,7 +252,7 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
   test("with reduced motion, nothing scrolls smoothly", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/departments/electronics");
-    const row = page.getByRole("navigation", { name: "Categories" });
+    const row = rowOf(page, "Categories");
     expect(await row.evaluate((el) => getComputedStyle(el).scrollBehavior)).toBe("auto");
     // Focus scrolls the row at once rather than gliding.
     await row.getByRole("link").last().focus();
@@ -225,13 +260,27 @@ test.describe("on a phone, groups and categories are sideways rows", () => {
   });
 });
 
+// The common phone widths, as well as the 320px floor (S4).
+for (const width of [375, 390]) {
+  test.describe(`at ${width}px`, () => {
+    test.use({ viewport: { width, height: 800 } });
+    for (const path of PHONE_PAGES) {
+      test(`${path} keeps its rows to one line and does not scroll sideways`, async ({ page }) => {
+        await page.goto(path);
+        expect(await oneLine(rowOf(page, "Groups"))).toBe(true);
+        expect(await oneLine(rowOf(page, "Categories"))).toBe(true);
+        await noPageOverflow(page);
+      });
+    }
+  });
+}
+
 test("from a tablet up, the rows wrap as before", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await page.goto("/departments/electronics");
-  const row = page.getByRole("navigation", { name: "Categories" });
+  const row = rowOf(page, "Categories");
   expect(await row.evaluate((el) => getComputedStyle(el).flexWrap)).toBe("wrap");
   expect(await row.evaluate((el) => getComputedStyle(el).overflowX)).toBe("visible");
   expect(await row.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
-  const groups = page.getByRole("navigation", { name: "Groups" });
-  expect(await groups.evaluate((el) => getComputedStyle(el).display)).toBe("grid");
+  expect(await rowOf(page, "Groups").evaluate((el) => getComputedStyle(el).display)).toBe("grid");
 });
