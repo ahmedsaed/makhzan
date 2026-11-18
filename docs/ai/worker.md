@@ -365,26 +365,58 @@ heartbeat_s = 60
 
 ## Images
 
-`ml/worker.Dockerfile` adds the worker to a model image. Build the base images first
-(`ml/kev`, `ml/pplx`; see `ml/README.md`), then build from the `ml/` directory. Its
-`.dockerignore` sends only the worker's code, never the weights cache or `ml/out/`.
+`ml/worker.Dockerfile` adds the worker to a model image. Its build context is `ml/`, whose
+`.dockerignore` sends only the worker's code, never the weights cache or `ml/out/`. No image
+holds model weights: they are mounted from the host at run time.
+
+**The CPU workers come from GHCR.** `.github/workflows/ai-worker-images.yml` builds
+`kev-worker-cpu` and `pplx-worker-cpu` on every push to `main` that touches `ml/` (and on
+demand). Each is one chain, from `ml/docker-bake.hcl`: the lean model image
+(`ml/kev/Dockerfile.cpu-lean`, `ml/pplx/Dockerfile.cpu-lean`), then the worker layer on exactly
+that build, through a named context, so no registry tag or local image comes between them.
+Before pushing, CI runs `python -m makhzan_ml.worker.smoke --model <key>` in the image with
+`--network none`. It checks that torch sees no CUDA device and `fla` is absent, that the
+model's code and (for Kev) its pinned commit are present, that the image holds no weight file,
+that the entrypoint's `--check` passes, and that a whole session runs against the fake broker
+with a fake judge. Pull requests touching `ml/` build and smoke-test without pushing. Each image
+is tagged `sha-<commit>` (long and short), and the run's summary prints its digest:
 
 ```bash
-# CPU (home server): on the lean images
-docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/kev-cpu-lean:1.0 \
-  -t makhzan-ml/kev-worker-cpu:1.0 ml
-docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/pplx-decider-cpu-lean:1.3 \
-  -t makhzan-ml/pplx-worker-cpu:1.0 ml
-# GPU (desktop): on the GPU images
+docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>
+docker pull ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu@sha256:<digest>
+```
+
+The home server pulls by digest and runs by digest (below), so the image it runs is the one
+CI smoke-tested, whatever a tag points at later. Both are public. The upstream code is
+Apache-2.0: Kev's source (github.com/jaredpalmer/kev) ships its `LICENSE` in `/opt/kev`, and
+the pplx-decider package's `LICENSE` and `NOTICE` come from the pinned Hub revision into
+`/opt/pplx`. The images carry `org.opencontainers.image.licenses`, `.source` and `.revision`
+labels, and the Kev images `dev.makhzan.kev.commit`.
+
+The same chain builds locally, from the repository root:
+
+```bash
+docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load    # makhzan-ml/kev-worker-cpu:local
+docker run --rm --network none --entrypoint python makhzan-ml/kev-worker-cpu:local \
+  -m makhzan_ml.worker.smoke --model kev
+```
+
+**The GPU workers (~26 GB) stay local builds.** Build the base images first (`ml/kev`,
+`ml/pplx`; see `ml/README.md`), then build from the `ml/` directory:
+
+```bash
 docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/kev:1.0 \
   -t makhzan-ml/kev-worker-gpu:1.0 ml
 docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/pplx-decider:1.3 \
   -t makhzan-ml/pplx-worker-gpu:1.0 ml
 ```
 
-The base images are local builds referenced by tag. They are not in a registry, so `FROM`
-cannot pin them by digest. Each run command below passes the built image's id as
-`MAKHZAN_IMAGE`, which the worker reports at hello.
+A local base is referenced by tag, so `FROM` cannot pin it by digest. The desktop run command
+passes the built image's id as `MAKHZAN_IMAGE`, which the worker reports at hello.
+
+The Kev images record the Kev code commit they were built from as `MAKHZAN_KEV_COMMIT`
+(`ml/kev/Dockerfile*`), and the worker refuses to load Kev if it differs from its pin. A Kev
+base built before that change records none, and the worker only logs that.
 
 ## Running on the home server (CPU, capped)
 
@@ -402,13 +434,15 @@ The weights directory is a Hugging Face home whose `hub/` holds the pinned snaps
 real files (copied with `rsync -L`, as for the CPU benchmark), plus `trees/` and `refs/`.
 
 ```bash
-NAME=home-kev IMAGE=makhzan-ml/kev-worker-cpu:1.0   # or home-pplx, makhzan-ml/pplx-worker-cpu:1.0
+NAME=home-kev   # or home-pplx, with pplx-worker-cpu
+IMAGE=ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>   # from the CI run's summary
+docker pull "$IMAGE"
 docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   --cpus=6 --cpu-shares=256 --memory=20g --memory-swap=20g \
   --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
   --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
   --network makhzan-ai \
-  -e MAKHZAN_IMAGE="$(docker image inspect -f '{{.Id}}' "$IMAGE")" \
+  -e MAKHZAN_IMAGE="$IMAGE" \
   -v "<weights dir>:/models:ro" \
   -v "<config dir>/$NAME.toml:/etc/makhzan-ai/worker.toml:ro" \
   -v "<config dir>/$NAME.token:/run/secrets/makhzan-ai-token:ro" \
@@ -421,6 +455,10 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   the 10 s heartbeat join).
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
+- `MAKHZAN_IMAGE` is the registry digest the image was pulled by, so the broker's record of
+  each session names exactly the image CI built and smoke-tested.
+- To move to a new build, take the digest from the newest run of "AI worker images" and change
+  `IMAGE`; nothing on the server follows a tag.
 
 **Egress to the broker only.** The broker is reached over Tailscale at
 `http://<tailscale-ip>:<port>`; the host's Tailscale client carries the traffic, encrypted.
@@ -629,15 +667,18 @@ no model. CI runs it with the ingestion suite.
   load (about 150 s on CPU), which runs past the window; the window is checked again
   right after the load, so nothing is scored, and the lease goes back gracefully, but the
   model was loaded for nothing and the worker overstays its window by the load's length.
-- **The Kev code commit is not verified.** The base images keep `KEV_COMMIT` as a build ARG
-  only, so the worker cannot read which Kev code it runs. The tarball checksum in the base
-  Dockerfile pins it at build time. The full fix is an `ENV` or `LABEL` in
-  `ml/kev/Dockerfile*`, passed on as `MAKHZAN_KEV_COMMIT`.
 - **Freeing Kev's memory on unload** at the end of a session is coded (the atexit hook that
   held it is removed) but has not been measured with real models.
 - **No systemd units or network rules are shipped**: only the examples above. Setting them up
   on the home server is a separate, supervised step.
-- **No registry or image digests.** The images are local builds.
+- **The GHCR packages start private.** The first push creates `makhzan/kev-worker-cpu` and
+  `makhzan/pplx-worker-cpu` as private packages; the owner sets each public once (the
+  package's settings, "Change visibility"). Until then an anonymous `docker pull` is refused.
+- **Hash-pinned wheels** are still not done for the lean bases (`ml/README.md`, "Lean CPU
+  images"): CI installs the same version-pinned packages a local build does.
+- **The GPU images are local builds**, referenced by tag (about 26 GB each; not published).
+- **A Kev base image built before `MAKHZAN_KEV_COMMIT` was recorded** (a local GPU image, until
+  it is rebuilt) leaves the commit unchecked; the worker logs it. The GHCR images record it.
 - **Nothing has run on the home server through the worker.** Both models were checked on
   CPU on the desktop, under the same caps (above). The next check is one supervised run of
   each worker on the home server, against the real broker.

@@ -395,7 +395,21 @@ the CPU-only torch wheel. The other packages are the GPU image's `uv pip freeze`
 (`requirements-cpu.txt`) minus nvidia-*, triton and flash-linear-attention. Build either
 directly, for example `docker build -f ml/kev/Dockerfile.cpu-lean -t makhzan-ml/kev-cpu-lean:1.0 ml/kev`.
 
-- **Pinned:** both base images by digest, the Kev source by commit and tarball checksum, the
+The workers built on them, `kev-worker-cpu` and `pplx-worker-cpu`, are built by CI
+(`.github/workflows/ai-worker-images.yml`) and published to GHCR. Each is one chain from
+`docker-bake.hcl`: the lean base, then `worker.Dockerfile` on exactly that build through a
+named context. CI smoke-tests each image without weights or network
+(`python -m makhzan_ml.worker.smoke`) before pushing, and the run's summary prints the digest.
+The home server pulls and runs by digest, with `MAKHZAN_IMAGE` set to it:
+`docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:...` (docs/ai/worker.md,
+"Images"). The same chain builds locally with
+`docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load`. The GPU images stay local
+builds. No image holds weights. Kev's `LICENSE` ships with its source in `/opt/kev`, and the
+pplx-decider card's `LICENSE` and `NOTICE` (Apache-2.0, from the pinned revision,
+sha256-checked) are in `/opt/pplx`.
+
+- **Pinned:** both base images by digest, the Kev source by commit and tarball checksum (and
+  recorded in the image as `MAKHZAN_KEV_COMMIT`, which the worker checks against its pin), the
   pplx_decider source files by sha256, the pplx checkpoint by revision (`d06fb3f…`), and the Kev
   checkpoint by revision (`jaredpalmer/kev-4b@6cfce5c…`). Kev's `head.pt` pins its base,
   Qwen/Qwen3.5-4B-Base@1001bb4…. Change the Kev revision in both the Dockerfile's CMD and
