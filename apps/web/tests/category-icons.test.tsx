@@ -258,6 +258,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
   it("knows which departments are drawn", () => {
     expect([...DEPARTMENTS_WITH_ICONS].sort()).toEqual(
       [
+        "automotive",
         "chemicals",
         "electrical",
         "electronics",

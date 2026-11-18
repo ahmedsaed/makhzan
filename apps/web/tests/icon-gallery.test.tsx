@@ -25,6 +25,7 @@ const SECTIONS: [string, string][] = [
   ["welding", "Welding"],
   ["materials", "Materials"],
   ["safety", "Safety"],
+  ["automotive", "Automotive"],
 ];
 
 const TILES = [
@@ -121,6 +122,16 @@ const WEAK: Record<string, string> = {
   "safety:fire-cabinets": "A cabinet with a hose reel; reads as a sensor box.",
   "safety:fire-alarms": "A bell; evacuation gear is not shown.",
   "safety:gloves": "A glove cuff and four fingers; the thumb is hard to see small.",
+  "automotive:vehicle-diagnostics": "A handheld scanner; looks like a calculator.",
+  "automotive:vehicle-service": "A lift with a car body; schematic.",
+  "automotive:vehicle-accessories": "A steering wheel standing for accessories and consumables.",
+  "automotive:electrical-testers": "A test lamp on its lead; hard to read small.",
+  "automotive:alignment": "A wheel with sight lines; reads as a target.",
+  "automotive:body-shop": "A spray gun with a cup; close to the drill in tools.",
+  "automotive:vehicle-cleaning": "A sponge with bubbles; no car is shown.",
+  "automotive:booster-cables": "Two clamps and a loop of cable.",
+  "automotive:tie-downs": "A ratchet between two strap ends.",
+  "automotive:car-care": "Sparkles; says shine, not a product.",
 };
 
 function cell(ref: string, label: string): string {
