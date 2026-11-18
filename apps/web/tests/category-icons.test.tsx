@@ -267,6 +267,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
         "photography",
         "safety",
         "seals-bearings",
+        "timber",
         "tools",
         "welding",
       ].sort(),

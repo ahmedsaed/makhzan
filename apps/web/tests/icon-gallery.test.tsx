@@ -26,6 +26,7 @@ const SECTIONS: [string, string][] = [
   ["materials", "Materials"],
   ["safety", "Safety"],
   ["automotive", "Automotive"],
+  ["timber", "Timber"],
 ];
 
 const TILES = [
@@ -132,6 +133,17 @@ const WEAK: Record<string, string> = {
   "automotive:booster-cables": "Two clamps and a loop of cable.",
   "automotive:tie-downs": "A ratchet between two strap ends.",
   "automotive:car-care": "Sparkles; says shine, not a product.",
+  "timber:hardwood": "Three boards; a stack of planks, not a tree.",
+  "timber:oak": "An oak leaf; the lobes blur at 24 px.",
+  "timber:teak": "A broad veined leaf; close to oak by idea.",
+  "timber:mahogany": "Growth rings; a log end, with no sign of mahogany itself.",
+  "timber:pine": "A conifer; pine as the tree.",
+  "timber:walnut": "A nut with its seam.",
+  "timber:wenge": "A board with short straight grain lines.",
+  "timber:padauk": "A round-crowned tree; nothing says padauk.",
+  "timber:engineered-wood": "A slab with edge layers; close to rubber sheet in materials.",
+  "timber:wood-oils-waxes": "A shallow tin of wax.",
+  "timber:wood-fillers": "A putty knife with a dab.",
 };
 
 function cell(ref: string, label: string): string {
