@@ -262,7 +262,11 @@ export const TOOLS_ICONS: Record<string, Glyph> = {
       </>
     ),
   },
-  "tools:measurement-other": { label: "Other Measurement Tools", kind: "category", body: OTHER_BODY },
+  "tools:measurement-other": {
+    label: "Other Measurement Tools",
+    kind: "category",
+    body: OTHER_BODY,
+  },
   // Accessories & consumables
   "tools:drill-bits": {
     label: "Drill Bits & Holesaws",

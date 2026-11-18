@@ -23,9 +23,23 @@ const SECTIONS: [string, string][] = [
 ];
 
 const TILES = [
-  "electronics", "electrical", "tools", "seals-bearings", "automotive", "chemicals", "cleaning",
-  "garden", "machinery", "materials", "piping", "rigging", "safety", "security", "timber",
-  "welding", "photography",
+  "electronics",
+  "electrical",
+  "tools",
+  "seals-bearings",
+  "automotive",
+  "chemicals",
+  "cleaning",
+  "garden",
+  "machinery",
+  "materials",
+  "piping",
+  "rigging",
+  "safety",
+  "security",
+  "timber",
+  "welding",
+  "photography",
 ];
 
 /** Icons the artist is least sure of: said so on the sheet, with why. */
@@ -77,7 +91,9 @@ describe.skipIf(!OUT)("icon gallery", () => {
       return `<figure class="cell"><div class="sizes"><span class="s24">${svg}</span><span class="s48">${svg}</span></div><figcaption><b>${d}</b></figcaption></figure>`;
     }).join("");
     const sections = SECTIONS.map(([domain, name]) => {
-      const entries = Object.entries(CATEGORY_ICONS).filter(([ref]) => ref.startsWith(`${domain}:`));
+      const entries = Object.entries(CATEGORY_ICONS).filter(([ref]) =>
+        ref.startsWith(`${domain}:`),
+      );
       const groups = entries.filter(([, g]) => g.kind === "group");
       const cats = entries.filter(([, g]) => g.kind === "category");
       const weak = entries.filter(([ref]) => WEAK[ref]).length;

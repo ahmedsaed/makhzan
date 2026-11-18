@@ -619,18 +619,25 @@ makhzan draws its own icons for a department's groups and categories
 - **Strokes at least 2 units apart,** so two lines stay two at 18px (review, not tested).
 
 Icons are keyed by category ref, `domain:slug`, never a bare slug (slugs repeat across
-departments); a group is a top-level category, so it is keyed by its ref too. Electronics
-is drawn in full: its 8 groups and 34 categories, plus Cameras & Imaging and Educational &
-Robot Kits, and Photography's 2 groups and 4 categories, all drawn ahead of the taxonomy
-that adds them (an icon for a ref no taxonomy has yet is allowed; a category without an
-icon is not). Photography's categories have no schematic symbols, so they are drawn as the
-things themselves (a softbox, a tripod, a bag, a lens). The other departments are not drawn
-yet (automotive, chemicals, cleaning, electrical, garden, machinery, materials, piping,
-rigging, safety, seals & bearings, security, timber, tools, welding): their categories
-show plain in the browse tree, and their groups show the department's line icon
-(`components/department-icon.tsx`) until their set is drawn. A department's set is a
-batch: one drawn department is all or nothing, and a new category in a drawn department
-fails the test until its icon is added.
+departments); a group is a top-level category, so it is keyed by its ref too. Each
+department's set lives in `components/category-icon-sets/<department>.tsx`. Drawn so far:
+Electronics in full (8 groups and 34 categories, plus Cameras & Imaging and Educational &
+Robot Kits), Photography's 2 groups and 4 categories (both drawn ahead of the taxonomy that
+adds them; an icon for a ref no taxonomy has yet is allowed, a category without an icon is
+not), Electrical (10 + 37), Tools (5 + 31) and Seals & Bearings (6 + 20). Photography's
+categories have no schematic symbols, so they are the things themselves (a softbox, a
+tripod, a bag, a lens). The remaining departments (automotive, chemicals, cleaning, garden,
+machinery, materials, piping, rigging, safety, security, timber, welding) show their
+categories plain in the browse tree. A department's set is a batch: one drawn department
+is all or nothing, and a new category in a drawn department fails the test until its icon
+is added. No two icons in the registry may be the same drawing unless the test's allow-list
+says they mean the same thing (today only the four "Other ..." categories of Tools).
+
+**Department tiles** (`components/department-icon.tsx`, drawings in
+`category-icon-sets/departments.tsx`) are drawn in the same style, one object per
+department, for tiles and list rows; every department has one, and a group in a department
+whose set is not drawn shows it too. `tests/icon-gallery.test.tsx` writes the contact sheet
+for review when `GALLERY_OUT` is set.
 
 ### Brand
 

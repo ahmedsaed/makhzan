@@ -39,13 +39,13 @@ const ELECTRONICS = [
   cat("electronics", "accessories", "Accessories", "other", 1202),
 ];
 
-const SEALS = [
-  cat("seals-bearings", "seals", "Seals & Gaskets", null, 0),
-  cat("seals-bearings", "o-rings", "O-Rings", "seals", 400),
-  cat("seals-bearings", "gaskets", "Gaskets", "seals", 90),
-  cat("seals-bearings", "transmission", "Bearings & Transmission", null, 0),
-  cat("seals-bearings", "bearings", "Bearings", "transmission", 300),
-  cat("seals-bearings", "couplings", "Couplings", "transmission", 40),
+const UNDRAWN = [
+  cat("welding", "seals", "Seals & Gaskets", null, 0),
+  cat("welding", "o-rings", "O-Rings", "seals", 400),
+  cat("welding", "gaskets", "Gaskets", "seals", 90),
+  cat("welding", "transmission", "Bearings & Transmission", null, 0),
+  cat("welding", "bearings", "Bearings", "transmission", 300),
+  cat("welding", "couplings", "Couplings", "transmission", 40),
 ];
 
 /** A group's categories: the region its control names. */
@@ -149,7 +149,7 @@ describe("the browse tree", () => {
   });
 
   it("leaves an undrawn department's categories plain, its groups with the department icon", () => {
-    tree("seals-bearings:o-rings", SEALS, "seals-bearings");
+    tree("welding:o-rings", UNDRAWN, "welding");
     expect(document.querySelectorAll("[data-tree-category] svg")).toHaveLength(0);
     const groups = document.querySelectorAll("[data-tree-group]");
     for (const group of groups) {

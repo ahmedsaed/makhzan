@@ -55,9 +55,7 @@ export const DEPARTMENT_ICONS: Readonly<Record<string, ReactElement>> = {
       <path d="M12 9l2.6 1.5v3L12 15l-2.6-1.5v-3z" />
     </>
   ),
-  materials: (
-    <path d="M4 3.5h16V7h-6.5v10H20v3.5H4V17h6.5V7H4z" />
-  ),
+  materials: <path d="M4 3.5h16V7h-6.5v10H20v3.5H4V17h6.5V7H4z" />,
   photography: (
     <>
       <path d="M4.5 7h3l1.5-2.5h6L16.5 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z" />
