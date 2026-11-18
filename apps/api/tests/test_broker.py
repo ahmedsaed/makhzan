@@ -589,7 +589,13 @@ async def test_write_decision_keeps_the_row_when_the_outcome_is_unchanged(db):
 
 async def test_concurrent_decisions_on_one_pair_serialise(db):
     """Two results for one pair at once (two workers): the advisory lock makes
-    them take turns, so exactly one decision stands and the other is stale."""
+    them take turns, so exactly one decision stands and the other is stale.
+
+    pg_locks is cluster-wide: every database on the server (dev, other test
+    sessions) shows up in it, so each query here is scoped to this test's
+    own backends. The first writer commits only once the second is seen
+    waiting on the same lock, so the test proves the wait rather than
+    hoping a sleep was long enough."""
     a, b = await _pair(db)
     async with SessionLocal() as session:
         await flow.current_judges(session)
@@ -600,13 +606,35 @@ async def test_concurrent_decisions_on_one_pair_serialise(db):
         async with SessionLocal() as session:
             await flow.write_decision(session, "match", a, b, *_step(outcome, low))
             if hold:
+                pid = await session.scalar(text("SELECT pg_backend_pid()"))
                 async with SessionLocal() as other:
-                    held = await other.scalar(
-                        text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'")
-                    )
-                assert held == 1
-                entered.set()
-                await asyncio.sleep(0.3)  # holding the lock, uncommitted
+                    held = (
+                        await other.execute(
+                            text(
+                                "SELECT classid, objid, objsubid FROM pg_locks"
+                                " WHERE locktype = 'advisory' AND granted AND pid = :pid"
+                            ),
+                            {"pid": pid},
+                        )
+                    ).all()
+                    assert len(held) == 1  # the pair's lock, held uncommitted
+                    entered.set()
+                    waiting: list = []
+                    for _ in range(200):  # up to 10 s for the second to block
+                        waiting = (
+                            await other.execute(
+                                text(
+                                    "SELECT l.classid, l.objid, l.objsubid FROM pg_locks l"
+                                    " JOIN pg_database d ON d.oid = l.database"
+                                    " WHERE l.locktype = 'advisory' AND NOT l.granted"
+                                    " AND d.datname = current_database()"
+                                )
+                            )
+                        ).all()
+                        if waiting:
+                            break
+                        await asyncio.sleep(0.05)
+                    assert waiting == held  # the second writer waits on this very lock
             await session.commit()
 
     async def second() -> None:
