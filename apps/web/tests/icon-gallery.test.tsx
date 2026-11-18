@@ -28,6 +28,7 @@ const SECTIONS: [string, string][] = [
   ["automotive", "Automotive"],
   ["timber", "Timber"],
   ["piping", "Piping"],
+  ["rigging", "Rigging"],
 ];
 
 const TILES = [
@@ -157,6 +158,14 @@ const WEAK: Record<string, string> = {
   "piping:spiral-wound-gaskets": "A spiral; says spiral, and the gasket is a ring.",
   "piping:strainers": "A basket with mesh; reads as a colander.",
   "piping:flexible-joints": "Bellows between pipe stubs; close to a fuse symbol.",
+  "rigging:hoists": "A hoist body, chain link and hook; the hook is the hardest part to read.",
+  "rigging:rigging-gear": "A shackle standing for all gear; close to the welding magnet's U.",
+  "rigging:chain-hoists": "Chain links only; the hoist body is not shown.",
+  "rigging:lever-hoists": "A body, lever and two rings; busy at 24 px.",
+  "rigging:rope-hoists": "A drum with rope and ring; a winch more than a hoist.",
+  "rigging:trolleys": "A trolley under a beam, with a ring.",
+  "rigging:rack-jacks": "A toothed column with a lever.",
+  "rigging:pulleys-blocks": "A block with a sheave.",
 };
 
 function cell(ref: string, label: string): string {
