@@ -754,7 +754,7 @@ async def _sweep_partition(
         except Exception as exc:  # noqa: BLE001 — a dead host must not discard the run
             if tally is not None and not _refused_unsent(exc, log, before):
                 tally["pages"] += 1  # it reached the host, whatever came back
-            errors.append(f"{partition or 'default'} p{page}: {exc}")
+            errors.append(f"{partition or 'default'} p{page}: {type(exc).__name__}: {exc}")
             if halt is not None and _refused_by_own_host(exc, adapter):
                 halt.append(str(exc))
             return True
