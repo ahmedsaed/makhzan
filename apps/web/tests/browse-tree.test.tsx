@@ -107,11 +107,11 @@ describe("the browse tree", () => {
 
   it("expands another group in place", () => {
     tree("electronics:resistors");
-    const toggle = screen.getByRole("button", { name: "Show categories in Power" });
+    const toggle = screen.getByRole("button", { name: "Subcategories of Power" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(toggle).toHaveAccessibleName("Hide categories in Power");
+    expect(toggle).toHaveAccessibleName("Subcategories of Power");
     const list = document.getElementById(toggle.getAttribute("aria-controls")!)!;
     expect(list).not.toHaveAttribute("hidden");
     expect(within(list).getByRole("link", { name: /^Solar/ })).toHaveTextContent("276");
@@ -121,7 +121,9 @@ describe("the browse tree", () => {
     tree(null);
     const other = document.querySelector("[data-tree-group='electronics:other']")!;
     expect(other).toHaveAttribute("href", "/departments/electronics/accessories");
-    expect(screen.queryByRole("button", { name: /categories in Accessories & Other/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Subcategories of Accessories & Other/ }),
+    ).toBeNull();
   });
 
   it("keeps a group of one category when the group holds products of its own", () => {
@@ -161,7 +163,7 @@ describe("the browse tree", () => {
       />,
     );
     expect(screen.getByRole("link", { name: /^Resistors/ }).className).toMatch(/min-h-11/);
-    expect(screen.getByRole("button", { name: /categories in Power/ }).className).toMatch(
+    expect(screen.getByRole("button", { name: /Subcategories of Power/ }).className).toMatch(
       /size-11/,
     );
   });

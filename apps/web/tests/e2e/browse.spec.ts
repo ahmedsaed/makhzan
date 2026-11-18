@@ -122,7 +122,7 @@ test("a category is addressed through its department, never a bare slug", async 
   const tree = page
     .getByRole("complementary")
     .getByRole("navigation", { name: "Browse Electronics" });
-  await tree.getByRole("button", { name: "Show categories in Components" }).click();
+  await tree.getByRole("button", { name: "Subcategories of Components" }).click();
   await tree.getByRole("link", { name: /Integrated Circuits/ }).click();
   await expect(page).toHaveURL("/departments/electronics/ics");
 });

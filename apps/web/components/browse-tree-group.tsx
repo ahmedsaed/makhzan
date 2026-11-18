@@ -37,7 +37,8 @@ export function TreeGroup({
           type="button"
           aria-expanded={open}
           aria-controls={id}
-          aria-label={`${open ? "Hide" : "Show"} categories in ${name}`}
+          // A fixed name; `aria-expanded` says whether they are showing.
+          aria-label={`Subcategories of ${name}`}
           onClick={() => setOpen((was) => !was)}
           className={cn(
             "grid shrink-0 place-items-center rounded-md text-ink-3 hover:bg-ground hover:text-ink",

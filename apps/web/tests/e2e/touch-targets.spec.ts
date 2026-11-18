@@ -81,7 +81,7 @@ test("a department page's controls", async ({ page }) => {
   await expectTappable(page, {
     "sheet close": sheet.getByRole("button", { name: "Close" }),
     "sheet group": sheet.locator("[data-tree-group='electronics:components']"),
-    "sheet chevron": sheet.getByRole("button", { name: /categories in Components/ }),
+    "sheet chevron": sheet.getByRole("button", { name: /Subcategories of Components/ }),
     "sheet category": sheet.getByRole("link", { name: /^Resistors/ }),
   });
   await page.keyboard.press("Escape");
