@@ -365,12 +365,36 @@ the page container on desktop; each section is left out when its fetch fails.
     facts line "in stock N of the last 12 weeks · Stock history".
 
 **Department and category.** Header (name, count, "Search in {department}"); groups as object
-tiles; the selected group's categories as smaller object tiles; then results with the
-chip bar. No page is a dead-end list of links. From `lg` the search sits beside the
-name and the tiles lie on their side (a small frame, the name, its count and, for a
-group, its top three categories) in balanced rows across the full width: a row of
-large squares holding the same stand-in icon said nothing and left half the screen
-empty. Phones keep the square tiles. All departments (`/departments`) is a directory, full width, largest department
+tiles, each with its group's icon (see Category icons); then the categories; then results
+with the chip bar. No page is a dead-end list of links. Groups are tiles and categories
+are never tiles, so the two cannot be mistaken for each other (the icon pilot, November
+2026: both were tiles holding the same icon). On a group or category page the group's
+categories are chips (the site's chip: the category's symbol, its name and count; the
+selected one filled). On the department's own page "Biggest in {department}" lists its
+eight biggest categories as light pills, "Resistors · Components | 2,704": a 32px pill
+outlined in `line` on no fill, its symbol, the group in `ink-3`, a hairline, the count.
+A shortcut that leads where a group tile already does is left out: a group's only
+category ("Accessories & Other" and its one category "Accessories" were the same thing
+twice) and a top-level leaf; the eight are taken first, so the shelf gets shorter rather
+than reaching for a smaller category. In a department whose icons are not drawn yet the
+chips and pills carry no icon, plain, rather than one stand-in repeated. From `lg` the
+search sits beside the name and the tiles lie on their side (a small frame, the name,
+its count and, for a group, its top three categories) in balanced rows across the full
+width: a row of large squares holding the same stand-in icon said nothing and left half
+the screen empty. From `sm` the categories wrap onto as many rows as they need.
+
+On a phone (below `sm`) the group tiles and the categories are each **one row that
+scrolls sideways** (the owner, 18 November 2026: wrapped, they pushed the products a
+long way down). `components/scroll-row.tsx`: native momentum scrolling, snapping to
+items, no scrollbar, and no page-level sideways scroll (S4). The selected group or
+category is scrolled into view on load, without moving the page. Three cues say the row
+goes on: the next item shows partly; the edge that hides content fades out over 2.5rem,
+only that edge, and sharp again at the row's end; and a small round chevron (`surface`,
+`line-strong` outline, `ink-2`) sits on that edge, gone once the row reaches it, which
+scrolls about one screen when tapped in a 44px target. The chevrons are pointer helpers,
+`aria-hidden` and out of the tab order: the row is a `nav` of links, every one reachable
+by keyboard and screen reader, and a focused link is scrolled clear of the edges. Under
+`prefers-reduced-motion` every scroll is instant and nothing nudges. All departments (`/departments`) is a directory, full width, largest department
 first. A department with 10% or more of all products (three today) is a full-width block listing every
 group with up to six of its categories, as links with counts, in columns. The rest
 share a grid of cards (2, 3, then 4 across), each listing its biggest categories:
@@ -535,6 +559,36 @@ decoration: `aria-hidden`, no pointer events, behind all content, and hidden und
 and cover it, and `ink` and `ink-2` keep 4.5:1 against the stroke colour itself
 (S2).
 
+### Category icons
+
+makhzan draws its own icons for a department's groups and categories
+(`apps/web/components/category-icons.tsx`; option 3 of the icon pilot, approved
+18 November 2026). The style guide, which a test holds every icon to (S7):
+
+- **A 24 × 24 grid with a 2-unit margin.** Drawn inside the 20 × 20 live area; only
+  a schematic symbol's leads may run on to the edge, as a wire would.
+- **One stroke: 1.5 units, round caps and joins.** 1.25px at 20px, 2px at 32px. No
+  hairlines, no mixed weights. A dot is a zero-length segment, as heavy as a line.
+- **No fills; `currentColor`.** Outline only, in the colour of the text around it:
+  `ink-3` on a tile's white frame, `ink-2` in a chip, `ink-3` in a pill, in both themes.
+  The brand orange stays the logo's.
+- **Groups are objects, categories are symbols.** A group is a simple silhouette of a
+  thing you would hold (a board, a motor, a printer). A category is its schematic
+  symbol where electronics has one everyone reads (resistor, capacitor, diode); where
+  the symbol is obscure, a package or part stands in (a DIP chip, a 5 mm LED, an
+  ultrasonic sensor). The two families look different at a glance.
+- **Strokes at least 2 units apart,** so two lines stay two at 18px (review, not tested).
+
+Icons are keyed by category ref, `domain:slug`, never a bare slug (slugs repeat across
+departments); a group is a top-level category, so it is keyed by its ref too. Electronics
+is drawn in full: its 8 groups and 34 categories. The other departments are not drawn
+yet (automotive, chemicals, cleaning, electrical, garden, machinery, materials, piping,
+rigging, safety, seals & bearings, security, timber, tools, welding): their category
+chips and pills carry no icon, and their group tiles show the department's line icon
+(`components/department-icon.tsx`) until their set is drawn. A department's set is a
+batch: one drawn department is all or nothing, and a new category in a drawn department
+fails the test until its icon is added.
+
 ### Brand
 
 **The logo** ("organizer grid") is a 2×2 parts organizer: three outlined compartments
@@ -590,6 +644,7 @@ Each is meant to be checked by a test.
 - **S1** Colours come only from the tokens above; no literal colours in components.
 - **S2** Text meets 4.5:1 against its background in both themes (3:1 at 24px and up).
 - **S3** Prices use tabular figures; part numbers use the monospace face.
-- **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px.
+- **S4** Touch targets are at least 44px on phones; no horizontal scroll at 320px. A row that scrolls sideways inside itself (the phone's group and category rows, the chip bar) is not page scroll; it keeps its items' 44px inside its own box.
 - **S5** Photos are contained in a white frame in both themes; never cropped.
 - **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.
+- **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. A department with a drawn set has an icon for every group and category in its taxonomy; one without has plain category chips.
