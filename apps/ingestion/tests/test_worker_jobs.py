@@ -264,3 +264,20 @@ async def test_a_rebuild_queues_the_ai_producers_once_per_window(monkeypatch):
     assert len(redis.named("ai_candidates")) == 1
     names = {getattr(f, "name", None) for f in main.WorkerSettings.functions}
     assert "ai_candidates" in names
+
+
+async def test_the_heavy_jobs_hand_freed_memory_back_even_when_they_fail(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_release_freed_memory", lambda: calls.append("trim"))
+
+    async def boom(ctx):
+        raise RuntimeError("rebuild failed")
+
+    monkeypatch.setattr(main, "_rebuild_and_reindex", boom)
+    with pytest.raises(RuntimeError):
+        await main.rebuild_and_reindex({})
+    assert calls == ["trim"]
+
+
+def test_releasing_freed_memory_never_raises():
+    main._release_freed_memory()
