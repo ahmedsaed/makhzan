@@ -80,7 +80,7 @@ function pathPoints(d: string): [number, number][] {
 
 describe("S7 · every category icon follows the style guide", () => {
   it("has icons to check", () => {
-    expect(ENTRIES.length).toBeGreaterThanOrEqual(130);
+    expect(ENTRIES.length).toBeGreaterThanOrEqual(150);
   });
 
   it.each(ENTRIES)("%s: one 1.5 stroke, round, unfilled, currentColor, on 24 × 24", (ref) => {
@@ -257,10 +257,10 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
 
   it("knows which departments are drawn", () => {
     expect([...DEPARTMENTS_WITH_ICONS].sort()).toEqual(
-      ["electrical", "electronics", "photography", "tools"].sort(),
+      ["electrical", "electronics", "photography", "seals-bearings", "tools"].sort(),
     );
     expect(hasCategoryIcons("electronics")).toBe(true);
-    expect(hasCategoryIcons("seals-bearings")).toBe(false);
+    expect(hasCategoryIcons("seals-bearings")).toBe(true);
     expect(hasCategoryIcons("welding")).toBe(false);
   });
 
