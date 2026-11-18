@@ -24,6 +24,7 @@ const SECTIONS: [string, string][] = [
   ["chemicals", "Chemicals"],
   ["welding", "Welding"],
   ["materials", "Materials"],
+  ["safety", "Safety"],
 ];
 
 const TILES = [
@@ -110,6 +111,16 @@ const WEAK: Record<string, string> = {
   "materials:insulation": "A wall with wavy fill; the loops say insulation to the trade only.",
   "materials:metal-stock": "Round bars end-on; says pipes or logs.",
   "materials:decorative-aggregates": "Three mounds for stone and sand.",
+  "safety:personal-protection": "A vest standing for the whole group.",
+  "safety:fire-protection":
+    "A flame; the group is about fighting fire, and a flame alone does not say so.",
+  "safety:head-protection": "A hard hat; close to the department tile.",
+  "safety:welding-protection": "A mask with a visor; close to the welding tile.",
+  "safety:knee-protection": "A pad with straps; reads as a shield.",
+  "safety:workwear": "A shirt with bands; close to the vest.",
+  "safety:fire-cabinets": "A cabinet with a hose reel; reads as a sensor box.",
+  "safety:fire-alarms": "A bell; evacuation gear is not shown.",
+  "safety:gloves": "A glove cuff and four fingers; the thumb is hard to see small.",
 };
 
 function cell(ref: string, label: string): string {

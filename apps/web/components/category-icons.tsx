@@ -7,6 +7,7 @@ import { TOOLS_ICONS } from "@/components/category-icon-sets/tools";
 import { CHEMICALS_ICONS } from "@/components/category-icon-sets/chemicals";
 import { WELDING_ICONS } from "@/components/category-icon-sets/welding";
 import { MATERIALS_ICONS } from "@/components/category-icon-sets/materials";
+import { SAFETY_ICONS } from "@/components/category-icon-sets/safety";
 import type { Glyph, GlyphKind } from "@/components/category-icon-sets/types";
 import { departmentIcon } from "@/components/department-icon";
 
@@ -49,6 +50,7 @@ export type { Glyph, GlyphKind };
 export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
   ...ELECTRICAL_ICONS,
   ...TOOLS_ICONS,
+  ...SAFETY_ICONS,
   ...MATERIALS_ICONS,
   ...WELDING_ICONS,
   ...CHEMICALS_ICONS,
