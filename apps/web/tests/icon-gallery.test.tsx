@@ -66,11 +66,8 @@ const WEAK: Record<string, string> = {
   "tools:hand-tools": "A diagonal spanner; the group is bigger than one wrench.",
   "tools:wrenches": "Jaw round a nut: schematic, but unlike the group's spanner.",
   "tools:blades-discs": "A blade only; the cutting disc is the saw.",
-  "electrical:disconnectors": "Differs from the breaker by one tick; small apart.",
-  "electrical:circuit-breakers": "Standard breaker symbol; obscure to a layman.",
   "electrical:overload-relays": "Resistor-like box; the zigzag carries it.",
   "electrical:stabilizers": "A transformer symbol standing for stabilizers and PF correction.",
-  "electrical:signal-conditioning": "A box with a wave: generic.",
   "electrical:capacitive-sensors": "Sensor beside a tank; the idea is level sensing.",
   "electrical:sensor-accessories": "A cable connector; brackets are not shown.",
   "electrical:process-switches": "Float only; pressure and flow are not shown.",
@@ -91,11 +88,7 @@ const WEAK: Record<string, string> = {
   "machinery:concrete-vibrators": "A poker head on a hose; the waves carry it.",
   "machinery:concrete-saws": "A blade over a slab; close to the saws icon in tools.",
   "machinery:concrete-tools": "A trowel; the category also holds floats and screeds.",
-  "machinery:hydraulic-components": "A hydraulic pump symbol; obscure outside the trade.",
-  "machinery:machine-connectors": "A fitting between two pipe stubs; close to a fuse.",
-  "chemicals:adhesive-tapes": "A roll on its strip; close to the filament spool in electronics.",
   "chemicals:paints": "A brush; the group's bucket carries the idea better.",
-  "chemicals:rust-removers": "A threaded bolt with flakes; says bolt more than remover.",
   "chemicals:foams": "A can beside a cloud of foam.",
   "chemicals:sealants": "Two blocks with a bead between; schematic.",
   "chemicals:industrial-adhesives": "Two bonded plates with dots for glue.",
@@ -113,16 +106,11 @@ const WEAK: Record<string, string> = {
   "materials:rubber-sheet": "A slab in isometric; close to the group's stack of sheets.",
   "materials:anti-vibration-pads": "A foot on a spring pad; schematic.",
   "materials:membranes": "Rain over a layer; says waterproofing, not membrane.",
-  "materials:polyester-resins": "A weave grid for fibreglass; reads as a grid or a table.",
   "materials:safety-flooring": "A plate with ridges; reads as a tile.",
   "materials:insulation": "A wall with wavy fill; the loops say insulation to the trade only.",
-  "materials:metal-stock": "Round bars end-on; says pipes or logs.",
   "materials:decorative-aggregates": "Three mounds for stone and sand.",
-  "safety:personal-protection": "A vest standing for the whole group.",
   "safety:fire-protection":
     "A flame; the group is about fighting fire, and a flame alone does not say so.",
-  "safety:head-protection": "A hard hat; close to the department tile.",
-  "safety:welding-protection": "A mask with a visor; close to the welding tile.",
   "safety:knee-protection": "A pad with straps; reads as a shield.",
   "safety:workwear": "A shirt with bands; close to the vest.",
   "safety:fire-cabinets": "A cabinet with a hose reel; reads as a sensor box.",
@@ -132,20 +120,14 @@ const WEAK: Record<string, string> = {
   "automotive:vehicle-service": "A lift with a car body; schematic.",
   "automotive:vehicle-accessories": "A steering wheel standing for accessories and consumables.",
   "automotive:electrical-testers": "A test lamp on its lead; hard to read small.",
-  "automotive:alignment": "A wheel with sight lines; reads as a target.",
   "automotive:body-shop": "A spray gun with a cup; close to the drill in tools.",
   "automotive:vehicle-cleaning": "A sponge with bubbles; no car is shown.",
   "automotive:booster-cables": "Two clamps and a loop of cable.",
   "automotive:tie-downs": "A ratchet between two strap ends.",
   "automotive:car-care": "Sparkles; says shine, not a product.",
   "timber:hardwood": "Three boards; a stack of planks, not a tree.",
-  "timber:oak": "An oak leaf; the lobes blur at 24 px.",
-  "timber:teak": "A broad veined leaf; close to oak by idea.",
-  "timber:mahogany": "Growth rings; a log end, with no sign of mahogany itself.",
   "timber:pine": "A conifer; pine as the tree.",
   "timber:walnut": "A nut with its seam.",
-  "timber:wenge": "A board with short straight grain lines.",
-  "timber:padauk": "A round-crowned tree; nothing says padauk.",
   "timber:engineered-wood": "A slab with edge layers; close to rubber sheet in materials.",
   "timber:wood-oils-waxes": "A shallow tin of wax.",
   "timber:wood-fillers": "A putty knife with a dab.",
@@ -153,18 +135,11 @@ const WEAK: Record<string, string> = {
   "piping:line-fittings": "A bare tee outline standing for all fittings.",
   "piping:butterfly-valves": "A pipe section with a tilted disc and a lever.",
   "piping:ball-valves": "A ball between pipe stubs with an L-handle.",
-  "piping:globe-valves":
-    "The bowtie valve symbol with a ring; only a trade reader tells it from the gate.",
-  "piping:gate-valves": "The bowtie valve symbol with a stem; see globe valves.",
   "piping:check-valves": "A flow arrow in a body.",
   "piping:sheet-gaskets": "A sheet with a folded corner and a cut ring.",
   "piping:spiral-wound-gaskets": "A spiral; says spiral, and the gasket is a ring.",
-  "piping:strainers": "A basket with mesh; reads as a colander.",
-  "piping:flexible-joints": "Bellows between pipe stubs; close to a fuse symbol.",
-  "rigging:hoists": "A hoist body, chain link and hook; the hook is the hardest part to read.",
   "rigging:rigging-gear": "A shackle standing for all gear; close to the welding magnet's U.",
   "rigging:chain-hoists": "Chain links only; the hoist body is not shown.",
-  "rigging:lever-hoists": "A body, lever and two rings; busy at 24 px.",
   "rigging:rope-hoists": "A drum with rope and ring; a winch more than a hoist.",
   "rigging:trolleys": "A trolley under a beam, with a ring.",
   "rigging:rack-jacks": "A toothed column with a lever.",
@@ -172,13 +147,11 @@ const WEAK: Record<string, string> = {
   "security:access-control": "A keypad; card readers and locks are not shown.",
   "security:door-access": "A door with a knob; the electronics are not shown.",
   "security:intercoms": "A door station with a camera and speaker.",
-  "security:biometrics": "Fingerprint arcs; hard to read small.",
   "security:recorders": "A recorder box; close to a router or a set-top box.",
   "security:remote-controls": "A fob with signal arcs.",
   "security:cash-handling": "A banknote; the group holds counters and detectors too.",
   "garden:garden-hand-tools": "A trowel standing for all hand tools.",
   "garden:irrigation": "A watering can; hose and drip lines are not shown.",
-  "garden:cutting-garden": "Pruning shears; the pivot and hook are hard to read.",
   "garden:mowers-trimmers": "A string trimmer; the mower is the power group's icon.",
   "garden:sprinklers": "A sprinkler head with fanned spray.",
   "cleaning:cleaning-equipment": "A bucket standing for all equipment.",
@@ -186,17 +159,81 @@ const WEAK: Record<string, string> = {
     "A squeegee-like head on a handle with bristles; reads as a brush.",
   "cleaning:pressure-washers": "A unit with a hose and spray dots; the dots are faint.",
   "cleaning:vacuum-cleaners": "A canister with hose and wand.",
-  "cleaning:floor-machines": "A motor over a pad with a handle; close to sanders in tools.",
-  "cleaning:foam-machines": "A tank with bubbles; close to foams in chemicals.",
   "cleaning:washer-accessories": "A nozzle with spray lines.",
+  "piping:gate-valves":
+    "A wedge in a boxy body under a handwheel; apart from the globe by shape only.",
+  "piping:globe-valves": "A round body with a disc under a handwheel; see gate valves.",
+  "piping:strainers": "A Y-shaped branch off a flanged body; may still read as a tool.",
+  "electrical:disconnectors":
+    "A rotary handle on a plate; a knife switch is the other common form.",
+  "electrical:signal-conditioning": "A sine turning into a square wave in a module; generic.",
+  "machinery:machine-connectors": "A plug entering a socket; generic.",
+  "machinery:hydraulic-components":
+    "A valve block with two cartridges and ports; obscure outside the trade.",
+  "chemicals:rust-removers": "A rusted sheet peeling; the product itself is not shown.",
+  "chemicals:adhesive-tapes": "A strip with a torn end and a peel curl; no roll.",
+  "materials:metal-stock": "An angle profile standing for all stock.",
+  "materials:polyester-resins": "A boat hull for fibreglass; says boats.",
+  "safety:personal-protection": "A shield with a tick: a symbol where its siblings are objects.",
+  "safety:head-protection": "A helmet in profile with a peak; still hard-hat-like.",
+  "safety:welding-protection": "A leather apron; the welding mask is the department tile.",
+  "automotive:alignment": "A wheel with angle arrows; the arrows are small.",
+  "rigging:hoists": "A body with a J hook; no chain.",
+  "rigging:lever-hoists": "Body, lever and hook; close to the hoists group.",
+  "security:biometrics": "A fingerprint in a scan frame.",
+  "garden:cutting-garden": "A hooked jaw on two handles; pruners are hard to draw small.",
+  "cleaning:floor-machines": "A box on a pad with a handle; reads as a polisher.",
+  "cleaning:foam-machines": "A bottle on a barrel with foam bubbles.",
+  "timber:oak":
+    "Cathedral arches. Planks told apart by grain only; the grain is faint at 24 px, so a stranger will not tell the species apart.",
+  "timber:teak":
+    "Straight lines. Planks told apart by grain only; the grain is faint at 24 px, so a stranger will not tell the species apart.",
+  "timber:mahogany":
+    "Wavy ribbons. Planks told apart by grain only; the grain is faint at 24 px, so a stranger will not tell the species apart.",
+  "timber:padauk":
+    "Flecks and dashes. Planks told apart by grain only; the grain is faint at 24 px, so a stranger will not tell the species apart.",
+  "timber:wenge":
+    "Slanted streaks. Planks told apart by grain only; the grain is faint at 24 px, so a stranger will not tell the species apart.",
 };
+
+/** Icons redrawn in the second pass, marked on the sheet. */
+const REDRAWN = new Set([
+  "piping:gate-valves",
+  "piping:globe-valves",
+  "piping:strainers",
+  "piping:flexible-joints",
+  "electrical:circuit-breakers",
+  "electrical:disconnectors",
+  "electrical:signal-conditioning",
+  "machinery:machine-connectors",
+  "machinery:hydraulic-components",
+  "chemicals:rust-removers",
+  "chemicals:adhesive-tapes",
+  "materials:metal-stock",
+  "materials:polyester-resins",
+  "safety:personal-protection",
+  "safety:head-protection",
+  "safety:welding-protection",
+  "automotive:alignment",
+  "rigging:hoists",
+  "rigging:lever-hoists",
+  "security:biometrics",
+  "garden:cutting-garden",
+  "cleaning:floor-machines",
+  "cleaning:foam-machines",
+  "timber:oak",
+  "timber:teak",
+  "timber:mahogany",
+  "timber:padauk",
+  "timber:wenge",
+]);
 
 function cell(ref: string, label: string): string {
   const weak = WEAK[ref];
   const svg = renderToStaticMarkup(<CategoryIcon iconRef={ref} />);
-  return `<figure class="cell${weak ? " weak" : ""}">
+  return `<figure class="cell${weak ? " weak" : ""}${REDRAWN.has(ref) ? " redrawn" : ""}">
     <div class="sizes"><span class="s24">${svg}</span><span class="s48">${svg}</span></div>
-    <figcaption><b>${label}</b><code>${ref}</code>${
+    <figcaption><b>${label}</b>${REDRAWN.has(ref) ? "<strong>redrawn</strong>" : ""}<code>${ref}</code>${
       weak ? `<em>weak: ${weak}</em>` : ""
     }</figcaption></figure>`;
 }
@@ -239,10 +276,12 @@ h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-
 .s24 svg{width:24px;height:24px;display:block}.s48 svg{width:48px;height:48px;display:block}
 figcaption{display:flex;flex-direction:column;gap:2px;font-size:12.5px;line-height:1.3}
 figcaption code{font-size:11px;color:var(--ink-3);overflow-wrap:anywhere}
+figcaption strong{font-size:10.5px;color:#7dd3a8;text-transform:uppercase;letter-spacing:.04em}
+.cell.redrawn{box-shadow:inset 3px 0 0 #7dd3a8}
 figcaption em{font-style:normal;color:var(--warn);font-size:11.5px}
 </style></head><body><div class="page">
 <header><div><h1>Category icons, all departments</h1>
-<p>Every department&#39;s icons and every department tile. Each icon at 24 px and 48 px. Orange-bordered cells are the ones I think are weak, with why.</p></div>
+<p>Every department&#39;s icons and every department tile. Each icon at 24 px and 48 px. Orange-bordered cells are the ones I think are weak, with why; a green edge and the word redrawn mark the second drawing pass.</p></div>
 <button id="t" type="button">Light</button></header>
 <section><h2>Department tiles <small>17</small></h2><div class="grid">${tiles}</div></section>
 ${sections}
