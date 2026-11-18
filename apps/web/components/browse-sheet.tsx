@@ -51,6 +51,8 @@ type Drag = {
   /** Downward speed, px/ms, smoothed. */
   vy: number;
   dy: number;
+  /** Where the sheet was when the finger took it: 0, or part-way out mid-glide. */
+  from: number;
   height: number;
   captured: boolean;
 };
@@ -209,14 +211,31 @@ export function BrowseSheet({
   // Swipe down on the handle or the heading to close.
   const onPointerDown = (event: React.PointerEvent) => {
     const sheet = dialog.current;
-    // A press on the Close button is a click, never the start of a swipe.
-    if (!sheet?.open || (event.target as HTMLElement).closest("button")) return;
+    // A press on the Close button is a click, never the start of a swipe; and
+    // the 200ms slide down, once begun, is not taken back.
+    if (
+      !sheet?.open ||
+      sheet.hasAttribute("data-closing") ||
+      (event.target as HTMLElement).closest("button")
+    ) {
+      return;
+    }
+    // A finger on the sheet takes it from wherever it is: a glide or a
+    // spring-back in progress is cancelled (its timer too), and the sheet is
+    // held where it was, not snapped to the top.
+    forget();
+    const from = Math.max(0, new DOMMatrix(getComputedStyle(sheet).transform).m42);
+    if (from > 0) {
+      sheet.style.transition = "none";
+      sheet.style.transform = `translateY(${from}px)`;
+    }
     drag.current = {
       y0: event.clientY,
       y: event.clientY,
       t: event.timeStamp,
       vy: 0,
-      dy: 0,
+      dy: from,
+      from,
       height: sheet.offsetHeight,
       captured: false,
     };
@@ -245,7 +264,8 @@ export function BrowseSheet({
     d.y = event.clientY;
     d.t = event.timeStamp;
     // Down follows the finger; up resists, and stops at 16px.
-    d.dy = raw >= 0 ? raw : -16 * (1 - Math.exp(raw / 40));
+    const at = d.from + raw;
+    d.dy = at >= 0 ? at : -16 * (1 - Math.exp(at / 40));
     sheet.style.transform = `translateY(${d.dy}px)`;
     sheet.style.setProperty(
       "--sheet-backdrop",
@@ -259,7 +279,9 @@ export function BrowseSheet({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (!d?.captured || !sheet) return;
+    if (!d || !sheet) return;
+    // A tap that stopped a glide part-way: decide from where it was held.
+    if (!d.captured && d.from === 0) return;
     if (event.timeStamp - d.t > 80) d.vy = 0; // held still before letting go
     const past = d.dy > Math.min(Math.max(80, d.height * 0.25), d.height * 0.5);
     const reduce = reducedMotion();
@@ -278,7 +300,9 @@ export function BrowseSheet({
         timer.current = window.setTimeout(finish, ms);
       }
     } else {
-      // Spring back, with a slight overshoot.
+      // Spring back, with a slight overshoot. No longer gliding, if a grab
+      // stopped one: a later close must not wait for a glide that is gone.
+      gliding.current = false;
       sheet.style.transition = reduce ? "none" : `transform ${SPRING_MS}ms ${SPRING}`;
       sheet.style.setProperty("--sheet-backdrop-ms", reduce ? "0ms" : "200ms");
       sheet.style.transform = "translateY(0px)";

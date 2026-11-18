@@ -927,3 +927,80 @@ async function linkColour(page: Page) {
     return colour;
   });
 }
+
+// A finger that takes the sheet back during a swipe's glide (review of 4243fb9).
+test.describe("the phone sheet, grabbed mid-glide", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  /**
+   * Swipe the sheet out far enough to glide, then, inside the glide, put a
+   * finger back on the handle and (unless `hold`) let go after a short pull.
+   * Dispatched in one script, so the second touch lands inside the 120-240ms
+   * glide every time.
+   */
+  async function grabMidGlide(page: Page, { hold = false } = {}) {
+    await page.goto("/departments/electronics/resistors");
+    await page.locator("[data-browse-pill]").click();
+    const sheet = page.locator("dialog[data-browse-sheet]");
+    await settled(sheet);
+    await sheet.locator("[data-sheet-handle]").evaluate(async (el, holdOn) => {
+      const box = el.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const at = (type: string, y: number, id: number) =>
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            pointerId: id,
+            pointerType: "touch",
+            clientX: x,
+            clientY: y,
+          }),
+        );
+      const frame = () => new Promise((done) => requestAnimationFrame(done));
+      const y0 = box.top + 10;
+      // 1. Out past the threshold: the glide starts.
+      at("pointerdown", y0, 1);
+      for (let dy = 20; dy <= 200; dy += 20) at("pointermove", y0 + dy, 1);
+      at("pointerup", y0 + 200, 1);
+      // 2. A frame later, mid-glide, a finger takes it again.
+      await frame();
+      const sheet = el.closest("dialog")!;
+      if (!sheet.open) throw new Error("closed before the grab");
+      at("pointerdown", y0, 2);
+      at("pointermove", y0 + 10, 2);
+      if (holdOn) return;
+      // 3. A short pull, held still, and let go: it springs back.
+      await new Promise((done) => setTimeout(done, 120));
+      at("pointerup", y0 + 10, 2);
+    }, hold);
+    return sheet;
+  }
+
+  const isOpen = (sheet: Locator) => sheet.evaluate((el) => (el as HTMLDialogElement).open);
+
+  test("after a grab mid-glide and a short release, Escape still closes it", async ({ page }) => {
+    const sheet = await grabMidGlide(page);
+    await page.waitForTimeout(500); // past the old glide's end and the spring
+    expect(await isOpen(sheet)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => isOpen(sheet)).toBe(false);
+  });
+
+  test("after a grab mid-glide and a short release, Close still closes it", async ({ page }) => {
+    const sheet = await grabMidGlide(page);
+    await page.waitForTimeout(500);
+    expect(await isOpen(sheet)).toBe(true);
+    await sheet.getByRole("button", { name: "Close" }).click();
+    await expect.poll(() => isOpen(sheet)).toBe(false);
+  });
+
+  test("the glide's own timer does not close it under a new drag", async ({ page }) => {
+    const sheet = await grabMidGlide(page, { hold: true });
+    // The finger is still down; the old glide would have finished in 240ms.
+    await page.waitForTimeout(500);
+    expect(await isOpen(sheet)).toBe(true);
+    // Held part-way out, where the finger took it, not snapped to the top.
+    const y = await sheet.evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m42);
+    expect(y).toBeGreaterThan(0);
+  });
+});
