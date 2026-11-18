@@ -239,8 +239,11 @@ services:
     environment:
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
       SITE_URL: ${SITE_URL:-}
+    # WEB_BIND is the address the port is published on: loopback by default, the
+    # Docker bridge (172.17.0.1) when the reverse proxy is itself a container.
+    # Never every interface: that lets visitors skip the proxy and its TLS.
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
     # Next's data cache (the `revalidate` results in lib/api.ts) lives under
     # .next/cache. Without a volume it is part of the container, so every deploy
     # starts cold and the first visitor pays for the whole taxonomy again —
