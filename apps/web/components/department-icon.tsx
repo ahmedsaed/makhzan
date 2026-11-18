@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import {
+  Camera,
   Car,
   CircleDot,
   Cpu,
@@ -33,6 +34,7 @@ const ICONS: Record<string, LucideIcon> = {
   garden: Sprout,
   machinery: Factory,
   materials: Layers,
+  photography: Camera,
   piping: Waypoints,
   rigging: CircleDot,
   safety: HardHat,

@@ -1,7 +1,29 @@
+import { Camera, Package } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
+import { departmentIcon } from "@/components/department-icon";
 import type { Category } from "@/lib/api";
-import { asPhrase, insideOf, totalOf, departmentSummaries, departmentTree } from "@/lib/departments";
+import {
+  asPhrase,
+  departmentLabel,
+  insideOf,
+  totalOf,
+  departmentSummaries,
+  departmentTree,
+} from "@/lib/departments";
+
+describe("department icons and labels", () => {
+  // Each department gets its own line icon; the package is only the fallback
+  // for one the frontend has not been told about.
+  it("gives photography a camera, not the fallback", () => {
+    expect(departmentIcon("photography")).toBe(Camera);
+    expect(departmentIcon("photography")).not.toBe(Package);
+  });
+
+  it("labels the photography department from its slug", () => {
+    expect(departmentLabel("photography")).toBe("Photography");
+  });
+});
 
 const cat = (
   domain: string,
