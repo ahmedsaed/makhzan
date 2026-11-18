@@ -324,9 +324,10 @@ ranking decides the order. Only explicit category browse is scoped to one domain
 Adding a vertical means authoring a profile (taxonomy, rules, identifier
 strategy). That domain knowledge is the real cost; the code seam is already there.
 
-**Inference only ever guesses within the supplier's default domain.** The
-pipeline infers under `Supplier.domain` (or the crosswalk's domain), so keyword
-rules in a profile that no supplier defaults to are never consulted. Such a
+**Inference only ever guesses within the supplier's default domain.** It runs
+only when the crosswalk missed, so there is no crosswalk domain to go by: the
+pipeline infers under `Supplier.domain`. Keyword rules in a profile that no
+supplier defaults to are therefore never consulted. Such a
 department — photography today, stocked by electronics shops — is reached by
 crosswalk only, and its profile carries no rules.
 
