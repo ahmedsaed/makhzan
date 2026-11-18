@@ -63,9 +63,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "group",
     body: (
       <>
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <rect x="9" y="7.5" width="6" height="6" rx="0.75" />
-        <path d="M6 7.25h0M18 7.25h0M7 16.75h0M9.5 16.75h0M12 16.75h0M14.5 16.75h0M17 16.75h0" />
+        <path d="M7 7V4.5A1.5 1.5 0 0 1 8.5 3h11A1.5 1.5 0 0 1 21 4.5v10a1.5 1.5 0 0 1-1.5 1.5H17" />
+        <rect x="3" y="7" width="14" height="14" rx="1.5" />
+        <rect x="7" y="11" width="6" height="6" rx="0.75" />
       </>
     ),
   },
@@ -131,9 +131,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "group",
     body: (
       <>
-        <rect x="3" y="6" width="18" height="13.5" rx="2" />
-        <path d="M3 10.5h18M6 8.25h0M18 8.25h0" />
-        <rect x="9" y="13.5" width="6" height="3" rx="1.5" />
+        <path d="M12 3 20.5 7.25v9.5L12 21l-8.5-4.25v-9.5z" />
+        <path d="m3.5 7.25 8.5 4.25 8.5-4.25M12 11.5V21" />
+        <path d="m7.75 5.1 8.5 4.3" />
       </>
     ),
   },
@@ -286,10 +286,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <rect x="4.5" y="5" width="17" height="14" rx="1.5" />
-        <path d="M2 9.5h4.5v4H2z" />
-        <rect x="11.5" y="10.5" width="5" height="5" rx="0.5" />
-        <path d="M9 7.5h0M11.5 7.5h0M14 7.5h0M16.5 7.5h0M19 7.5h0" />
+        <rect x="5.5" y="5.5" width="16" height="13" rx="1.5" />
+        <path d="M2 9.5h5v5H2" />
+        <path d="M10 8h0M12.5 8h0M15 8h0M17.5 8h0M10 16h0M12.5 16h0M15 16h0M17.5 16h0" />
       </>
     ),
   },
@@ -320,9 +319,7 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <rect x="2.5" y="5" width="19" height="14" rx="1.5" />
-        <rect x="5" y="7.5" width="14" height="9" rx="0.5" />
-        <path d="M7.5 10.5h5M7.5 13.5h8" />
+        <path d="M9 3.5h6M9 12h6M9 20.5h6M7.5 5v5.5M16.5 5v5.5M7.5 13.5V19M16.5 13.5V19M20 20.5h0" />
       </>
     ),
   },
@@ -342,11 +339,10 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <rect x="4" y="3" width="16" height="14" rx="1.5" />
-        <circle cx="12" cy="10" r="4" />
-        <path d="M10.25 9.25a2 2 0 0 1 1.75-1.25" />
-        <path d="M6.75 5.75h0M17.25 5.75h0" />
-        <path d="M9.5 17v4.5h5V17" />
+        <rect x="4" y="3" width="16" height="12" rx="1.5" />
+        <circle cx="12" cy="9" r="3.5" />
+        <path d="M10.5 8.25a1.75 1.75 0 0 1 1.5-1" />
+        <path d="M7.5 15v6.5h9V15M10.5 18h3" />
       </>
     ),
   },
@@ -408,10 +404,11 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <rect x="4.5" y="11" width="15" height="10" rx="1" />
-        <path d="M2.5 14h19" />
-        <circle cx="9" cy="7.5" r="2" />
-        <path d="M10.5 6.2 18 5.5a1.25 1.25 0 0 1 0 2.5l-7.5-.7M9 9.5V11" />
+        <rect x="2.5" y="10" width="11" height="6" rx="1.5" />
+        <rect x="4.5" y="4.5" width="7" height="5.5" rx="1" />
+        <path d="M13.5 13h4.25" />
+        <circle cx="19.5" cy="13" r="1.75" />
+        <path d="M5 19.5h6" />
       </>
     ),
   },
@@ -442,9 +439,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <path d="M6.5 7.5h11a4.5 4.5 0 0 1 0 9h-11a4.5 4.5 0 0 1 0-9z" />
-        <circle cx="6.5" cy="12" r="2" />
-        <circle cx="17.5" cy="12" r="2" />
+        <path d="M2.5 15h19M2.5 19h19" />
+        <rect x="7" y="8" width="10" height="7" rx="1" />
+        <path d="M9.5 11.5h0M14.5 11.5h0" />
       </>
     ),
   },
@@ -475,9 +472,10 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <path d="M10.5 10.5 9.5 3.5l2.5 2M13.5 10.5l1-7-2.5 2" />
-        <circle cx="12" cy="11.5" r="1.75" />
-        <path d="M10.5 12.5c-2 2-3.5 5-3.5 9M13.5 12.5c2 2 3.5 5 3.5 9" />
+        <path d="M12 8.46L17.48 2.98A2.5 2.5 0 0 1 21.02 6.52L15.54 12Z" />
+        <path d="M13.94 6.52L17.48 10.06M15.71 4.75L19.25 8.29" />
+        <path d="M13.06 9.53L11.65 10.94L13.06 12.35L14.47 10.94" />
+        <path d="M12.35 11.65L4.93 19.07M4.15 18.29L5.71 19.85" />
       </>
     ),
   },
@@ -486,10 +484,10 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <rect x="5" y="2.5" width="14" height="19" rx="2" />
-        <rect x="7.5" y="5" width="9" height="4.5" rx="0.75" />
-        <circle cx="12" cy="14.5" r="2.75" />
-        <path d="M12 14.5l1.5-1.5M9 19h0M15 19h0" />
+        <rect x="6" y="2.5" width="12" height="13" rx="1.5" />
+        <rect x="8.5" y="5" width="7" height="3" rx="0.5" />
+        <circle cx="12" cy="11.5" r="1.75" />
+        <path d="M9.5 15.5c0 3-4.5 2.5-6 6M14.5 15.5c0 3 4.5 2.5 6 6" />
       </>
     ),
   },
@@ -522,8 +520,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <path d="M8 10h8v8.5a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 8 18.5zM9.5 10V3.5h5V10M12 20v2" />
-        <path d="M11 6h0M13 6h0" />
+        <rect x="10.5" y="8.5" width="7" height="7" rx="1" />
+        <path d="M17.5 10h4v4h-4" />
+        <path d="M10.5 12H8.5c-2.5 0-2.5 5.5-5 5.5H2.5" />
       </>
     ),
   },
@@ -588,9 +587,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <path d="M3.5 8h11v8h-11z" />
-        <path d="M14.5 6h5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-5z" />
-        <path d="M7 8v8M10.5 8v8" />
+        <circle cx="12" cy="12" r="8.5" />
+        <circle cx="12" cy="12" r="4" />
+        <path d="M8.5 8.5a5 5 0 0 1 2-1.25" />
       </>
     ),
   },
