@@ -30,14 +30,19 @@ ADD --checksum=sha256:867392d787151402314028151ca47c8ba89cad969d5b70f2e83c9633ab
 ADD --checksum=sha256:412292fba7f9e92f70f3071935f090e381910d1f6279380e728dc1c6b8380e6c ${HUB}/source/src/pplx_decider/protocol.py src/pplx_decider/protocol.py
 ADD --checksum=sha256:f13de0c018e76eb37fd9d7c1fbecc2aa811bb54f650ccc69861c901b65866892 ${HUB}/source/src/pplx_decider/types.py src/pplx_decider/types.py
 ADD --checksum=sha256:272a40ba42e83b437022b09fa3e5fe28bf0160b3d1905fa274589f6cfae8eeb8 ${HUB}/source/src/pplx_decider/locate.py src/pplx_decider/locate.py
+# The card's licence (Apache-2.0) and NOTICE, from the same pinned revision, kept with its code.
+ADD --checksum=sha256:bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a ${HUB}/LICENSE LICENSE
+ADD --checksum=sha256:7cb7e9b7b26e8dc334c64c5926de55e16c28ea181d4d10f02d58e9a6632bd3ed ${HUB}/NOTICE NOTICE
 COPY serve.py /opt/pplx/serve.py
-RUN chmod -R a+rX /opt/pplx/src /opt/pplx/serve.py \
+RUN chmod -R a+rX /opt/pplx/src /opt/pplx/serve.py /opt/pplx/LICENSE /opt/pplx/NOTICE \
  && python -c "import pplx_decider, sys; sys.path.insert(0, '/opt/pplx'); import serve; print('pplx_decider', pplx_decider.__version__)"
 
 RUN useradd --uid 1000 --create-home pplx
 USER pplx
 ENV HOME=/home/pplx HF_HOME=/home/pplx/.cache/huggingface DEVICE=cpu \
     HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 TRANSFORMERS_OFFLINE=1
+LABEL dev.makhzan.pplx.revision=${REVISION} org.opencontainers.image.licenses=Apache-2.0 \
+      org.opencontainers.image.description="pplx-decider-flash-v1.3 CPU lean, perplexity-ai/pplx-decider-flash-v1.3@${REVISION}"
 EXPOSE 8000
 ENTRYPOINT ["python", "/opt/pplx/serve.py", "--host", "0.0.0.0", "--port", "8000"]
 CMD ["--model", "perplexity-ai/pplx-decider-flash-v1.3", "--revision", "d06fb3f2d97e0a52325a0d463c450cf0338f44fe"]
