@@ -581,7 +581,11 @@ makhzan draws its own icons for a department's groups and categories
 
 Icons are keyed by category ref, `domain:slug`, never a bare slug (slugs repeat across
 departments); a group is a top-level category, so it is keyed by its ref too. Electronics
-is drawn in full: its 8 groups and 34 categories. The other departments are not drawn
+is drawn in full: its 8 groups and 34 categories, plus Cameras & Imaging and Educational &
+Robot Kits, and Photography's 2 groups and 4 categories, all drawn ahead of the taxonomy
+that adds them (an icon for a ref no taxonomy has yet is allowed; a category without an
+icon is not). Photography's categories have no schematic symbols, so they are drawn as the
+things themselves (a softbox, a tripod, a bag, a lens). The other departments are not drawn
 yet (automotive, chemicals, cleaning, electrical, garden, machinery, materials, piping,
 rigging, safety, seals & bearings, security, timber, tools, welding): their category
 chips and pills carry no icon, and their group tiles show the department's line icon

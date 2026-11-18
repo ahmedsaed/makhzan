@@ -3,7 +3,7 @@
  * and Electronics, the first department with a drawn set, has one for every
  * group and category in its taxonomy.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -80,7 +80,7 @@ function pathPoints(d: string): [number, number][] {
 
 describe("S7 · every category icon follows the style guide", () => {
   it("has icons to check", () => {
-    expect(ENTRIES.length).toBeGreaterThanOrEqual(42);
+    expect(ENTRIES.length).toBeGreaterThanOrEqual(50);
   });
 
   it.each(ENTRIES)("%s: one 1.5 stroke, round, unfilled, currentColor, on 24 × 24", (ref) => {
@@ -131,6 +131,12 @@ describe("S7 · every category icon follows the style guide", () => {
           true,
         );
       }
+      for (const ellipse of svg.querySelectorAll("ellipse")) {
+        const [cx, cy, rx, ry] = ["cx", "cy", "rx", "ry"].map((a) =>
+          Number(ellipse.getAttribute(a)),
+        );
+        expect(inside(LIVE, cx - rx, cy - ry, cx + rx, cy + ry), `${ref}: ellipse`).toBe(true);
+      }
       for (const path of svg.querySelectorAll("path")) {
         for (const [x, y] of pathPoints(path.getAttribute("d") ?? "")) {
           expect(inside(reach, x, y), `${ref}: point ${x.toFixed(2)},${y.toFixed(2)}`).toBe(true);
@@ -140,12 +146,16 @@ describe("S7 · every category icon follows the style guide", () => {
   );
 });
 
-/** (slug, parent slug or null) for every category in the Python taxonomy. */
-function electronicsTaxonomy(): [string, string | null][] {
-  const source = readFileSync(
-    join(__dirname, "../../../packages/schemas/makhzan_schemas/domains/electronics.py"),
-    "utf8",
-  );
+const DOMAINS = join(__dirname, "../../../packages/schemas/makhzan_schemas/domains");
+
+/**
+ * (slug, parent slug or null) for every category in a department's Python
+ * taxonomy, or null when the department's profile is not in this checkout.
+ */
+function taxonomyOf(domain: string): [string, string | null][] | null {
+  const path = join(DOMAINS, `${domain.replace(/-/g, "_")}.py`);
+  if (!existsSync(path)) return null;
+  const source = readFileSync(path, "utf8");
   const block = source.slice(
     source.indexOf("TAXONOMY"),
     source.indexOf("]\n", source.indexOf("TAXONOMY")),
@@ -155,27 +165,45 @@ function electronicsTaxonomy(): [string, string | null][] {
   ].map((m) => [m[1], m[3] ?? null]);
 }
 
-describe("S7 · Electronics has an icon for every group and category", () => {
-  const taxonomy = electronicsTaxonomy();
-
-  it("reads the taxonomy", () => {
+describe("S7 · a drawn department has an icon for every group and category", () => {
+  it("reads Electronics' taxonomy", () => {
+    const taxonomy = taxonomyOf("electronics")!;
     expect(taxonomy.length).toBeGreaterThanOrEqual(40);
     expect(taxonomy.filter(([, parent]) => parent === null)).toHaveLength(8);
   });
 
-  it.each(taxonomy)("electronics:%s is drawn", (slug, parent) => {
-    const glyph = categoryGlyph(`electronics:${slug}`);
-    expect(glyph, `draw electronics:${slug} in components/category-icons.tsx`).not.toBeNull();
+  // Every department with any icon drawn, checked against its taxonomy when
+  // its profile is in this checkout. A department drawn ahead of its taxonomy
+  // (photography, before feat/taxonomy-gaps merges) is checked once it lands.
+  const rows = [...DEPARTMENTS_WITH_ICONS].flatMap((domain) =>
+    (taxonomyOf(domain) ?? []).map(([slug, parent]) => [`${domain}:${slug}`, parent] as const),
+  );
+
+  it.each(rows)("%s is drawn", (ref, parent) => {
+    const glyph = categoryGlyph(ref);
+    expect(glyph, `draw ${ref} in components/category-icons.tsx`).not.toBeNull();
     // Groups are objects, categories symbols: the two families must not swap.
     expect(glyph?.kind).toBe(parent === null ? "group" : "category");
   });
 
-  it("draws nothing the taxonomy no longer has", () => {
-    const refs = new Set(taxonomy.map(([slug]) => `electronics:${slug}`));
-    const stale = Object.keys(CATEGORY_ICONS).filter(
-      (ref) => ref.startsWith("electronics:") && !refs.has(ref),
-    );
-    expect(stale).toEqual([]);
+  it("allows icons drawn ahead of the taxonomy, and says which they are", () => {
+    // An icon for a ref the taxonomy does not have yet is not an error: the
+    // icons for feat/taxonomy-gaps' categories are drawn before it merges.
+    // Only a category without an icon is (above).
+    const known = new Set<string>(rows.map(([ref]) => ref));
+    const ahead = Object.keys(CATEGORY_ICONS).filter((ref) => !known.has(ref));
+    const expected = [
+      "electronics:cameras",
+      "electronics:kits",
+      "photography:lighting",
+      "photography:camera-gear",
+      "photography:photo-lights",
+      "photography:tripods",
+      "photography:camera-bags",
+      "photography:camera-accessories",
+    ];
+    // Once a taxonomy lands, its refs leave this list; nothing else may be in it.
+    for (const ref of ahead) expect(expected, ref).toContain(ref);
   });
 });
 
@@ -192,13 +220,13 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
   });
 
   it("knows which departments are drawn", () => {
-    expect([...DEPARTMENTS_WITH_ICONS]).toEqual(["electronics"]);
+    expect([...DEPARTMENTS_WITH_ICONS]).toEqual(["electronics", "photography"]);
     expect(hasCategoryIcons("electronics")).toBe(true);
     expect(hasCategoryIcons("seals-bearings")).toBe(false);
   });
 
   it("renders nothing for a category it has not drawn", () => {
-    expect(renderToStaticMarkup(<CategoryIcon iconRef="electronics:cameras" />)).toBe("");
+    expect(renderToStaticMarkup(<CategoryIcon iconRef="electronics:not-drawn" />)).toBe("");
   });
 
   it("gives an undrawn group tile its department's icon", () => {

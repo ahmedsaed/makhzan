@@ -29,6 +29,10 @@ import { departmentIcon } from "@/components/department-icon";
  * to a drawn department later (a new electronics leaf) shows a plain chip
  * until its icon is added here; tests/category-icons.test.tsx fails until
  * then, so it cannot be forgotten.
+ *
+ * Icons may run ahead of the taxonomy: electronics:cameras, electronics:kits
+ * and the photography department are drawn for feat/taxonomy-gaps before it
+ * merges. A ref nothing lists yet is simply never looked up.
  */
 
 export type GlyphKind = "group" | "category";
@@ -48,9 +52,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "group",
     body: (
       <>
-        <path d="M2 12h3.5M18.5 12H22" />
-        <path d="M5.5 9.5a2 2 0 0 1 2-2h1.5l1 1h4l1-1h1.5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H15l-1-1h-4l-1 1H7.5a2 2 0 0 1-2-2z" />
-        <path d="M9 7.5v9M12 8.5v7M15 7.5v9" />
+        <path d="M6.5 5.5v10.5a5.5 2 0 0 0 11 0V5.5" />
+        <ellipse cx="12" cy="5.5" rx="5.5" ry="2" />
+        <path d="M14.5 9v5.5M9.5 18v3.5M14.5 18v2" />
       </>
     ),
   },
@@ -333,6 +337,19 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
       </>
     ),
   },
+  "electronics:cameras": {
+    label: "Cameras & Imaging",
+    kind: "category",
+    body: (
+      <>
+        <rect x="4" y="3" width="16" height="14" rx="1.5" />
+        <circle cx="12" cy="10" r="4" />
+        <path d="M10.25 9.25a2 2 0 0 1 1.75-1.25" />
+        <path d="M6.75 5.75h0M17.25 5.75h0" />
+        <path d="M9.5 17v4.5h5V17" />
+      </>
+    ),
+  },
   "electronics:power-supplies": {
     label: "Power Supplies & Converters",
     kind: "category",
@@ -425,9 +442,9 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
     kind: "category",
     body: (
       <>
-        <path d="M9.5 2.5h5v4h-5z" />
-        <path d="M6.5 6.5h11v6h-11zM10.25 6.5v6M13.75 6.5v6" />
-        <path d="M8.5 12.5l2.5 6h2l2.5-6M12 18.5v3" />
+        <path d="M6.5 7.5h11a4.5 4.5 0 0 1 0 9h-11a4.5 4.5 0 0 1 0-9z" />
+        <circle cx="6.5" cy="12" r="2" />
+        <circle cx="17.5" cy="12" r="2" />
       </>
     ),
   },
@@ -489,6 +506,17 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
       </>
     ),
   },
+  "electronics:kits": {
+    label: "Educational & Robot Kits",
+    kind: "category",
+    body: (
+      <>
+        <rect x="5" y="8" width="14" height="11" rx="2" />
+        <path d="M12 8V5.5M12 3.25h0" />
+        <path d="M9.5 12.5h0M14.5 12.5h0M10 15.5h4M3 11.5v4M21 11.5v4" />
+      </>
+    ),
+  },
   "electronics:accessories": {
     label: "Accessories",
     kind: "category",
@@ -496,6 +524,73 @@ export const CATEGORY_ICONS: Readonly<Record<string, Glyph>> = {
       <>
         <path d="M8 10h8v8.5a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 8 18.5zM9.5 10V3.5h5V10M12 20v2" />
         <path d="M11 6h0M13 6h0" />
+      </>
+    ),
+  },
+  // Photography (feat/taxonomy-gaps): drawn ahead of the taxonomy reaching main.
+  // No schematic symbols here, so its categories are drawn as the things themselves.
+  "photography:lighting": {
+    label: "Lighting",
+    kind: "group",
+    body: (
+      <>
+        <path d="M9.5 18h5M10 21h4" />
+        <path d="M9.5 18c0-2-2.5-3-2.5-6a5 5 0 0 1 10 0c0 3-2.5 4-2.5 6" />
+        <path d="M12 2.5v1M4.5 6l.75.75M19.5 6l-.75.75M2.5 12h1M20.5 12h1" />
+      </>
+    ),
+  },
+  "photography:camera-gear": {
+    label: "Camera Gear",
+    kind: "group",
+    body: (
+      <>
+        <path d="M4.5 7h3l1.5-2.5h6L16.5 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z" />
+        <circle cx="12" cy="13" r="3.5" />
+        <path d="M18 10h0" />
+      </>
+    ),
+  },
+  "photography:photo-lights": {
+    label: "Photo & Video Lights",
+    kind: "category",
+    body: (
+      <>
+        <rect x="4" y="3" width="16" height="11" rx="1" />
+        <rect x="7.5" y="6" width="9" height="5" rx="0.5" />
+        <path d="M12 14v4M12 18l-3.5 3.5M12 18l3.5 3.5" />
+      </>
+    ),
+  },
+  "photography:tripods": {
+    label: "Tripods & Stands",
+    kind: "category",
+    body: (
+      <>
+        <rect x="8.5" y="2.5" width="7" height="3" rx="0.75" />
+        <path d="M12 5.5V10M12 10 5 21.5M12 10l7 11.5M12 10v11.5" />
+      </>
+    ),
+  },
+  "photography:camera-bags": {
+    label: "Camera Bags",
+    kind: "category",
+    body: (
+      <>
+        <rect x="3" y="8" width="18" height="12.5" rx="2" />
+        <path d="M8.5 8V6a1.5 1.5 0 0 1 1.5-1.5h4A1.5 1.5 0 0 1 15.5 6v2" />
+        <path d="M3 12.5h18M10.5 12.5v2.5h3v-2.5" />
+      </>
+    ),
+  },
+  "photography:camera-accessories": {
+    label: "Camera Accessories",
+    kind: "category",
+    body: (
+      <>
+        <path d="M3.5 8h11v8h-11z" />
+        <path d="M14.5 6h5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-5z" />
+        <path d="M7 8v8M10.5 8v8" />
       </>
     ),
   },
