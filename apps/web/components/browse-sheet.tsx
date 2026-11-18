@@ -79,7 +79,14 @@ export function BrowseSheet({
   const pill = useRef<HTMLAnchorElement>(null);
   const [shown, setShown] = useState(true);
   const drag = useRef<Drag | null>(null);
+  // close()'s fallback and a glide's finish: the timer that closes the sheet.
   const timer = useRef(0);
+  // A spring-back's tidy-up, apart from the above, so a spring never clears a close.
+  const springTimer = useRef(0);
+  // True while a glide or spring-back the code started is moving the sheet: the
+  // only time a press reads where the sheet is. Any other transform (the rise's
+  // animation, say) is not one to hold the sheet at.
+  const moving = useRef(false);
   // The closing animation's end listener, kept so every way out removes it:
   // left attached, it would close the next opening when its own rise ended.
   const onEnd = useRef<((event: AnimationEvent) => void) | null>(null);
@@ -91,6 +98,7 @@ export function BrowseSheet({
   const settle = useCallback(() => {
     const sheet = dialog.current;
     if (!sheet) return;
+    moving.current = false;
     sheet.style.removeProperty("transform");
     sheet.style.removeProperty("transition");
     sheet.style.removeProperty("--sheet-backdrop");
@@ -100,6 +108,7 @@ export function BrowseSheet({
   /** Forget a pending close: its timer, its end listener, a glide. */
   const forget = useCallback(() => {
     window.clearTimeout(timer.current);
+    window.clearTimeout(springTimer.current);
     gliding.current = false;
     if (onEnd.current) dialog.current?.removeEventListener("animationend", onEnd.current);
     onEnd.current = null;
@@ -127,6 +136,7 @@ export function BrowseSheet({
     if (reducedMotion()) return finish();
     forget(); // a spring-back's tidy-up timer, say
     settle();
+    drag.current = null; // a finger still down lets go into the close, not a swipe
     sheet.setAttribute("data-closing", "");
     const end = (event: AnimationEvent) => {
       // Only the sinking itself: not the rise, not a child's animation.
@@ -220,14 +230,30 @@ export function BrowseSheet({
     ) {
       return;
     }
-    // A finger on the sheet takes it from wherever it is: a glide or a
-    // spring-back in progress is cancelled (its timer too), and the sheet is
-    // held where it was, not snapped to the top.
+    // A finger on the sheet takes it from wherever a glide or a spring-back
+    // in progress has it: that motion is cancelled (its timer too), and the
+    // sheet, and its backdrop, are held where they were, not snapped to the
+    // top. Only those motions are read: during the rise the computed
+    // transform is the animation's, part-way up, and taking it as the
+    // finger's start would turn a tap into a swipe past the threshold. Any
+    // other press starts from rest and leaves the rise to finish.
+    const rising = sheet
+      .getAnimations()
+      .some((a) => (a as CSSAnimation).animationName === "sheet-in" && a.playState === "running");
+    const from =
+      moving.current && !rising
+        ? Math.max(0, new DOMMatrix(getComputedStyle(sheet).transform).m42)
+        : 0;
     forget();
-    const from = Math.max(0, new DOMMatrix(getComputedStyle(sheet).transform).m42);
+    moving.current = false;
     if (from > 0) {
       sheet.style.transition = "none";
       sheet.style.transform = `translateY(${from}px)`;
+      sheet.style.setProperty("--sheet-backdrop-ms", "0ms");
+      sheet.style.setProperty(
+        "--sheet-backdrop",
+        String(Math.max(0, 1 - from / sheet.offsetHeight)),
+      );
     }
     drag.current = {
       y0: event.clientY,
@@ -243,7 +269,7 @@ export function BrowseSheet({
   const onPointerMove = (event: React.PointerEvent) => {
     const d = drag.current;
     const sheet = dialog.current;
-    if (!d || !sheet) return;
+    if (!d || !sheet || sheet.hasAttribute("data-closing")) return;
     const raw = event.clientY - d.y0;
     // Captured once it is plainly a drag, so a release outside the handle (a
     // mouse dragged off it) still ends the gesture here; not on the press,
@@ -279,7 +305,9 @@ export function BrowseSheet({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (!d || !sheet) return;
+    // Closing already (Escape, say, under a finger still down): the close
+    // owns the sheet and its fallback timer.
+    if (!d || !sheet || sheet.hasAttribute("data-closing")) return;
     // A tap that stopped a glide part-way: decide from where it was held.
     if (!d.captured && d.from === 0) return;
     if (event.timeStamp - d.t > 80) d.vy = 0; // held still before letting go
@@ -296,6 +324,7 @@ export function BrowseSheet({
       if (ms === 0) finish();
       else {
         window.clearTimeout(timer.current);
+        moving.current = true;
         gliding.current = true;
         timer.current = window.setTimeout(finish, ms);
       }
@@ -307,12 +336,14 @@ export function BrowseSheet({
       sheet.style.setProperty("--sheet-backdrop-ms", reduce ? "0ms" : "200ms");
       sheet.style.transform = "translateY(0px)";
       sheet.style.removeProperty("--sheet-backdrop");
-      window.clearTimeout(timer.current);
+      window.clearTimeout(springTimer.current);
       if (reduce) settle();
-      else
-        timer.current = window.setTimeout(() => {
+      else {
+        moving.current = true;
+        springTimer.current = window.setTimeout(() => {
           if (!drag.current) settle();
         }, SPRING_MS + 40);
+      }
     }
   };
 
