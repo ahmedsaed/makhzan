@@ -38,7 +38,11 @@ Every supplier maps its own categories through a crosswalk.
 
 tools · seals-bearings · electronics · electrical · piping · chemicals · timber ·
 machinery · welding · safety · garden · materials · cleaning · rigging ·
-security · automotive
+security · automotive · photography
+
+Photography (lights, tripods, bags, camera accessories) was added 2026-11-18,
+with `electronics:cameras` and `electronics:kits`, for listings that had no
+honest slot. It is filled by crosswalk only (see CLAUDE.md, "Domains").
 
 The site calls them **departments** (`/departments/{department}`).
 
@@ -183,7 +187,7 @@ Remaining: an admin path for adding a source other than editing the private
 the default profile because Meilisearch settings are per index, so a vertical
 needing very different ranking will force a compromise order or a second index.
 Identifiers are read for electronics, tools, chemicals and seals-bearings
-(`makhzan_schemas/identifiers.py`, with a family guard); the other 12 domains
+(`makhzan_schemas/identifiers.py`, with a family guard); the other 13 domains
 have no rules yet — their codes are family-level or sizes and each is one shop
 today — and group less.
 
