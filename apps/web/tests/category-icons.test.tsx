@@ -269,6 +269,7 @@ describe("the registry is keyed by ref, and falls back cleanly", () => {
         "rigging",
         "safety",
         "seals-bearings",
+        "security",
         "timber",
         "tools",
         "welding",

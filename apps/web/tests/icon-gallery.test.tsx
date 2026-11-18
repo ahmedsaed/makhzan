@@ -29,6 +29,7 @@ const SECTIONS: [string, string][] = [
   ["timber", "Timber"],
   ["piping", "Piping"],
   ["rigging", "Rigging"],
+  ["security", "Security"],
 ];
 
 const TILES = [
@@ -166,6 +167,13 @@ const WEAK: Record<string, string> = {
   "rigging:trolleys": "A trolley under a beam, with a ring.",
   "rigging:rack-jacks": "A toothed column with a lever.",
   "rigging:pulleys-blocks": "A block with a sheave.",
+  "security:access-control": "A keypad; card readers and locks are not shown.",
+  "security:door-access": "A door with a knob; the electronics are not shown.",
+  "security:intercoms": "A door station with a camera and speaker.",
+  "security:biometrics": "Fingerprint arcs; hard to read small.",
+  "security:recorders": "A recorder box; close to a router or a set-top box.",
+  "security:remote-controls": "A fob with signal arcs.",
+  "security:cash-handling": "A banknote; the group holds counters and detectors too.",
 };
 
 function cell(ref: string, label: string): string {
