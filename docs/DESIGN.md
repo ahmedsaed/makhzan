@@ -389,9 +389,8 @@ drawn yet the categories are plain and the groups keep the department's line ico
 
 On a phone (below `md`) there is no category row at all. A floating pill at the bottom
 centre, clear of the home bar, names the place, "Resistors · Browse" (or the group or
-department), and opens the same tree as a bottom sheet (`components/browse-sheet.tsx`):
-the current group expanded, the current category outlined and bold, 44px rows. The sheet
-is a modal `<dialog>` named by its heading, so focus stays in it while it is open; it
+department), and opens the same tree as a bottom sheet (`components/browse-sheet.tsx`),
+the current group expanded. The sheet is a modal `<dialog>` named by its heading, so focus stays in it while it is open; it
 locks the page's scroll, closes on a swipe down, a tap outside it, Escape, Close or the
 choice of a link, and then puts focus on the pill itself, whatever had it before (Safari
 and Firefox on macOS do not focus a link on click, so the dialog's own restore would land on
@@ -401,6 +400,34 @@ and comes back on any scroll up or on keyboard focus; under `prefers-reduced-mot
 just shows and hides. The results end with room for it, so it never covers the last card.
 It is outlined, with no shadow. With JavaScript off it is a link to the page's own tree,
 which then shows on a phone too.
+
+**The sheet's look and motion** (the owner's sheet-motion mockup, option A with the funnel,
+18 November 2026; the desktop sidebar keeps its plain rows and chevrons). Every row is a
+button on the `tint` token: 44px tall, 8px corners, its icon, name and count (counts in
+`ink-2`, which keeps 4.5:1 on the tint where `ink-3` does not). A group is two such
+buttons in one row, 6px apart with no divider: its name, which leads to the group, and a
+44px control with a funnel icon (the category icons' style: 24 grid, 1.5 stroke, round
+caps, no fill), named "Subcategories of {group}", with `aria-expanded` and
+`aria-controls`. While the group is open the control fills solid in `chip-on` (150ms).
+Its categories are the same buttons, indented under it, and "All of {department}" at the
+top is one too. A group the tree collapses to one link (no stocked categories, or exactly
+one equal to the group) keeps the same two buttons and widths: its name leads where it
+always did, and the funnel is a disabled button (dimmed: `ink-3` on a half-strength tint,
+no pointer, out of the tab order, no `aria-expanded`), named "No subcategories in
+{group}". The place you are is a 2px `chip-on` outline, never a fill, on whichever button
+it is; on a group's own page, its name button.
+
+The sheet rises over 250ms (`cubic-bezier(.2,.8,.2,1)`) as its backdrop fades in, and sinks
+over 200ms (`cubic-bezier(.4,0,1,1)`) before the dialog closes; Escape, a tap outside, Close
+and a link all close it that way. A swipe on the handle moves it with the finger and thins
+the backdrop; let go past 80px or a quarter of the sheet (at most half), or with a flick
+faster than 0.5px/ms, and it glides out at the finger's speed in 120 to 240ms
+(`cubic-bezier(.25,.6,.4,1)`); otherwise it springs back in 380ms with a slight overshoot
+(`cubic-bezier(.3,1.35,.5,1)`). A group opens by `grid-template-rows` from `0fr` to `1fr` in
+250ms, nothing measured; its categories stay in the page while folded (server rendered,
+crawlable) but `inert`. Under `prefers-reduced-motion` all of it is instant, the backdrop
+included (`*::backdrop` is in the global rule), and closing never waits for an animation;
+the drag still follows the finger. Widening past `md` closes it at once.
 
 All departments (`/departments`) is a directory, full width, largest department
 first. A department with 10% or more of all products (three today) is a full-width block listing every
@@ -536,6 +563,7 @@ Burnt orange for actions. Hairline borders, 10–12px corners, no shadows.
 | `link` | `#C2410C` | `#FB923C` |
 | `badge` / `badge-ink` ("3 shops") | `#FDECE3` / `#9A3412` | `#3A2416` / `#FDBA8C` |
 | `chip-on` / `chip-on-ink` | `#15171C` / `#FFFFFF` | `#ECECEA` / `#121316` |
+| `tint` (the phone sheet's buttons) | `#EFEFEA` | `#25282E` |
 | `warn` / `warn-line` / `warn-ink` | `#FEF9C3` / `#E5D36A` / `#574500` | `#2A2710` / `#57501C` / `#F3E08A` |
 | `age-muted` (15–45 days) | `#6E5A00` | `#D9C46C` |
 | `photo-frame` | `#FFFFFF` | `#FFFFFF` |
