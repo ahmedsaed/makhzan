@@ -50,8 +50,13 @@ deps:  ## Install Python and web dependencies
 	cd apps/api && poetry install
 	cd apps/web && pnpm install
 
-migrate:  ## Apply database migrations
+# The search index's settings too, as the deploy's migrate step does: the API
+# names the attributes it searches, and Meilisearch rejects a query naming one
+# an older index does not list. A changed set also queues a reindex for the
+# worker (`make worker` runs it).
+migrate:  ## Apply database migrations and the search index's settings
 	cd packages/schemas && DATABASE_URL="$(DB_URL)" poetry run alembic upgrade head
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.ensure_index
 
 test: test-ingestion test-api test-worker  ## Run every Python test suite
 

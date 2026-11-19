@@ -95,6 +95,9 @@ services:
         condition: service_healthy
       search:
         condition: service_started
+      # ensure_index queues a reindex when the searchable attributes changed.
+      redis:
+        condition: service_started
     restart: "no"
 
   api:

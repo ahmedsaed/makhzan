@@ -22,7 +22,7 @@ from makhzan_schemas.search import (
     build_product_document,
 )
 
-from worker.indexer import reindex_all
+from worker.indexer import TASK_TIMEOUT_MS, ensure_index, index_documents, reindex_all
 
 
 class _Task:
@@ -33,6 +33,9 @@ class FakeIndex:
     def __init__(self) -> None:
         self.documents: list[dict] = []
         self.settings: dict = {}
+
+    def get_searchable_attributes(self) -> list[str]:
+        return self.settings.get("searchableAttributes", ["*"])
 
     def update_settings(self, settings: dict) -> _Task:
         self.settings = settings
@@ -54,6 +57,8 @@ class FakeClient:
         self.indexes: dict[str, FakeIndex] = {}
         #: The live index's documents at the moment of each swap request.
         self.live_at_swap: list[int] = []
+        #: The timeout of every wait for a task.
+        self.wait_timeouts: list[int] = []
 
     @property
     def products(self) -> FakeIndex:
@@ -74,8 +79,8 @@ class FakeClient:
             self.indexes[a], self.indexes[b] = self.indexes[b], self.indexes[a]
         return _Task()
 
-    def wait_for_task(self, uid: int) -> None:
-        pass
+    def wait_for_task(self, uid: int, timeout_in_ms: int = 5000) -> None:
+        self.wait_timeouts.append(timeout_in_ms)
 
     def index(self, name: str) -> FakeIndex:
         return self.indexes.setdefault(name, FakeIndex())
@@ -496,3 +501,31 @@ async def test_the_index_searches_the_member_fields_in_order():
     assert client.products.settings["searchableAttributes"] == SEARCHABLE_ATTRIBUTES
     for attr in MEMBER_ATTRIBUTES:
         assert attr in SEARCHABLE_ATTRIBUTES
+
+
+async def test_every_wait_on_meilisearch_is_generous():
+    """The client's default wait is 5 s, and changing searchableAttributes
+    re-tokenises every document: on the live catalogue a timeout there would
+    fail the deploy's migrate step."""
+    shop = _supplier("shop-a")
+    product = Product(id=uuid.uuid4(), group_key="single:a", title_en="a")
+    await _seed(shop, product, _listing(shop, product))
+    client = FakeClient()
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+    index_documents(client, [{"id": "x"}], wait=True)
+
+    assert TASK_TIMEOUT_MS >= 300_000
+    assert client.wait_timeouts
+    assert set(client.wait_timeouts) == {TASK_TIMEOUT_MS}
+
+
+def test_ensure_index_says_whether_the_searchable_attributes_changed():
+    """So the deploy knows the indexed documents lack what the new attributes
+    search, and queues a reindex (worker.ensure_index)."""
+    client = FakeClient()
+    assert ensure_index(client) is True, "a new index has none of ours"
+    assert ensure_index(client) is False, "applying the same settings again changes nothing"
+    client.products.settings["searchableAttributes"] = ["part_number", "title_en", "brand"]
+    assert ensure_index(client) is True, "an index from before the member arrays"
+    assert client.wait_timeouts and set(client.wait_timeouts) == {TASK_TIMEOUT_MS}
