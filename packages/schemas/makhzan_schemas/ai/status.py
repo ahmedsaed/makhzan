@@ -358,10 +358,17 @@ async def _audit(session: AsyncSession, judges: dict) -> dict:
 
 
 def _age(iso: str | None, now: datetime) -> str:
+    """How long before `now` a moment was: "5h", "2d 3h".
+
+    `now` is the status transaction's `now()`, read once at its start; a
+    worker that calls the broker while status is still reading stamps
+    `last_seen_at` a moment later. Floor division made those few seconds
+    "-1h", so a moment after `now` is "0h".
+    """
     if not iso:
         return "-"
-    delta = now - datetime.fromisoformat(iso)
-    hours = int(delta.total_seconds() // 3600)
+    seconds = max(0.0, (now - datetime.fromisoformat(iso)).total_seconds())
+    hours = int(seconds // 3600)
     return f"{hours // 24}d {hours % 24}h" if hours >= 24 else f"{hours}h"
 
 

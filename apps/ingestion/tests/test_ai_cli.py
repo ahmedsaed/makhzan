@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -198,3 +199,49 @@ async def test_a_flag_is_dismissed_with_a_note_and_its_resolved_time(capsys):
     assert (row.status, row.resolved_by, row.note) == ("dismissed", "tester", "worker updated")
     assert row.resolved_at is not None
     assert await ai.run(["flags", "dismiss", str(flag.id), "--note", "again"]) == 1
+
+
+def _status_fixture(**decisions) -> dict:
+    """The smallest `collect()` result `format_text` prints."""
+    return {
+        "at": "2026-11-19T12:00:00+00:00",
+        "mode": "live",
+        "policy": {"name": "p1", "thresholds": {"kev": 0.5}},
+        "judges": {},
+        "queue": {},
+        "throughput": {},
+        "nights": {},
+        "workers": [],
+        "flags": {},
+        "decisions": decisions,
+        "rescore_due": {"due": 0, "open_job": 0, "dead_job": 0, "no_job": 0},
+        "audit": {"scored": 0, "below_0.8": 0, "below_0.05": 0},
+    }
+
+
+def test_a_worker_seen_after_the_status_snapshot_is_not_seen_in_the_future():
+    """`now` is the status transaction's start; a worker that calls the broker
+    while status reads stamps `last_seen_at` a moment later. That once printed
+    "last seen -1h ago"."""
+    from makhzan_schemas.ai.status import _age, format_text
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+    assert _age((now + timedelta(seconds=3)).isoformat(), now) == "0h"
+    assert _age((now - timedelta(minutes=10)).isoformat(), now) == "0h"
+    assert _age((now - timedelta(hours=5, minutes=1)).isoformat(), now) == "5h"
+    assert _age((now - timedelta(days=2, hours=3)).isoformat(), now) == "2d 3h"
+    data = _status_fixture()
+    data["workers"] = [
+        {
+            "name": "cpu-1",
+            "models": ["kev"],
+            "last_seen_at": "2026-11-19T12:00:02.5+00:00",
+            "revoked": False,
+            "device": "cpu",
+            "dtype": None,
+            "threads": None,
+            "window": None,
+        }
+    ]
+    out = format_text(data)
+    assert "last seen 0h ago" in out and "-1h" not in out
