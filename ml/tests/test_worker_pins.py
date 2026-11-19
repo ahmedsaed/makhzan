@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import math
+import re
+from pathlib import Path
 
 import pytest
-from makhzan_ml.worker import judges, run
+from makhzan_ml.worker import judges, pins, run
 from makhzan_ml.worker.fake_broker import canonical_sha256
 from makhzan_ml.worker.pins import PINS
 from makhzan_schemas.ai import pipelines, policy, prompt
@@ -20,6 +22,31 @@ def test_pins_are_the_policy_models():
         assert pin.model_version == model.model_version
         assert pin.temperature == model.scoring["temperature"]
     assert PINS["kev"].code == policy.KEV_CODE
+
+
+ML = Path(__file__).resolve().parent.parent
+
+
+def _arg(dockerfile: str, name: str) -> str:
+    found = re.findall(rf"^ARG {name}=(\S+)$", (ML / dockerfile).read_text(), re.M)
+    assert len(found) == 1, f"{dockerfile}: ARG {name} appears {len(found)} times"
+    return found[0]
+
+
+@pytest.mark.parametrize("dockerfile", ["kev/Dockerfile", "kev/Dockerfile.cpu-lean"])
+def test_the_kev_images_build_the_pinned_kev_code(dockerfile):
+    # The image records this ARG as MAKHZAN_KEV_COMMIT, and the worker refuses a Kev that
+    # differs from pins.KEV_CODE: a bump in one place alone builds an image that never scores.
+    assert _arg(dockerfile, "KEV_COMMIT") == pins.KEV_CODE
+
+
+def test_the_lean_images_serve_the_pinned_revisions():
+    kev = (ML / "kev/Dockerfile.cpu-lean").read_text()
+    assert _arg("kev/Dockerfile.cpu-lean", "KEV_REVISION") == pins.KEV_REVISION
+    assert f"jaredpalmer/kev-4b@{pins.KEV_REVISION}" in kev  # the CMD, which cannot use the ARG
+    pplx = (ML / "pplx/Dockerfile.cpu-lean").read_text()
+    assert _arg("pplx/Dockerfile.cpu-lean", "REVISION") == pins.PPLX_REVISION
+    assert f'"--revision", "{pins.PPLX_REVISION}"' in pplx
 
 
 def test_every_stage_model_can_be_served():

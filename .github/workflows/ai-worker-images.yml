@@ -1,0 +1,52 @@
+name: AI worker images
+
+# The CPU AI-matching workers (docs/ai/worker.md, "Images"): each is its lean model image plus
+# the worker layer, built as one chain by ml/docker-bake.hcl and smoke-tested without weights;
+# on main, the very build that was tested is pushed to GHCR by digest. The home server pulls
+# them by digest. No model weights go into any image, and the GPU images (~26 GB) stay local
+# builds. The steps are in ai-worker-image-build.yml; this file decides who may push.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ml/**"
+      - ".github/workflows/ai-worker-images.yml"
+      - ".github/workflows/ai-worker-image-build.yml"
+  pull_request:
+    paths:
+      - "ml/**"
+      - ".github/workflows/ai-worker-images.yml"
+      - ".github/workflows/ai-worker-image-build.yml"
+  workflow_dispatch:
+
+# A pull request's run gives way to its next push. A run on main is never cancelled: it could
+# be cut between the push and the tags, leaving an untagged image and no digest in a summary.
+concurrency:
+  group: ai-worker-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  # Pull requests, and manual runs from any other branch: build and smoke-test, never push, and
+  # never hold packages: write.
+  check:
+    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ai-worker-image-build.yml
+    with:
+      push: false
+
+  # main only: build, smoke-test, then push that same build. One job, not build then push: the
+  # digest pushed must be the image tested, and handing a 2.6 GB image between jobs would mean
+  # an artifact and a re-push that could change it.
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ai-worker-image-build.yml
+    with:
+      push: true

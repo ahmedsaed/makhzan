@@ -282,10 +282,9 @@ def _load_kev(rt: Runtime, pin: Pin) -> Judge:
     os.environ["KEV_TEMPERATURE"] = repr(pin.temperature)
     os.environ["KEV_CUDA_GRAPHS"] = "0"
     os.environ["KEV_DTYPE"] = rt.dtype
-    # The Kev code commit, when the image records it. The base images do not yet (their
-    # KEV_COMMIT is a build ARG only), so today this is "unrecorded" and the check is the
-    # image's pinned tarball checksum alone; set MAKHZAN_KEV_COMMIT at build time from a
-    # base that records it, and a mismatch is refused here.
+    # The Kev code commit the image records: the Kev base images set MAKHZAN_KEV_COMMIT
+    # beside the source they built from (ml/kev/Dockerfile*), whose tarball checksum pins it.
+    # A mismatch is refused here; a base image built before it recorded one only logs it.
     code = os.environ.get("MAKHZAN_KEV_COMMIT") or None
     if code is None:
         log.warning("kev: the image does not record its Kev code commit; not checked")

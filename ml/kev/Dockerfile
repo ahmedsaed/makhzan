@@ -36,6 +36,9 @@ RUN tar -xzf /tmp/kev.tar.gz --strip-components=1 -C /opt/kev && rm /tmp/kev.tar
 RUN useradd --uid 1000 --create-home kev
 USER kev
 ENV HOME=/home/kev HF_HOME=/home/kev/.cache/huggingface
+# The Kev code commit this image holds, for the worker's pin check (makhzan_ml/worker/judges.py).
+ENV MAKHZAN_KEV_COMMIT=${KEV_COMMIT}
+LABEL dev.makhzan.kev.commit=${KEV_COMMIT}
 EXPOSE 8000
 ENTRYPOINT ["python", "-m", "kev.serve", "--host", "0.0.0.0", "--port", "8000"]
 CMD ["--run", "jaredpalmer/kev-4b"]
