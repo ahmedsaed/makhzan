@@ -2,9 +2,9 @@ name: AI worker images
 
 # The CPU AI-matching workers (docs/ai/worker.md, "Images"): each is its lean model image plus
 # the worker layer, built as one chain by ml/docker-bake.hcl and smoke-tested without weights;
-# on main, the very build that was tested is pushed to GHCR by digest. The home server pulls
-# them by digest. No model weights go into any image, and the GPU images (~26 GB) stay local
-# builds. The steps are in ai-worker-image-build.yml; this file decides who may push.
+# on main, the very build that was tested is pushed to GHCR by digest. The home server runs
+# :latest, which only ever points at a tested digest, and records the digest it resolved to.
+# No model weights go into any image, and the GPU images (~26 GB) stay local builds. The steps are in ai-worker-image-build.yml; this file decides who may push.
 
 on:
   push:

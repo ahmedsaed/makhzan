@@ -8,12 +8,12 @@ name: AI worker image build
 #      build. The push happens here, before the checks;
 #   2. the smoke test in the loaded copy (no weights, no network) and a size scan of its files;
 #   3. when pushing and both passed: the registry's image checked against the one tested, the
-#      sha- tags put on that digest, and only then the digest written to the summary.
+#      sha- tags and latest put on that digest, and only then the digest written to the summary.
 #
 # Trade-off, accepted (docs/ai/worker.md, "Images"): a run on main that fails a check leaves its
 # image in GHCR, untagged and in no summary. Nothing deletes it. Each build context is an
-# allow-list that never holds weights, and the server only runs a digest copied from a
-# successful run's summary. Deleting it was left out. It is not known that GITHUB_TOKEN may
+# allow-list that never holds weights, and the server only runs latest, which only ever points
+# at a tested digest, and records the digest it resolved to. Deleting it was left out. It is not known that GITHUB_TOKEN may
 # delete a user-owned package's versions, and the index's platform manifest is a version shared
 # with any earlier build of the same content, so a deletion could break an image in use.
 
@@ -77,10 +77,13 @@ jobs:
           images: ${{ steps.prep.outputs.repo }}
           # The labels go into the bake (as target <image>-meta in ml/docker-bake.hcl); the tags
           # do not: the registry gets them only after the smoke test, on the tested digest.
+          # latest is one of them, on the default branch only, so it is attached by the same
+          # post-check step as the sha- tags and can only point at a digest that passed.
           bake-target: ${{ matrix.image }}-meta
           tags: |
             type=sha,format=long
             type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
 
       # The bake's --set lines. Every run reads the GHA cache; only main writes it, so pull
       # requests cannot evict main's layers. Every run loads the image as $LOCAL; main also
@@ -186,7 +189,7 @@ jobs:
             *) echo "the registry's image is not the one tested"; exit 1 ;; esac
           echo "DIGEST=$digest" >> "$GITHUB_ENV"
 
-      # The sha- tags go on the tested digest only now; imagetools copies the manifest as is.
+      # The sha- tags and latest go on the tested digest only now; imagetools copies the manifest as is.
       - name: Tag the tested digest
         if: inputs.push
         env:

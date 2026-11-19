@@ -401,13 +401,17 @@ The workers built on them, `kev-worker-cpu` and `pplx-worker-cpu`, are built by 
 named context. On `main` only, the one build is loaded on the runner and pushed by digest,
 untagged, in the same step, so before it is checked. The loaded copy is then smoke-tested
 without weights or network (`python -m makhzan_ml.worker.smoke`, plus a scan for any file over
-100 MB that is not a shared library). Only if both pass does the run tag that digest and
-print it in its summary. A run that fails leaves an untagged image in GHCR (docs/ai/worker.md,
+100 MB that is not a shared library). Only if both pass does the run tag that digest
+(`sha-<commit>` and, on `main`, `latest`) and print it in its summary. A run that fails leaves an untagged image in GHCR (docs/ai/worker.md,
 "Images").
-The home server pulls and runs by digest, with `MAKHZAN_IMAGE` set to it:
-`docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:...` (docs/ai/worker.md,
-"Images"). The same chain builds locally with
-`docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load`. The GPU images stay local
+The home server runs `:latest`, pulled before each run, and passes the resolved digest as
+`MAKHZAN_IMAGE`:
+`docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest`, then
+`docker image inspect -f '{{index .RepoDigests 0}}'` on the same name (after the pull:
+`RepoDigests` is empty for an image not pulled from a registry).
+A build whose pins changed is refused by the worker's `expect_version` check; rolling back
+means running an older `sha-<commit>` tag (docs/ai/worker.md, "Images"). The same chain builds
+locally with `docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load`. The GPU images stay local
 builds. No image holds weights. Kev's `LICENSE` ships with its source in `/opt/kev`, and the
 pplx-decider card's `LICENSE` and `NOTICE` (Apache-2.0, from the pinned revision,
 sha256-checked) are in `/opt/pplx`.
