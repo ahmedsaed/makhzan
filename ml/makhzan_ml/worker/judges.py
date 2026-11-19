@@ -431,3 +431,16 @@ def unload(judge: Judge, device: str) -> None:
         import torch
 
         torch.cuda.empty_cache()
+    release_freed_memory()
+
+
+def release_freed_memory() -> None:
+    """Ask glibc to hand freed heap pages back to the system (`malloc_trim(0)`), as the
+    ingestion worker does. Best effort: a worker that waits between windows does not rely
+    on it, since each window's session runs in a child process that exits (supervisor.py)."""
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass

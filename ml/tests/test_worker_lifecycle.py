@@ -1071,3 +1071,35 @@ def test_a_stop_during_the_load_scores_nothing(broker, sleeps):
     assert fake.loads == ["kev"] and fake.scored == []
     assert job.status == "queued" and job.attempts == 0
     assert fake.unloads == ["kev"]
+
+
+# --- what hello calls the image -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "env, want",
+    [
+        ({}, None),
+        ({"MAKHZAN_IMAGE": "ghcr.io/x/kev-worker-cpu@sha256:" + "a" * 64,
+          "MAKHZAN_IMAGE_REVISION": "b" * 40}, "ghcr.io/x/kev-worker-cpu@sha256:" + "a" * 64),
+        ({"MAKHZAN_IMAGE_REPO": "ghcr.io/x/kev-worker-cpu", "MAKHZAN_IMAGE_REVISION": "c" * 40},
+         "ghcr.io/x/kev-worker-cpu:sha-" + "c" * 40),
+        ({"MAKHZAN_IMAGE_REPO": "makhzan-ml/kev-worker-cpu", "MAKHZAN_IMAGE_REVISION": "local"},
+         "makhzan-ml/kev-worker-cpu:local"),
+        ({"MAKHZAN_IMAGE": " ", "MAKHZAN_IMAGE_REVISION": "local"}, "unnamed:local"),
+        ({"MAKHZAN_IMAGE_REPO": "makhzan-ml/kev-worker-cpu"}, None),
+    ],
+)  # fmt: skip
+def test_the_image_reported_at_hello(env, want):
+    assert run.image_reference(env) == want
+
+
+def test_hello_reports_the_image_and_outside_window(broker, sleeps):
+    worker, _, _ = make_worker(broker, sleeps)
+    worker.image = run.image_reference(
+        {"MAKHZAN_IMAGE_REPO": "ghcr.io/x/kev-worker-cpu", "MAKHZAN_IMAGE_REVISION": "d" * 40}
+    )
+    worker.run()
+    hello = broker.bodies("/hello")[0]
+    assert hello["image"] == "ghcr.io/x/kev-worker-cpu:sha-" + "d" * 40
+    assert hello["config"]["outside_window"] == "exit"

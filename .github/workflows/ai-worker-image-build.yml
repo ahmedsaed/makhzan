@@ -100,6 +100,10 @@ jobs:
             echo "$TARGET.cache-from=type=gha,scope=$TARGET"
             echo "$TARGET.tags="
             echo "$TARGET.output=type=docker,name=$LOCAL"
+            # The image names itself at hello as $REPO:sha-<commit> (run.image_reference), the
+            # tag the post-check step puts on this tested build; a container cannot see its digest.
+            echo "$TARGET.args.IMAGE_REPO=$REPO"
+            echo "$TARGET.args.REVISION=$GITHUB_SHA"
             if [ "$PUSH" = "true" ]; then
               echo "$BASE.cache-to=type=gha,mode=max,scope=$BASE"
               echo "$TARGET.cache-to=type=gha,mode=max,scope=$TARGET"
@@ -130,18 +134,21 @@ jobs:
           set: ${{ steps.plan.outputs.set }}
 
       # No weights and no network: CPU-only torch, no fla, the model's code and pins present,
-      # no weight-named file in the image, the entrypoint's --check, and a whole session against
-      # the fake broker with a fake judge (ml/makhzan_ml/worker/smoke.py). Run under the home
-      # server's container restrictions. Scoring parity needs the weights and stays the
+      # no weight-named file in the image, the entrypoint's --check, a whole session against
+      # the fake broker with a fake judge, the same through the supervisor's forked child, the
+      # broker proxy forwarding over loopback to its one target, and the commit the image
+      # records (ml/makhzan_ml/worker/smoke.py). Run under the home server's container
+      # restrictions (as root, so the weight scan can read every directory). Scoring parity needs the weights and stays the
       # supervised first run on the home server.
       - name: Smoke test (no weights, no network)
         env:
           MODEL: ${{ matrix.model }}
           LICENCE: ${{ matrix.licence }}
         run: |
-          docker run --rm --network none --read-only --tmpfs /tmp:size=256m \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --entrypoint python "$LOCAL" -m makhzan_ml.worker.smoke --model "$MODEL"
+          docker run --rm --network none --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
+            --cap-drop ALL --security-opt no-new-privileges --init \
+            --entrypoint python "$LOCAL" -m makhzan_ml.worker.smoke --model "$MODEL" \
+            --expect-revision "$GITHUB_SHA"
           # The upstream licence travels with the image.
           read -ra files <<<"$LICENCE"
           docker run --rm --network none --entrypoint sh "$LOCAL" -c \

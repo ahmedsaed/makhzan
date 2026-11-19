@@ -98,6 +98,25 @@ def request_sha256(payload: object) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def image_reference(env: dict[str, str] | None = None) -> str | None:
+    """What hello reports as `image` (the broker keeps it as given, in the session's hello).
+
+    `MAKHZAN_IMAGE` when set (a digest the host resolved, or a local build's id). Else what
+    the image says of itself, from the build: `MAKHZAN_IMAGE_REPO` and
+    `MAKHZAN_IMAGE_REVISION` (ml/worker.Dockerfile), the commit CI built it from, given as
+    `<repo>:sha-<commit>`, the tag CI puts on exactly that tested build; a local build
+    without a revision is `<repo>:local`. None when the image records neither."""
+    env = os.environ if env is None else env
+    explicit = (env.get("MAKHZAN_IMAGE") or "").strip()
+    if explicit:
+        return explicit
+    revision = (env.get("MAKHZAN_IMAGE_REVISION") or "").strip()
+    if not revision:
+        return None
+    repo = (env.get("MAKHZAN_IMAGE_REPO") or "").strip() or "unnamed"
+    return f"{repo}:local" if revision == "local" else f"{repo}:sha-{revision}"
+
+
 class Clock:
     """Time, injectable for tests. `now` is in the schedule's time zone."""
 

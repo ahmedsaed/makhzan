@@ -1,4 +1,5 @@
-"""`python -m makhzan_ml.worker --config PATH [--check]`: one worker session."""
+"""`python -m makhzan_ml.worker --config PATH [--check]`: one worker session, or, with
+`[schedule] outside_window = "wait"`, a supervisor that runs one per window, forever."""
 
 from __future__ import annotations
 
@@ -38,16 +39,26 @@ def main(argv: list[str] | None = None) -> int:
             )
             return run.EXIT_CONFIG
         logging.info(
-            "configuration ok: %s serves %s on %s %s, window %s, on_empty %s",
+            "configuration ok: %s serves %s on %s %s, window %s, on_empty %s, "
+            "outside_window %s, image %s",
             cfg.name,
             cfg.model,
             cfg.device,
             cfg.dtype,
             cfg.schedule.describe(),
             cfg.schedule.on_empty,
+            cfg.schedule.outside_window,
+            run.image_reference(),
         )
         return run.EXIT_OK
-    worker = run.Worker(cfg, image=os.environ.get("MAKHZAN_IMAGE"))
+    image = run.image_reference()
+    if cfg.schedule.outside_window == "wait":
+        from makhzan_ml.worker.supervisor import Supervisor
+
+        supervisor = Supervisor(cfg, image=image)
+        supervisor.install_signal_handlers()
+        return supervisor.run()
+    worker = run.Worker(cfg, image=image)
     worker.install_signal_handlers()
     return worker.run()
 

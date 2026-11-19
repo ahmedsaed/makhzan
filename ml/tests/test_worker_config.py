@@ -376,3 +376,63 @@ def test_a_schedule_object_without_a_zone_still_works():
 
 def test_always_needs_no_zone():
     assert parse(base(schedule={"windows": "always"})).schedule.timezone is None
+
+
+# --- waiting for the window, and the broker proxy ------------------------------------------
+
+
+def test_outside_window_defaults_to_exit_and_takes_wait():
+    assert parse(base()).schedule.outside_window == "exit"
+    cfg = parse(base(schedule={"outside_window": "wait", "windows": ["01:00-05:00"],
+                               "timezone": "Africa/Cairo"}))  # fmt: skip
+    assert cfg.schedule.outside_window == "wait"
+    assert cfg.hello_config()["outside_window"] == "wait"
+    refused(base(schedule={"outside_window": "sleep"}), "outside_window")
+    refused(base(schedule={"outside_window": True}), "outside_window")
+
+
+def test_opens_at_is_the_next_start_and_follows_touching_windows():
+    s = Schedule((Window.parse("01:00-03:00"), Window.parse("03:00-05:00")), CAIRO)
+
+    def at(day, h, m=0):
+        return datetime(2026, 11, day, h, m, tzinfo=CAIRO)
+
+    assert s.opens_at(at(17, 0, 10)) == at(17, 1)
+    assert s.opens_at(at(17, 12)) == at(18, 1)
+    assert s.opens_at(at(17, 1)) == at(17, 3)  # strictly after
+    # After the run (01:00 to 05:00 as one), the next opening is tomorrow's.
+    assert s.opens_at(s.closes_at(at(17, 2))) == at(18, 1)
+    assert Schedule(None).opens_at(at(17, 2)) is None
+    midnight = Schedule((Window.parse("22:00-02:00"),), CAIRO)
+    assert midnight.opens_at(midnight.closes_at(at(17, 23))) == at(18, 22)
+    assert s.zone_name() == "Africa/Cairo"
+
+
+@pytest.mark.parametrize(
+    "url, via_proxy, ok",
+    [
+        ("http://broker-proxy:8100/ai/v1", True, True),
+        ("http://broker-proxy:8100/ai/v1", False, False),  # off: names stay refused
+        ("http://brokerproxy/ai/v1", True, True),
+        ("http://broker.proxy:8100/ai/v1", True, False),  # a dotted name is a real host
+        ("http://broker.example.test/ai/v1", True, False),
+        ("http://1234:8100/ai/v1", True, False),  # read as an IPv4 address by the resolver
+        ("http://0x7f000001:8100/ai/v1", True, False),  # likewise, 127.0.0.1
+        ("http://-proxy:8100/ai/v1", True, False),
+        ("http://192.0.2.5/ai/v1", True, False),  # addresses keep their own rule
+        ("http://100.64.0.1:8080/ai/v1", True, True),
+        ("https://broker.example.test/ai/v1", True, True),
+    ],
+)
+def test_a_compose_service_name_needs_broker_via_proxy(url, via_proxy, ok):
+    data = base(worker={"broker_url": url, "broker_via_proxy": via_proxy})
+    if ok:
+        assert parse(data).broker_via_proxy is via_proxy
+    else:
+        refused(data, "broker_url")
+
+
+def test_broker_via_proxy_is_a_boolean_and_says_how_to_allow_a_name():
+    refused(base(worker={"broker_via_proxy": "yes"}), "broker_via_proxy")
+    refused(base(worker={"broker_url": "http://broker-proxy:8100/ai/v1"}),
+            "needs broker_via_proxy = true")  # fmt: skip

@@ -12,6 +12,12 @@
 # they are mounted from the host at run time.
 # The GPU images stay local builds (docs/ai/worker.md, "Images").
 
+# The commit the worker layer records (MAKHZAN_IMAGE_REVISION, reported at hello). CI sets it
+# to the commit it builds (REVISION=$GITHUB_SHA in the bake's environment); "local" otherwise.
+variable "REVISION" {
+  default = "local"
+}
+
 group "default" {
   targets = ["kev-worker-cpu", "pplx-worker-cpu"]
 }
@@ -52,7 +58,8 @@ target "_worker" {
   dockerfile = "worker.Dockerfile"
   # FROM ${BASE}: "base" resolves to the named context each worker sets, never a registry.
   args = {
-    BASE = "base"
+    BASE     = "base"
+    REVISION = REVISION
   }
 }
 
@@ -60,6 +67,10 @@ target "kev-worker-cpu" {
   inherits = ["_worker", "kev-worker-cpu-meta"]
   contexts = {
     base = "target:kev-cpu-lean"
+  }
+  # The repository the image names itself by at hello; CI sets the GHCR one (--set).
+  args = {
+    IMAGE_REPO = "makhzan-ml/kev-worker-cpu"
   }
   labels = {
     "org.opencontainers.image.title"       = "makhzan kev-worker-cpu"
@@ -72,6 +83,9 @@ target "pplx-worker-cpu" {
   inherits = ["_worker", "pplx-worker-cpu-meta"]
   contexts = {
     base = "target:pplx-cpu-lean"
+  }
+  args = {
+    IMAGE_REPO = "makhzan-ml/pplx-worker-cpu"
   }
   labels = {
     "org.opencontainers.image.title"       = "makhzan pplx-worker-cpu"
