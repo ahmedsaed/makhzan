@@ -24,7 +24,7 @@ import asyncio
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import meilisearch
 from makhzan_schemas import rebuild as _rebuild
@@ -35,13 +35,31 @@ ATTEMPTS = 30
 WAIT_SECONDS = 2.0
 
 
-async def enqueue_rebuild() -> str | None:
-    """Queue `rebuild_and_reindex` for this window; its job id, or None when a
-    rebuild with that id is already queued. Replaced in tests."""
+#: A rebuild due sooner than this is too soon to queue into. The deploy
+#: recreates the worker only after migrate, so a rebuild that falls due in
+#: between would run on the old worker's code, and its reindex would put back
+#: the old searchable attributes: the new API's queries would then be rejected
+#: until the next rebuild.
+MIN_LEAD = timedelta(seconds=120)
+
+
+def rebuild_slot(now: datetime) -> tuple[str, datetime]:
+    """The rebuild window to queue into: this one, unless it ends within
+    `MIN_LEAD`, then the next. Still `rebuild_job_id`'s ids, so the job is
+    shared with whatever else asks for a rebuild in that window."""
+    job_id, runs_at = _rebuild.rebuild_job_id(now)
+    if runs_at - now < MIN_LEAD:
+        job_id, runs_at = _rebuild.rebuild_job_id(now + timedelta(seconds=_rebuild.REBUILD_WINDOW))
+    return job_id, runs_at
+
+
+async def enqueue_rebuild(now: datetime | None = None) -> str | None:
+    """Queue `rebuild_and_reindex` (`rebuild_slot`); its job id, or None when a
+    rebuild with that id is already queued."""
     from arq import create_pool
     from arq.connections import RedisSettings
 
-    job_id, runs_at = _rebuild.rebuild_job_id(datetime.now(timezone.utc))
+    job_id, runs_at = rebuild_slot(now or datetime.now(timezone.utc))
     redis = await create_pool(
         RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://localhost:6379"))
     )
