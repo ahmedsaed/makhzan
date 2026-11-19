@@ -305,7 +305,7 @@ export function ResultsToolbar({
   );
 }
 
-/** Previous · "25–48 of 120" · Next, as links: every page is a URL. */
+/** Previous · "31–60 of 120" · Next, as links: every page is a URL. */
 export function Pagination({
   offset,
   total,

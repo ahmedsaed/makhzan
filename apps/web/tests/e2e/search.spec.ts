@@ -79,6 +79,25 @@ test("on a phone, the filter sheet works without JavaScript", async ({ browser }
   await context.close();
 });
 
+test("on a phone, a category tapped in the sheet closes it and narrows the results", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/search?q=relay");
+  await page.locator("summary", { hasText: "Category, price" }).click();
+  const sheet = page.getByRole("dialog", { name: "Category, price" });
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("link", { name: /Measuring Tools/ }).click();
+  await expect(page).toHaveURL(/category=tools%3Ameasurement/);
+  await expect(sheet).toBeHidden();
+  await expect(
+    page.locator("details:has(> summary:has-text('Category, price'))"),
+  ).not.toHaveAttribute("open");
+  // 0, 5 … 25 are measuring tools and in stock.
+  await expect(count(page)).toHaveText(/^6 in stock/);
+  await expect(page.getByRole("link", { name: "Measuring Tools ✕" })).toBeVisible();
+});
+
 test("on desktop, the rail picks a category the moment it is clicked", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/search?q=relay&offset=30&in_stock=all");
