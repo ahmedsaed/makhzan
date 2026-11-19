@@ -78,7 +78,9 @@ The site calls them **departments** (`/departments/{department}`).
   `electronics:kits`, and `!word` vetoes and `a ... b` phrases in keyword rules.
 - **Frontend** (#68): our own icons for every group and category of all 17
   departments, browse layout B (a sidebar tree on desktop, a Browse pill and
-  bottom sheet on a phone) and the sheet's option A look and motion.
+  bottom sheet on a phone) and the sheet's option A look and motion. Then
+  (#77) 30 results a page, so a full page ends on a complete grid row (rule S8),
+  and the search rail drawn like the browse tree.
 - **Categories seen** (#74): which shop categories each product of the Odoo and
   Wix shops was listed under, per cycle, and `./makhzan categories-seen`.
   Record-only.

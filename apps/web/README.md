@@ -4,7 +4,7 @@ Next.js 16 (App Router, React 19) + Tailwind v4 + shadcn/Base UI, pnpm. The
 consumer site: server-rendered, English only, light and dark.
 
 `docs/DESIGN.md` is the specification — pages, URLs, the palette and the rules
-(C1–C4, F1–F3, P1–P4, S1–S7) the tests check.
+(C1–C4, F1–F3, P1–P4, S1–S8) the tests check.
 
 ## Structure (root `@/*` alias, no `src/`)
 
@@ -20,7 +20,8 @@ consumer site: server-rendered, English only, light and dark.
 - `components/` — the shared pieces pages are built from: `ResultRow` /
   `ResultCard` / `ResultList` / `ViewToggle`, `PriceRange`, `Freshness` /
   `StaleNote`, `ShopsBadge`, `PhotoFrame`, `ShopLink`, `Chip` / `ChipBar`,
-  `FilterPanel`, `Breadcrumb`, `ObjectTile`, `SiteHeader` / `SiteFooter`,
+  `FilterPanel` / `ResultsFilters` (the search rail, drawn with the browse tree's
+  rows from `tree-rows.ts`), `Breadcrumb`, `ObjectTile`, `SiteHeader` / `SiteFooter`,
   `BrowseTree` (the desktop sidebar tree) / `BrowseSheet` (the phone's Browse
   bottom sheet), `DepartmentIcon` / `CategoryIcon`
 - `components/category-icon-sets/` — the custom category icons, one file per

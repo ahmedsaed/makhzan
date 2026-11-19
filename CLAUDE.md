@@ -819,7 +819,7 @@ See `docs/ROADMAP.md` for what is done, in progress, and next.
 
 The frontend is built to `docs/DESIGN.md` (the November 2026 redesign): the data
 behind each layout decision, the page tree and URLs, the style tokens, and rules
-(C1–S7) that tests enforce. Read it before touching the frontend. What comes next
+(C1–S8) that tests enforce. Read it before touching the frontend. What comes next
 (projects, blog, accounts, supplier pages) is `docs/PRODUCT.md`.
 
 `apps/web` has vitest unit tests and Playwright e2e specs under `apps/web/tests`
