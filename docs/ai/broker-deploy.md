@@ -93,7 +93,10 @@ search key or report salt.
 2. From a worker machine on the tailnet:
    `curl http://<server tailscale ip>:8100/ai/v1/health`.
 3. `./makhzan ai worker add ...` for each worker; install the tokens; point
-   each worker's `broker_url` at `http://<server tailscale ip>:8100/ai/v1`.
+   each worker's `broker_url` at `http://<server tailscale ip>:8100/ai/v1`
+   (the home server's compose stack points its workers at its own
+   broker-only proxy instead, which forwards to that address:
+   `ml/deploy/home-server/README.md`).
 4. Leave the mode `off` (the default). The broker leases and scores in either
    mode; `off` only keeps the regroup from reading decisions (P4).
 5. The first `ai_candidates` run after a rebuild records a baseline and
@@ -102,5 +105,11 @@ search key or report salt.
    copy and reviewed there before anything reaches production (P4).
 6. `./makhzan ai status` (or the AI section of `./makhzan status`) shows the
    queue, workers, throughput and decisions.
-7. Only after the owner's review: `make regroup-dry-run ARGS=--ai`, then
-   `./makhzan ai mode live`.
+7. After the owner's review, push the backlog's scores and decisions with
+   `./makhzan ai import DIR` (`docs/ai/broker-api.md` §6.1), then
+   `./makhzan ai backlog` for what it left undecided.
+8. Only after the owner's OK: preview the regroup on production
+   (`worker.regroup --dry-run --ai`), then `./makhzan ai mode live`.
+
+Production went through these steps and has been `live` since 2026-11-19
+(`docs/ai/decision-review.md`, "Go-live").

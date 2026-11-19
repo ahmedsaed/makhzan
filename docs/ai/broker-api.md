@@ -4,8 +4,10 @@ Status: phase 1 built the shared core (`packages/schemas/makhzan_schemas/ai/`),
 the tables and the regroup's reading side. Phase 2 built the broker
 (`apps/api/app/broker/main.py` over `makhzan_schemas.ai.broker` and
 `ai.flow`), the triggers (`ai/candidates.py`), the CLI (`./makhzan ai`) and
-status; deploying it is `docs/ai/broker-deploy.md`. The worker (phase 3) is
-built against this document. Where this contract and the code disagree, the
+status; deploying it is `docs/ai/broker-deploy.md`. The worker (phase 3,
+`docs/ai/worker.md`) is built against this document, and `./makhzan ai import`
+(`worker/ai_import.py`, §6.1) pushes a locally scored backlog. Production has run
+in mode `live` since 2026-11-19 (`docs/ai/decision-review.md`, "Go-live"). Where this contract and the code disagree, the
 code in `makhzan_schemas.ai` is the reference for pipelines, the transition
 rule, prompts and hashes, and this document must be fixed.
 
@@ -115,7 +117,9 @@ writes decisions, so the backlog can be scored while the mode is off.
 - The backlog is scored on the owner's machines against a local copy, its
   groupings reviewed there with `make regroup-dry-run ARGS=--ai` (which reads
   standing decisions whatever the mode), and its scores and decisions then
-  pushed to production (P4). Pushing them is phase 3's tooling.
+  pushed to production (P4) with `./makhzan ai import`.
+- Production: `live` since 2026-11-19, after the backlog was imported and
+  its regroup previewed there (`docs/ai/decision-review.md`, "Go-live").
 
 ## 3. Endpoints
 

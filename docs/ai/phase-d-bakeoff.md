@@ -1,9 +1,11 @@
 # Phase D bake-off: candidate finding and pair judging
 
-**Date:** 2026-11-13/14. **Status:** draft for `docs/ai/phase-d-bakeoff.md`. Everything ran
+**Date:** 2026-11-13/14. **Status:** dated record. Its judge comparison was prompted with
+the one-sentence question and is marked confounded in `docs/ai/decision-review.md` (D7, D12),
+which records the setup production runs. Everything ran
 locally on the RTX 3060 desktop: no hosted API, no crawling, nothing on production. The data
 was the Phase C labelled pairs and a local copy of the production database (the same snapshot
-Phase C used: 61,134 active listings). Scripts are in `ml/bakeoff/` (branch `feat/ml-bakeoff`).
+Phase C used: 61,134 active listings). Scripts are in `ml/bakeoff/` (written on branch `feat/ml-bakeoff`, now on main).
 Per-pair scores, keyed by pair id only, are in `ml/out/bakeoff/` (git-ignored).
 
 ## Summary

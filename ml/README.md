@@ -9,8 +9,10 @@ below.
 127.0.0.1. No catalogue data is kept in this directory or in git. The bench reads pairs from a
 path you give it and writes results to `ml/out/`, which git ignores.
 
-This directory covers serving and measurement only. Which model is best at matching is the
-bake-off's question, and nothing here measures matching accuracy.
+The serving and measurement below do not measure matching accuracy; that is the bake-off's
+question. The directory also holds the production AI worker (`makhzan_ml/worker/`, built into
+the images under "Lean CPU images" and documented in `docs/ai/worker.md`) and the home server's
+compose stack (`deploy/home-server/`), live since 2026-11-19.
 
 ## Quick start
 

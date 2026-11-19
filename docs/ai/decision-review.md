@@ -1,4 +1,4 @@
-# AI matching: decision review (2026-11-16, updated 2026-11-17)
+# AI matching: decision review (2026-11-16, updated 2026-11-19)
 
 Every design decision in the AI matching work so far, who made it, what rests on
 it, and what the owner needs to decide. Written after the owner found that the
@@ -11,8 +11,9 @@ put to the owner. Results that rest on a session choice are not settled.
 
 ## Labelling rules in force (summary)
 
-The full text, with examples, is in `ml/out/labels/README.md` (git-ignored with
-the labels). Labels are same / different / variant / unsure; for matching,
+The full text, with examples, is in the private configuration's `labels/README.md`
+(versioned with the labels, never only in a session's scratch folder or the public
+repo). Labels are same / different / variant / unsure; for matching,
 variant and different both count as not same, and unsure is excluded.
 
 1. **Brands:** a different brand alone never makes a different product.
@@ -146,7 +147,7 @@ is the decision that should have come back to the owner.
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
 | D20 | Quantisation | Rejected unless proven harmless | Owner | serving | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
-| D22 | Data | Labels kept in git-ignored `ml/out/labels/` | Owner rule, after loss | — | settled |
+| D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
 
 ### What still holds, whatever the prompt
@@ -280,7 +281,7 @@ Register:
   (`KEV_TEMPERATURE=1.0`), calibrated default 2.41.
 - D16 kept; cross-department candidates (e.g. bearings) later.
 
-New labelling rules (also in `ml/out/labels/README.md`):
+New labelling rules (also in the labels' README: then `ml/out/labels/README.md`, now the private configuration's `labels/README.md`):
 
 4. Sizes within about 5% are the same (rounding or typos).
 5. A bare standard part number implies its standard package (1N4007 vs the SMD
@@ -419,7 +420,7 @@ The overnight backlog (92,833 pairs, policy p1) was imported into a local copy o
 
 The owner reviewed a sample of 40 AI-made groups (20 random, the 10 largest, 10 joining listings that share no identifier; 142 listings), each shown with every member, its photos, specs, and both judges' scores. **Verdict: 40 of 40 all correct.** The weakest, a membrane 4x4 keypad grouped with hard-key 4x4 keypads, was judged acceptable to merge (owner). With the 40/40 validation of 2026-11-17, 80 of 80 checked merges are correct (95% lower bound about 96%).
 
-Answers: `ml/out/labels/ai-groups-review/answers.json` (git-ignored).
+Answers: `ai-groups-review/answers.json` under the labels (then `ml/out/labels/`, git-ignored; now the private configuration's `labels/`).
 
 **Owner decision:** import the backlog into production and preview the regroup there; switching `ai_matching` to `live` waits for a separate owner OK.
 
