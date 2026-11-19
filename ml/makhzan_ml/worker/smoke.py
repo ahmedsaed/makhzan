@@ -197,8 +197,8 @@ def check_supervisor(model: str, importable=judges.importable) -> None:
             sup = supervisor.Supervisor(cfg, supervisor.ForkedSession(make_worker))
             inner = sup.session.run
 
-            def once() -> int:
-                code = inner()
+            def once(ctl=None) -> int:
+                code = inner(ctl)
                 sup.request_stop("smoke done")
                 return code
 

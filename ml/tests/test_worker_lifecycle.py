@@ -101,7 +101,13 @@ def config(url: str, **sections) -> dict:
     data = {
         "worker": {"name": "home-kev", "broker_url": url, "token": TOKEN, "model": "kev"},
         "compute": {"threads": 6, "nice": 0},
-        "schedule": {"windows": "always", "timezone": "Africa/Cairo", "on_empty": "exit"},
+        # no_new_lease_s 0: these tests exercise the window's very end; the cutoff has its own.
+        "schedule": {
+            "windows": "always",
+            "timezone": "Africa/Cairo",
+            "on_empty": "exit",
+            "no_new_lease_s": 0,
+        },
         "leases": {"max_jobs": 2, "lease_s": 900, "heartbeat_s": 60},
     }
     for name, values in sections.items():
@@ -287,9 +293,17 @@ def test_sigterm_stops_after_the_request_in_flight(broker, sleeps):
     worker, fake, _ = make_worker(broker, sleeps)
     worker.install_signal_handlers()
     try:
-        fake.on_score = lambda i: i == 1 and os.kill(os.getpid(), signal.SIGTERM)
+        # The signal lands during the request; the watcher thread stops the session while
+        # it runs (as during a forward pass), and the request still finishes.
+        def on_score(i):
+            if i == 1:
+                os.kill(os.getpid(), signal.SIGTERM)
+                assert worker.stop.wait(5), "the watcher thread never stopped the session"
+
+        fake.on_score = on_score
         assert worker.run() == run.EXIT_OK
     finally:
+        signal.set_wakeup_fd(-1)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.signal(signal.SIGINT, signal.default_int_handler)
     assert worker.stop_reason == "SIGTERM"
@@ -1103,3 +1117,54 @@ def test_hello_reports_the_image_and_outside_window(broker, sleeps):
     hello = broker.bodies("/hello")[0]
     assert hello["image"] == "ghcr.io/x/kev-worker-cpu:sha-" + "d" * 40
     assert hello["config"]["outside_window"] == "exit"
+
+
+# --- no new lease, no load, in the window's last no_new_lease_s ------------------------------
+
+
+def test_no_session_starts_inside_the_cutoff(broker, sleeps):
+    broker.add_job("kev", pair(1))
+    clock = FakeClock(datetime(2026, 11, 17, 4, 56, tzinfo=CAIRO))
+    worker, fake, _ = make_worker(broker, sleeps, clock=clock,
+                                  schedule={"windows": ["01:00-05:00"], "no_new_lease_s": 300})  # fmt: skip
+    assert worker.run() == run.EXIT_OK
+    assert broker.calls == [] and fake.loads == []  # no hello, nothing loaded
+
+
+def test_no_new_lease_after_the_cutoff(broker, sleeps):
+    jobs = [broker.add_job("kev", pair(n)) for n in range(4)]
+    clock = FakeClock(datetime(2026, 11, 17, 4, 54, tzinfo=CAIRO))
+    fake = FakeJudges(clock, seconds=40)  # a job is 80 s
+    worker, fake, clock = make_worker(
+        broker, sleeps, clock=clock, fake=fake,
+        schedule={"windows": ["01:00-05:00"], "no_new_lease_s": 300},
+        leases={"max_jobs": 1},
+    )  # fmt: skip
+    assert worker.run() == run.EXIT_OK
+    # One lease at 04:54, its job finished at 04:55:20; no lease after 04:55.
+    assert len(broker.bodies("/lease")) == 1
+    assert jobs[0].status == "done" and all(j.status == "queued" for j in jobs[1:])
+    assert all(j.attempts == 0 for j in jobs)
+    assert "no new lease" in worker.stop_reason
+    assert fake.loads == fake.unloads == ["kev"]
+    assert clock.now() < datetime(2026, 11, 17, 4, 56, tzinfo=CAIRO)  # gone well before 05:00
+    assert [s["end_reason"] for s in broker.sessions.values()] == ["released"]
+
+
+def test_a_lease_taken_just_before_the_cutoff_loads_nothing(broker, sleeps):
+    jobs = [broker.add_job("kev", pair(n)) for n in range(2)]
+    clock = FakeClock(datetime(2026, 11, 17, 4, 54, 59, tzinfo=CAIRO))
+    worker, fake, clock = make_worker(broker, sleeps, clock=clock,
+                                      schedule={"windows": ["01:00-05:00"], "no_new_lease_s": 300})  # fmt: skip
+    lease = worker.broker.lease
+
+    def slow_lease(body):  # the answer arrives after the cutoff (04:55:01)
+        out = lease(body)
+        clock.advance(2)
+        return out
+
+    worker.broker.lease = slow_lease
+    assert worker.run() == run.EXIT_OK
+    assert fake.loads == []  # no load at 04:55:01
+    assert all(j.status == "queued" and j.attempts == 0 for j in jobs)  # back, uncharged
+    assert "no model load" in worker.stop_reason

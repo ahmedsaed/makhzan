@@ -78,7 +78,7 @@ def stop_after(sup, clock, sessions: int, hook=None):
     def wait(seconds, stop):
         if hook:
             hook(seconds)
-        if sup.windows >= sessions and not sup.session.worker:
+        if sup.windows >= sessions and not getattr(sup.session, "worker", None):
             sup.request_stop("SIGTERM")
         return original(seconds, stop)
 
@@ -146,9 +146,9 @@ def test_sleeps_are_chunked_and_land_on_the_window_start(broker):
     starts = []
     original = sup.session.run
 
-    def session_run():
+    def session_run(ctl=None):
         starts.append(clock.now())
-        return original()
+        return original(ctl)
 
     sup.session.run = session_run
     stop_after(sup, clock, 1)
@@ -166,9 +166,9 @@ def test_on_empty_exit_ends_the_window_early_and_sleeps_until_the_next(broker, c
     starts = []
     original = sup.session.run
 
-    def session_run():
+    def session_run(ctl=None):
         starts.append(clock.now())
-        return original()
+        return original(ctl)
 
     sup.session.run = session_run
     stop_after(sup, clock, 2)
@@ -188,9 +188,9 @@ def test_touching_windows_are_one_run_and_the_next_is_after_both(broker):
     starts = []
     original = sup.session.run
 
-    def session_run():
+    def session_run(ctl=None):
         starts.append(clock.now())
-        return original()
+        return original(ctl)
 
     sup.session.run = session_run
     stop_after(sup, clock, 2)
@@ -218,7 +218,7 @@ def test_an_unreachable_broker_is_retried_inside_the_window(broker):
     codes = iter([run.EXIT_UNREACHABLE, run.EXIT_UNREACHABLE])
     starts = []
 
-    def session_run():
+    def session_run(ctl=None):
         starts.append(clock.now())
         return next(codes, run.EXIT_OK)
 
@@ -234,7 +234,7 @@ def test_a_failed_session_waits_for_the_next_window(broker, caplog, code):
     sup, _ = build(broker, clock, Judges(clock))
     starts = []
 
-    def session_run():
+    def session_run(ctl=None):
         starts.append(clock.now())
         return code
 
@@ -262,7 +262,6 @@ def test_sigterm_while_asleep_exits_at_once_with_0(broker):
     }))  # fmt: skip
     ran = []
     sup = supervisor.Supervisor(cfg, supervisor.InProcessSession(lambda: ran.append(1)))
-    old = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
     try:
         sup.install_signal_handlers()
         threading.Timer(0.2, os.kill, args=(os.getpid(), signal.SIGTERM)).start()
@@ -270,8 +269,7 @@ def test_sigterm_while_asleep_exits_at_once_with_0(broker):
         assert sup.run() == 0
         assert time.monotonic() - t0 < 2.0
     finally:
-        for s, h in old.items():
-            signal.signal(s, h)
+        sup.restore_signal_handlers()
     assert ran == [] and broker.calls == []  # nothing loaded, nothing sent
 
 
@@ -322,8 +320,8 @@ def test_each_window_runs_in_a_child_that_loads_and_frees_the_model(broker, tmp_
     sup, fake = forked(broker, tmp_path)
     original = sup.session.run
 
-    def once():
-        code = original()
+    def once(ctl=None):
+        code = original(ctl)
         sup.request_stop("test done")
         return code
 
@@ -341,7 +339,6 @@ def test_each_window_runs_in_a_child_that_loads_and_frees_the_model(broker, tmp_
 def test_sigterm_during_a_window_is_forwarded_to_the_child(broker, tmp_path):
     jobs = [broker.add_job("kev", pair(n)) for n in range(5)]
     sup, _ = forked(broker, tmp_path, seconds=0.3, on_empty="wait")
-    old = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
     try:
         sup.install_signal_handlers()
         threading.Timer(1.0, os.kill, args=(os.getpid(), signal.SIGTERM)).start()
@@ -349,8 +346,7 @@ def test_sigterm_during_a_window_is_forwarded_to_the_child(broker, tmp_path):
         assert sup.run() == run.EXIT_OK  # the child's own graceful exit code
         assert time.monotonic() - t0 < 10
     finally:
-        for s, h in old.items():
-            signal.signal(s, h)
+        sup.restore_signal_handlers()
     assert sup.windows == 1
     done = [j for j in jobs if j.status == "done"]
     assert 0 < len(done) < len(jobs)
@@ -365,7 +361,7 @@ def test_a_child_killed_by_a_signal_is_reported_and_waited_out(broker, tmp_path)
     class Dies:
         pid = None
 
-        def run(self):
+        def run(self, ctl=None):
             pid = os.fork()
             if pid == 0:
                 os.kill(os.getpid(), signal.SIGKILL)
@@ -433,3 +429,123 @@ def test_the_supervisor_imports_no_model_code():
     done = subprocess.run([sys.executable, "-c", code], cwd=ml, capture_output=True, text=True,
                           env={**os.environ, "PYTHONPATH": str(ml)})  # fmt: skip
     assert done.returncode == 0, done.stderr
+
+
+# --- one model at a time, enforced; the fork race; signal-safe handlers ---------------------
+
+
+class Hangs:
+    """A child's worker that never finishes on its own (a stop it ignores, a stuck load)."""
+
+    def install_signal_handlers(self):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    def run(self):
+        time.sleep(120)
+        return 0
+
+
+def test_a_session_still_running_after_the_kill_deadline_is_killed(caplog):
+    """Fake clock: the child is real, the deadline is counted on the clock."""
+    clock = FakeClock(datetime(2026, 11, 17, 5, 0, tzinfo=CAIRO))
+    session = supervisor.ForkedSession(Hangs)
+    ctl = supervisor.Control(
+        deadline_s=supervisor.KILL_AFTER_S,
+        pause=lambda s: clock.advance(s),
+        monotonic=lambda: clock.mono,
+    )
+    t0 = time.monotonic()
+    assert session.run(ctl) == -signal.SIGKILL
+    assert time.monotonic() - t0 < 10  # real time: the fake clock ran the 270 s
+    assert clock.mono == pytest.approx(supervisor.KILL_AFTER_S, abs=supervisor.POLL_S)
+    assert "KILLING the session" in caplog.text and session.pid is None
+
+
+def test_the_supervisor_sets_the_deadline_at_the_window_end_plus_the_grace(broker):
+    clock = FakeClock(datetime(2026, 11, 17, 4, 0, tzinfo=CAIRO))
+    sup, _ = build(broker, clock, Judges(clock))  # window 01:00-05:00
+    seen = []
+
+    def session_run(ctl=None):
+        seen.append(ctl.deadline_s)
+        return run.EXIT_OK
+
+    sup.session.run = session_run
+    stop_after(sup, clock, 1)
+    sup.run()
+    assert seen == [3600 + supervisor.KILL_AFTER_S]
+    assert supervisor.KILL_AFTER_S < 5 * 60  # the home server's gap before the next window
+
+
+def test_the_kill_comes_before_the_next_workers_window(broker):
+    """Through the supervisor, fake clock: a session that hangs past 05:00 is killed at 05:04:30,
+    before pplx opens at 05:05, and the supervisor goes back to sleep."""
+    clock = FakeClock(datetime(2026, 11, 17, 4, 59, tzinfo=CAIRO))
+    cfg = parse(config(broker.url, schedule={"windows": ["01:00-05:00"],
+                                             "outside_window": "wait", "no_new_lease_s": 0}))  # fmt: skip
+    sup = supervisor.Supervisor(cfg, supervisor.ForkedSession(Hangs), clock=clock)
+    ended = []
+    original = sup.session.run
+
+    def session_run(ctl=None):
+        code = original(ctl)
+        ended.append(clock.now())
+        return code
+
+    sup.session.run = session_run
+    stop_after(sup, clock, 1)
+    sup.run()
+    assert sup.codes == [-signal.SIGKILL]
+    assert ended[0] == datetime(2026, 11, 17, 5, 4, 30, tzinfo=CAIRO)
+
+
+def test_a_stop_before_the_fork_forks_nothing():
+    made = []
+    session = supervisor.ForkedSession(lambda: made.append(1))
+    assert session.run(supervisor.Control(should_stop=lambda: True)) == run.EXIT_OK
+    assert made == [] and session.pid is None
+
+
+def test_a_stop_recorded_during_the_fork_is_forwarded_to_the_child():
+    """The stop flag is re-read once the child exists: a signal that landed while the parent
+    was forking reaches the child, which stops."""
+
+    class WaitsForSigterm:
+        def install_signal_handlers(self):
+            self.got = False
+            signal.signal(signal.SIGTERM, lambda *a: setattr(self, "got", True))
+
+        def run(self):
+            deadline = time.monotonic() + 20
+            while not self.got and time.monotonic() < deadline:
+                time.sleep(0.05)
+            return 0 if self.got else 7
+
+    session = supervisor.ForkedSession(WaitsForSigterm)
+    calls = []
+
+    def should_stop():
+        calls.append(1)
+        if len(calls) == 1:
+            return False  # clear when signals were blocked
+        session.stop("SIGTERM")  # recorded meanwhile: forwarded as the supervisor would
+        return True
+
+    ctl = supervisor.Control(should_stop=should_stop, pause=time.sleep)
+    assert session.run(ctl) == 0  # the child saw the SIGTERM (7 if it had not)
+
+
+def test_the_signal_handler_only_records(broker):
+    """No Event.set in a handler: the handler records, the loop turns it into a stop."""
+    cfg = parse(config(broker.url, schedule={"windows": "always", "outside_window": "wait"}))
+    sup = supervisor.Supervisor(cfg, supervisor.InProcessSession(lambda: None))
+    try:
+        sup.install_signal_handlers()
+        handler = signal.getsignal(signal.SIGTERM)
+        handler(signal.SIGTERM, None)
+        assert not sup.stop.is_set() and sup._signalled == signal.SIGTERM
+        assert sup._stopped() and sup.stop_reason == "SIGTERM"
+    finally:
+        sup.restore_signal_handlers()
+    assert signal.getsignal(signal.SIGTERM) is not handler

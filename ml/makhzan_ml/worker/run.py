@@ -207,11 +207,30 @@ class Worker:
             self.stop.set()
 
     def install_signal_handlers(self) -> None:
-        def handler(signum, _frame):
-            self.request_stop(signal.Signals(signum).name)
+        """SIGTERM and SIGINT stop the session, signal-safely: the handler itself does
+        nothing (a `threading.Event.set` there could deadlock on a lock the interrupted code
+        holds). Python writes each signal's number to a wakeup pipe, and a watcher thread
+        reading it calls `request_stop`, at once, even while the main thread is inside a
+        forward pass."""
+        r, w = os.pipe()
+        os.set_blocking(w, False)
+        signal.set_wakeup_fd(w, warn_on_full_buffer=False)
 
-        signal.signal(signal.SIGTERM, handler)
-        signal.signal(signal.SIGINT, handler)
+        def watch() -> None:
+            while True:
+                try:
+                    data = os.read(r, 64)
+                except OSError:
+                    return
+                if not data:
+                    return
+                for signum in data:
+                    if signum in (signal.SIGTERM, signal.SIGINT):
+                        self.request_stop(signal.Signals(signum).name)
+
+        threading.Thread(target=watch, name="signals", daemon=True).start()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda _signum, _frame: None)  # the wakeup fd does the work
 
     def _closes_at(self) -> datetime | None:
         return self.cfg.schedule.closes_at(self.clock.now())
@@ -233,6 +252,12 @@ class Worker:
     def _may_continue(self) -> bool:
         return not self.stop.is_set() and self._window_open()
 
+    def _too_late(self) -> bool:
+        """Inside the window's last `no_new_lease_s`: no new lease, no model load, so
+        neither can keep a model in memory past the window (one model at a time)."""
+        left = self._seconds_to_window_end()
+        return left is not None and left <= self.cfg.schedule.no_new_lease_s
+
     def _start_window_timer(self) -> None:
         """Stop at the window's end even while blocked in a broker call's backoff."""
         if self._closes_at() is None:
@@ -248,6 +273,13 @@ class Worker:
     def run(self) -> int:
         if not self.cfg.schedule.is_open(self.clock.now()):
             log.info("outside the window (%s); nothing to do", self.cfg.schedule.describe())
+            return EXIT_OK
+        if self._too_late():
+            log.info(
+                "the window ends in %.0f s, inside no_new_lease_s = %.0f; nothing to do",
+                self._seconds_to_window_end(),
+                self.cfg.schedule.no_new_lease_s,
+            )
             return EXIT_OK
         code = EXIT_ERROR
         try:
@@ -440,6 +472,11 @@ class Worker:
         must stop ("stop"). A lease asks for up to `max_jobs`: no time is sent, and what the
         window's end interrupts goes back gracefully."""
         while self._may_continue():
+            if self._too_late():
+                self.request_stop(
+                    f"no new lease in the window's last {self.cfg.schedule.no_new_lease_s:.0f} s"
+                )
+                return "stop"
             body = {
                 "session": self.session,
                 "model": key,
@@ -513,6 +550,12 @@ class Worker:
         try:
             # The window may have ended, or a stop come, while the lease was taken: then
             # nothing is loaded, and the whole lease goes back gracefully (below).
+            if self._may_continue() and self.judge is None and self._too_late():
+                # Taken just before the cutoff: no load this late. The lease goes back whole,
+                # gracefully (below), and the session ends.
+                self.request_stop(
+                    f"no model load in the window's last {self.cfg.schedule.no_new_lease_s:.0f} s"
+                )
             if self._may_continue():
                 judge = self._ensure_loaded(key, lease_id)
                 for job in jobs:

@@ -422,23 +422,59 @@ def test_opens_at_is_the_next_start_and_follows_touching_windows():
     [
         ("http://broker-proxy:8100/ai/v1", True, True),
         ("http://broker-proxy:8100/ai/v1", False, False),  # off: names stay refused
-        ("http://brokerproxy/ai/v1", True, True),
-        ("http://broker.proxy:8100/ai/v1", True, False),  # a dotted name is a real host
-        ("http://broker.example.test/ai/v1", True, False),
-        ("http://1234:8100/ai/v1", True, False),  # read as an IPv4 address by the resolver
-        ("http://0x7f000001:8100/ai/v1", True, False),  # likewise, 127.0.0.1
-        ("http://-proxy:8100/ai/v1", True, False),
+        ("http://brokerproxy/ai/v1", True, False),  # only the proxy's exact name
+        ("http://db:5432/ai/v1", True, False),  # another service in the stack: never
+        ("http://broker-proxy.example.test:8100/ai/v1", True, False),
         ("http://192.0.2.5/ai/v1", True, False),  # addresses keep their own rule
         ("http://100.64.0.1:8080/ai/v1", True, True),
         ("https://broker.example.test/ai/v1", True, True),
     ],
 )
-def test_a_compose_service_name_needs_broker_via_proxy(url, via_proxy, ok):
+def test_broker_via_proxy_allows_only_the_proxys_name(url, via_proxy, ok):
     data = base(worker={"broker_url": url, "broker_via_proxy": via_proxy})
     if ok:
         assert parse(data).broker_via_proxy is via_proxy
     else:
         refused(data, "broker_url")
+
+
+@pytest.mark.parametrize(
+    "hosts, url, ok",
+    [
+        (["ai-proxy"], "http://ai-proxy:8100/ai/v1", True),
+        (["ai-proxy"], "http://broker-proxy:8100/ai/v1", False),  # the list replaces it
+        (["1234"], None, False),  # read as an address by the resolver
+        (["0x7f000001"], None, False),
+        (["proxy.example.test"], None, False),  # dotted: a real host
+        ([], None, False),
+        ("broker-proxy", None, False),  # a list, not a string
+    ],
+)
+def test_broker_proxy_hosts_is_an_allow_list_of_service_names(hosts, url, ok):
+    worker = {"broker_via_proxy": True, "broker_proxy_hosts": hosts}
+    if url:
+        worker["broker_url"] = url
+    data = base(worker=worker)
+    if ok:
+        assert parse(data).broker_proxy_hosts == tuple(hosts)
+    else:
+        refused(data, "broker_proxy_hosts|broker_url")
+
+
+def test_broker_proxy_hosts_needs_broker_via_proxy():
+    refused(base(worker={"broker_proxy_hosts": ["broker-proxy"]}), "only read with")
+    assert parse(base(worker={"broker_via_proxy": True})).broker_proxy_hosts == ("broker-proxy",)
+
+
+def test_no_new_lease_s_defaults_by_device_and_is_checked():
+    assert parse(base()).schedule.no_new_lease_s == 300
+    assert parse(base(compute={"device": "gpu"})).schedule.no_new_lease_s == 0
+    cairo = {"windows": ["01:00-05:00"], "timezone": "Africa/Cairo"}
+    assert parse(base(schedule={**cairo, "no_new_lease_s": 60})).schedule.no_new_lease_s == 60
+    assert parse(base(schedule=cairo)).hello_config()["no_new_lease_s"] == 300
+    refused(base(schedule={"no_new_lease_s": -1}), "0 or more")
+    refused(base(schedule={"no_new_lease_s": "5m"}), "no_new_lease_s")
+    refused(base(schedule={**cairo, "windows": ["01:00-01:05"]}), "no time to lease")
 
 
 def test_broker_via_proxy_is_a_boolean_and_says_how_to_allow_a_name():
