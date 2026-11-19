@@ -52,8 +52,8 @@ test("a filter narrows by navigation and can be undone", async ({ page }) => {
   await page.goto("/search?q=ESP32");
   await page
     .getByRole("complementary", { name: "Filters" })
-    .getByRole("radio", { name: /Integrated Circuits/ })
-    .check();
+    .getByRole("link", { name: /Integrated Circuits/ })
+    .click();
   await expect(page).toHaveURL(/category=electronics%3Aics/);
 
   // The active filter is visible as a chip, so the result count is explained.
@@ -95,7 +95,7 @@ test("on a phone the filters open as a sheet", async ({ page }) => {
   await expect(page.getByRole("complementary", { name: "Filters" })).toBeHidden();
   await page.locator("summary", { hasText: "Category, price" }).click();
   const sheet = page.getByRole("dialog", { name: "Category, price" });
-  await expect(sheet.getByRole("radio", { name: /Integrated Circuits/ })).toBeVisible();
+  await expect(sheet.getByRole("link", { name: /Integrated Circuits/ })).toBeVisible();
   await page.getByRole("button", { name: "Close filters" }).click();
   await expect(sheet).toBeHidden();
 });

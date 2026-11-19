@@ -127,6 +127,21 @@ the page container on desktop; each section is left out when its fetch fails.
   them and offers them; when only both together did, it offers "Show all N".
 - List rows: photo, two-line title, price, shop name or an "N shops" badge, freshness.
   Grid cards: the same facts. The toggle is remembered per visitor.
+- A page holds 30 results. The grid is 2 across on phones, 3 from `sm` and 5 from `xl`
+  (never 4), each a divisor of 30, so a full page ends on a complete row at every width
+  (rule S8). It was 24 with a 4-across step until November 2026, which left the 5-across
+  desktop grid's last row one card short.
+- The "Category, price" rail (search and a shop's search, from `lg`, 17.5rem like the
+  department sidebar) is drawn like the department pages' sidebar tree
+  (`components/tree-rows.ts` holds both): a "Category" label in small capitals over a
+  bordered panel of 36px rows, "Any category" first, then each department as a small
+  heading with its line icon and its categories indented under it on a hairline, each
+  with its category icon and its count in `ink-3`. Each row is a link that picks the
+  category (offset dropped, the rest kept); the one in force is outlined in `chip-on`
+  and bold, never filled, and marked `aria-current="true"` (a filter, not a place).
+  "Price, EGP" is a second labelled panel: Min, Max, Clear (the price only) and Apply.
+  On a phone the same list is in the bottom sheet as the browse sheet's 44px tinted
+  buttons; a tap on a category applies it at once, and "Show results" applies the price.
 
 **Product.**
 - Breadcrumb (department › group › category), photo (contained, white frame), title, part
@@ -537,8 +552,8 @@ to, and open without JavaScript. Contact routes and does not collect: report a p
 crawler@ for personal data, hello@merope.dev for anything else. The other three fetch
 nothing. /privacy and /how-we-crawl each link to /contact.
 
-**Desktop.** Search results get a side rail (category, price), and department pages
-the tree instead; the chips stay above the list;
+**Desktop.** Search results get a side rail (category, price), drawn like the department
+pages' tree, and department pages the tree itself; the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
 Product pages go two columns: a narrow one (about 26rem) with the photo and, under it,
 the way to the shop (price box, or the summary and the offers as two-line cards); and a
@@ -701,3 +716,4 @@ Each is meant to be checked by a test.
 - **S5** Photos are contained in a white frame in both themes; never cropped.
 - **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.
 - **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. Every group and category in a department's taxonomy has an icon, and no icon exists for a ref no taxonomy has. Shapes, curves and arcs stay inside the live area (a category's straight leads may reach the edge), and the 17 department tiles are held to the same.
+- **S8** A full page of results ends on a complete row: the page size (`PAGE_SIZE`, 30) is divisible by the grid's column count at every breakpoint (2, 3, 5), read from the classes the grid renders (`tests/result-grid.test.tsx`), and the browser's layout agrees on search and on a category page (`tests/e2e/search.spec.ts`).

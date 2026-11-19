@@ -48,12 +48,15 @@ test("the search page's controls", async ({ page }) => {
     sort: page.getByRole("combobox"),
     "list view": page.getByRole("button", { name: "List view" }),
     "grid view": page.getByRole("button", { name: "Grid view" }),
-    "next page": page.getByRole("link", { name: "Next" }),
     "top category": page
       .getByRole("region", { name: /Top categories/ })
       .getByRole("link")
       .first(),
   });
+
+  // 36 with out of stock shown: more than the 30 a page holds.
+  await page.goto("/search?q=relay&in_stock=all");
+  await expectTappable(page, { "next page": page.getByRole("link", { name: "Next" }) });
 
   await page.goto("/search?q=relay&shop=shop-a");
   await expectTappable(page, {

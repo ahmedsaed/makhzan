@@ -6,6 +6,7 @@ import { BrowseTree } from "@/components/browse-tree";
 import { Link } from "@/components/link";
 import { NotAnswering, Results } from "@/components/results";
 import { SearchField } from "@/components/search-field";
+import { TREE_LABEL, TREE_PANEL } from "@/components/tree-rows";
 import { Container } from "@/components/section";
 import { categoryNameOf, type Category } from "@/lib/api";
 import { formatCount } from "@/lib/format";
@@ -101,10 +102,8 @@ export async function DepartmentBrowse({
             JavaScript off. */}
         <aside id="browse-tree" className="hidden target:block md:block">
           <div className="md:sticky md:top-4 md:max-h-[calc(100svh-2rem)] md:overflow-y-auto md:overscroll-contain md:pb-4">
-            <p className="px-2.5 pt-2 pb-2 text-xs font-semibold tracking-[0.06em] text-ink-2 uppercase">
-              Browse {label}
-            </p>
-            <div className="rounded-card border border-line bg-surface p-1.5">
+            <p className={TREE_LABEL}>Browse {label}</p>
+            <div className={TREE_PANEL}>
               <BrowseTree {...treeProps} density="sidebar" />
             </div>
           </div>
