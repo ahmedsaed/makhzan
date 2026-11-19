@@ -293,7 +293,7 @@ this image can load the model key, and exits.
 ## Example configurations
 
 These four are examples. The home server's windows are the owner's (Kev 01:00–05:00, pplx
-05:00–07:00, Cairo time); the desktop's run until their queue is empty. Hosts and tokens are
+05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts and tokens are
 placeholders. The worker's tests parse every block below, and the compose stack's two files.
 
 The home server's Kev worker, as `ml/deploy/home-server/home-kev.toml` has it: through the
@@ -333,7 +333,8 @@ heartbeat_s = 60
 ```
 
 The home server's pplx worker. Its window follows Kev's, so the two never share the memory
-(but see "Not done yet" for Kev's stop running past 05:00):
+and starts 5 minutes after Kev's ends, since Kev's graceful stop can run about 4 minutes past
+05:00:
 
 ```toml
 # home-pplx.toml
@@ -357,7 +358,7 @@ mmap = false
 weights_cache = "/models"
 
 [schedule]
-windows = ["05:00-07:00"]
+windows = ["05:05-07:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
 on_empty = "exit"
@@ -533,11 +534,13 @@ docker compose logs -f kev                      # sleeping until 01:00, window o
 ```
 
 - **Scheduling.** Each worker stays up with `outside_window = "wait"` ("Waiting for the
-  window") and `restart: unless-stopped`: Kev 01:00–05:00, pplx 05:00–07:00, Africa/Cairo.
-  **One model at a time on the machine** is guaranteed by the two windows not overlapping,
-  and by each window's session running in a child process that exits at the window's end, so
-  the memory is back before the next window (with the caveat under "Not done yet": Kev's stop
-  can run a few minutes past 05:00).
+  window") and `restart: unless-stopped`: Kev 01:00–05:00, pplx 05:05–07:00, Africa/Cairo.
+  **One model at a time on the machine** (the owner's rule: 31 GB in all, other services
+  running) is guaranteed by the two windows not overlapping, by a 5-minute gap after Kev's
+  window, which covers its graceful stop running about 4 minutes past 05:00 (a request in
+  flight, up to about 104 s, or a model load, about 150 s, then its last posts), and by each
+  window's session running in a child process that exits at the window's end, so the memory
+  is back before the next window. `ml/tests/test_worker_deploy.py` holds the gap.
 - **The caps**, per worker: `cpus: 6` with `threads = 6`, `cpu_shares: 256` (anything else on
   the machine wins contention) and `nice = 10` (applied by each session), `mem_limit: 20g`
   with `memswap_limit: 20g` (no swap), `read_only: true` with a 256 MB tmpfs `/tmp` and
@@ -801,11 +804,10 @@ no model. CI runs it with the ingestion suite.
   with fake components only ("Running on the home server"). Setting it up there, with the
   real broker and weights, is a separate, supervised step; the old timers and the
   `DOCKER-USER` rules, if they were ever installed, are to be removed by hand then.
-- **Kev's graceful stop can run past 05:00, into pplx's window.** The windows do not overlap,
-  but a request in flight at 05:00 (up to about 104 s on the home server's CPU) or a model load
-  (about 150 s) finishes first, and pplx loads on its first lease after 05:00, so both models
-  can be in memory for up to about three minutes. If the machine cannot hold both (about
-  18 GB each), the fix is a gap between the windows (pplx from 05:05), the owner's call.
+- **The 5-minute gap after Kev's window is an estimate from the measured worst cases** (a
+  request of about 104 s or a load of about 150 s, then up to 3 × 10 s of last posts and a
+  10 s join: about 4 minutes), not a guarantee: a stop slower than that would still overlap
+  pplx's first load. The supervisor does not check that the other worker has unloaded.
 - **`inhibit_ipv4` depends on the Docker Engine.** Without it an `internal` network still
   lets a container reach the host's own services; an engine that ignores the option leaves
   that open. The stack's README has the check; the desktop's engine (29.x) honours it.

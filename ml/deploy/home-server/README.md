@@ -7,7 +7,7 @@ timers and no host firewall rules. The reference is `docs/ai/worker.md`.
 | Service | What it is |
 |---|---|
 | `kev` | `home-kev`: Kev on CPU, window 01:00–05:00 (Africa/Cairo) |
-| `pplx` | `home-pplx`: pplx on CPU, window 05:00–07:00 (Africa/Cairo) |
+| `pplx` | `home-pplx`: pplx on CPU, window 05:05–07:00 (Africa/Cairo) |
 | `broker-proxy` | our own TCP forwarder (`makhzan_ml.worker.proxy`), the workers' only way out |
 
 ## Set up
@@ -37,12 +37,12 @@ whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 - **An empty queue** (`on_empty = "exit"`) ends that window's session early and frees the
   model until the next window. Set `on_empty = "wait"` to keep polling every `poll_s` until
   the window's end instead, with the model held once loaded.
-- **One model at a time on this machine**, guaranteed by the two windows not overlapping:
-  Kev's ends at 05:00, where pplx's starts. Keep it that way when changing them. One caveat:
-  Kev's graceful stop can run a few minutes past 05:00 (a request in flight, up to about
-  104 s on this CPU, or a model load, about 150 s, then its last posts), and pplx loads on its
-  first lease after 05:00. If the two models (about 18 GB each) cannot be held at once,
-  leave a gap, for example start pplx at 05:05.
+- **One model at a time on this machine** (the owner's rule: 31 GB in all, other services
+  running, about 18 GB per model). The windows never overlap, and pplx starts 5 minutes after
+  Kev's ends: Kev's graceful stop can run about 4 minutes past 05:00 (a request in flight, up
+  to about 104 s on this CPU, or a model load, about 150 s, then its last posts), and pplx
+  loads on its first lease after its window opens. Keep at least that gap when changing
+  either window; a test (`ml/tests/test_worker_deploy.py`) fails without it.
 - **`docker compose stop`** while a worker sleeps exits at once; during a window it is the
   graceful stop, within `stop_grace_period` (240 s).
 - **The image names itself at hello** as `ghcr.io/ahmedsaed/makhzan/<image>:sha-<commit>`,

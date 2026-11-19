@@ -20,7 +20,7 @@ mmap = false
 weights_cache = "/models"
 
 [schedule]
-# Must not overlap home-pplx's window: one model at a time on this machine.
+# One model at a time on this machine: home-pplx starts 5 minutes after this window ends.
 windows = ["01:00-05:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"

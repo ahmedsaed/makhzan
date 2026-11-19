@@ -7,9 +7,10 @@
 #   docker compose logs -f kev                        # watch a worker
 #
 # Each worker stays up and waits for its own window (outside_window = "wait" in its TOML):
-# Kev 01:00-05:00, pplx 05:00-07:00, Africa/Cairo. Each window's session runs in a child
+# Kev 01:00-05:00, pplx 05:05-07:00, Africa/Cairo. Each window's session runs in a child
 # process that exits at the window's end, so between windows a worker holds no model, and
-# since the windows never overlap only one model is ever in memory on this machine.
+# since the windows never overlap and leave 5 minutes for Kev's graceful stop, only one
+# model is ever in memory on this machine.
 #
 # Network: the workers sit on `broker-only`, an internal network with no route anywhere.
 # Their one way out is `broker-proxy`, our own TCP forwarder (makhzan_ml.worker.proxy), which
