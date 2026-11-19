@@ -106,6 +106,8 @@ _MEDIA_FILE = re.compile(r"^https://static\.wixstatic\.com/media/([^/?#]+)")
 
 class WixStoresAdapter(SourceAdapter):
     source_type = SourceType.SCRAPED
+    #: Its category is the partition's (see `knows_category`).
+    records_categories_seen = True
 
     def __init__(
         self,

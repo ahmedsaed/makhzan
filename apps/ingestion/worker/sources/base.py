@@ -511,6 +511,14 @@ class SourceAdapter(ABC):
     #: purpose, which the drift check does not report as new.
     ignored_categories: tuple[str, ...] = ()
 
+    #: A source whose category comes from the partition being swept, so a
+    #: product filed under several categories is seen once under each and keeps
+    #: whichever was swept last. True records each partition's name on the
+    #: listing (`attributes.categories_seen`, worker/categories_seen.py), for a
+    #: person to judge multi-category products by. Record only: it changes no
+    #: category. Off for sources that read every category off the item itself.
+    records_categories_seen: bool = False
+
     #: Who the crawler says it is to this shop: "browser" (the default, what
     #: every source has always sent) or "makhzanbot" (an honest User-Agent,
     #: signed with Web Bot Auth when a key is configured). See
