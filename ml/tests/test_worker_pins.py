@@ -7,9 +7,8 @@ import re
 from pathlib import Path
 
 import pytest
-from makhzan_ml.worker import judges, run
+from makhzan_ml.worker import judges, pins, run
 from makhzan_ml.worker.fake_broker import canonical_sha256
-from makhzan_ml.worker import pins
 from makhzan_ml.worker.pins import PINS
 from makhzan_schemas.ai import pipelines, policy, prompt
 

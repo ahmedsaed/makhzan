@@ -5,10 +5,17 @@ name: AI worker image build
 #
 #   1. one bake of the lean base, then the worker on it (ml/docker-bake.hcl), loaded into the
 #      runner's Docker and, when pushing, also pushed to GHCR by digest, untagged, from the same
-#      build: what is tested below is what was pushed;
-#   2. the smoke test in the image (no weights, no network) and a size scan of its files;
-#   3. when pushing: the registry's image checked against the one tested, the sha- tags put on
-#      that digest, and only then the digest written to the summary.
+#      build. The push happens here, before the checks;
+#   2. the smoke test in the loaded copy (no weights, no network) and a size scan of its files;
+#   3. when pushing and both passed: the registry's image checked against the one tested, the
+#      sha- tags put on that digest, and only then the digest written to the summary.
+#
+# Trade-off, accepted (docs/ai/worker.md, "Images"): a run on main that fails a check leaves its
+# image in GHCR, untagged and in no summary. Nothing deletes it. Each build context is an
+# allow-list that never holds weights, and the server only runs a digest copied from a
+# successful run's summary. Deleting it was left out. It is not known that GITHUB_TOKEN may
+# delete a user-owned package's versions, and the index's platform manifest is a version shared
+# with any earlier build of the same content, so a deletion could break an image in use.
 
 on:
   workflow_call:

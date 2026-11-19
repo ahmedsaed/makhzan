@@ -377,7 +377,8 @@ demand); the steps are in `ai-worker-image-build.yml`. Each is one chain, from
 context, so no registry tag or local image comes between them.
 
 One build both loads the image on the runner and, on `main`, pushes it to GHCR by digest,
-untagged. The loaded image is then checked:
+untagged, in the same step: the push comes **before** the checks below, which run on the
+loaded copy of that same build:
 
 - `python -m makhzan_ml.worker.smoke --model <key>` runs in it with `--network none`: torch
   sees no CUDA device and `fla` is absent, the model's code and (for Kev) its pinned commit
@@ -386,10 +387,19 @@ untagged. The loaded image is then checked:
 - a scan of the exported filesystem fails on any file over 100 MB that is not a shared
   library, whatever it is called.
 
-Only then does the run check that the registry's image is the one tested (same config), put
-the `sha-<commit>` tags (long and short) on that digest, and print the digest in its summary.
+When both pass, the run checks that the registry's image is the one tested (same config), puts
+the `sha-<commit>` tags (long and short) on that digest, and prints the digest in its summary.
 Only runs on `main` push, and only they hold `packages: write`; pull requests touching
 `ml/`, and manual runs from other branches, build and test without pushing.
+
+**A failed run on `main` leaves an untagged image in GHCR.** It was pushed before the checks
+failed, and nothing deletes it: it carries no tag and appears in no summary. That is accepted
+because the build context of each image is an allow-list that never holds weights (`ml/kev`,
+`ml/pplx`, and `ml/` through its `.dockerignore`), and because the server only ever runs a
+digest copied from a successful run's summary. Deleting it from CI was considered and left out.
+It is not known that `GITHUB_TOKEN` may delete versions of a user-owned package. And the pushed
+digest is an index whose platform manifest is its own package version, shared with any earlier
+build of the same content, so deleting it could break an image already in use.
 
 ```bash
 docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>
@@ -681,6 +691,9 @@ no model. CI runs it with the ingestion suite.
   held it is removed) but has not been measured with real models.
 - **No systemd units or network rules are shipped**: only the examples above. Setting them up
   on the home server is a separate, supervised step.
+- **A failed run on `main` leaves an untagged image in GHCR** (see "Images"). The full fix is
+  to push only after the checks, from a copy kept byte for byte, for example an OCI layout
+  exported by the same bake and copied with `skopeo copy --preserve-digests`.
 - **The GHCR packages start private.** The first push creates `makhzan/kev-worker-cpu` and
   `makhzan/pplx-worker-cpu` as private packages; the owner sets each public once (the
   package's settings, "Change visibility"). Until then an anonymous `docker pull` is refused.

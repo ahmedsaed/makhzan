@@ -398,10 +398,12 @@ directly, for example `docker build -f ml/kev/Dockerfile.cpu-lean -t makhzan-ml/
 The workers built on them, `kev-worker-cpu` and `pplx-worker-cpu`, are built by CI
 (`.github/workflows/ai-worker-images.yml`) and published to GHCR. Each is one chain from
 `docker-bake.hcl`: the lean base, then `worker.Dockerfile` on exactly that build through a
-named context. On `main` only, the build that CI smoke-tests without weights or network
-(`python -m makhzan_ml.worker.smoke`, plus a scan for any file over 100 MB that is not a shared
-library) is the one it pushes by digest; the tags go on after the tests, and the run's summary
-prints the digest.
+named context. On `main` only, the one build is loaded on the runner and pushed by digest,
+untagged, in the same step, so before it is checked. The loaded copy is then smoke-tested
+without weights or network (`python -m makhzan_ml.worker.smoke`, plus a scan for any file over
+100 MB that is not a shared library). Only if both pass does the run tag that digest and
+print it in its summary. A run that fails leaves an untagged image in GHCR (docs/ai/worker.md,
+"Images").
 The home server pulls and runs by digest, with `MAKHZAN_IMAGE` set to it:
 `docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:...` (docs/ai/worker.md,
 "Images"). The same chain builds locally with
