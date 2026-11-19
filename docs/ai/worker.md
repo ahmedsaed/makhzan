@@ -371,15 +371,25 @@ holds model weights: they are mounted from the host at run time.
 
 **The CPU workers come from GHCR.** `.github/workflows/ai-worker-images.yml` builds
 `kev-worker-cpu` and `pplx-worker-cpu` on every push to `main` that touches `ml/` (and on
-demand). Each is one chain, from `ml/docker-bake.hcl`: the lean model image
-(`ml/kev/Dockerfile.cpu-lean`, `ml/pplx/Dockerfile.cpu-lean`), then the worker layer on exactly
-that build, through a named context, so no registry tag or local image comes between them.
-Before pushing, CI runs `python -m makhzan_ml.worker.smoke --model <key>` in the image with
-`--network none`. It checks that torch sees no CUDA device and `fla` is absent, that the
-model's code and (for Kev) its pinned commit are present, that the image holds no weight file,
-that the entrypoint's `--check` passes, and that a whole session runs against the fake broker
-with a fake judge. Pull requests touching `ml/` build and smoke-test without pushing. Each image
-is tagged `sha-<commit>` (long and short), and the run's summary prints its digest:
+demand); the steps are in `ai-worker-image-build.yml`. Each is one chain, from
+`ml/docker-bake.hcl`: the lean model image (`ml/kev/Dockerfile.cpu-lean`,
+`ml/pplx/Dockerfile.cpu-lean`), then the worker layer on exactly that build, through a named
+context, so no registry tag or local image comes between them.
+
+One build both loads the image on the runner and, on `main`, pushes it to GHCR by digest,
+untagged. The loaded image is then checked:
+
+- `python -m makhzan_ml.worker.smoke --model <key>` runs in it with `--network none`: torch
+  sees no CUDA device and `fla` is absent, the model's code and (for Kev) its pinned commit
+  are present, no weight-named file is in the image, the entrypoint's `--check` passes, and a
+  whole session runs against the fake broker with a fake judge;
+- a scan of the exported filesystem fails on any file over 100 MB that is not a shared
+  library, whatever it is called.
+
+Only then does the run check that the registry's image is the one tested (same config), put
+the `sha-<commit>` tags (long and short) on that digest, and print the digest in its summary.
+Only runs on `main` push, and only they hold `packages: write`; pull requests touching
+`ml/`, and manual runs from other branches, build and test without pushing.
 
 ```bash
 docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>
@@ -457,8 +467,8 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
 - `--user` must be able to read the weights and the two mounted files.
 - `MAKHZAN_IMAGE` is the registry digest the image was pulled by, so the broker's record of
   each session names exactly the image CI built and smoke-tested.
-- To move to a new build, take the digest from the newest run of "AI worker images" and change
-  `IMAGE`; nothing on the server follows a tag.
+- To move to a new build, take the digest from the newest run of "AI worker images" on `main`
+  and change `IMAGE`; nothing on the server follows a tag.
 
 **Egress to the broker only.** The broker is reached over Tailscale at
 `http://<tailscale-ip>:<port>`; the host's Tailscale client carries the traffic, encrypted.
