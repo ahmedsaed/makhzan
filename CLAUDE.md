@@ -321,6 +321,23 @@ Collapsing them produces a tidy-looking taxonomy that no buyer recognises.
 searching "multimeter" should see electronics and tools results together, and
 ranking decides the order. Only explicit category browse is scoped to one domain.
 
+**Search never depends on grouping: every active listing's titles, brands and
+part numbers are searchable on its product's document; the product appears
+once** (owner's rule). The product's own `title_en`/`brand`/`part_number` are
+copied from one representative listing, which moves with stock and price, so
+the document also carries `member_titles_en`, `member_titles_ar`,
+`member_brands` and `member_part_numbers` (each listing's `part_number`,
+`attributes.mfr_part_number` and `attributes.adapter_part_number`), deduplicated
+and sorted (`makhzan_schemas.search.member_fields`). `searchableAttributes` is
+product part number, product titles, members' titles, brand, members' brands,
+members' part numbers; both part-number fields are `IDENTIFIER_ATTRIBUTES`,
+searched only for identifier-shaped queries. Still one document per product,
+not one per listing with `distinctAttribute`: facet counts would count
+listings, and price, stock and supplier count are product-level. All of it is
+index-time work in `reindex_all` (one batched query); a search stays one
+Meilisearch request, and `attributesToRetrieve` (`DISPLAYED_ATTRIBUTES`) keeps
+the member arrays out of the hits.
+
 Adding a vertical means authoring a profile (taxonomy, rules, identifier
 strategy). That domain knowledge is the real cost; the code seam is already there.
 

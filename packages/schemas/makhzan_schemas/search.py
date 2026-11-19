@@ -5,12 +5,23 @@ over its offers (min price, supplier count, any-in-stock) so results can show
 "from EGP X · N suppliers" without a join. Listings/offers are read from the DB
 on the product and supplier pages.
 
+**Search never depends on grouping.** Every active listing's titles, brands and
+part numbers are searchable on its product's document (the `member_*` arrays),
+and the product appears once. The product's own `title_en`, `title_ar`, `brand`
+and `part_number` are copied from one representative listing, chosen by stock
+and price; were they all that was searched, a merge would hide every other
+shop's wording and a price change could move a product out of a query's
+results. The member arrays hold the same text whichever listing represents the
+product, so what a query finds depends only on which listings are active.
+
 Intentionally free of the meilisearch client dependency: this module only builds
 plain dicts and holds config. Each app owns its own client.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from makhzan_schemas.domains import DEFAULT_DOMAIN, PROFILES, get_profile
@@ -20,15 +31,97 @@ if TYPE_CHECKING:
 
 INDEX_NAME = "products"
 
-# Order matters: earlier attributes rank higher. Taken from the default domain's
-# profile — electronics ranks the part number first because its search is
-# identifier-driven.
+#: Searchable text gathered from every active listing of a product, not only
+#: its representative (see the module docstring). Arrays, deduplicated and
+#: sorted, so they do not depend on which listing represents the product and a
+#: rebuild of an unchanged product produces an identical document.
+MEMBER_ATTRIBUTES = [
+    "member_titles_en",
+    "member_titles_ar",
+    "member_brands",
+    # Each listing's `part_number`, its stated code (`attributes.mfr_part_number`)
+    # and its adapter's (`attributes.adapter_part_number`).
+    "member_part_numbers",
+]
+
+#: What a search hit returns (`attributesToRetrieve`): every document field but
+#: the member arrays, which exist to be searched, not shown. Listing every
+#: listing's title on every hit would multiply the payload for nothing a result
+#: card displays, and leaving them out here costs the query path nothing, where
+#: stripping them from the hits afterwards would be Python over every result.
+#: A test holds this to `build_product_document`'s keys, so a new display field
+#: cannot silently go missing from results.
+DISPLAYED_ATTRIBUTES = [
+    "id",
+    "domain",
+    "part_number",
+    "title_en",
+    "title_ar",
+    "brand",
+    "category_slug",
+    "category_ref",
+    "category_refs",
+    "category_name",
+    "supplier_name",
+    "supplier_count",
+    "supplier_slugs",
+    "offer_count",
+    "min_price",
+    "max_price",
+    "min_price_offer_id",
+    "min_price_shop",
+    "min_price_option",
+    "min_price_quantity",
+    "price_each",
+    "on_request_count",
+    "price_on_request",
+    "currency",
+    "in_stock",
+    "image",
+    "image_shop",
+    "last_verified_at",
+]
+
+#: Matched only by identifier-shaped queries (`looks_like_identifier`). For a
+#: word query a stray code match would outrank real title hits, and a member's
+#: code is weaker evidence than the product's own: it is often read from a title
+#: that merely references the part ("bracket for SG90").
+IDENTIFIER_ATTRIBUTES = ["part_number", "member_part_numbers"]
+
+
+def _searchable_attributes(own: Iterable[str]) -> list[str]:
+    """The product's own attributes in its profile's order, each member array
+    straight after the last of its own kind: the product's titles, then the
+    members' titles, then brands, and the members' codes last.
+
+    The default domain's profile says the product's `part_number` ranks first
+    (electronics search is identifier-driven); that holds only for identifier
+    queries, which are the only ones that search it.
+    """
+    own = list(own)
+    order: list[str] = []
+    for attr in own:
+        order.append(attr)
+        if attr == "title_ar" or (attr == "title_en" and "title_ar" not in own):
+            order += ["member_titles_en", "member_titles_ar"]
+        elif attr == "brand":
+            order.append("member_brands")
+    order += [a for a in MEMBER_ATTRIBUTES if a not in order]
+    return order
+
+
+# Order matters: earlier attributes rank higher. The product's own attributes
+# come from the default domain's profile; the member arrays follow their own
+# kind (`_searchable_attributes`). Meilisearch's `attribute` rule comes after
+# `words`, `typo` and `proximity`, so the order breaks ties between equally
+# good matches: a member's title that holds the query's words closer together
+# still outranks a looser match in the product's own title.
 #
 # Meilisearch settings are index-wide, so this cannot yet differ per domain. A
 # vertical that ranks very differently (nobody searches an MPN for gloves) will
 # need either a compromise order or a per-domain index; revisit when the second
 # domain lands. Documents carry `domain` so results can at least be filtered.
-SEARCHABLE_ATTRIBUTES = list(get_profile(DEFAULT_DOMAIN).search_attributes)
+SEARCHABLE_ATTRIBUTES = _searchable_attributes(get_profile(DEFAULT_DOMAIN).search_attributes)
 
 FILTERABLE_ATTRIBUTES = [
     # Canonical category identity. A bare slug is ambiguous: slugs are unique per
@@ -69,10 +162,11 @@ FACET_ATTRIBUTES = ["domain", "category_ref", "in_stock"]
 
 SORTABLE_ATTRIBUTES = ["min_price", "last_verified_at", "supplier_count", "offer_count"]
 
-#: Attributes to search when the query is plain words. Deliberately excludes
-#: part_number: it ranks first index-wide, which is right for "LM358" and wrong
-#: for "digital caliper" — a stray identifier match would outrank real title hits.
-TEXT_SEARCH_ATTRIBUTES = [a for a in SEARCHABLE_ATTRIBUTES if a != "part_number"]
+#: Attributes to search when the query is plain words. Deliberately excludes the
+#: part numbers, the product's and its members': part_number ranks first
+#: index-wide, which is right for "LM358" and wrong for "digital caliper" — a
+#: stray identifier match would outrank real title hits.
+TEXT_SEARCH_ATTRIBUTES = [a for a in SEARCHABLE_ATTRIBUTES if a not in IDENTIFIER_ATTRIBUTES]
 
 #: Longer than this and it is a phrase, not a part number. Guards against a
 #: descriptive query happening to contain something identifier-shaped.
@@ -121,6 +215,41 @@ def _enum(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
+@dataclass(frozen=True)
+class MemberText:
+    """What one active listing contributes to its product's searchable text."""
+
+    title_en: str | None = None
+    title_ar: str | None = None
+    brand: str | None = None
+    #: The listing's `part_number`, stated code and adapter's code, any of them None.
+    part_numbers: tuple[str | None, ...] = ()
+
+
+def _distinct(values: Iterable[str | None]) -> list[str]:
+    """Non-empty values, one per spelling that differs other than in case or
+    spacing, sorted so the result does not depend on the listings' order."""
+    seen: dict[str, str] = {}
+    for value in values:
+        text = " ".join((value or "").split())
+        if text:
+            key = text.casefold()
+            if key not in seen or text < seen[key]:
+                seen[key] = text
+    return [seen[k] for k in sorted(seen)]
+
+
+def member_fields(members: Iterable[MemberText]) -> dict[str, list[str]]:
+    """The `member_*` arrays of a product's document, from its active listings."""
+    members = list(members)
+    return {
+        "member_titles_en": _distinct(m.title_en for m in members),
+        "member_titles_ar": _distinct(m.title_ar for m in members),
+        "member_brands": _distinct(m.brand for m in members),
+        "member_part_numbers": _distinct(p for m in members for p in m.part_numbers),
+    }
+
+
 def build_product_document(
     product: "Product",
     category_slug: str | None,
@@ -130,6 +259,7 @@ def build_product_document(
     category_refs: list[str] | None = None,
     image_shop: dict | None = None,
     min_price_shop: dict | None = None,
+    members: Iterable[MemberText] = (),
 ) -> dict:
     """Project a Product (with its aggregates) into a flat Meilisearch document.
 
@@ -150,6 +280,10 @@ def build_product_document(
     about the low end (`min_price_option`, `min_price_quantity`, `price_each`,
     `on_request_count`, `price_on_request`) are display only, and mean what
     `ProductSummary` says they mean (makhzan_schemas.pricing).
+
+    `members` is the text of each of the product's **active** listings, the
+    representative included (`member_fields`). Searched, never displayed: the
+    API's searches retrieve only `DISPLAYED_ATTRIBUTES`.
     """
     lv = product.last_verified_at
     leaf = category_ref(category_domain or product.domain, category_slug)
@@ -186,4 +320,5 @@ def build_product_document(
         "image": product.image,
         "image_shop": image_shop if product.image else None,
         "last_verified_at": int(lv.timestamp()) if lv else None,
+        **member_fields(members),
     }

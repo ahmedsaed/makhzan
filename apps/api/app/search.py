@@ -11,6 +11,7 @@ import os
 import meilisearch
 from makhzan_schemas.freshness import fresh_since
 from makhzan_schemas.search import (
+    DISPLAYED_ATTRIBUTES,
     FACET_ATTRIBUTES,
     INDEX_NAME,
     SEARCHABLE_ATTRIBUTES,
@@ -93,12 +94,20 @@ def search_products(
         # found from each of their pages, with its cross-shop aggregates intact.
         filters.append(f'supplier_slugs = "{shop}"')
 
-    opts: dict = {"limit": limit, "offset": offset}
+    # The member arrays are searched, never shown: Meilisearch leaves them out
+    # of the hits itself, so responses stay the size they were.
+    opts: dict = {
+        "limit": limit,
+        "offset": offset,
+        "attributesToRetrieve": DISPLAYED_ATTRIBUTES,
+    }
     # part_number ranks first index-wide, which is what you want for "LM358" and
     # wrong for "digital caliper" — and now that a whole vertical (tools) carries
     # no part numbers at all, letting it rank first for word queries would be
     # actively unhelpful. Meilisearch cannot reorder attributes per query, so
-    # narrow which ones are searched instead.
+    # narrow which ones are searched instead. The members' part numbers follow
+    # the same rule (IDENTIFIER_ATTRIBUTES); their titles and brands are always
+    # searched, so every active listing's wording finds its product.
     opts["attributesToSearchOn"] = (
         list(SEARCHABLE_ATTRIBUTES) if looks_like_identifier(query) else TEXT_SEARCH_ATTRIBUTES
     )

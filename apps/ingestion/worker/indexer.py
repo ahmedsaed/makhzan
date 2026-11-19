@@ -1,8 +1,11 @@
 """Search indexer (writer side).
 
-Pushes Listings into Meilisearch. The index is a rebuildable projection of the
-`listings` table — `reindex_all` can recreate it from scratch, and the pipeline
-indexes incrementally as it ingests.
+Pushes products into Meilisearch, one document each. The index is a rebuildable
+projection of the database, and `reindex_all` is the only writer: the pipeline
+writes listings only, and every regroup (`rebuild_and_reindex`, `worker.regroup`)
+calls it straight after, so a product whose membership changed is indexed with
+its new members by the same rebuild that changed it. (`worker.reindex` indexes
+the groups as they stand.)
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from makhzan_schemas.search import (
     INDEX_NAME,
     SEARCHABLE_ATTRIBUTES,
     SORTABLE_ATTRIBUTES,
+    MemberText,
     build_product_document,
     category_ref,
 )
@@ -36,15 +40,30 @@ def get_client() -> meilisearch.Client:
 #: serves a half-filled index.
 STAGING_INDEX_NAME = f"{INDEX_NAME}_staging"
 
+#: How long to wait for a Meilisearch task before giving up. The client's own
+#: default is 5 s, and changing `searchableAttributes` re-tokenises every
+#: document in the index: on the live catalogue that can take longer, and a
+#: timeout in `ensure_index` fails the deploy's migrate step.
+TASK_TIMEOUT_MS = 300_000
 
-def ensure_index(client: meilisearch.Client, name: str = INDEX_NAME) -> None:
-    """Create the index (if absent) and apply its attribute configuration."""
+
+def _wait(client: meilisearch.Client, task) -> None:
+    client.wait_for_task(task.task_uid, timeout_in_ms=TASK_TIMEOUT_MS)
+
+
+def ensure_index(client: meilisearch.Client, name: str = INDEX_NAME) -> bool:
+    """Create the index (if absent) and apply its attribute configuration.
+
+    Returns whether `searchableAttributes` changed (a new index counts): the
+    documents already in it then lack what the new attributes search, until
+    the next reindex fills them (`worker.ensure_index` queues one).
+    """
     try:
-        task = client.create_index(name, {"primaryKey": "id"})
-        client.wait_for_task(task.task_uid)
+        _wait(client, client.create_index(name, {"primaryKey": "id"}))
     except meilisearch.errors.MeilisearchApiError:
         pass  # already exists
     index = client.index(name)
+    before = index.get_searchable_attributes()
     task = index.update_settings(
         {
             "searchableAttributes": SEARCHABLE_ATTRIBUTES,
@@ -54,7 +73,8 @@ def ensure_index(client: meilisearch.Client, name: str = INDEX_NAME) -> None:
             "pagination": {"maxTotalHits": 50000},
         }
     )
-    client.wait_for_task(task.task_uid)
+    _wait(client, task)
+    return list(before or []) != SEARCHABLE_ATTRIBUTES
 
 
 def index_documents(
@@ -72,7 +92,7 @@ def index_documents(
     for start in range(0, len(docs), batch_size):
         task = index.add_documents(docs[start : start + batch_size])
         if wait:
-            client.wait_for_task(task.task_uid)
+            _wait(client, task)
 
 
 def delete_documents(client: meilisearch.Client, ids: list[str], *, wait: bool = False) -> None:
@@ -81,7 +101,7 @@ def delete_documents(client: meilisearch.Client, ids: list[str], *, wait: bool =
         return
     task = client.index(INDEX_NAME).delete_documents(ids)
     if wait:
-        client.wait_for_task(task.task_uid)
+        _wait(client, task)
 
 
 def ancestry(category_id, tree: dict) -> list[str]:
@@ -129,19 +149,35 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
         cat.id: (category_ref(cat.domain, cat.slug), cat.parent_id)
         for cat in (await session.execute(select(Category))).scalars()
     }
-    # Which shops sell each product. Active listings only, matching how the
-    # product's own aggregates are computed: an archived offer must not keep a
-    # product in a shop's search after the shop dropped it.
+    # Which shops sell each product, and what each of its listings says. Active
+    # listings only, matching how the product's own aggregates are computed: an
+    # archived offer must not keep a product in a shop's search after the shop
+    # dropped it, nor keep its wording searchable. Every active listing's text
+    # is searchable, whichever one the product's own title was copied from
+    # (makhzan_schemas.search: search never depends on grouping). Only two keys
+    # of `attributes` come back, not the column, which also holds product-page
+    # details: that keeps the payload small, though Postgres still reads each
+    # row's whole `attributes` value to extract them.
     shops: dict = defaultdict(set)
-    for product_id, slug in (
+    members: dict = defaultdict(list)
+    for product_id, slug, title_en, title_ar, brand, *codes in (
         await session.execute(
-            select(Listing.product_id, Supplier.slug)
+            select(
+                Listing.product_id,
+                Supplier.slug,
+                Listing.title_en,
+                Listing.title_ar,
+                Listing.brand,
+                Listing.part_number,
+                Listing.attributes["mfr_part_number"].astext,
+                Listing.attributes["adapter_part_number"].astext,
+            )
             .join(Supplier, Supplier.id == Listing.supplier_id)
             .where(Listing.status == ListingStatus.ACTIVE, Listing.product_id.is_not(None))
-            .distinct()
         )
     ).all():
         shops[product_id].add(slug)
+        members[product_id].append(MemberText(title_en, title_ar, brand, tuple(codes)))
     # The shop each photo comes from, for the badge on it, and the shop whose
     # offer sets the lowest price: the handful of
     # shops, looked up once rather than joined into every product row.
@@ -159,12 +195,12 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
             ancestry(cat.id, tree) if cat else [],
             photo_shops.get(product.image_supplier_id),
             photo_shops.get(product.min_price_supplier_id),
+            members=members.get(product.id, ()),
         )
         for product, cat in rows
     ]
     index_documents(client, docs, wait=True, index_name=STAGING_INDEX_NAME)
-    swap = client.swap_indexes([{"indexes": [INDEX_NAME, STAGING_INDEX_NAME]}])
-    client.wait_for_task(swap.task_uid)
+    _wait(client, client.swap_indexes([{"indexes": [INDEX_NAME, STAGING_INDEX_NAME]}]))
     # The staging name now holds the previous index.
     _drop_index(client, STAGING_INDEX_NAME)
     return len(docs)
@@ -172,7 +208,6 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
 
 def _drop_index(client: meilisearch.Client, name: str) -> None:
     try:
-        task = client.delete_index(name)
-        client.wait_for_task(task.task_uid)
+        _wait(client, client.delete_index(name))
     except meilisearch.errors.MeilisearchApiError:
         pass  # not there

@@ -20,7 +20,9 @@ from makhzan_schemas.freshness import STALE_AFTER_DAYS, fresh_since
 from makhzan_schemas.search import (
     FACET_ATTRIBUTES,
     FILTERABLE_ATTRIBUTES,
+    DISPLAYED_ATTRIBUTES,
     INDEX_NAME,
+    MEMBER_ATTRIBUTES,
     SEARCHABLE_ATTRIBUTES,
     TEXT_SEARCH_ATTRIBUTES,
 )
@@ -191,6 +193,9 @@ async def test_an_identifier_query_searches_the_part_number_too(meili):
 
     assert opts_of(meili)["attributesToSearchOn"] == SEARCHABLE_ATTRIBUTES
     assert "part_number" in opts_of(meili)["attributesToSearchOn"]
+    # Every listing's code, not only the representative's: a stated code no
+    # title carries still finds its product.
+    assert "member_part_numbers" in opts_of(meili)["attributesToSearchOn"]
 
 
 async def test_a_word_query_does_not_search_the_part_number(meili):
@@ -201,6 +206,29 @@ async def test_a_word_query_does_not_search_the_part_number(meili):
 
     assert opts_of(meili)["attributesToSearchOn"] == TEXT_SEARCH_ATTRIBUTES
     assert "part_number" not in opts_of(meili)["attributesToSearchOn"]
+    assert "member_part_numbers" not in opts_of(meili)["attributesToSearchOn"]
+
+
+async def test_a_word_query_searches_every_listings_titles_and_brands(meili):
+    """Search never depends on grouping: another shop's wording of a merged
+    product finds it, whichever listing its own title was copied from."""
+    search_products("cooling fan")
+
+    searched = opts_of(meili)["attributesToSearchOn"]
+    assert {"member_titles_en", "member_titles_ar", "member_brands"} <= set(searched)
+    assert searched.index("title_en") < searched.index("member_titles_en")
+
+
+async def test_hits_retrieve_every_display_field_but_the_member_arrays(meili):
+    """Searched, never shown: every listing's title on every card would multiply
+    the payload. Meilisearch leaves them out itself, in the one request; the
+    reader does no work over the hits."""
+    search_products("fan")
+
+    retrieved = opts_of(meili)["attributesToRetrieve"]
+    assert retrieved == DISPLAYED_ATTRIBUTES
+    assert not set(MEMBER_ATTRIBUTES) & set(retrieved)
+    assert len(meili.indexes[INDEX_NAME].searches) == 1
 
 
 async def test_an_empty_query_is_treated_as_a_word_query(meili):
