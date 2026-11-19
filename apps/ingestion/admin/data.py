@@ -776,9 +776,17 @@ async def ai_view(session) -> dict:
     )
     ok = "error" not in data
     totals = {"same": 0, "not_same": 0, "stale": 0, "revoked": 0}
+    # What the last live regroup found of the standing "same" decisions
+    # (`ai_decisions.effect`), summed over pipelines.
+    effects: dict[str, int] = {}
+    blocked: dict[str, int] = {}
     for entry in (data.get("decisions") or {}).values():
         for key in totals:
             totals[key] += entry.get(key, 0)
+        for key, n in (entry.get("effects") or {}).items():
+            effects[key] = effects.get(key, 0) + n
+        for key, n in (entry.get("blocked") or {}).items():
+            blocked[key] = blocked.get(key, 0) + n
     return {
         "status": data,
         "flags": flags,
@@ -787,4 +795,9 @@ async def ai_view(session) -> dict:
         "queue": _queue_rows(data) if ok else [],
         "spark": _spark(data.get("daily") or {}, _now()) if ok else None,
         "totals": totals,
+        "effects": {
+            "counts": effects,
+            "blocked": sorted(blocked.items(), key=lambda kv: (-kv[1], kv[0])),
+            "checked_at": data.get("effects_checked_at"),
+        },
     }

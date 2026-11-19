@@ -12,7 +12,11 @@
   request and the windows its workers reported (none reported: unknown);
 - open flags by kind;
 - decisions: standing by pipeline and outcome, written in the last 7 days,
-  stale and revoked; re-scores due (P6: a standing decision whose text or
+  stale and revoked; what the last live regroup found of the standing "same"
+  ones (`effect`: in effect, blocked by reason, inactive, overridden, not yet
+  checked) and when that regroup ran (`worker_state['ai_effects_checked_at']`,
+  kept when the mode goes off, so its age says how old they are); re-scores
+  due (P6: a standing decision whose text or
   judge changed), with how many have an open job, a dead one, or none;
 - the audit (P12): rules-merged pairs scored, and how many fell below 0.8 and
   below 0.05. No threshold is chosen; these are counts only.
@@ -27,7 +31,16 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from makhzan_schemas.ai.decisions import REVOKED, STALE, STANDING
+from makhzan_schemas.ai.decisions import (
+    BLOCKED,
+    IN_EFFECT,
+    INACTIVE,
+    OVERRIDDEN,
+    REVOKED,
+    STALE,
+    STANDING,
+    effects_checked_at,
+)
 from makhzan_schemas.ai.mode import ai_mode
 from makhzan_schemas.ai.pipelines import PIPELINES
 from makhzan_schemas.ai.policy import ACTIVE, MODELS, thresholds
@@ -45,6 +58,21 @@ from makhzan_schemas.models import (
 
 #: P12's two counts.
 AUDIT_BELOW = (0.8, 0.05)
+
+#: `ai_decisions.effect` in the order status prints it; None is "unchecked".
+EFFECTS = (IN_EFFECT, BLOCKED, INACTIVE, OVERRIDDEN)
+
+
+def _new_decisions_entry() -> dict:
+    return {
+        "same": 0,
+        "not_same": 0,
+        STALE: 0,
+        REVOKED: 0,
+        "new_7d": {},
+        "effects": {**{e: 0 for e in EFFECTS}, "unchecked": 0},
+        "blocked": {},
+    }
 
 
 def _window_seconds(window: str | None) -> int | None:
@@ -224,9 +252,7 @@ async def collect(session: AsyncSession) -> dict:
     )
     decisions: dict[str, dict] = {}
     for pipeline_name, state, outcome, count in decision_rows:
-        entry = decisions.setdefault(
-            pipeline_name, {"same": 0, "not_same": 0, STALE: 0, REVOKED: 0, "new_7d": {}}
-        )
+        entry = decisions.setdefault(pipeline_name, _new_decisions_entry())
         if state == STANDING:
             entry[outcome] = count
         else:
@@ -237,9 +263,26 @@ async def collect(session: AsyncSession) -> dict:
         .group_by(AiDecision.pipeline, AiDecision.outcome)
     )
     for pipeline_name, outcome, count in recent_rows:
-        decisions.setdefault(
-            pipeline_name, {"same": 0, "not_same": 0, STALE: 0, REVOKED: 0, "new_7d": {}}
-        )["new_7d"][outcome] = count
+        decisions.setdefault(pipeline_name, _new_decisions_entry())["new_7d"][outcome] = count
+    # What the last live regroup found of each standing "same" decision.
+    effect_rows = await session.execute(
+        select(
+            AiDecision.pipeline,
+            AiDecision.effect,
+            AiDecision.blocked_reason,
+            func.count(),
+        )
+        .where(AiDecision.state == STANDING, AiDecision.outcome == "same")
+        .group_by(AiDecision.pipeline, AiDecision.effect, AiDecision.blocked_reason)
+    )
+    for pipeline_name, effect, reason, count in effect_rows:
+        entry = decisions.setdefault(pipeline_name, _new_decisions_entry())
+        bucket = effect if effect in entry["effects"] else "unchecked"
+        entry["effects"][bucket] += count
+        if effect == BLOCKED:
+            label = reason or "unknown"
+            entry["blocked"][label] = entry["blocked"].get(label, 0) + count
+    checked = await effects_checked_at(session)
 
     rescore = await _rescore_due(session, current_judge)
     audit = await _audit(session, current_judge)
@@ -266,6 +309,8 @@ async def collect(session: AsyncSession) -> dict:
         "nights": nights,
         "flags": flags,
         "decisions": decisions,
+        # When the last live regroup recorded the effects (one stamp for all).
+        "effects_checked_at": checked.isoformat() if checked else None,
         "rescore_due": rescore,
         "audit": audit,
     }
@@ -358,11 +403,42 @@ async def _audit(session: AsyncSession, judges: dict) -> dict:
 
 
 def _age(iso: str | None, now: datetime) -> str:
+    """How long before `now` a moment was: "5h", "2d 3h".
+
+    `now` is the status transaction's `now()`, read once at its start; a
+    worker that calls the broker while status is still reading stamps
+    `last_seen_at` a moment later. Floor division made those few seconds
+    "-1h", so a moment after `now` is "0h".
+    """
     if not iso:
         return "-"
-    delta = now - datetime.fromisoformat(iso)
-    hours = int(delta.total_seconds() // 3600)
+    seconds = max(0.0, (now - datetime.fromisoformat(iso)).total_seconds())
+    hours = int(seconds // 3600)
     return f"{hours // 24}d {hours % 24}h" if hours >= 24 else f"{hours}h"
+
+
+def _effects(entry: dict, checked_at: str | None, now: datetime) -> str:
+    """ " (in effect 4512, blocked 600 (same shop 540, values 60), ...)" after
+    the standing "same" count: what the last live regroup found, and how long
+    ago it ran (`checked_at`, the regroup-wide stamp), or nothing when no live
+    regroup has recorded them."""
+    effects = entry.get("effects") or {}
+    if not entry.get("same") or not checked_at:
+        return ""
+    parts = [f"in effect {effects.get(IN_EFFECT, 0)}"]
+    blocked = f"blocked {effects.get(BLOCKED, 0)}"
+    if entry.get("blocked"):
+        reasons = sorted(entry["blocked"].items(), key=lambda kv: (-kv[1], kv[0]))
+        blocked += " (" + ", ".join(f"{k} {v}" for k, v in reasons) + ")"
+    parts += [
+        blocked,
+        f"inactive {effects.get(INACTIVE, 0)}",
+        f"overridden {effects.get(OVERRIDDEN, 0)}",
+    ]
+    if effects.get("unchecked"):
+        parts.append(f"unchecked {effects['unchecked']}")
+    parts.append(f"checked {_age(checked_at, now)} ago")
+    return " (" + ", ".join(parts) + ")"
 
 
 def format_text(data: dict) -> str:
@@ -410,11 +486,12 @@ def format_text(data: dict) -> str:
         "  flags        "
         + (", ".join(f"{k} {v}" for k, v in sorted(flags.items())) if flags else "none open")
     )
+    checked = data.get("effects_checked_at")
     for pipeline_name, d in sorted(data["decisions"].items()):
         new = ", ".join(f"{k} {v}" for k, v in sorted(d["new_7d"].items())) or "none"
         lines.append(
-            f"  decisions {pipeline_name:<8} standing: same {d['same']}, not same {d['not_same']}"
-            f"; stale {d[STALE]}, revoked {d[REVOKED]}; new in 7 d: {new}"
+            f"  decisions {pipeline_name:<8} standing: same {d['same']}{_effects(d, checked, now)}, "
+            f"not same {d['not_same']}; stale {d[STALE]}, revoked {d[REVOKED]}; new in 7 d: {new}"
         )
     r = data["rescore_due"]
     if r["due"]:

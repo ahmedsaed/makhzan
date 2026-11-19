@@ -55,12 +55,15 @@ STALLED_AFTER = timedelta(hours=36)
 
 
 def _age(moment: datetime | None) -> str:
+    """'5m ago', '8h ago', '3d ago'. A moment slightly after this process's
+    clock (written by another host or transaction a beat later) is '0m ago',
+    never a negative age."""
     if moment is None:
         return "never"
-    delta = datetime.now(timezone.utc) - moment
-    hours = delta.total_seconds() / 3600
+    seconds = max(0.0, (datetime.now(timezone.utc) - moment).total_seconds())
+    hours = seconds / 3600
     if hours < 1:
-        return f"{delta.total_seconds() / 60:.0f}m ago"
+        return f"{seconds / 60:.0f}m ago"
     if hours < 48:
         return f"{hours:.0f}h ago"
     return f"{hours / 24:.0f}d ago"

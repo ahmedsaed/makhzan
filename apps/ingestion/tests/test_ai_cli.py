@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -198,3 +199,115 @@ async def test_a_flag_is_dismissed_with_a_note_and_its_resolved_time(capsys):
     assert (row.status, row.resolved_by, row.note) == ("dismissed", "tester", "worker updated")
     assert row.resolved_at is not None
     assert await ai.run(["flags", "dismiss", str(flag.id), "--note", "again"]) == 1
+
+
+def _status_fixture(**decisions) -> dict:
+    """The smallest `collect()` result `format_text` prints."""
+    return {
+        "at": "2026-11-19T12:00:00+00:00",
+        "mode": "live",
+        "policy": {"name": "p1", "thresholds": {"kev": 0.5}},
+        "judges": {},
+        "queue": {},
+        "throughput": {},
+        "nights": {},
+        "workers": [],
+        "flags": {},
+        "decisions": decisions,
+        "rescore_due": {"due": 0, "open_job": 0, "dead_job": 0, "no_job": 0},
+        "audit": {"scored": 0, "below_0.8": 0, "below_0.05": 0},
+    }
+
+
+def test_the_decisions_line_says_what_the_last_live_regroup_found():
+    from makhzan_schemas.ai.status import format_text
+
+    entry = {
+        "same": 6329,
+        "not_same": 12000,
+        "stale": 40,
+        "revoked": 2,
+        "new_7d": {"same": 300},
+        "effects": {
+            "in_effect": 4512,
+            "blocked": 640,
+            "inactive": 1150,
+            "overridden": 7,
+            "unchecked": 20,
+        },
+        "blocked": {
+            "same shop": 540,
+            "values": 37,
+            "not mutual best": 51,
+            "clusters share a shop": 12,
+        },
+    }
+    data = _status_fixture(match=entry)
+    data["effects_checked_at"] = "2026-11-19T09:30:00+00:00"
+    line = next(x for x in format_text(data).splitlines() if "decisions" in x)
+    assert line == (
+        "  decisions match    standing: same 6329 (in effect 4512, blocked 640 (same shop 540, "
+        "not mutual best 51, values 37, clusters share a shop 12), inactive 1150, overridden 7, "
+        "unchecked 20, checked 2h ago), not same 12000; stale 40, revoked 2; new in 7 d: same 300"
+    )
+    # Never checked (no live regroup has run): the line is as it was.
+    line = next(
+        x for x in format_text(_status_fixture(match=entry)).splitlines() if "decisions" in x
+    )
+    assert line.startswith("  decisions match    standing: same 6329, not same 12000;")
+
+
+def test_a_worker_seen_after_the_status_snapshot_is_not_seen_in_the_future():
+    """`now` is the status transaction's start; a worker that calls the broker
+    while status reads stamps `last_seen_at` a moment later. That once printed
+    "last seen -1h ago"."""
+    from makhzan_schemas.ai.status import _age, format_text
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+    assert _age((now + timedelta(seconds=3)).isoformat(), now) == "0h"
+    assert _age((now - timedelta(minutes=10)).isoformat(), now) == "0h"
+    assert _age((now - timedelta(hours=5, minutes=1)).isoformat(), now) == "5h"
+    assert _age((now - timedelta(days=2, hours=3)).isoformat(), now) == "2d 3h"
+    data = _status_fixture()
+    data["workers"] = [
+        {
+            "name": "cpu-1",
+            "models": ["kev"],
+            "last_seen_at": "2026-11-19T12:00:02.5+00:00",
+            "revoked": False,
+            "device": "cpu",
+            "dtype": None,
+            "threads": None,
+            "window": None,
+        }
+    ]
+    out = format_text(data)
+    assert "last seen 0h ago" in out and "-1h" not in out
+
+
+async def test_status_counts_each_same_decisions_effect_after_a_live_regroup(capsys):
+    from makhzan_schemas.ai.mode import set_ai_mode
+    from makhzan_schemas.grouping import rebuild_products
+
+    decision = await _decision("same", 0.9, 0.97)
+    async with SessionLocal() as session:
+        await set_ai_mode(session, "live")
+        await session.commit()
+    async with SessionLocal() as session:
+        await rebuild_products(session)
+    async with SessionLocal() as session:
+        row = await session.get(AiDecision, decision)
+    assert row.effect == "in_effect" and row.checked_at is not None
+    assert await ai.run(["status"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "standing: same 1 (in effect 1, blocked 0, inactive 0, overridden 0, checked 0h ago)" in out
+    )
+
+
+def test_make_status_never_prints_a_negative_age():
+    from worker.status import _age
+
+    assert _age(datetime.now(UTC) + timedelta(seconds=30)) == "0m ago"
+    assert _age(datetime.now(UTC) - timedelta(minutes=5, seconds=10)) == "5m ago"
+    assert _age(datetime.now(UTC) - timedelta(hours=3, minutes=1)) == "3h ago"
