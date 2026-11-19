@@ -397,8 +397,9 @@ Only runs on `main` push, and only they hold `packages: write`; pull requests to
 **A failed run on `main` leaves an untagged image in GHCR.** It was pushed before the checks
 failed, and nothing deletes it: it carries no tag and appears in no summary. That is accepted
 because the build context of each image is an allow-list that never holds weights (`ml/kev`,
-`ml/pplx`, and `ml/` through its `.dockerignore`), and because the server only ever runs a
-digest copied from a successful run's summary. Deleting it from CI was considered and left out.
+`ml/pplx`, and `ml/` through its `.dockerignore`), and because the server only ever runs
+`latest`, which points only at a tested digest, and records the digest it resolved to. Deleting
+it from CI was considered and left out.
 It is not known that `GITHUB_TOKEN` may delete versions of a user-owned package. And the pushed
 digest is an index whose platform manifest is its own package version, shared with any earlier
 build of the same content, so deleting it could break an image already in use.
@@ -410,7 +411,8 @@ docker pull ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu@sha256:<digest>
 
 The home server runs `:latest`, pulled before each run, and passes the digest that resolved to
 as `MAKHZAN_IMAGE` (below), so the broker's record names the exact image, whatever `latest`
-points at later:
+points at later. Run the inspect after the pull: `RepoDigests` is empty for an image that was
+not pulled from a registry.
 
 ```bash
 docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest
@@ -419,7 +421,9 @@ IMG=$(docker image inspect -f '{{index .RepoDigests 0}}' ghcr.io/ahmedsaed/makhz
 
 A build whose pins changed (a new model version) is refused by the worker's `expect_version`
 check until its configuration is updated, so a `latest` that moved never scores under a stale
-configuration. To roll back, run an older `sha-<commit>` tag of the same image. Both are public. The upstream code is
+configuration. To roll back, run an older `sha-<commit>` tag of the same image.
+
+Both are public. The upstream code is
 Apache-2.0: Kev's source (github.com/jaredpalmer/kev) ships its `LICENSE` in `/opt/kev`, and
 the pplx-decider package's `LICENSE` and `NOTICE` come from the pinned Hub revision into
 `/opt/pplx`. The images carry `org.opencontainers.image.licenses`, `.source` and `.revision`
@@ -467,9 +471,10 @@ real files (copied with `rsync -L`, as for the CPU benchmark), plus `trees/` and
 
 ```bash
 NAME=home-kev   # or home-pplx, with pplx-worker-cpu
-REPO=ghcr.io/ahmedsaed/makhzan/kev-worker-cpu   # or a sha-<commit> tag, to roll back
-docker pull "$REPO:latest"
-IMAGE=$(docker image inspect -f '{{index .RepoDigests 0}}' "$REPO:latest")   # repo@sha256:...
+REPO=ghcr.io/ahmedsaed/makhzan/kev-worker-cpu
+TAG=latest   # to roll back, an older sha-<commit>
+docker pull "$REPO:$TAG"
+IMAGE=$(docker image inspect -f '{{index .RepoDigests 0}}' "$REPO:$TAG")   # after the pull
 docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   --cpus=6 --cpu-shares=256 --memory=20g --memory-swap=20g \
   --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
@@ -488,11 +493,12 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   the 10 s heartbeat join).
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
-- `MAKHZAN_IMAGE` is the registry digest `latest` resolved to after the pull, and the container
-  runs that digest, so the broker's record of each session names exactly the image CI built and
+- `MAKHZAN_IMAGE` is the registry digest `latest` resolved to after the pull (the inspect must
+  follow the pull: `RepoDigests` is empty for an image not pulled from a registry), and the
+  container runs that digest, so the broker's record of each session names exactly the image CI built and
   smoke-tested.
 - A new build is picked up by the pull before the next run. A build whose pins changed is
-  refused by `expect_version` until the configuration follows. To roll back, set `REPO`'s tag
+  refused by `expect_version` until the configuration follows. To roll back, set `TAG`
   to an older `sha-<commit>` (the digest is in that run's summary).
 
 **Egress to the broker only.** The broker is reached over Tailscale at

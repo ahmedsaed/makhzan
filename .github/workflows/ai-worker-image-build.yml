@@ -12,8 +12,8 @@ name: AI worker image build
 #
 # Trade-off, accepted (docs/ai/worker.md, "Images"): a run on main that fails a check leaves its
 # image in GHCR, untagged and in no summary. Nothing deletes it. Each build context is an
-# allow-list that never holds weights, and the server only runs a digest copied from a
-# successful run's summary. Deleting it was left out. It is not known that GITHUB_TOKEN may
+# allow-list that never holds weights, and the server only runs latest, which only ever points
+# at a tested digest, and records the digest it resolved to. Deleting it was left out. It is not known that GITHUB_TOKEN may
 # delete a user-owned package's versions, and the index's platform manifest is a version shared
 # with any earlier build of the same content, so a deletion could break an image in use.
 

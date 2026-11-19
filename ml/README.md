@@ -407,10 +407,11 @@ without weights or network (`python -m makhzan_ml.worker.smoke`, plus a scan for
 The home server runs `:latest`, pulled before each run, and passes the resolved digest as
 `MAKHZAN_IMAGE`:
 `docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest`, then
-`IMG=$(docker image inspect -f '{{index .RepoDigests 0}}' ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest)`.
+`docker image inspect -f '{{index .RepoDigests 0}}'` on the same name (after the pull:
+`RepoDigests` is empty for an image not pulled from a registry).
 A build whose pins changed is refused by the worker's `expect_version` check; rolling back
-means running an older `sha-<commit>` tag (docs/ai/worker.md, "Images"). The same chain builds locally with
-`docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load`. The GPU images stay local
+means running an older `sha-<commit>` tag (docs/ai/worker.md, "Images"). The same chain builds
+locally with `docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load`. The GPU images stay local
 builds. No image holds weights. Kev's `LICENSE` ships with its source in `/opt/kev`, and the
 pplx-decider card's `LICENSE` and `NOTICE` (Apache-2.0, from the pinned revision,
 sha256-checked) are in `/opt/pplx`.
