@@ -19,7 +19,19 @@ timers and no host firewall rules. The reference is `docs/ai/worker.md`.
    broker's Tailscale address and port (`BROKER_TARGET`, an IP, never a name).
 2. Put each worker's broker token in `home-kev.token` and `home-pplx.token` (`chmod 600`,
    owned by that user). The broker issues them: `./makhzan ai worker add home-kev --models kev`.
-3. `docker compose up -d`.
+3. Check each worker's configuration first. A configuration error makes the worker exit 2,
+   and `restart: unless-stopped` would restart it in a loop:
+
+   ```bash
+   docker compose run --rm --no-deps kev --config /etc/makhzan-ai/worker.toml --check
+   docker compose run --rm --no-deps pplx --config /etc/makhzan-ai/worker.toml --check
+   ```
+
+   Each prints `configuration ok: ...` (with the image's commit) and exits 0.
+4. `docker compose up -d`, then the network check below.
+
+Docker Engine 26 or newer is needed (the internal network's `inhibit_ipv4` option, below);
+the check prints the engine's version.
 
 Update to the latest tested images with `docker compose pull && docker compose up -d`. To
 roll back, set `KEV_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
@@ -42,7 +54,12 @@ whose pins changed is refused by the TOMLs' `expect_version` until they follow.
   Kev's ends: Kev's graceful stop can run about 4 minutes past 05:00 (a request in flight, up
   to about 104 s on this CPU, or a model load, about 150 s, then its last posts), and pplx
   loads on its first lease after its window opens. Keep at least that gap when changing
-  either window; a test (`ml/tests/test_worker_deploy.py`) fails without it.
+  either window; a test (`ml/tests/test_worker_deploy.py`) fails without it. It is also
+  enforced: a worker takes no new lease and starts no model load in its window's last
+  5 minutes (`no_new_lease_s = 300`, the CPU default), and if a session is still running
+  4.5 minutes after its window's end the supervisor kills it (logged as `KILLING the
+  session`), so its memory is free before the other worker's window opens. A killed session's
+  lease expires at the broker and charges the job in hand one attempt.
 - **`docker compose stop`** while a worker sleeps exits at once; during a window it is the
   graceful stop, within `stop_grace_period` (240 s).
 - **The image names itself at hello** as `ghcr.io/ahmedsaed/makhzan/<image>:sha-<commit>`,
@@ -51,19 +68,24 @@ whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 ## The network
 
 The workers are on `broker-only`, a Docker network with `internal: true`: no route out, no
-DNS beyond the stack's own service names. `broker-proxy` is on that network and on an
-ordinary bridge (`egress`), and forwards one TCP port to `BROKER_TARGET`, byte for byte, and
-to nothing else: it reads no request, so nothing a worker sends can name another
-destination. The host's Tailscale client carries the proxy's traffic to the broker, as it did
+DNS beyond the stack's own service names. `broker-proxy` is on that network, at a fixed
+address (`PROXY_ADDRESS`, 10.231.89.2 by default), and on an ordinary bridge (`egress`). It
+listens on its `broker-only` address only, never on the bridge, and forwards one TCP port to
+`BROKER_TARGET`, byte for byte, and to nothing else: it reads no request, so nothing a worker
+sends can name another destination. The host's Tailscale client carries the proxy's traffic to the broker, as it did
 for the workers before. The worker TOMLs say `broker_url = "http://broker-proxy:8100/ai/v1"`
-with `broker_via_proxy = true`, the only case where the worker accepts plain http to a name.
+with `broker_via_proxy = true`, the only case where the worker accepts plain http to a name,
+and only to that exact name (`broker_proxy_hosts`, default `["broker-proxy"]`). That is safe
+only inside this stack, where the name can resolve to nothing but the proxy on an internal
+network; never set it for a worker on an ordinary network.
 
 `internal: true` alone still gives the host an address on that network's bridge, so a worker
 could reach a host service listening on all interfaces. `com.docker.network.bridge.inhibit_ipv4`
-removes that address; it needs a recent Docker Engine. Check it after `docker compose up -d`:
+removes that address; it needs Docker Engine 26 or newer. Check it after `docker compose up -d`:
 only the proxy should connect.
 
 ```bash
+docker version --format '{{.Server.Version}}'   # 26 or newer
 docker compose exec -T kev python - <<'EOF'
 import socket
 for host, port in [("broker-proxy", 8100), ("1.1.1.1", 443), ("172.17.0.1", 22)]:
@@ -71,10 +93,14 @@ for host, port in [("broker-proxy", 8100), ("1.1.1.1", 443), ("172.17.0.1", 22)]
         socket.create_connection((host, port), timeout=5).close(); print(host, port, "CONNECTED")
     except OSError as e:
         print(host, port, "blocked:", e)
+try:  # no DNS for anything outside the stack
+    socket.getaddrinfo("example.com", 443); print("DNS example.com RESOLVED: not isolated")
+except OSError as e:
+    print("DNS example.com blocked:", e)
 EOF
 docker network inspect makhzan-ai_broker-only -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
 ```
 
-The last line should print nothing (or `invalid IP`): no host address on the bridge. If it
+Only `broker-proxy 8100` should connect, and the DNS lookup must fail. The last line should print nothing (or `invalid IP`): no host address on the bridge. If it
 prints an address, the engine ignored the option; try connecting to that address from the
 container as above, and if it answers, update Docker before relying on the isolation.

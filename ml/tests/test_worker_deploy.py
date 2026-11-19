@@ -104,3 +104,21 @@ def test_the_gap_check_itself(first, second, ok):
     a = [Window.parse(w) for w in first]
     b = [Window.parse(w) for w in second]
     assert (not gap_clashes(a, b)) is ok
+
+
+def test_the_proxy_listens_only_on_its_internal_address_and_workers_are_capped():
+    """Read as text (no YAML parser in the test environment): the lines that matter."""
+    text = (DEPLOY / "compose.yml").read_text()
+    proxy = text[text.index("  broker-proxy:") : text.index("\n  kev:")]
+    assert "0.0.0.0" not in proxy
+    assert "      - --listen\n      - ${PROXY_ADDRESS:-10.231.89.2}:8100\n" in proxy
+    assert "        ipv4_address: ${PROXY_ADDRESS:-10.231.89.2}\n" in proxy
+    nets = text[text.index("\nnetworks:") :]
+    assert "    internal: true\n" in nets
+    assert 'com.docker.network.bridge.inhibit_ipv4: "true"' in nets
+    assert "subnet: ${BROKER_NET_SUBNET:-10.231.89.0/24}" in nets
+    worker = text[text.index("x-worker: &worker") : text.index("\nservices:")]
+    assert "  pids_limit: 256\n" in worker and "  networks: [broker-only]\n" in worker
+    for name in ("kev", "pplx"):
+        block = text[text.index(f"\n  {name}:\n") :].split("\n\n")[0]
+        assert "<<: *worker" in block and "networks" not in block  # the anchor's network only

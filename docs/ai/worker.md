@@ -153,6 +153,25 @@ The combinations with `on_empty`:
 - `on_empty = "wait"`: the child keeps polling every `poll_s` until the window's end, with
   the model held once loaded.
 
+**One model at a time, enforced.** Each session takes no new lease and starts no model load
+in its window's last `no_new_lease_s` (300 s on CPU). If a session is still running
+`KILL_AFTER_S` (4.5 minutes) after its window's end all the same, the supervisor SIGKILLs it
+and logs `KILLING the session` at ERROR, so the next worker's window (5 minutes later on the
+home server) never finds its model in memory. 4.5 minutes is above the graceful stop's bound
+on the home server's CPU (about 170 s) and below the gap. A killed session cannot release
+its lease: it expires at the broker and charges the job in hand one attempt. The supervisor
+waits for its child with a polling `waitpid` against that deadline, never a blocking one.
+
+**Signals, safely.** The supervisor's SIGTERM/SIGINT handler only records the signal; Python
+also writes it to a wakeup pipe, so any sleep ends at once (`select`), and the main loop
+turns the record into a stop and forwards it to a running child. SIGTERM and SIGINT are
+blocked across the fork and the stop flag is read right after blocking them, so a signal
+that came just before is seen and nothing is forked, and one during the fork is forwarded as
+soon as the child's pid is known. The session (`run.Worker`) does the same with a watcher
+thread: its handler does nothing, the wakeup pipe carries the signal, and the thread calls
+`request_stop`, which now lands even while the main thread is inside a forward pass. Neither
+handler takes a lock.
+
 A session that fails is logged and the supervisor sleeps until the next window: a model that
 will not load, version drift, a refused token or a child killed (for memory, say) would only
 fail again if retried at once, and a compose `restart: unless-stopped` would turn an exit into
@@ -248,7 +267,8 @@ this image can load the model key, and exits.
 |---|---|---|
 | `name` | required | the worker's name, as registered (`ai_workers.name`) |
 | `broker_url` | required | the broker's base URL over Tailscale, `http://<tailscale-ip>:<port>/ai/v1`, or the compose stack's proxy, `http://broker-proxy:8100/ai/v1` (with `broker_via_proxy`). Plain `http://` is accepted only to a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one (127.0.0.0/8, ::1: the tests, the parity check, a broker on the same machine), and only as an address, never a name (not even `localhost`) and with no zone id, unless `broker_via_proxy` is set; a malformed port is refused at load; anything else must be `https://` |
-| `broker_via_proxy` | `false` | `true` also accepts plain `http://` to a compose service name: one DNS label with a letter in it, no dots, nothing the resolver reads as an address (`1234`, `0x7f000001`). For the broker proxy on the worker's internal Docker network, which has no other route out and forwards only to the broker's Tailscale address. Off, a name is refused as before |
+| `broker_via_proxy` | `false` | `true` also accepts plain `http://` to the broker proxy's name, exactly, and no other name. Safe only inside the compose stack: on the worker's internal Docker network, which has no other route out, the name can only be the proxy, which forwards only to the broker's Tailscale address. Never set it for a worker on an ordinary network. Off, a name is refused as before |
+| `broker_proxy_hosts` | `["broker-proxy"]` | with `broker_via_proxy`: the exact names allowed, each a compose service name (one DNS label with a letter in it, no dots, nothing the resolver reads as an address such as `1234` or `0x7f000001`) |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
 | `ca_file` | system CAs | for an `https://` broker only: a CA bundle to trust instead, for a privately signed certificate |
 | `model` | required | the one model key served, from `policy.MODELS`: `"kev"` or `"pplx"`. The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
@@ -278,6 +298,7 @@ this image can load the model key, and exits.
 | `windows` | `"always"` | `"always"`, or one or more `"HH:MM-HH:MM"` in local time. A window may cross midnight (`"22:00-02:00"`). Windows that touch or overlap run on as one |
 | `timezone` | required with windows | an IANA zone such as `"Africa/Cairo"`. Required whenever `windows` is not `"always"`: a container's local time is UTC unless told otherwise, so a window without a zone would run at the wrong hours |
 | `on_empty` | `"exit"` | `"exit"` or `"wait"` |
+| `no_new_lease_s` | 300 on CPU, 0 on GPU | no new lease and no model load this close to a window's end (seconds), so a CPU load (about 150 s) cannot start at 04:59 and hold a model past the window. A session that would start inside it does nothing; a lease taken just before it goes back whole, gracefully, with nothing loaded. Must be shorter than every window |
 | `outside_window` | `"exit"` | `"exit"`: outside every window, exit 0 (started by something else at the window). `"wait"`: stay up, sleep until each window, run its session in a child process that exits at the window's end ("Waiting for the window") |
 | `poll_s` | 600 | with `"wait"`, how often to ask for work again; at least 5 |
 
@@ -563,7 +584,8 @@ docker compose logs -f kev                      # sleeping until 01:00, window o
 network with `internal: true`: no route out, no DNS beyond the stack's service names. Their
 one way out is `broker-proxy`, which sits on that network and on an ordinary bridge and
 forwards one TCP port to the broker's Tailscale address (`BROKER_TARGET`), and nothing else.
-It is our own code, `python -m makhzan_ml.worker.proxy --listen 0.0.0.0:8100 --to <ip>:8100`
+It is our own code, `python -m makhzan_ml.worker.proxy --listen 10.231.89.2:8100 --to <ip>:8100`
+(it listens on its fixed address on `broker-only` only, never on the bridge)
 (standard library asyncio), run from the Kev worker image with no model loaded, read-only,
 no capabilities, non-root, 128 MB. It reads no request, so nothing a worker sends can name
 another destination (a `CONNECT` or an absolute URL is only bytes delivered to the broker,
@@ -574,8 +596,11 @@ carries its traffic to the broker, encrypted. The workers' `broker_url` is
 `internal: true` alone leaves the host an address on the network's bridge, and a container
 could reach host services listening on all interfaces through it (the end-to-end run below
 reached sshd that way). The network therefore sets `com.docker.network.bridge.inhibit_ipv4`,
-which leaves the host without one; it needs a recent Docker Engine, and the stack's README
-has the check to run after `up -d`.
+which leaves the host without one; it needs Docker Engine 26 or newer, and the stack's
+README has the check to run after `up -d` (the engine's version, the connections, and an
+external DNS lookup that must fail). The workers also have `pids_limit: 256`, and the README
+runs each worker's `--check` before the first `up -d`, so a configuration error does not
+become a restart loop.
 
 **End to end, with fake components (2026-11-19).** The stack was run on the desktop from
 local bake builds (`makhzan-ml/{kev,pplx}-worker-cpu:e2e`), unchanged but for an override that
@@ -778,6 +803,12 @@ no model. CI runs it with the ingestion suite.
   and, forking for real, the model loaded and freed in the child, not the supervisor, and a
   SIGTERM during a window forwarded to the child, which stops gracefully. The entrypoint runs
   the supervisor only for `"wait"`, and imports neither torch nor a thread.
+- **One model at a time, enforced**, on a fake clock: no session, lease or load inside
+  `no_new_lease_s` (a lease taken just before it goes back uncharged with nothing loaded); a
+  real child that ignores SIGTERM killed at the window's end plus 4.5 minutes (05:04:30,
+  before pplx's 05:05); the deadline the supervisor sets; a stop seen before the fork forks
+  nothing, one recorded during it reaches the child; the signal handler only records. The
+  compose file: the proxy listens on its internal address only, workers have `pids_limit`.
 - **The broker proxy** (`test_worker_proxy.py`): bytes forwarded both ways, a `CONNECT` or
   an absolute URL delivered to the target all the same, an unreachable target, the
   connection limit, idle connections closed, targets as IP addresses only.
@@ -806,8 +837,9 @@ no model. CI runs it with the ingestion suite.
   `DOCKER-USER` rules, if they were ever installed, are to be removed by hand then.
 - **The 5-minute gap after Kev's window is an estimate from the measured worst cases** (a
   request of about 104 s or a load of about 150 s, then up to 3 × 10 s of last posts and a
-  10 s join: about 4 minutes), not a guarantee: a stop slower than that would still overlap
-  pplx's first load. The supervisor does not check that the other worker has unloaded.
+  10 s join: about 4 minutes). It is now enforced from the stopping side: no lease or load in
+  a window's last 5 minutes, and a kill 4.5 minutes after its end. Nothing checks from the
+  starting side that the other worker has unloaded (the two containers share no state).
 - **`inhibit_ipv4` depends on the Docker Engine.** Without it an `internal` network still
   lets a container reach the host's own services; an engine that ignores the option leaves
   that open. The stack's README has the check; the desktop's engine (29.x) honours it.
