@@ -201,7 +201,7 @@ export function Results({
     // chips and results.
     <div
       className={cn(
-        "flex flex-col gap-3 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:grid-rows-[auto_auto_1fr] lg:gap-x-8 lg:gap-y-4",
+        "flex flex-col gap-3 lg:grid lg:grid-cols-[17.5rem_minmax(0,1fr)] lg:grid-rows-[auto_auto_1fr] lg:gap-x-8 lg:gap-y-4",
         className,
       )}
     >

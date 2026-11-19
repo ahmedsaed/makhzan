@@ -55,16 +55,25 @@ test("on a phone, the filter sheet works without JavaScript", async ({ browser }
   await page.goto("/search?q=relay&min_suppliers=2");
   await expect(page.getByRole("complementary", { name: "Filters" })).toBeHidden();
 
+  // A category is a link: one tap picks it, as in the browse sheet.
   await page.locator("summary", { hasText: "Category, price" }).click();
-  const sheet = page.getByRole("dialog", { name: "Category, price" });
+  let sheet = page.getByRole("dialog", { name: "Category, price" });
   await expect(sheet.getByText("Electronics", { exact: true })).toBeVisible();
-  await sheet.getByRole("radio", { name: /Integrated Circuits/ }).check();
+  await sheet.getByRole("link", { name: /Integrated Circuits/ }).click();
+  await expect(page).toHaveURL(/category=electronics%3Aics/);
+
+  // The price is a form, and keeps the category and the chips it does not own.
+  await page.locator("summary", { hasText: "Category, price" }).click();
+  sheet = page.getByRole("dialog", { name: "Category, price" });
+  await expect(sheet.getByRole("link", { name: /Integrated Circuits/ })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await sheet.getByRole("spinbutton", { name: "Max" }).fill("300");
   await sheet.getByRole("button", { name: "Show results" }).click();
 
   await expect(page).toHaveURL(/category=electronics%3Aics/);
   await expect(page).toHaveURL(/max_price=300/);
-  // The chip the sheet did not own survives the round trip.
   await expect(page).toHaveURL(/min_suppliers=2/);
   await expect(page.getByRole("link", { name: "Up to EGP 300 ✕" })).toBeVisible();
   await context.close();
@@ -72,13 +81,72 @@ test("on a phone, the filter sheet works without JavaScript", async ({ browser }
 
 test("on desktop, the rail picks a category the moment it is clicked", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/search?q=relay");
+  await page.goto("/search?q=relay&offset=30&in_stock=all");
   const rail = page.getByRole("complementary", { name: "Filters" });
-  await rail.getByRole("radio", { name: /Measuring Tools/ }).check();
+  const categories = rail.getByRole("navigation", { name: "Category" });
+  await expect(categories.getByRole("link", { name: /Any category/ })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await categories.getByRole("link", { name: /Measuring Tools/ }).click();
   await expect(page).toHaveURL(/category=tools%3Ameasurement/);
-  // Every category stays pickable once one is picked.
-  await expect(rail.getByRole("radio", { name: /Resistors/ })).toBeVisible();
-  await expect(rail.getByRole("radio", { name: /Measuring Tools/ })).toBeChecked();
+  // A new pick starts at the first page and keeps the other filters.
+  await expect(page).not.toHaveURL(/offset=/);
+  await expect(page).toHaveURL(/in_stock=all/);
+  // Every category stays pickable once one is picked; only the pick is current.
+  await expect(categories.getByRole("link", { name: /Resistors/ })).toBeVisible();
+  await expect(categories.getByRole("link", { name: /Measuring Tools/ })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(categories.locator("[aria-current]")).toHaveCount(1);
+  await expect(categories.getByRole("link", { name: /Measuring Tools/ })).toHaveCSS(
+    "outline-style",
+    "solid",
+  );
+
+  // "Any category" clears it, from the keyboard too.
+  await categories.getByRole("link", { name: /Any category/ }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page).not.toHaveURL(/category=/);
+});
+
+test("the rail's price applies with the category kept, and Clear clears only the price", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/search?q=relay&category=electronics%3Aresistors");
+  const price = page.getByRole("complementary", { name: "Filters" }).getByRole("form", {
+    name: "Price",
+  });
+  await price.getByRole("spinbutton", { name: "Min" }).fill("100");
+  await price.getByRole("button", { name: "Apply" }).click();
+  await expect(page).toHaveURL(/min_price=100/);
+  await expect(page).toHaveURL(/category=electronics%3Aresistors/);
+  await page
+    .getByRole("complementary", { name: "Filters" })
+    .getByRole("link", { name: "Clear" })
+    .click();
+  await expect(page).not.toHaveURL(/min_price/);
+  await expect(page).toHaveURL(/category=electronics%3Aresistors/);
+});
+
+test("the rail looks like the browse sidebar: icons, 36px rows, a bordered panel", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/search?q=relay");
+  const categories = page
+    .getByRole("complementary", { name: "Filters" })
+    .getByRole("navigation", { name: "Category" });
+  await expect(categories.locator("[data-icon='electronics:resistors']")).toBeVisible();
+  await expect(categories.locator("[data-department-icon=electronics]")).toBeVisible();
+  const row = categories.getByRole("link", { name: /Measuring Tools/ });
+  expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await expect(categories.locator("div.rounded-card.border")).toHaveCount(1);
+  // The same width as the department pages' sidebar from `lg` (17.5rem).
+  const rail = page.getByRole("complementary", { name: "Filters" });
+  expect(Math.round((await rail.boundingBox())!.width)).toBe(280);
 });
 
 test("sort works without JavaScript", async ({ browser }) => {

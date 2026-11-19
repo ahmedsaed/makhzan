@@ -131,6 +131,17 @@ the page container on desktop; each section is left out when its fetch fails.
   (never 4), each a divisor of 30, so a full page ends on a complete row at every width
   (rule S8). It was 24 with a 4-across step until November 2026, which left the 5-across
   desktop grid's last row one card short.
+- The "Category, price" rail (search and a shop's search, from `lg`, 17.5rem like the
+  department sidebar) is drawn like the department pages' sidebar tree
+  (`components/tree-rows.ts` holds both): a "Category" label in small capitals over a
+  bordered panel of 36px rows, "Any category" first, then each department as a small
+  heading with its line icon and its categories indented under it on a hairline, each
+  with its category icon and its count in `ink-3`. Each row is a link that picks the
+  category (offset dropped, the rest kept); the one in force is outlined in `chip-on`
+  and bold, never filled, and marked `aria-current="true"` (a filter, not a place).
+  "Price, EGP" is a second labelled panel: Min, Max, Clear (the price only) and Apply.
+  On a phone the same list is in the bottom sheet as the browse sheet's 44px tinted
+  buttons; a tap on a category applies it at once, and "Show results" applies the price.
 
 **Product.**
 - Breadcrumb (department › group › category), photo (contained, white frame), title, part
@@ -541,8 +552,8 @@ to, and open without JavaScript. Contact routes and does not collect: report a p
 crawler@ for personal data, hello@merope.dev for anything else. The other three fetch
 nothing. /privacy and /how-we-crawl each link to /contact.
 
-**Desktop.** Search results get a side rail (category, price), and department pages
-the tree instead; the chips stay above the list;
+**Desktop.** Search results get a side rail (category, price), drawn like the department
+pages' tree, and department pages the tree itself; the chips stay above the list;
 list rows become columns (photo · title and category · shops and freshness · price).
 Product pages go two columns: a narrow one (about 26rem) with the photo and, under it,
 the way to the shop (price box, or the summary and the offers as two-line cards); and a
