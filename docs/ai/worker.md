@@ -388,7 +388,9 @@ loaded copy of that same build:
   library, whatever it is called.
 
 When both pass, the run checks that the registry's image is the one tested (same config), puts
-the `sha-<commit>` tags (long and short) on that digest, and prints the digest in its summary.
+the `sha-<commit>` tags (long and short) and `latest` on that digest, and prints the digest in its summary.
+`latest` is attached by that same step, on `main` only, so it only ever points at a digest that
+passed every check; a pull request or other branch tags nothing.
 Only runs on `main` push, and only they hold `packages: write`; pull requests touching
 `ml/`, and manual runs from other branches, build and test without pushing.
 
@@ -406,8 +408,18 @@ docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>
 docker pull ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu@sha256:<digest>
 ```
 
-The home server pulls by digest and runs by digest (below), so the image it runs is the one
-CI smoke-tested, whatever a tag points at later. Both are public. The upstream code is
+The home server runs `:latest`, pulled before each run, and passes the digest that resolved to
+as `MAKHZAN_IMAGE` (below), so the broker's record names the exact image, whatever `latest`
+points at later:
+
+```bash
+docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest
+IMG=$(docker image inspect -f '{{index .RepoDigests 0}}' ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest)
+```
+
+A build whose pins changed (a new model version) is refused by the worker's `expect_version`
+check until its configuration is updated, so a `latest` that moved never scores under a stale
+configuration. To roll back, run an older `sha-<commit>` tag of the same image. Both are public. The upstream code is
 Apache-2.0: Kev's source (github.com/jaredpalmer/kev) ships its `LICENSE` in `/opt/kev`, and
 the pplx-decider package's `LICENSE` and `NOTICE` come from the pinned Hub revision into
 `/opt/pplx`. The images carry `org.opencontainers.image.licenses`, `.source` and `.revision`
@@ -455,8 +467,9 @@ real files (copied with `rsync -L`, as for the CPU benchmark), plus `trees/` and
 
 ```bash
 NAME=home-kev   # or home-pplx, with pplx-worker-cpu
-IMAGE=ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>   # from the CI run's summary
-docker pull "$IMAGE"
+REPO=ghcr.io/ahmedsaed/makhzan/kev-worker-cpu   # or a sha-<commit> tag, to roll back
+docker pull "$REPO:latest"
+IMAGE=$(docker image inspect -f '{{index .RepoDigests 0}}' "$REPO:latest")   # repo@sha256:...
 docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   --cpus=6 --cpu-shares=256 --memory=20g --memory-swap=20g \
   --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
@@ -475,10 +488,12 @@ docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
   the 10 s heartbeat join).
 - The worker stops itself at the window's end in any case; the timer only starts it.
 - `--user` must be able to read the weights and the two mounted files.
-- `MAKHZAN_IMAGE` is the registry digest the image was pulled by, so the broker's record of
-  each session names exactly the image CI built and smoke-tested.
-- To move to a new build, take the digest from the newest run of "AI worker images" on `main`
-  and change `IMAGE`; nothing on the server follows a tag.
+- `MAKHZAN_IMAGE` is the registry digest `latest` resolved to after the pull, and the container
+  runs that digest, so the broker's record of each session names exactly the image CI built and
+  smoke-tested.
+- A new build is picked up by the pull before the next run. A build whose pins changed is
+  refused by `expect_version` until the configuration follows. To roll back, set `REPO`'s tag
+  to an older `sha-<commit>` (the digest is in that run's summary).
 
 **Egress to the broker only.** The broker is reached over Tailscale at
 `http://<tailscale-ip>:<port>`; the host's Tailscale client carries the traffic, encrypted.
