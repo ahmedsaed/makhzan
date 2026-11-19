@@ -1,7 +1,7 @@
 """makhzan API entrypoint.
 
-Directory/discovery backend. Serves the consumer search/browse API and the
-supplier-portal API. Reads from Postgres + Meilisearch; the ingestion worker
+Directory/discovery backend. Serves the consumer search/browse API (there is
+no supplier portal yet). Reads from Postgres + Meilisearch; the ingestion worker
 (apps/ingestion) is what writes new listings. The one write a visitor makes is
 a "Report a problem" (`POST /reports`, app/routers/reports.py).
 """
