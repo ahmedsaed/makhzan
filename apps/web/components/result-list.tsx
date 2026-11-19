@@ -46,8 +46,10 @@ export function ResultList({
     return (
       <ul
         data-view="grid"
+        // 2, 3, then 5 across: each divides PAGE_SIZE (30), so a full page ends
+        // on a complete row at every width. No 4: 30 rows of 4 leave two over.
         className={cn(
-          "grid grid-cols-2 gap-2.5 px-4 sm:grid-cols-3 md:px-0 lg:grid-cols-4 xl:grid-cols-5",
+          "grid grid-cols-2 gap-2.5 px-4 sm:grid-cols-3 md:px-0 xl:grid-cols-5",
           className,
         )}
       >

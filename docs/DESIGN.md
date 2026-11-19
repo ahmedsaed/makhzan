@@ -127,6 +127,10 @@ the page container on desktop; each section is left out when its fetch fails.
   them and offers them; when only both together did, it offers "Show all N".
 - List rows: photo, two-line title, price, shop name or an "N shops" badge, freshness.
   Grid cards: the same facts. The toggle is remembered per visitor.
+- A page holds 30 results. The grid is 2 across on phones, 3 from `sm` and 5 from `xl`
+  (never 4), each a divisor of 30, so a full page ends on a complete row at every width
+  (rule S8). It was 24 with a 4-across step until November 2026, which left the 5-across
+  desktop grid's last row one card short.
 
 **Product.**
 - Breadcrumb (department › group › category), photo (contained, white frame), title, part
@@ -701,3 +705,4 @@ Each is meant to be checked by a test.
 - **S5** Photos are contained in a white frame in both themes; never cropped.
 - **S6** Every shop photo carries, in its bottom-left corner, a badge naming the shop it comes from: an element drawn over the `<img>`, never a change to the image (the photo stays the shop's own file, decision 0003). It is `aria-hidden`, with the shop in the alt text ("<title> — photo from <shop>"). Never on the no-photo placeholder. Frames under 96px (the 72px list-row thumbnail) carry none, and say whose photo it is in alt and title; 96–119px frames carry a compact one.
 - **S7** Every category icon is drawn to the style guide (Category icons): viewBox `0 0 24 24`, stroke width 1.5, round caps and joins, no fill but `none` or `currentColor`, plain shapes with no styling of their own, on the grid. Icons are keyed by `domain:slug`. Every group and category in a department's taxonomy has an icon, and no icon exists for a ref no taxonomy has. Shapes, curves and arcs stay inside the live area (a category's straight leads may reach the edge), and the 17 department tiles are held to the same.
+- **S8** A full page of results ends on a complete row: the page size (`PAGE_SIZE`, 30) is divisible by the grid's column count at every breakpoint (2, 3, 5), read from the classes the grid renders (`tests/result-grid.test.tsx`), and the browser's layout agrees on search and on a category page (`tests/e2e/search.spec.ts`).

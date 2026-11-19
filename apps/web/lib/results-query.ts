@@ -29,7 +29,13 @@ import { withParams } from "@/lib/routes";
 
 export type RawParams = Record<string, string | string[] | undefined>;
 
-export const PAGE_SIZE = 24;
+/**
+ * Results per page. Divisible by every column count the grid uses
+ * (components/result-list.tsx: 2, 3 and 5; the list is 1), so a full page ends
+ * on a complete row at every width. tests/result-grid.test.tsx holds the two
+ * together. The API allows up to 100.
+ */
+export const PAGE_SIZE = 30;
 
 /** The API refuses `min_suppliers` above this; a link asking for more is
  *  clamped to it rather than turned into an error. */

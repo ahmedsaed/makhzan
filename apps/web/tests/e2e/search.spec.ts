@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /**
  * The results page against fixtures/search.mjs: "relay" is 30 products in
- * stock and 6 out of stock, "obsolete" is only out of stock.
+ * stock (exactly one page) and 6 out of stock, "obsolete" is only out of stock.
  */
 
 const rows = (page: Page) => page.locator("[data-result=row]");
@@ -117,9 +117,9 @@ test("list and grid carry the same facts (C1)", async ({ page }) => {
     );
   const list = await facts("[data-result=row]");
   await page.getByRole("button", { name: "Grid view" }).click();
-  await expect(page.locator("[data-result=card]")).toHaveCount(24);
+  await expect(page.locator("[data-result=card]")).toHaveCount(30);
   const grid = await facts("[data-result=card]");
-  expect(list).toHaveLength(24);
+  expect(list).toHaveLength(30);
   expect(grid).toEqual(list);
   for (const fact of list) {
     expect(fact.price && fact.shops && fact.checked && fact.title).toBeTruthy();
@@ -127,12 +127,14 @@ test("list and grid carry the same facts (C1)", async ({ page }) => {
 });
 
 test("pages forward and back by offset", async ({ page }) => {
-  await page.goto("/search?q=relay");
-  await expect(rows(page)).toHaveCount(24);
+  // 36 with out of stock shown: a page of 30, then 6.
+  await page.goto("/search?q=relay&in_stock=all");
+  await expect(rows(page)).toHaveCount(30);
+  await expect(page.getByText("1–30 of 36")).toBeVisible();
   await page.getByRole("link", { name: "Next" }).click();
-  await expect(page).toHaveURL(/offset=24/);
+  await expect(page).toHaveURL(/offset=30/);
   await expect(rows(page)).toHaveCount(6);
-  await expect(page.getByText("25–30 of 30")).toBeVisible();
+  await expect(page.getByText("31–36 of 36")).toBeVisible();
   await page.getByRole("link", { name: "Previous" }).click();
   await expect(page).not.toHaveURL(/offset/);
 });
@@ -151,7 +153,7 @@ test("no results suggests dropping the filters that caused it", async ({ page })
   await expect(page.getByText("Nothing matched")).toBeVisible();
   await page.getByRole("link", { name: "Any price" }).click();
   await expect(page).toHaveURL("/search?q=relay");
-  await expect(rows(page)).toHaveCount(24);
+  await expect(rows(page)).toHaveCount(30);
 });
 
 test("only out-of-stock matches say so and offer to show them", async ({ page }) => {
@@ -180,3 +182,31 @@ test("the title names the query", async ({ page }) => {
   await page.goto("/search?q=relay");
   await expect(page).toHaveTitle("relay · makhzan");
 });
+
+/**
+ * A full page ends on a complete row: the grid's columns divide the page size
+ * (tests/result-grid.test.tsx holds the classes to it; this checks the layout
+ * the browser actually makes of them, on search and on a category page).
+ */
+for (const [name, url] of [
+  ["search", "/search?q=relay"],
+  ["a category page", "/departments/piping/valves"],
+] as const) {
+  for (const width of [390, 700, 1100, 1440]) {
+    test(`on ${name} at ${width}px, a full page's last grid row is complete`, async ({ page }) => {
+      await page.addInitScript(() => window.localStorage.setItem("makhzan:view", "grid"));
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(url);
+      const cards = page.locator("[data-result=card]");
+      await expect(cards).toHaveCount(30);
+      const tops = await cards.evaluateAll((items) =>
+        items.map((item) => Math.round(item.getBoundingClientRect().top)),
+      );
+      const rowsOf = new Map<number, number>();
+      for (const top of tops) rowsOf.set(top, (rowsOf.get(top) ?? 0) + 1);
+      const perRow = [...rowsOf.values()];
+      expect(perRow[0]).toBeGreaterThan(1);
+      expect(new Set(perRow), `cards per row: ${perRow.join(", ")}`).toEqual(new Set([perRow[0]]));
+    });
+  }
+}

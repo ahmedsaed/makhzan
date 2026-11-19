@@ -15,6 +15,10 @@
  *   dusty      3 products in stock, all stale
  *   ancient    3 products, all out of stock and stale
  *   searchfail the API failing
+ *
+ * And one browse page: the piping department (its Butterfly Valves category)
+ * holds 40 products in stock, more than a page, so a category page's full page
+ * can be checked to end on a complete row.
  */
 
 const NOW = Math.floor(Date.now() / 1000);
@@ -66,6 +70,22 @@ function capacitor(index) {
   };
 }
 
+function valve(index) {
+  return {
+    ...relay(index),
+    id: `valve-${index}`,
+    domain: "piping",
+    title_en: `Butterfly valve DN${50 + index * 5}`,
+    category_slug: "valves",
+    category_ref: "piping:valves",
+    category_name: "Butterfly Valves",
+    in_stock: true,
+    last_verified_at: NOW - 2 * DAY,
+  };
+}
+
+const VALVES = Array.from({ length: 40 }, (_, index) => valve(index));
+
 const CATALOGUE = {
   relay: Array.from({ length: 36 }, (_, index) => relay(index)),
   obsolete: [relay(31), relay(32)].map((hit) => ({ ...hit, title_en: `Obsolete ${hit.title_en}` })),
@@ -92,7 +112,7 @@ export function searchFixture(url) {
   const params = url.searchParams;
   const q = (params.get("q") ?? "").trim().toLowerCase();
   if (q === "searchfail") return { status: 500, body: { detail: "meilisearch unreachable" } };
-  const all = CATALOGUE[q];
+  const all = CATALOGUE[q] ?? (!q && params.get("domain") === "piping" ? VALVES : null);
   if (!all) return null;
 
   const minPrice = params.get("min_price");
