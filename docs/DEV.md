@@ -124,8 +124,12 @@ After a load, `make status` shows what you have, and the product IDs will differ
 from the server's if grouping has changed since the dump was taken.
 
 ## 5. Search index
-The Meilisearch index (`listings`) is a rebuildable projection of the DB.
-Ingestion indexes incrementally; to rebuild from scratch:
+The Meilisearch index (`products`) is a rebuildable projection of the DB, one
+document per listed product, carrying every active listing's titles, brands
+and part numbers (`makhzan_schemas/search.py`). Nothing indexes incrementally:
+each rebuild (`rebuild_and_reindex`, `worker.regroup`) regroups and then
+rebuilds the whole index in a staging index swapped in. To rebuild it from the
+groups as they stand:
 ```bash
 cd apps/ingestion
 DATABASE_URL="postgresql+asyncpg://makhzan:makhzan@localhost:5432/makhzan" \
