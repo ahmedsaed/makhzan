@@ -8,8 +8,8 @@ products and prices into one searchable catalogue, then hands you off to the
 supplier to buy. It is a **directory, not a store**: no cart, no payment, no
 delivery.
 
-Live at **[makhzan.merope.dev](https://makhzan.merope.dev)**: about 59,600
-products from 9 suppliers, across 16 departments (electronics, tools, piping,
+Live at **[makhzan.merope.dev](https://makhzan.merope.dev)**: about 56,300
+products from 9 suppliers, across 17 departments (electronics, tools, piping,
 welding, seals and bearings, timber, and more). Seven suppliers are read daily;
 two block our server's address and are paused until they reply, so their
 listings date from August 2026.
@@ -29,8 +29,8 @@ it:
 - **A full pass is spread across about a week.** Each daily run takes only a
   slice of a catalogue, so a shop sees a steady trickle, not a spike.
 - **The crawler identifies itself** in every request (`From: crawler@makhzan.merope.dev`).
-  Shops are moving one at a time to its own name, `makhzanbot`, with every request
-  signed (Web Bot Auth); the key is published at
+  Every shop read today is read under its own name, `makhzanbot`, with every
+  request signed (Web Bot Auth); the key is published at
   `/.well-known/http-message-signatures-directory`.
 - **What the crawler did is public**: when each shop was last read, how many
   requests it sent and how far apart, at
@@ -64,6 +64,7 @@ apps/web          Next.js frontend (English only): search, departments, product 
 apps/api          FastAPI, read-only, over Postgres and Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalise -> upsert -> group -> index
 packages/schemas  SQLAlchemy models, migrations, taxonomies, grouping, search contract
+ml/               AI matching: the worker that scores candidate pairs with local models
 config/           sources.example.toml (the format of a sources file)
 scripts/          deploy, backup, status and data-loading scripts
 ```
@@ -83,8 +84,12 @@ Some of what makes it work:
   crosswalk where one exists; keyword inference from titles is the fallback, not
   the default.
 - **Cautious product matching.** Listings from different shops merge into one
-  product only when an extracted part number *and* their titles agree. Price
-  alone never merges anything.
+  product when an extracted part number *and* their titles agree, when a person
+  ruled them the same, or when local models judged them the same (AI matching,
+  [docs/ai/plan.md](docs/ai/plan.md)). Vetoes on shop, stated values, form and
+  price still apply; only a person's ruling can lift one, and never the shop's. Price alone never merges anything.
+- **Search never depends on grouping.** Every listing's titles, brands and part
+  numbers are searchable on its product.
 
 ## Getting started
 
@@ -110,6 +115,8 @@ local workflow, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers production.
 - [docs/PRODUCT.md](docs/PRODUCT.md): product decisions, and what comes next
 - [docs/DESIGN.md](docs/DESIGN.md): the frontend's specification (the November 2026 redesign)
 - [docs/crawler-identity.md](docs/crawler-identity.md): makhzanbot and request signing
+- [docs/crawler-scheduling.md](docs/crawler-scheduling.md): how often each shop is read, and why
+- [docs/ai/plan.md](docs/ai/plan.md): AI matching with local models (live since 2026-11-19)
 - [docs/DOMAIN_GENERALIZATION.md](docs/DOMAIN_GENERALIZATION.md): how verticals are modelled
 - [docs/decisions/](docs/decisions/): decision records
 - [CLAUDE.md](CLAUDE.md): working notes on ingestion, taxonomy and matching,

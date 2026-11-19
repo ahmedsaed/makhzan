@@ -19,6 +19,8 @@ apps/api         FastAPI read-only API over Postgres + Meilisearch
 apps/ingestion    Arq worker: source adapters -> normalize -> upsert -> review queue;
                   admin/ is the internal dashboard (Tailscale only, docs/admin.md)
 packages/schemas  SQLAlchemy models, Alembic migrations, taxonomy, grouping, search contract
+ml/               AI matching: the worker (makhzan_ml/worker), its images, experiments;
+                  deploy/home-server/ is the home server's worker compose stack
 scripts/          Operational scripts (deploy, backup, probes)
 config/           sources.example.toml only; the real configuration is ../makhzan-config (private)
 ```
@@ -33,7 +35,7 @@ Poetry virtualenv — there is no single root env.
 
 ```bash
 make setup                      # .env + services + deps + migrations, from a clean clone
-make test                       # every Python test suite (ingestion + api)
+make test                       # every Python test suite (ingestion + api + ml/tests)
 make lint                       # exactly what CI checks
 make api / make web / make worker
 make sources                    # seed the sources table from sources.toml
@@ -41,11 +43,13 @@ make ingest SOURCE=<source-id> LIMIT=10
 make reindex                    # rebuild products + search index
 make status                     # crawler progress, recent runs, catalog health
 make freshness                  # requests, staleness, changes found, false archivals (read-only)
+make categories-seen            # products a shop lists under several categories (read-only)
 ./makhzan status                # the same report, plus containers/health/crawl flag, from production
 ./makhzan crawl off|on          # the crawl-wide pause (database flag, no recreate)
 ./makhzan shop pause|resume ID  # one shop's pause, over sources.toml's `enabled`
 make admin                      # the admin dashboard on :8200 (docs/admin.md)
 make ai ARGS="status"           # AI matching: workers, mode, backlog, decisions (./makhzan ai ...)
+./makhzan ai import DIR         # load a backlog scored elsewhere: scores, then decisions
 make broker                     # the AI broker on :8100
 ```
 
@@ -165,6 +169,17 @@ mapped category to an unmapped one keeps the old category until a mapped one
 says otherwise. Tag-cloud sources (`authoritative_categories` False) are
 unchanged — a miss there falls through to inference, and "I was in a position to
 know, and there is none" still clears.
+
+**Which categories a listing was seen under is recorded, not acted on**
+(`worker/categories_seen.py`). On the Odoo and Wix shops (`records_categories_seen`)
+a product filed under several categories takes whichever partition was swept last,
+so some flip every cycle (and each flip re-queues AI scores). Full-run sweeps of a
+category partition record `attributes.categories_seen` per `cycle_started_at`
+(this cycle and the last; unmapped and ignored names too; carried over by
+`_upsert_listing` like the details), and `./makhzan categories-seen
+[--source ID] [--conflicts-only]` reports the last completed cycle. Assignment
+is unchanged (last mapped partition wins, pinned by a test): how to treat
+multi-category products is the owner's call after one full cycle.
 
 Progress is **durable per page**: after each page the pipeline commits and advances
 a `SourceCursor`. A run that dies on page 40 of 43 keeps 39 pages, and the next
@@ -686,14 +701,18 @@ removes. AI matching must read the same set
 (`load_overrides`), never re-ask a model about a ruled pair.
 
 **AI "same" decisions are read only when `worker_state['ai_matching']` is
-`live`** (`off` by default; `makhzan_schemas.ai`, `docs/ai/broker-api.md`).
+`live`** (`off` by default; live in production since 2026-11-19;
+`makhzan_schemas.ai`, `docs/ai/broker-api.md`).
 Then they act last (`grouping._ai_phase`): once the rules and the rulings have
 formed every cluster, an AI pair may join two whole clusters, today's vetoes
 checked between every member, a ruled pair never read, and a Kev score below
 0.05 between any two members blocks the join. Acting last is what makes the
 result independent of placement order and keeps it from ever splitting a
 rules merge. The regroup alone writes `listings.matched_via`
-(`matching.matched_by` reads it). With no decision read, grouping is byte for
+(`matching.matched_by` reads it), and after it commits, in its own transaction,
+each standing "same" decision it read gets `ai_decisions.effect` (in effect,
+blocked with the AI phase's reason, inactive, overridden), which `./makhzan ai
+status` breaks down. With no decision read, grouping is byte for
 byte what it was (`test_grouping_differential.py`); `make regroup-dry-run
 ARGS=--ai` previews standing decisions while off, which is how the backlog's
 groupings are reviewed on a local copy before production.
@@ -715,6 +734,15 @@ records a baseline and queues nothing: the existing catalogue is
 retries it (`./makhzan ai jobs retry`). `ON CONFLICT` on a partial index
 needs its predicate as literal SQL: bound, it stops matching once asyncpg's
 prepared statement goes generic (the sixth run on a connection).
+
+The home server runs the two CPU workers as one compose stack
+(`ml/deploy/home-server/`, `docs/ai/worker.md`): each waits for its window
+(Kev 01:00–05:00, pplx 05:05–07:00 Africa/Cairo; one model in memory at a
+time), with a broker-only proxy as its sole egress. CI builds, smoke-tests and
+publishes their images to GHCR and tags `latest` only after the checks pass;
+GPU images are local builds. A backlog scored on the GPU enters production
+through `./makhzan ai import`, which refuses any line from a judge other than
+the code's and decides only pairs whose rendered text is unchanged.
 
 **Non-products are skipped before they are stored** (`normalize.not_a_product`):
 placeholder titles ("Item", "point1"), delivery fees, and anything the shop files
@@ -738,7 +766,8 @@ An agent or a session recommends; it does not choose.
   out, e.g. price), the label policy, thresholds, the sample design and how
   candidates are found.
 - **A judge's prompt carries the owner's policy.** The labelling rulings
-  (`ml/out/labels/README.md`, mirrored in `docs/ai/decision-review.md`) apply to
+  (the private configuration's `labels/README.md`, mirrored in
+  `docs/ai/decision-review.md`) apply to
   the judges, not only to labellers: a brand alone never makes a different
   product; a missing or unmentioned field is compatible, never a difference;
   drop-in revisions are the same; a stated contradiction in value, size,
@@ -749,9 +778,10 @@ An agent or a session recommends; it does not choose.
   unreviewed. When a finding changes its premise (new rulings, new data),
   revisit it with the owner. Every AI decision, and who made it, is recorded in
   `docs/ai/decision-review.md`.
-- **Labels are hard-won.** Pairs, keys and answers live in git-ignored
-  `ml/out/labels/` with the listing ids beside each label, never only in a
-  session's scratch folder: a reboot erased the Phase C labels that way.
+- **Labels are hard-won.** Pairs, keys and answers live with the listing ids
+  beside each label in the private configuration's `labels/` (versioned), never
+  only in a session's scratch folder or the public repo: a reboot erased the
+  Phase C labels that way.
 
 ## Conventions
 
@@ -789,7 +819,7 @@ See `docs/ROADMAP.md` for what is done, in progress, and next.
 
 The frontend is built to `docs/DESIGN.md` (the November 2026 redesign): the data
 behind each layout decision, the page tree and URLs, the style tokens, and rules
-(C1–S5) that tests enforce. Read it before touching the frontend. What comes next
+(C1–S7) that tests enforce. Read it before touching the frontend. What comes next
 (projects, blog, accounts, supplier pages) is `docs/PRODUCT.md`.
 
 `apps/web` has vitest unit tests and Playwright e2e specs under `apps/web/tests`
