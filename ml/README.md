@@ -404,11 +404,14 @@ without weights or network (`python -m makhzan_ml.worker.smoke`, plus a scan for
 100 MB that is not a shared library). Only if both pass does the run tag that digest
 (`sha-<commit>` and, on `main`, `latest`) and print it in its summary. A run that fails leaves an untagged image in GHCR (docs/ai/worker.md,
 "Images").
-The home server runs `:latest`, pulled before each run, and passes the resolved digest as
-`MAKHZAN_IMAGE`:
-`docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest`, then
-`docker image inspect -f '{{index .RepoDigests 0}}'` on the same name (after the pull:
-`RepoDigests` is empty for an image not pulled from a registry).
+Each image records the commit it was built from (`MAKHZAN_IMAGE_REVISION`, passed into the
+bake by CI) and names itself at hello as `<repo>:sha-<commit>`, since a container cannot see
+its own digest. The home server runs both workers and the broker proxy as one compose stack,
+`deploy/home-server/` (`docker compose up -d`; updates with `docker compose pull && docker
+compose up -d`): no systemd timers, no host firewall rules. Each worker stays up and waits
+for its own window (`outside_window = "wait"`), running each window's session in a child
+process that exits at the window's end, and reaches the broker only through the proxy on an
+internal Docker network (docs/ai/worker.md, "Running on the home server").
 A build whose pins changed is refused by the worker's `expect_version` check; rolling back
 means running an older `sha-<commit>` tag (docs/ai/worker.md, "Images"). The same chain builds
 locally with `docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load`. The GPU images stay local

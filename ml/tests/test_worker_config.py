@@ -13,6 +13,7 @@ from makhzan_ml.worker.config import ConfigError, Schedule, Window, load, parse
 from makhzan_ml.worker.pins import PINS
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "ai" / "worker.md"
+DEPLOY = Path(__file__).resolve().parents[1] / "deploy" / "home-server"
 CAIRO = ZoneInfo("Africa/Cairo")
 
 
@@ -334,16 +335,24 @@ def test_every_documented_example_parses(name, body):
     data.get("compute", {}).pop("weights_cache", None)
     # The broker URL's placeholders, filled with a Tailscale address and a port.
     url = data["worker"]["broker_url"]
-    assert url == "http://<tailscale-ip>:<port>/ai/v1"
-    data["worker"]["broker_url"] = url.replace("<tailscale-ip>", "100.101.102.103").replace(
-        "<port>", "8080"
-    )
+    if name.startswith("home-"):  # through the compose stack's broker proxy
+        assert url == "http://broker-proxy:8100/ai/v1" and data["worker"]["broker_via_proxy"]
+    else:
+        assert url == "http://<tailscale-ip>:<port>/ai/v1"
+        data["worker"]["broker_url"] = url.replace("<tailscale-ip>", "100.101.102.103").replace(
+            "<port>", "8080"
+        )
     cfg = parse(data)
     assert cfg.name == name
     if name.startswith("desk-"):
         assert cfg.device == "gpu"
     if name.startswith("home-"):
         assert (cfg.device, cfg.threads, cfg.mmap) == ("cpu", 6, False)
+        assert cfg.schedule.outside_window == "wait"
+        # The documented example is the compose stack's file, minus its comments.
+        deployed = parse({**tomllib.loads((DEPLOY / f"{name}.toml").read_text()),
+                          "worker": {**data["worker"]}})  # fmt: skip
+        assert deployed.schedule == cfg.schedule and deployed.max_jobs == cfg.max_jobs
 
 
 @pytest.mark.parametrize(
