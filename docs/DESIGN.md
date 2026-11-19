@@ -20,7 +20,7 @@ Measured on 60.9k active listings (November 2026).
 
 | Fact | Consequence |
 |---|---|
-| 98.6% of products have one shop; 1.4% have 2–7 | A parts search engine that hands off to a shop, and only sometimes a comparison. The product page is designed for one offer; comparison appears only with 2+ shops. Being sold by several shops is rare, so it is a badge and a filter. |
+| 98.6% of products have one shop; 1.4% have 2–7 (since AI matching went live on 2026-11-19, about 5.6% have 2 or more) | A parts search engine that hands off to a shop, and only sometimes a comparison. The product page is designed for one offer; comparison appears only with 2+ shops. Being sold by several shops is rare, so it is a badge and a filter. |
 | 41% of listings are out of stock | Out of stock is **hidden by default**, and the count of hidden items is always shown. |
 | A large share of listings are weeks or months old (two shops cannot be reached) | Freshness is shown everywhere and gets louder with age (rule F2). Results hide products not checked in over 45 days by default, with the count shown, like out of stock (C2b). |
 | Arabic titles 0.1%, Arabic descriptions 3% | **English only.** Arabic search queries keep working; the Arabic interface is gone. |
@@ -28,7 +28,7 @@ Measured on 60.9k active listings (November 2026).
 | No structured specs until November 2026; brand on 2%; part numbers on 15% | Since the enrichment, about 1,000 listings carry specs from their shop and about 5,400 datasheet links: shown when present, never as an empty table. No brand filter (brand is known on about a tenth of listings). Part numbers matter to ranking, not as a field. |
 | Titles: median 38 characters, p90 67, p99 103 | Two-line titles everywhere; grid cards allow three. |
 | Prices EGP 5 (p10) to 39,000 (p99); unit of sale recorded only where a shop states a minimum order (Phase 2) | "From EGP X" for ranges; a price reads "each" only beside a stated minimum (C3), never otherwise. |
-| 16 departments, very uneven (three hold 88% of products) | Departments are listed by size and each says what's inside; never equal tiles of names. |
+| 17 departments, very uneven (three hold 88% of products) | Departments are listed by size and each says what's inside; never equal tiles of names. |
 | Shops' contact details: listed by hand from where each shop's details are published (its site, its Facebook, its Google Maps listing; `sources.toml`) or read by the crawler from its JSON-LD; few shops have them yet, and none has a logo | The shop page shows what is known with where and when it was read, and names what is still missing; a product page offers WhatsApp or a call only for a shop that publishes one. |
 | Offers per product exceed shops per product | One shop can list several variants of one product. |
 
@@ -54,7 +54,7 @@ Measured on 60.9k active listings (November 2026).
 ├── /search?q=…                 Results (list or grid), top categories, filters
 │   └── /products/{id}-{slug}   Product: one shop, or several (offers list)
 │       └── shop's own page ↗   the only exit
-├── /departments                All 16 departments as a directory: each with its categories as links
+├── /departments                All 17 departments as a directory: each with its categories as links
 │   └── /departments/{department}         The department's tree beside its products
 │       └── /departments/{department}/{category}   the same page, narrowed (a group or a category)
 ├── /shops                      Every shop: products, in stock, last checked (cards on desktop)
@@ -101,7 +101,7 @@ pages.
 "rechecked about weekly"; figures for products, shops, departments and categories on desktop)
 and a row of example searches, each checked to return results. Then the departments: on
 phones as rows (an object photo, the department, its count, its top categories in words),
-the top 8 then "All 16 departments"; from `md` as cards, four across on desktop, whose
+the top 8 then "All 17 departments"; from `md` as cards, four across on desktop, whose
 biggest categories are links, with the remaining departments named underneath. Then "Sold
 by several shops" (a row of products with 2+ shops and their price ranges), the shops
 (products, in stock, last checked), "How makhzan works" in three steps (beside the
