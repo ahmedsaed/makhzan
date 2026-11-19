@@ -300,3 +300,11 @@ async def test_status_counts_each_same_decisions_effect_after_a_live_regroup(cap
     assert (
         "standing: same 1 (in effect 1, blocked 0, inactive 0, overridden 0, checked 0h ago)" in out
     )
+
+
+def test_make_status_never_prints_a_negative_age():
+    from worker.status import _age
+
+    assert _age(datetime.now(UTC) + timedelta(seconds=30)) == "0m ago"
+    assert _age(datetime.now(UTC) - timedelta(minutes=5, seconds=10)) == "5m ago"
+    assert _age(datetime.now(UTC) - timedelta(hours=3, minutes=1)) == "3h ago"
