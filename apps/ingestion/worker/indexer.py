@@ -1,8 +1,11 @@
 """Search indexer (writer side).
 
-Pushes Listings into Meilisearch. The index is a rebuildable projection of the
-`listings` table — `reindex_all` can recreate it from scratch, and the pipeline
-indexes incrementally as it ingests.
+Pushes products into Meilisearch, one document each. The index is a rebuildable
+projection of the database, and `reindex_all` is the only writer: the pipeline
+writes listings only, and every regroup (`rebuild_and_reindex`, `worker.regroup`)
+calls it straight after, so a product whose membership changed is indexed with
+its new members by the same rebuild that changed it. (`worker.reindex` indexes
+the groups as they stand.)
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from makhzan_schemas.search import (
     INDEX_NAME,
     SEARCHABLE_ATTRIBUTES,
     SORTABLE_ATTRIBUTES,
+    MemberText,
     build_product_document,
     category_ref,
 )
@@ -129,19 +133,33 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
         cat.id: (category_ref(cat.domain, cat.slug), cat.parent_id)
         for cat in (await session.execute(select(Category))).scalars()
     }
-    # Which shops sell each product. Active listings only, matching how the
-    # product's own aggregates are computed: an archived offer must not keep a
-    # product in a shop's search after the shop dropped it.
+    # Which shops sell each product, and what each of its listings says. Active
+    # listings only, matching how the product's own aggregates are computed: an
+    # archived offer must not keep a product in a shop's search after the shop
+    # dropped it, nor keep its wording searchable. Every active listing's text
+    # is searchable, whichever one the product's own title was copied from
+    # (makhzan_schemas.search: search never depends on grouping). Two keys of
+    # `attributes`, not the column: it also holds product-page details.
     shops: dict = defaultdict(set)
-    for product_id, slug in (
+    members: dict = defaultdict(list)
+    for product_id, slug, title_en, title_ar, brand, *codes in (
         await session.execute(
-            select(Listing.product_id, Supplier.slug)
+            select(
+                Listing.product_id,
+                Supplier.slug,
+                Listing.title_en,
+                Listing.title_ar,
+                Listing.brand,
+                Listing.part_number,
+                Listing.attributes["mfr_part_number"].astext,
+                Listing.attributes["adapter_part_number"].astext,
+            )
             .join(Supplier, Supplier.id == Listing.supplier_id)
             .where(Listing.status == ListingStatus.ACTIVE, Listing.product_id.is_not(None))
-            .distinct()
         )
     ).all():
         shops[product_id].add(slug)
+        members[product_id].append(MemberText(title_en, title_ar, brand, tuple(codes)))
     # The shop each photo comes from, for the badge on it, and the shop whose
     # offer sets the lowest price: the handful of
     # shops, looked up once rather than joined into every product row.
@@ -159,6 +177,7 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
             ancestry(cat.id, tree) if cat else [],
             photo_shops.get(product.image_supplier_id),
             photo_shops.get(product.min_price_supplier_id),
+            members=members.get(product.id, ()),
         )
         for product, cat in rows
     ]

@@ -1,8 +1,10 @@
 """reindex_all — the product documents it writes, with Meilisearch faked.
 
-What is pinned here is `supplier_slugs`, which powers "search within this shop".
-It is not a Product column but is gathered from the product's listings, so a
-mistake shows up only as a shop page quietly missing or keeping products.
+What is pinned here is what is gathered from the product's listings rather than
+read off the Product row: `supplier_slugs`, which powers "search within this
+shop", and the `member_*` arrays, which make every active listing's wording
+searchable whichever listing the product's own title came from. A mistake in
+either shows up only as a product quietly missing from results.
 """
 
 from __future__ import annotations
@@ -13,7 +15,12 @@ from datetime import UTC, datetime
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import ListingStatus, SourceType
 from makhzan_schemas.models import Category, Listing, Product, Supplier
-from makhzan_schemas.search import FILTERABLE_ATTRIBUTES
+from makhzan_schemas.search import (
+    FILTERABLE_ATTRIBUTES,
+    MEMBER_ATTRIBUTES,
+    SEARCHABLE_ATTRIBUTES,
+    build_product_document,
+)
 
 from worker.indexer import reindex_all
 
@@ -78,7 +85,9 @@ def _supplier(slug: str) -> Supplier:
     return Supplier(id=uuid.uuid4(), slug=slug, name=slug, source_type=SourceType.SCRAPED)
 
 
-def _listing(supplier: Supplier, product: Product, status=ListingStatus.ACTIVE) -> Listing:
+def _listing(
+    supplier: Supplier, product: Product, status=ListingStatus.ACTIVE, **fields
+) -> Listing:
     return Listing(
         id=uuid.uuid4(),
         supplier_id=supplier.id,
@@ -86,10 +95,9 @@ def _listing(supplier: Supplier, product: Product, status=ListingStatus.ACTIVE) 
         source=supplier.slug,
         source_type=SourceType.SCRAPED,
         external_id=str(uuid.uuid4()),
-        title_en="LM358 Op-Amp",
         status=status,
         images=[],
-        attributes={},
+        **{"title_en": "LM358 Op-Amp", "attributes": {}, **fields},
     )
 
 
@@ -331,3 +339,160 @@ async def test_documents_name_the_shop_whose_offer_sets_the_lowest_price():
     assert docs["unpriced"]["min_price_shop"] is None
     assert docs["unpriced"]["price_on_request"] is None
     assert docs["unpriced"]["on_request_count"] == 0
+
+
+async def test_documents_hold_every_active_listings_text():
+    """Search never depends on grouping: the product's own title is one
+    listing's, but every member's titles, brands and codes are searchable."""
+    shop_a, shop_b, shop_c = _supplier("shop-a"), _supplier("shop-b"), _supplier("shop-c")
+    product = Product(
+        id=uuid.uuid4(),
+        group_key="mpn:lm358",
+        part_number="LM358",
+        title_en="LM358 Dual Op-Amp",
+        brand="Texas Instruments",
+    )
+    await _seed(
+        shop_a,
+        shop_b,
+        shop_c,
+        product,
+        _listing(
+            shop_a,
+            product,
+            title_en="LM358 Dual Op-Amp",
+            brand="Texas Instruments",
+            part_number="LM358",
+        ),
+        _listing(
+            shop_b,
+            product,
+            title_en="Dual operational amplifier DIP-8",
+            title_ar="مكبر عمليات مزدوج",
+            brand="ST",
+            part_number="LM358N",
+            attributes={"mfr_part_number": "LM358P", "details": {"description": "long text"}},
+        ),
+        _listing(
+            shop_c,
+            product,
+            # Case and spacing aside, the same title and brand: listed once.
+            title_en="lm358  dual op-amp",
+            brand="texas instruments",
+            part_number="LM358",
+            attributes={"adapter_part_number": "LM358DR"},
+        ),
+    )
+
+    doc = (await _reindex())["LM358 Dual Op-Amp"]
+
+    assert doc["member_titles_en"] == ["Dual operational amplifier DIP-8", "LM358 Dual Op-Amp"]
+    assert doc["member_titles_ar"] == ["مكبر عمليات مزدوج"]
+    assert doc["member_brands"] == ["ST", "Texas Instruments"]
+    assert doc["member_part_numbers"] == ["LM358", "LM358DR", "LM358N", "LM358P"]
+
+
+async def test_an_inactive_listings_text_is_not_searchable():
+    """An archived offer is gone from the shop, and a hidden or pending one is
+    not shown: none of them may keep a product findable by its wording."""
+    shop = _supplier("shop-a")
+    product = Product(id=uuid.uuid4(), group_key="single:relay", title_en="5V Relay Module")
+    await _seed(
+        shop,
+        product,
+        _listing(shop, product, title_en="5V Relay Module", brand="Songle"),
+        *(
+            _listing(
+                shop,
+                product,
+                status=status,
+                title_en=f"{status.value} wording",
+                title_ar="نص",
+                brand=f"{status.value} brand",
+                part_number="SRD-05VDC",
+                attributes={"mfr_part_number": "X1", "adapter_part_number": "X2"},
+            )
+            for status in (
+                ListingStatus.ARCHIVED,
+                ListingStatus.HIDDEN,
+                ListingStatus.PENDING_REVIEW,
+            )
+        ),
+    )
+
+    doc = (await _reindex())["5V Relay Module"]
+
+    assert doc["member_titles_en"] == ["5V Relay Module"]
+    assert doc["member_titles_ar"] == []
+    assert doc["member_brands"] == ["Songle"]
+    assert doc["member_part_numbers"] == []
+
+
+async def test_member_text_does_not_depend_on_the_representative():
+    """The representative changes with stock and price; what a query can find
+    must not change with it."""
+    shop_a, shop_b = _supplier("shop-a"), _supplier("shop-b")
+    product = Product(id=uuid.uuid4(), group_key="single:fan", title_en="12V Fan 80mm")
+    await _seed(
+        shop_a,
+        shop_b,
+        product,
+        _listing(shop_a, product, title_en="12V Fan 80mm"),
+        _listing(shop_b, product, title_en="Cooling fan 8cm 12 volt"),
+    )
+    before = (await _reindex())["12V Fan 80mm"]
+
+    async with SessionLocal() as session:
+        stored = await session.get(Product, product.id)
+        stored.title_en = "Cooling fan 8cm 12 volt"
+        await session.commit()
+    after = (await _reindex())["Cooling fan 8cm 12 volt"]
+
+    for attr in MEMBER_ATTRIBUTES:
+        assert after[attr] == before[attr]
+    assert before["member_titles_en"] == ["12V Fan 80mm", "Cooling fan 8cm 12 volt"]
+
+
+async def test_a_single_listing_product_is_its_old_document_plus_the_member_fields():
+    shop = _supplier("shop-a")
+    product = Product(
+        id=uuid.uuid4(),
+        group_key="mpn:ne555",
+        part_number="NE555",
+        title_en="NE555 Timer",
+        title_ar="مؤقت",
+        brand="TI",
+    )
+    await _seed(
+        shop,
+        product,
+        _listing(
+            shop, product, title_en="NE555 Timer", title_ar="مؤقت", brand="TI", part_number="NE555"
+        ),
+    )
+
+    doc = (await _reindex())["NE555 Timer"]
+    async with SessionLocal() as session:
+        stored = await session.get(Product, product.id)
+        old = build_product_document(stored, None, None, supplier_slugs=["shop-a"])
+
+    assert set(doc) == set(old)
+    assert {k: v for k, v in doc.items() if k not in MEMBER_ATTRIBUTES} == {
+        k: v for k, v in old.items() if k not in MEMBER_ATTRIBUTES
+    }
+    assert doc["member_titles_en"] == ["NE555 Timer"]
+    assert doc["member_titles_ar"] == ["مؤقت"]
+    assert doc["member_brands"] == ["TI"]
+    assert doc["member_part_numbers"] == ["NE555"]
+
+
+async def test_the_index_searches_the_member_fields_in_order():
+    """Settings are applied by the reindex; an attribute not listed here is
+    stored but never searched."""
+    client = FakeClient()
+    async with SessionLocal() as session:
+        await reindex_all(session, client)
+
+    assert client.products.settings["searchableAttributes"] == SEARCHABLE_ATTRIBUTES
+    for attr in MEMBER_ATTRIBUTES:
+        assert attr in SEARCHABLE_ATTRIBUTES
