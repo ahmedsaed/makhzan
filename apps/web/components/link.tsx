@@ -6,8 +6,8 @@ import type { ComponentProps } from "react";
  *
  * Why this exists rather than `prefetch={false}` at each call site: a prefetch
  * is a full server render. Every page here is a list of links to other pages —
- * a search result page carries 24 product links, browse and supplier pages the
- * same — so Next's default (prefetch every link that scrolls into view) turns
+ * a search result page carries 30 product links (24 when this was measured),
+ * browse and supplier pages the same — so Next's default (prefetch every link that scrolls into view) turns
  * one page view into ~30 server-rendered product pages, each of which fetches
  * the product and then its similar products. Measured on the live site: one
  * search for "arduino uno" fired 31 `?_rsc=` prefetch requests.

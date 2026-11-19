@@ -35,9 +35,12 @@ export function FilterPanel({
 }
 
 /**
- * A native `<details>`, so the sheet opens with JavaScript off; picking a
- * filter navigates, which is how it closes then. With JavaScript, Escape, the
- * close button and a tap on the backdrop close it too.
+ * A native `<details>`, so the sheet opens with JavaScript off, where picking
+ * a filter loads a new page and that closes it. With JavaScript a link chosen
+ * inside navigates client-side and keeps the `<details>`, so the sheet closes
+ * itself on that click, as the browse sheet does; Escape, the close button
+ * and a tap on the backdrop close it too. Submitting the price form loads a
+ * new page either way.
  */
 export function FilterSheet({
   label = "Category, price",
@@ -81,6 +84,10 @@ export function FilterSheet({
       <div
         role="dialog"
         aria-label={label}
+        onClick={(event) => {
+          // A filter link chosen: the client-side navigation would leave it open.
+          if ((event.target as HTMLElement).closest("a")) close();
+        }}
         className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85svh] flex-col rounded-t-card border-t border-line bg-surface"
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-2">

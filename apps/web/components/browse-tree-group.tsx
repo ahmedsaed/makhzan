@@ -3,6 +3,7 @@
 import { ChevronDown } from "lucide-react";
 import { useId, useState } from "react";
 
+import { TREE_CHILDREN } from "@/components/tree-rows";
 import { cn } from "@/lib/utils";
 
 /**
@@ -65,12 +66,7 @@ export function TreeGroup({
             />
           </button>
         </div>
-        <ul
-          id={id}
-          role="list"
-          hidden={!open}
-          className="ms-[17px] mt-0.5 flex flex-col gap-0.5 border-s border-line ps-2"
-        >
+        <ul id={id} role="list" hidden={!open} className={cn(TREE_CHILDREN, "mt-0.5")}>
           {children}
         </ul>
       </li>
