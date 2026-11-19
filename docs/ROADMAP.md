@@ -1,6 +1,6 @@
 # Roadmap & current state
 
-**Last updated:** 2026-11-13
+**Last updated:** 2026-11-19
 
 `PLAN.md` holds the original product plan and phase definitions. This file tracks
 what is actually true today and what happens next. `PRODUCT.md` holds the product
@@ -8,9 +8,11 @@ decisions behind it; `DESIGN.md` is the frontend's specification.
 
 ## Where the project is
 
-**Updated 2026-11-13**, from production's `./makhzan status`. The November
-redesign has shipped and the site is public at makhzan.merope.dev: 60,974 active
-listings → 59,613 products, from **9 suppliers across 16 domains**. Two of the
+**Updated 2026-11-19.** The November redesign has shipped and the site is public
+at makhzan.merope.dev: about 61,300 active listings → 56,255 products (3,130 sold
+by two or more shops), from **9 suppliers across 17 domains**. AI matching went
+live on 2026-11-19 and took multi-shop products from 1,048 to 3,130
+(`docs/ai/decision-review.md`, "Go-live"). Two of the
 nine, the marketplace and shop 4 (35,585 listings between them, over half the
 catalogue), block the production server's address and are paused; their data is
 from 2026-08-24 (see "Live issue" below). The other seven are read daily.
@@ -18,7 +20,8 @@ from 2026-08-24 (see "Live issue" below). The other seven are read daily.
 ### Suppliers
 
 Named by role here; the key is in the private configuration (see `CLAUDE.md`).
-Listings are active listings on 2026-11-13.
+Listings are active listings on 2026-11-13. Every crawled shop is read as
+makhzanbot, signed, since 2026-11-18.
 
 | Supplier | Adapter | Listings | State |
 |---|---|---|---|
@@ -30,7 +33,7 @@ Listings are active listings on 2026-11-13.
 | Shop 2 | `WooCommerceAdapter` | 1,761 | crawled daily |
 | The Shopify shop | `ShopifyAdapter` | 1,267 | crawled daily |
 | Shop 5 | `WooCommerceAdapter` | 393 | crawled daily |
-| The Wix shop | `WixStoresAdapter` (since 2026-11-09) | 53 | crawled daily, as makhzanbot; product pages on |
+| The Wix shop | `WixStoresAdapter` (since 2026-11-09) | 53 | crawled daily; product pages on |
 
 Every supplier maps its own categories through a crosswalk.
 
@@ -46,7 +49,52 @@ honest slot. It is filled by crosswalk only (see CLAUDE.md, "Domains").
 
 The site calls them **departments** (`/departments/{department}`).
 
-### Shipped since the last update (2026-10-24)
+### Shipped 2026-11-13 to 2026-11-19
+
+- **AI matching, live since 2026-11-19** (`docs/ai/`). Local models judge
+  candidate pairs; the regroup reads their "same" decisions last, behind every
+  veto and a person's rulings. The broker, the configurable worker and the
+  producers (#58–#60); a backlog scored on the desktop GPU, imported with
+  `./makhzan ai import` (#69): 91,199 decisions, 6,249 "same"; the home server's
+  CPU workers as a compose stack waiting for their windows (Kev 01:00–05:00, pplx
+  05:05–07:00 Cairo), behind a broker-only proxy (#72), on images CI builds,
+  smoke-tests and publishes to GHCR (#70, #71); what became of each decision
+  (`ai_decisions.effect`) shown in `./makhzan ai status` (#75). Electronics only.
+  **Not done:** the queue left after the import (1,571 re-queued backlog jobs,
+  new pairs and the rules-merged audit) drains slowly at CPU speed in the home
+  server's windows; the owner approved draining it once on the desktop GPU.
+- **Grouping rulings** (#55): a person's never/must merge between two listings,
+  written by accepting a report or with `./makhzan overrides`. The shop view and
+  the "Matched by AI" badge on product pages (#56).
+- **Identifiers for every department with codes** (#45, #47): tools, chemicals
+  and seals-bearings as well as electronics, with a family guard and incumbency
+  in sub-clustering; a manufacturer part number a shop states is a fallback.
+- **Search never depends on grouping** (#76): every active listing's titles,
+  brands and part numbers are searchable on its product. The index is still one
+  document per product, rebuilt in full.
+- **The internal admin dashboard** (#62, `docs/admin.md`), durable pauses in the
+  database, and a reported listing re-checked first.
+- **Taxonomy** (#67): the photography department, `electronics:cameras` and
+  `electronics:kits`, and `!word` vetoes and `a ... b` phrases in keyword rules.
+- **Frontend** (#68): our own icons for every group and category of all 17
+  departments, browse layout B (a sidebar tree on desktop, a Browse pill and
+  bottom sheet on a phone) and the sheet's option A look and motion. Then
+  (#77) 30 results a page, so a full page ends on a complete grid row (rule S8),
+  and the search rail drawn like the browse tree.
+- **Categories seen** (#74): which shop categories each product of the Odoo and
+  Wix shops was listed under, per cycle, and `./makhzan categories-seen`.
+  Record-only.
+- **Shop data Phase 2 product page** (2026-11-13, #37, #39–#41): options,
+  minimums, quantity prices, part numbers, videos, price history. Search-engine
+  metadata (#43), the site pages (#50), "Report a problem" (#48).
+- **Crawler scheduling Phases 0 and 1** (2026-11-13, #36, #38,
+  `docs/crawler-scheduling.md`): the per-listing check log and `make freshness`;
+  T1 short-page stop (in shadow), T4 confirm before archiving, T10, T12. The
+  robots.txt AI policy (#32) and the `/how-we-crawl` redesign (#30).
+- **All crawled shops on makhzanbot** (2026-11-18): shops 1, 2 and 3 and the Odoo
+  shop joined the Wix shop, the Shopify shop and shop 5.
+
+### Shipped 2026-10-24 to 2026-11-13
 
 - **The November redesign** (`docs/DESIGN.md`): English only (the Arabic
   interface and the `/en`, `/ar` routes are gone; old URLs redirect), direction D,
@@ -99,18 +147,18 @@ The site calls them **departments** (`/departments/{department}`).
 ### Shop data
 
 Phase 1 (collecting more of what shops already publish) has shipped. Phase 2
-(showing it), decided 2026-11-09 in `docs/PRODUCT.md`, is **in progress**:
+(showing it), decided 2026-11-09 in `docs/PRODUCT.md`, has shipped except grouping:
 
 | Phase 2 item | State |
 |---|---|
 | Shop contact details on the shop page | done |
 | Crawler activity on `/how-we-crawl` and shop pages | done |
 | Price history recorded and served by the API | done |
-| Price history on the product page ("lowest in 90 days", chart) | in review (`feat/phase2-price-history`) |
-| Options table, minimum order, quantity breaks, stated MPN | in review (`feat/phase2-product-page`) |
-| "Ships from abroad" / "Fits: …" badges, videos, "Price on request" | in review (`feat/phase2-product-page`) |
-| Grouping on the manufacturer part numbers shops state | not done |
-| Grouping by material for products sold per colour | not done (needs the options table) |
+| Price history on the product page ("lowest in 90 days", chart) | done (2026-11-13) |
+| Options table, minimum order, quantity breaks, stated MPN | done (2026-11-13) |
+| "Ships from abroad" / "Fits: …" badges, videos, "Price on request" | done (2026-11-13) |
+| Grouping on the manufacturer part numbers shops state | partly: a fallback when the title names none (#45, #47) |
+| Grouping by material for products sold per colour | not done; moved into the AI plan (product families) |
 
 ### The polish list, and contacting the shops
 
@@ -130,12 +178,13 @@ emails went out.
 
 ### Infrastructure
 
-- Tests, as run on 2026-11-13: 879 ingestion and 228 API (`make test`), 695
-  Vitest and 226 Playwright cases in `apps/web` (not part of `make test`).
-  The 879 include the private configuration's crosswalk tests, which `make test`
-  runs when it finds the private checkout; public CI runs the public ones only
-  (750; the private configuration adds 129). CI runs lint, both Python suites, and web
-  lint, typecheck, build and tests.
+- Tests, as last reported (2026-11-19): about 1,610 ingestion, 362 API and 250
+  AI worker (`ml/tests`) cases (`make test`), 2,208 Vitest and 442 Playwright
+  cases in `apps/web` (not part of `make test`). The ingestion count includes the
+  private configuration's crosswalk tests, which `make test` runs when it finds
+  the private checkout; public CI runs the public ones only. CI runs lint, the
+  Python suites, and web lint, typecheck, build and tests, and builds, smoke-tests
+  and publishes the CPU AI worker images.
 - Each test session gets a database of its own, so suites can run in parallel.
 - Sweeps are resumable and checkpointed per page; archiving is cycle-gated.
 - A cycle spans about a week: the cron stays daily and each run takes a slice.
@@ -144,7 +193,8 @@ emails went out.
   after 2026-11-09 will show the real length.
 - `make status` (`./makhzan status` from production) reports sweep progress,
   cycle history, crawler identity, robots.txt, crosswalk drift, product details,
-  catalogue health, price observations and index drift.
+  catalogue health, price observations, AI matching and index drift; the admin
+  dashboard renders the same report.
 
 ## How it got here
 
@@ -161,27 +211,43 @@ Kept short; `git log` has the detail.
 
 ## Next
 
-### 1. Open, not yet ordered
+### 1. In progress
 
-1. **Shop data Phase 2 mockups**: the product page with the options table,
-   minimum order, quantity breaks, badges and price history, designed before it
-   is built.
-2. **The `/how-we-crawl` redesign.** A presentation redesign (cards, tabs and
-   additions to the activity record); the content, Web Bot Auth and the key
-   directory included, is already on the page. The mockup is approved and it is
-   being built.
-3. **A crawler scheduling plan.** Drafted; the owner is reviewing it.
-4. **A caching and rendering review** of the web app and API.
-5. **A bot traffic policy** for makhzan's own site.
+1. **Products in several categories** (the Odoo shop, the Wix shop). After one
+   full cycle of `categories_seen` recording (#74), the owner reviews
+   `./makhzan categories-seen` and decides how a multi-category product is
+   filed; until then the last mapped partition swept wins.
+2. **The audit review**: the owner reviews the AI audit of merges the rules
+   made (the producers' rules-merged audit), to find wrong rules merges.
+3. **Per-listing category overrides**, like grouping rulings (note required,
+   soft removal, audited, never overwritten by a sweep); first use, about 11
+   non-photographic lamps a shop files with its photo lights. The admin screen is
+   mocked first. Tracked; not started.
+4. **T1 short-page stop to "live"**, per source, once a full shadow cycle shows
+   zero disagreements (`make status`).
 
-### 2. The last polish item
+### 2. Open, not yet ordered
+
+1. **Crawler scheduling Phase 2** (WooCommerce lanes) waits for the owner's
+   decisions; Phase 3 (`docs/crawler-phase3-design.md`) waits for 4–8 weeks of
+   Phase 0 data.
+2. **More AI use cases**, one at a time (`docs/ai/plan.md`): product families
+   (grouping by material), a per-listing category for mixed shop tags, and
+   departments beyond electronics once there is labelled data for them.
+3. **A caching and rendering review** of the web app and API (parked).
+4. **A bot traffic policy** for makhzan's own site.
+5. **The two blocked shops**: follow up through their other channels (see "Live
+   issue").
+
+### 3. The last polish item
 The spot-check of each shop's makhzan page (prices, links, photos, categories).
 It was meant to come before the emails and did not: every reachable shop except
-possibly shop 1 has already been written to (see "The polish list, and contacting the shops").
+shop 5 has already been written to (see "The polish list, and contacting the shops").
 
-### 3. Domain generalization
+### 4. Domain generalization
 Phases 1–3 are done (`DomainProfile`, data-driven suppliers from a `sources`
-table, 15 further verticals), and browse is now scoped to a department.
+table, 15 further verticals, and photography since 2026-11-18), and browse is
+scoped to a department.
 Remaining: an admin path for adding a source other than editing the private
 `sources.toml`, and index-wide search settings — `search_attributes` comes from
 the default profile because Meilisearch settings are per index, so a vertical
@@ -191,7 +257,7 @@ Identifiers are read for electronics, tools, chemicals and seals-bearings
 have no rules yet — their codes are family-level or sizes and each is one shop
 today — and group less.
 
-### 4. Open-sourcing — done
+### 5. Open-sourcing — done
 The platform is public under Apache-2.0; the supplier configuration is not. The
 crawling code is commodity (public WooCommerce, Shopify, Odoo and Wix
 endpoints), while the hand-authored crosswalks are the competitive asset, so
@@ -199,7 +265,7 @@ endpoints), while the hand-authored crosswalks are the competitive asset, so
 private repository that production mounts (`docs/DEPLOYMENT.md`, "Private
 configuration").
 
-### 5. Deferred
+### 6. Deferred
 - ~~**Drop `suppliers.phone`.**~~ Done 2026-11-13: migration `772533d06b60` drops it, the
   contract step for `2b656e4b5adc`, which replaced it with `phones` and kept the
   column while a release that selected it was still serving (docs/DEPLOYMENT.md).
@@ -225,8 +291,8 @@ another address to get past the block. Archiving is cycle-gated, so nothing is
 lost; the cost is freshness, and their data is now from 2026-08-24.
 
 Both shops were emailed on 2026-11-06 and followed up on 2026-11-10, asking them
-to allow the crawler. **Neither has replied.** The next step, around 2026-11-16, is
-to follow up through their other channels (phone, WhatsApp, social). The details
+to allow the crawler. **Neither has replied.** The follow-up through their other channels (phone,
+WhatsApp, social), planned for around 2026-11-16, is still open. The details
 and options are tracked in the private configuration (`docs/live-issues.md`).
 
 ## Operational notes
@@ -237,6 +303,7 @@ dumping.** A dump carries mid-cycle cursor state, and restoring it can make the
 first production cycle archive listings that were simply never re-verified; a
 dump taken mid-session would have retired ~16,600 live listings of the largest supplier.
 
-GHCR images are private because the repo is; the server needs
-`docker login ghcr.io` with a classic token carrying `read:packages`, or the
-packages must be made public.
+A GHCR package's visibility is its own, not the repository's, so a new package
+starts private even though the repository is public: the server needs `docker
+login ghcr.io` with a classic token carrying `read:packages`, or the packages
+must be made public.

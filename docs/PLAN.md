@@ -2,7 +2,28 @@
 
 > An online hardware-store **aggregator** for local Egyptian suppliers — the one place to find your project materials (wood, metals, electronics, and beyond). A directory/discovery product, not a marketplace.
 
-Status: **Phase 2 complete, entering Phase 3** · Last updated: 2026-08-24
+Status: **the original plan**, last substantively updated 2026-08-24. What is true
+today is `docs/ROADMAP.md`; where the product goes next is `docs/PRODUCT.md`.
+
+> **Since this plan (noted 2026-11-19).** Several locked decisions below have
+> moved; the text is kept as written.
+> - **UI language:** English only since the November 2026 redesign. Supplier
+>   titles may be Arabic; there is no Arabic interface or RTL.
+> - **Cross-supplier matching:** shipped, no longer deferred. Rules group
+>   listings into products (`makhzan_schemas/grouping.py`), with permanent
+>   product ids (`docs/decisions/0004-stable-product-ids.md`); AI "same"
+>   decisions from local models join groups as well, live since 2026-11-19
+>   (`docs/ai/`).
+> - **First category:** no longer electronics only: 17 departments
+>   (`docs/DOMAIN_GENERALIZATION.md`).
+> - **Data sourcing:** website crawling only; there is no supplier portal or
+>   manual-entry path yet. Normalization is rules and crosswalks; no LLM
+>   pass exists in ingestion.
+> - **Phase 3 (supplier portal)** is not built; `docs/PRODUCT.md` places it
+>   among later work. **Phase 4:** daily crawling and canonicalization exist,
+>   and freshness is shown in tiers (a price last checked over
+>   `STALE_AFTER_DAYS`, 45, days ago is flagged and can be filtered out,
+>   `makhzan_schemas/freshness.py`).
 
 ---
 
@@ -112,7 +133,7 @@ Index carries per-listing EN + AR fields plus a separately-weighted exact-matcha
 - **Phase 0 — Field research.** ✅ Done. Manually catalog 10–15 real Greater-Cairo electronics suppliers + their sites. This list becomes the scraper backlog and validates the data exists.
 - **Phase 1 — Ingestion spine + schema.** ✅ Done. Postgres schema, first scraper (best-structured site), manual-entry admin, normalization pipeline, review queue. Target: a few hundred trustworthy listings. No public UI.
 - **Phase 2 — Search + consumer frontend.** ✅ Done. Wire the search engine; build search/browse/filter/detail with EN/AR + RTL. First demoable product.
-- **Phase 3 — Supplier portal.** ⬅️ Next. Self-serve listing management + "claim your shop" flow for scraped/manual suppliers.
+- **Phase 3 — Supplier portal.** Not started (see the note at the top). Self-serve listing management + "claim your shop" flow for scraped/manual suppliers.
 - **Phase 4 — Freshness & scale.** Scheduled re-scrapes, staleness decay, more suppliers; begin cross-supplier canonicalization. *Partly pulled forward:* the daily re-scrape and cross-supplier canonicalization already exist; staleness decay does not.
 
 ---

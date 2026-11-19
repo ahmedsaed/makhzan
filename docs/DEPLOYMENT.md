@@ -4,7 +4,8 @@ Docker Compose deployment for makhzan. Images are built and pushed by GitHub
 Actions to GHCR; the server pulls them. **TLS and the reverse proxy are managed
 by you** — the stack publishes only the web app on a host port for your proxy to
 sit in front of. The API is not exposed: the web app proxies `/api` to it over
-the internal network.
+the internal network. Two internal services, the AI broker and the admin
+dashboard, are published only on the server's Tailscale address.
 
 ## Architecture
 
@@ -16,10 +17,14 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
                         │                          ├─▶ db     (Postgres, internal) │
                         │                          ├─▶ search (Meili,    internal) │
                         │                          └─▶ redis  (Arq queue, internal)│
+Tailscale only ───────▶ │  broker (AI broker, BROKER_BIND → 8100)      │
+                        │  admin  (dashboard, ADMIN_BIND → 8200)       │
                         └──────────────────────────────────────────────┘
 ```
 
-- **web** is the only published service (`WEB_PORT`); point your proxy at it.
+- **web** is the only publicly published service (`WEB_PORT`, on `WEB_BIND`:
+  loopback by default, `172.17.0.1` when the proxy is a container, never every
+  interface); point your proxy at it.
   Next.js rewrites `/api/*` to the API (`API_INTERNAL_URL`, default
   `http://api:8000`) server-side, so the browser stays same-origin (no CORS) and
   the API is never exposed. Expose the API port yourself only if you need direct
@@ -28,7 +33,17 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
 - **ingestion** runs the Arq worker; a daily cron (`REFRESH_HOUR`, UTC) queues one
   job per enabled supplier, each with its own timeout, and every supplier job
   queues a shared regroup-and-reindex when it ends; the first of those each day
-  also retires product redirects unused for a year.
+  also retires product redirects unused for a year. After each rebuild it queues
+  the AI candidate producers (`ai_candidates`).
+- **broker** is the AI broker (`app.broker.main:app`, from the api image), the
+  only thing AI workers talk to. It is published on `BROKER_BIND`, the server's
+  Tailscale address and port (default loopback), and runs no model:
+  `docs/ai/broker-deploy.md`. AI matching has been live in production since
+  2026-11-19 (`worker_state['ai_matching']`, `docs/ai/decision-review.md`,
+  "Go-live"); its workers run on the home server (`ml/deploy/home-server/`).
+- **admin** is the internal dashboard (`admin.app:app`, from the ingestion
+  image), published on `ADMIN_BIND`, the Tailscale address and port (default
+  loopback): `docs/admin.md`.
 - **migrate** is a one-shot service that runs `alembic upgrade head` on every
   deploy before api/ingestion start. The previous release keeps serving while it
   runs, so a migration must not drop or rename anything that release reads:
@@ -37,7 +52,11 @@ your proxy / TLS ─────▶ │  web (Next.js, host :WEB_PORT → 3000) 
   dropped by `772533d06b60` once the live release no longer mapped it.
 
 Images: CI pushes `ghcr.io/<owner>/makhzan/{api,web,ingestion}`. The server pulls
-them (it can also `docker compose ... build` if you prefer).
+them (it can also `docker compose ... build` if you prefer). `broker` runs the
+api image and `admin` the ingestion image. The CPU AI worker images
+(`kev-worker-cpu`, `pplx-worker-cpu`) are built, smoke-tested and pushed by
+`ai-worker-images.yml` for the home server, not this stack; the GPU images stay
+local builds.
 
 ## One-time setup
 
@@ -45,13 +64,18 @@ them (it can also `docker compose ... build` if you prefer).
 
 Workflows live in `.github/workflows/`:
 
-- `ci.yml` — ruff + web lint/typecheck/build on every PR and push.
+- `ci.yml` — ruff, the ingestion, API and AI worker (`ml/tests`) test suites, the web end-to-end tests,
+  and web lint/typecheck/test/build on every PR and push.
 - `build.yml` — builds & pushes the three images to GHCR on push to `main` and on
   `v*` tags. Uses the built-in `GITHUB_TOKEN`; needs **Settings → Actions →
   General → Workflow permissions → Read and write**.
 - `deploy.yml` — SSHes to the server and runs `scripts/deploy.sh` on manual
   dispatch or when a Release is published. Add repo **Secrets**: `DEPLOY_HOST`,
   `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` (e.g. `~/Documents/Projects/makhzan`).
+- `ai-worker-images.yml` (with `ai-worker-image-build.yml`) — builds and
+  smoke-tests the CPU AI worker images on changes under `ml/`, and on `main`
+  pushes them to GHCR; `latest` moves only to a digest that passed the checks
+  (`docs/ai/worker.md`, "Images").
 
 The web image bakes in the repo **variable** `NEXT_PUBLIC_UMAMI_WEBSITE_ID`
 (Settings → Secrets and variables → Actions → Variables); unset, it ships without
@@ -92,6 +116,10 @@ Edit `.env.prod`:
 - strong `POSTGRES_PASSWORD` + `MEILI_MASTER_KEY` (`openssl rand -base64 32`);
   keep the password in `DATABASE_URL` in sync
 - `WEB_PORT` — the host port your proxy targets (the API stays internal); `WEB_BIND` — the address it is published on (default `127.0.0.1`; `172.17.0.1` when the proxy is a container)
+- `BROKER_BIND`, `ADMIN_BIND` — the Tailscale address and port of the AI broker
+  and the admin dashboard (default loopback); `AI_BROKER_ADMIN_TOKEN_SHA256` is
+  written by `./makhzan ai admin-token` (`docs/ai/broker-deploy.md`), and
+  `ADMIN_PASSWORD_HASH` / `ADMIN_SECRET` by `./makhzan admin password`
 - `NEXT_PUBLIC_API_URL` — leave `/api` (the web app rewrites it to the API);
   `API_INTERNAL_URL` (default `http://api:8000`) is the internal rewrite target
 - `SITE_URL` — the site's public origin, e.g. `https://makhzan.merope.dev`.
@@ -179,8 +207,13 @@ terminate TLS there, and you're live.
 
 ## Day-2 operations
 
-`./makhzan` (repo root) wraps the common ones: `status`, `deploy`, `crawl on|off`,
-`logs`, `stop`, `start`, `backup`, `migrate`, `retire`, `probe`, `reports`. Run it on the server, or from a
+`./makhzan` (repo root) wraps the common ones: `status`, `freshness`, `deploy`,
+`crawl on|off`, `shop pause|resume`, `admin password`, `logs`, `stop`, `start`,
+`backup`, `restore`, `migrate`, `retire`, `probe`, `reports`, `overrides`,
+`categories-seen [--source ID] [--conflicts-only]` (every shop category a
+product was listed under last cycle; read-only, record-only for now), and `ai`
+(`status`, workers and tokens, `mode`, `backlog`, `jobs`, and `ai import DIR`
+for a locally scored backlog; `./makhzan help` lists them). Run it on the server, or from a
 laptop with `DEPLOY_HOST` set (it re-runs itself over SSH). `status` is the one
 to reach for first: containers, health, whether the crawl is paused, and the full
 crawler report from `scripts/status.py`, read from the live database.
@@ -195,7 +228,9 @@ crawler report from `scripts/status.py`, read from the live database.
 | Remove a source and its listings | Delete it from `sources.toml` in the private configuration and deploy, then `./makhzan retire <source-id>` (a dry run) and again with `--yes`. Rebuilds products and the index. |
 | What a regroup would do to product ids | `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --no-deps ingestion python -m worker.regroup --dry-run` (kept / new / merged / split / emptied; changes nothing) |
 | Drop redirects unused for a year | Automatic: the first product rebuild of each day (the worker's `rebuild_and_reindex` job) does it, and records the day and counts in `worker_state` under `redirects_retired`. By hand, the same `run` with `python -m worker.retire_redirects [--dry-run]` (`docs/decisions/0005-url-retirement.md`) |
-| Review visitors' reports | `./makhzan reports` lists new ones, oldest first, each with the offers as the page showed them; `./makhzan reports show 12` adds the reporter's email; `./makhzan reports accept 12 13` / `reject 14` set `status` and `reviewed_at`. Nothing else happens on accept yet: correct the page by hand. |
+| Review visitors' reports | `./makhzan reports` lists new ones, oldest first, each with the offers as the page showed them; `./makhzan reports show 12` adds the reporter's email; `./makhzan reports accept 12 13` / `reject 14` set `status` and `reviewed_at`. Accepting a grouping report also records its rulings in `grouping_overrides` (applied by the next regroup; `reject` withdraws them), and accepting a wrong price or stock report asks the shop's next run to re-read the ticked offers first. Anything else on the page is corrected by hand. |
+| Grouping rulings | `./makhzan overrides` lists them with their status; `add A B --kind never\|must --note ..`, `remove ID --note ..` |
+| AI matching | `./makhzan ai status` (workers, mode, queue, decisions and their effect after the last regroup); `./makhzan ai import DIR` imports a backlog scored locally; `./makhzan ai mode off` stops the regroup reading AI decisions. `docs/ai/broker-deploy.md`, `docs/ai/worker.md` |
 | Erase reporters' data past its time | Automatic: the worker's `purge_reports` cron, every 10 minutes, erases an email 90 days after its report was sent (reviewed or not) and an address hash 24 hours after it, as /privacy says. By hand: `./makhzan reports purge` |
 | Pause / resume the daily crawl | `./makhzan crawl off [--note why]` (or `on`), or the admin dashboard: a database flag (`worker_state` `crawl_pause`) the worker reads before every daily job and every page, so nothing is recreated and a run in flight stops at its next page. `CRAWL_ENABLED` in `.env.prod` stays as the harder switch; `crawl on` clears it too (`docs/admin.md`) |
 | Pause / resume one shop | `./makhzan shop pause ID [--note why]` / `resume ID`, or the admin dashboard: `sources.paused_at`, which the sync never writes, so it survives deploys |

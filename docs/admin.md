@@ -205,17 +205,24 @@ between one shop's listings is refused, since the same shop never merges).
 **Remove** is soft and requires a note, kept as `remove_note`
 (`./makhzan overrides remove ID --note ...` takes one too).
 
-**AI matching.**
-- The **mode** switch opens an in-page confirm saying what the change does.
+**AI matching.** Live in production since 2026-11-19
+(`docs/ai/decision-review.md`, "Go-live").
+- The **mode** switch opens an in-page confirm saying what the change does
+  (turning it off: the next regroup undoes every AI merge, decisions and
+  scores kept).
 - Throughput (24 hours per model, scores per day over 7 days), decisions,
-  pipelines, the audit counts, the queue with nights to drain, and open
-  **flags**, each dismissed with a required note.
+  with the **effect** of the standing "same" decisions at the last live
+  regroup (`ai_decisions.effect`: in effect, blocked with a count per reason,
+  inactive, overridden, and unchecked), pipelines, the audit counts, the queue
+  with nights to drain, and open **flags**, each dismissed with a required
+  note. `./makhzan ai status` and `make status` print the same breakdown.
 - **Workers**: issue a token (shown once, on the response page only, never in
   a URL or the audit log; only its sha256 is stored), and revoke one with a
   second click.
 - **Review AI merges**: standing "same" decisions, those merged now first
   (`listings.matched_via = 'ai'`; with the mode off none are, and the list is
-  what going live would merge). **Revoke decision** needs no confirm but a
+  what going live would merge). Importing a locally scored backlog stays in
+  the CLI (`./makhzan ai import DIR`). **Revoke decision** needs no confirm but a
   note, as `./makhzan ai revoke --note` does (owner, 2026-11-17).
   **Redecide (dry run)** re-applies the active policy to stored
   scores and writes nothing.

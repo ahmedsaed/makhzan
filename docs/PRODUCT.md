@@ -4,7 +4,7 @@ Where makhzan goes after the November 2026 redesign: what has been decided, what
 been proposed and not yet discussed, and in what order. `docs/PLAN.md` is the original
 plan; `docs/DESIGN.md` is how it looks; this is what it becomes.
 
-Last updated 2026-11-13. Decisions are Ahmed's; "proposed" items are suggestions
+Last updated 2026-11-19. Decisions are Ahmed's; "proposed" items are suggestions
 recorded so the discussion can resume, not commitments.
 
 ## Now: polish, then ask the suppliers
@@ -60,7 +60,8 @@ Shopify shop and the Wix shop by email. Shop 5 has not been contacted yet.
 - **Report a problem** on products: important (wrong price, stock, match, category).
   Built (November 2026, the approved mockup): a button by the title, a two-step form, no
   account, no CAPTCHA (honeypot, timing and per-address limits), reviewed on the server
-  with `./makhzan reports`, and a privacy page (`/privacy`) that shipped with it. Not yet:
+  with `./makhzan reports` or the internal admin dashboard (`docs/admin.md`), and a
+  privacy page (`/privacy`) that shipped with it. Not yet:
   turning accepted reports into labelled pairs for matching (docs/ai/plan.md, phase G).
 - **Supplier pages:** remove, add or correct a shop, as requests handled by hand for
   now (through code). Self-service comes with the supplier portal.
@@ -98,11 +99,14 @@ change, switched on shop by shop (see "Decided" above).
 
 Phase 2 shows it, decided 2026-11-09:
 
-(In progress on 2026-11-13. Done: shop contact details, crawler activity, price history
-recorded and served by the API; on branches awaiting review, the product page below
-(`feat/phase2-product-page`) and price history on it (`feat/phase2-price-history`). Not
-done: search rows using the API's price-of-one summary fields, and both grouping changes.
-`docs/ROADMAP.md` keeps the table.)
+(State on 2026-11-19. Shipped 2026-11-13: shop contact details, crawler activity, price
+history recorded and served by the API, and the product page below with price history
+on it. Partly done: a stated manufacturer part number is read as a fallback identifier
+when the title names none, in the departments with `shop_stated_identifiers`
+(electronics, tools, chemicals, seals-bearings); using it as corroboration and logging
+disagreements is not done. Not done: search rows using the API's price-of-one summary
+fields, and grouping by material, which moved into the AI plan as product families
+(`docs/ai/plan.md`). `docs/ROADMAP.md` keeps the table.)
 
 - **Product page:** minimum order ("EGP 0.25 each · min. 10 (EGP 2.50)"), the
   manufacturer part number, an options table (each option with its own price, stock
@@ -149,19 +153,22 @@ From the last round of the discussion, recorded to resume later.
   2026) by a filter: stale products are hidden by default, like out of stock, with the
   count shown and one click to include them (DESIGN.md rule C2b). Nothing disappears
   for good, and ranking stays relevance.
-- **Report a problem without an account**: a reason, an optional email, rate limited,
-  into the review queue (which needs an admin screen; it has none today).
+- ~~**Report a problem without an account**~~: built (see "Decided"); reports are
+  reviewed on the internal admin dashboard or with `./makhzan reports`.
 - **Parts-list import by parsing, not AI**: CSV, KiCad and spreadsheet parts lists and
   plain lines ("10x 1k 0805", "ESP32-WROOM-32"), each matched with the existing
   part-number-aware search and confirmed by the person. AI only for lines parsing
   cannot read.
 - **Supplier pages in detail:** the opt-out prominent, with a stated turnaround; each
   request saved and emailed.
-- **Discoverability:** indexable product pages, a sitemap, structured product and offer
-  data, and link previews for WhatsApp and Facebook sharing.
-- **Privacy policy, terms and a contact page**, required once emails are collected
-  (Egypt's Personal Data Protection Law, No. 151 of 2020).
-- **An admin area**: reports, supplier requests, projects, posts, featuring.
+- ~~**Discoverability:**~~ done (November 2026): indexable product pages, a sitemap
+  with images, structured product, offer and store data, and link previews.
+- ~~**Privacy policy, terms and a contact page**~~: done (`/privacy`, `/terms`,
+  `/contact`; Egypt's Personal Data Protection Law, No. 151 of 2020).
+- **An admin area**: reports, supplier requests, projects, posts, featuring. Partly
+  there: an internal dashboard (`docs/admin.md`, private network only, one password)
+  reviews reports, grouping rulings, pauses and AI matching; it has no accounts, and
+  supplier requests, projects and posts are not in it.
 - **Blog categories**: News and Changes; Changes doubles as the public changelog.
 
 ## Proposed phases
@@ -183,5 +190,6 @@ From the last round of the discussion, recorded to resume later.
    warn after 45 days (F2), and hide by default after the same cutoff, counted and one
    click away (C2b).
 4. Notifications for alerts, later: email, WhatsApp or browser push?
-5. Price history: a small chart, or "lowest in 30 days"?
+5. ~~Price history: a small chart, or "lowest in 30 days"?~~ Decided: both, "lowest in
+   90 days" and a small chart (DESIGN.md).
 6. Reviews, ratings, questions and answers: wanted at all?

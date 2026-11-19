@@ -29,7 +29,7 @@ live "arduino uno" results, the source photos are:
 | shop 1 (`71Q7-IbiWrL._AC_SL1000_.png`) | 1.13 MB |
 
 The marketplace serves real thumbnails; the WordPress shops serve raw uploads. Those
-average ~273 KB, so a 24-row page is roughly **6.5 MB** of photos rendered into
+average ~273 KB, so a 24-row page (the page size then; 30 since November 2026) is roughly **6.5 MB** of photos rendered into
 48-pixel boxes, against ~24 KB optimised. That is a genuine cost and it is being
 accepted deliberately, not overlooked.
 

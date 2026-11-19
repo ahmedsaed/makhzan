@@ -9,7 +9,7 @@
 
 ```bash
 make setup     # .env + services + dependencies + migrations
-make test      # verify the ingestion + api suites pass
+make test      # verify the ingestion, api and AI worker (ml/tests) suites pass
 make api       # then, in another shell: make web
 ```
 
@@ -126,7 +126,9 @@ from the server's if grouping has changed since the dump was taken.
 ## 5. Search index
 The Meilisearch index (`products`) is a rebuildable projection of the DB, one
 document per listed product, carrying every active listing's titles, brands
-and part numbers (`makhzan_schemas/search.py`). Nothing indexes incrementally:
+and part numbers in its `member_*` fields (`makhzan_schemas/search.py`), so a
+listing is findable whatever product it was grouped into. There is no listings
+index, and nothing indexes incrementally:
 each rebuild (`rebuild_and_reindex`, `worker.regroup`) regroups and then
 rebuilds the whole index in a staging index swapped in. `make migrate` (and so
 `make setup`) applies the index's settings with `python -m worker.ensure_index`,
@@ -164,19 +166,24 @@ make test-api            # or: cd apps/api && poetry run pytest
 
 Endpoints:
 - `GET /health`
-- `GET /search?q=ESP32&category=electronics:resistors&in_stock=true&min_price=&max_price=&shop=&sort=price:asc&limit=&offset=`
-  (`shop` is a supplier slug: only products with an offer from that shop)
-- `GET /listings/{id}` (includes nested supplier + category + description)
-- `GET /categories` (taxonomy with per-category listing counts)
+- `GET /search?q=ESP32&category=electronics:resistors&domain=&in_stock=true&fresh=&min_price=&max_price=&min_suppliers=&shop=&facets=&sort=price:asc&limit=&offset=`
+  (returns products; `shop` is a supplier slug: only products with an offer from that shop)
+- `GET /products/{id}`, `/products/{id}/redirect`, `/products/{id}/similar`, `/products/{id}/history`
+- `GET /listings/{id}` (includes nested supplier + category + description), `/listings/{id}/history`
+- `GET /categories?domain=` (taxonomy with per-category product counts), `GET /stats`
 - `GET /suppliers` (every shop: active/in-stock counts, last checked, domains)
 - `GET /suppliers/{slug}` (the same, plus location and top categories)
 - `GET /suppliers/{slug}/listings?in_stock=&limit=&offset=` (in stock first, then freshest)
+- `GET /crawler/activity` (what each run sent, for `/how-we-crawl#activity`)
+- `GET /sitemap/products`, `GET /reports/token`, `POST /reports`
+- `GET /.well-known/http-message-signatures-directory` (makhzanbot's Web Bot Auth key)
 - `GET /docs` (OpenAPI UI)
 
 Web routes: the page tree in `docs/DESIGN.md` (`/`, `/search`, `/products/[id]`,
-`/trades/…`, `/shops/…`, `/how-we-crawl`, `/for-suppliers`).
+`/departments/…`, `/shops/…`, `/how-we-crawl`, `/for-suppliers`, and the content pages).
 
-**Categories:** the taxonomy + keyword resolver live in `makhzan_schemas/taxonomy.py`.
+**Categories:** each department's taxonomy and keyword resolver live in its `DomainProfile`
+(`makhzan_schemas/domains/`, `resolve_category_slug`); crosswalks are in the private configuration.
 New ingestion assigns categories automatically. To regroup products and rebuild the
 index, `poetry run python -m worker.regroup` (from `apps/ingestion`; `make reindex`).
 Never `worker.backfill` for that: it re-infers every category from titles and erases

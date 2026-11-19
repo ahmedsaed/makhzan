@@ -2,8 +2,11 @@
 
 Status: **built, tested against a contract-following fake broker, and checked against the
 phase 2 broker app** (six end-to-end sessions, below, run while the broker's time-fit
-removal was in progress). Nothing has run on the home server yet. What is not here yet is
-listed at the end.
+removal was in progress), and **in production since 2026-11-19**: the home server runs
+`home-kev` and `home-pplx` as a compose stack against the real broker (its first window:
+Kev scored 12 requests at about 123 s each, stopped and unloaded cleanly; pplx found its
+queue empty; `docs/ai/decision-review.md`, "Go-live"). What is not here yet is listed at
+the end.
 
 A worker is one process that serves the one model key its configuration names: the broker
 takes exactly one model per session, so two models are two workers (for example `home-kev`
@@ -848,10 +851,12 @@ no model. CI runs it with the ingestion suite.
   that held it is removed, then `gc.collect()` and `malloc_trim`) but has not been measured
   with real models. A worker that waits for its window does not depend on it: each window's
   session is a child process that exits.
-- **The compose stack has not run on the home server.** It ran end to end on the desktop
-  with fake components only ("Running on the home server"). Setting it up there, with the
-  real broker and weights, is a separate, supervised step; the old timers and the
-  `DOCKER-USER` rules, if they were ever installed, are to be removed by hand then.
+- **The compose stack's checks on the home server are one window old.** It ran end to end
+  on the desktop with fake components ("Running on the home server"), then went live there
+  on 2026-11-19 with the real broker and weights; one Kev window has run (above). A pplx
+  window that scores, and a window end that interrupts a real request, have not yet been
+  seen there. The old timers and the `DOCKER-USER` rules, if they were ever installed, are
+  removed by hand; this document does not record that they were.
 - **The 5-minute gap after Kev's window is an estimate from the measured worst cases** (a
   request of about 104 s or a load of about 150 s, then up to 3 × 10 s of last posts and a
   10 s join: about 4 minutes). It is now enforced from the stopping side: no lease or load in
@@ -874,8 +879,6 @@ no model. CI runs it with the ingestion suite.
 - **The GPU images are local builds**, referenced by tag (about 26 GB each; not published).
 - **A Kev base image built before `MAKHZAN_KEV_COMMIT` was recorded** (a local GPU image, until
   it is rebuilt) leaves the commit unchecked; the worker logs it. The GHCR images record it.
-- **Nothing has run on the home server through the worker.** Both models were checked on
-  CPU on the desktop, under the same caps (above). The next check is one supervised run of
-  each worker on the home server, against the real broker.
 - **Pushing a locally reviewed backlog to production** (P4) is separate tooling, not part of
-  the worker.
+  the worker: `./makhzan ai import DIR` (`worker/ai_import.py`, `docs/ai/broker-api.md`
+  §6.1), which imported the backlog on 2026-11-19.

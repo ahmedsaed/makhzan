@@ -1,6 +1,50 @@
 # Domain Generalization Refactor
 
-**Status:** proposed · **Owner:** TBD · **Created:** 2026-07-14 · **Amended:** 2026-08-24
+**Status:** largely shipped (see "State as of 2026-11-19") · **Owner:** TBD · **Created:** 2026-07-14 · **Amended:** 2026-08-24, 2026-11-19
+
+## State as of 2026-11-19
+
+The plan below is kept as written; the audit under "Current state" is the July
+2026 state (it predates, among others, the end of the Arabic interface and
+RTL). What exists now, in `packages/schemas/makhzan_schemas/domains/`:
+
+- **17 departments**, one `DomainProfile` each, registered in
+  `domains/__init__.py`: automotive, chemicals, cleaning, electrical,
+  electronics, garden, machinery, materials, photography, piping, rigging,
+  safety, seals-bearings, security, timber, tools, welding. `photography`
+  (Lighting, Camera Gear: photo-lights, tripods, camera-bags,
+  camera-accessories) was added in #67 and is filled by crosswalks only: it
+  has no keyword rules, because inference runs under a listing's supplier
+  domain and no supplier defaults to it. #67 also added the electronics
+  leaves `electronics:cameras` (camera modules, depth cameras, webcams) and
+  `electronics:kits`.
+- **Identifier rules** (`identifier_rules`, `makhzan_schemas/identifiers.py`)
+  for four departments: electronics, tools, chemicals and seals-bearings, which
+  also set `shop_stated_identifiers` (a shop's stated part number as a
+  fallback). The other 13 have none and group less.
+- **The rule engine** (`domains/base.py`): `category_rules` are ordered keyword
+  lists, most specific first. A keyword written `!word` is a veto (the rule
+  does not fire on a text containing it, and the text falls through to the
+  rules below); one written `a ... b` matches `a`, up to `MAX_GAP_WORDS` (4)
+  words, then `b`.
+- **Phase 1** shipped as described: `domain` on `Category` (slugs unique per
+  `(domain, slug)`), `Listing` and `Product`, resolved per listing from its
+  category, with `Supplier.domain` only a fallback.
+- **Phase 2** items 1, 2 and 4 shipped (the `sources` table, `build_adapter`).
+  Item 3, an admin path for adding a source, is still open: the admin dashboard
+  (`apps/ingestion/admin`) pauses and probes shops but adding one is still a
+  commit to the private `sources.toml`.
+- **Phase 3** was overtaken: instead of one wood vertical, 16 further
+  departments were authored, `timber` among them.
+- **Phase 4** in part: browse is scoped to a department (`/departments/{dept}`)
+  and search stays cross-domain with domain as a facet. There is no domain
+  switcher, and per-profile UI strings are limited to the identifier label.
+  `search_attributes` comes from the default profile, because Meilisearch
+  settings are per index.
+- **Non-goals:** AI matching with local models now exists (live since
+  2026-11-19, `docs/ai/`), but it decides only whether two listings are the
+  same product; categorization and identifier extraction are still rules and
+  crosswalks.
 
 ## Goal
 

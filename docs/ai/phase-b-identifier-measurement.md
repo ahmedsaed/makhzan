@@ -1,7 +1,7 @@
 # Phase B measurement: rule-based identifiers outside electronics
 
 Data: production copy, ACTIVE listings only (61,134). Scripts and regexes: `kinds.py`, `cov.py`, `cov2.py`,
-`fuzzy.py` in this directory. "Marketplace" = the one bespoke multi-vertical source (51% of all listings).
+`fuzzy.py` (a session's working files, not kept in the repository). "Marketplace" = the one bespoke multi-vertical source (51% of all listings).
 Other shops = "hobby shops" (6 WooCommerce/Odoo/Wix/Shopify electronics-leaning shops). Precision figures come from
 me reading 25-32 random matches per code kind, so treat them as +/- 15 points. Counts are exact.
 
