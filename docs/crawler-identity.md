@@ -197,7 +197,8 @@ One shop at a time, starting with one that does not sit behind a strict WAF.
   for a registered business, which the operator does not have yet. Pending.
   Nothing has been submitted to Shopify (see "Registering with Shopify"). The
   production signing key exists and its directory is published.
-- **The `/how-we-crawl` redesign.** The page already explains the token, the
-  block snippet, Web Bot Auth and the key directory, and deliberately publishes
-  no IP address. A presentation redesign (cards, tabs, more on the activity
-  record) has an approved mockup and is being built.
+
+The `/how-we-crawl` redesign, listed here until 2026-11-19, shipped on
+2026-11-13 (commit c5d6be4): the page explains the token, the block snippet,
+Web Bot Auth (with an annotated signed request) and the key directory,
+publishes the activity record, and deliberately names no IP address.

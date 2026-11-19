@@ -2,6 +2,15 @@
 
 **Status:** deferred · **Raised:** 2026-08-24 · **Surfaced by:** grouping precision work
 
+**Since (noted 2026-11-19):** still deferred. One part now rests on evidence
+rather than accident: the value veto (`makhzan_schemas.values`) reads a stated
+quantity ("3Pcs", "pack of 10") and treats a title that states one as a
+different offer from a title that states none, so a pack and a single unit no
+longer merge. Nothing parses pack size into a quantity field, and no unit price
+exists: the product page compares offers by the price of one *as each shop
+publishes it* (`makhzan_schemas.pricing.unit_price`). `Listing.unit` is written
+from an adapter's `unit_text`, which no adapter in this repository sets.
+
 ## The observation
 
 `1N4007` appeared as one product spanning 0.45 to 350 EGP. Both listings are

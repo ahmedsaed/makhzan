@@ -2,6 +2,8 @@
 
 **Status:** written 2026-11-13; Phase 0 and Phase 1 shipped the same day (PRs #36, #38) — see `docs/crawler-scheduling.md` for what is built. This is the research and the full plan.
 
+As of 2026-11-19: T1 still runs in shadow (live is a per-source config change after a clean shadow cycle). Phases 2 and 3 are not started. The only `include` re-read beside T4 is the re-check of a listing a person reported (`worker/recheck.py`, 2026-11-17), not the T3 volatility lane. Phase 0's item 5 shipped as churn counters on every category-carrying sweep (`stats.categories`, read by `make freshness`) rather than a per-listing leaf record; since 2026-11-19 the Odoo and Wix shops also record the shop category names each listing was seen under per cycle (`attributes.categories_seen`, `./makhzan categories-seen`), record-only until the owner decides how multi-category products are filed.
+
 Original status: plan only, 2026-11-13. No code, config or PR has been changed. No request
 went to a supplier. The numbers come from the code, `sources.toml`, the November QA
 surveys in `makhzan-config/docs/qa/`, and read-only `SELECT`s on production, each run

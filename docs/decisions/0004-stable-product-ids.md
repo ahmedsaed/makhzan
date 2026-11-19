@@ -2,7 +2,8 @@
 
 **Status:** accepted · **Raised:** 2026-11-06 · **Decided:** 2026-11-09 ·
 **Unblocks:** projects, price history, saved lists · **See also:**
-`0005-url-retirement.md`
+`0005-url-retirement.md` · **Updated:** 2026-11-19 (what changed since is under
+"Since the decision", at the end)
 
 ## The problem
 
@@ -157,3 +158,30 @@ of the whole database takes about 8 seconds.
   revert that was 4 of 305.
 - **Emptied rows are never retired.** They are cheap and answer 200; if they ever
   need pruning, that is a new decision.
+
+## Since the decision (noted 2026-11-19)
+
+The identity mechanism above is unchanged (`plan_identity`,
+`makhzan_schemas/grouping.py`). What feeds it is not "the grouping exactly as
+before" any more:
+
+- **Incumbency.** `_subcluster` rebuilds each existing product from its own
+  members first, then places newcomers, so a newcomer can no longer break a
+  settled product apart (CLAUDE.md, "Sub-clustering reads the products listings
+  already belong to").
+- **A person's rulings** (`grouping_overrides`): `never_merge` and `must_merge`
+  pairs act inside the grouping; a merge or split one carries out cites the
+  ruling's id under `overrides` in `product_events.detail`, and one that undoes
+  a removed ruling cites it under `removed_overrides`.
+- **AI "same" decisions**, read only while `worker_state['ai_matching']` is
+  `live` (live in production since 2026-11-19): a final phase (`_ai_phase`) may
+  join two whole clusters, every veto still checked. The resulting merges go
+  through `plan_identity` like any other, so an AI join merges product ids
+  (`merged_into`, a 308 to the survivor) and cites the decision under
+  `ai_decisions` in `product_events.detail`; `listings.matched_via` records
+  `rules` or `ai`. The go-live regroup is recorded in `docs/ai/decision-review.md`.
+- **Group keys depend only on membership** (named after the member first in
+  natural order, commit e272c1f), so the "different seed listing" case in "Undo
+  is by exact group key" above no longer mints a new id: the same membership
+  always forms the same key. Undo still needs the exact membership to form
+  again.

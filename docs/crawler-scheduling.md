@@ -1,9 +1,14 @@
 # Crawler scheduling: more freshness from the same requests
 
-Status, 2026-11-13: **Phase 1 is implemented, with T1 shipped in shadow.** The
-owner approved Phase 1 that day. Phase 0 (measurement) is being built in
-parallel. Phases 2 and 3 are not started. Suppliers are named by role, as in
-CLAUDE.md.
+Status, 2026-11-19: **Phases 0 and 1 are implemented, with T1 shipped in
+shadow.** The owner approved Phase 1 on 2026-11-13. Phase 0 (measurement)
+shipped beside it: the per-listing check log (`listings.checks`, `changes`,
+`first_checked_at`/`last_checked_at`, `pipeline._count_check`), validator
+logging (`stats.validators`, T11), category churn (`stats.categories`) and
+`make freshness` (`scripts/freshness.py`). Phases 2 and 3 are not started;
+the one piece of T3 that exists is the re-check of a listing a person reported
+(`worker/recheck.py`, below), not a volatility lane. Suppliers are named by
+role, as in CLAUDE.md.
 
 ## The rule that does not change
 
@@ -56,9 +61,9 @@ one interval-censored sample. Read these as orders of magnitude, not rates:
 
 | Phase | What | State |
 |---|---|---|
-| 0 | Measure: a per-listing check log, a freshness report, validator logging, category churn | in progress (separate branch) |
+| 0 | Measure: a per-listing check log, a freshness report, validator logging, category churn | **implemented**; collecting data |
 | 1 | T1 short-page end, T2 (a), T4 confirm before archiving, T12 sitemap veto, T10 details ordering | **implemented**; T1 ships in shadow |
-| 2 | WooCommerce lanes: modified-since (T5), `include[]` recheck (T3), wave sentinels (T9), newest page (T13) | not started; needs decision D2 |
+| 2 | WooCommerce lanes: modified-since (T5), `include[]` recheck (T3), wave sentinels (T9), newest page (T13) | not started; needs decision D2 (only the reported-listing re-check below uses `include` so far) |
 | 3 | Per-listing change rates (T7), click-weighted importance (T8), T2 (c), marketplace partition order | not started; needs Phase 0 data |
 
 ### Phase 1, as built
@@ -109,9 +114,12 @@ archives as before: that is a shop that changed, not drift.
   - after 2 runs whose asking failed, the unasked archive as before;
   - after 3 runs held for want of room to ask (the Odoo shop's 20 pages a
     run), the remainder archives as before;
-  - after one cycle of time from when the sweep finished (the source's
-    `target_cycle_days`, else as long as the cycle took, at least a day),
-    whatever is left archives as before.
+  - after one cycle of time from when the sweep finished, or from when a
+    person last resumed the shop or the crawl if later (`sources.resumed_at`,
+    `crawl_pause.resumed_at`) (the source's `target_cycle_days`, else as long
+    as the cycle took, at least a day), whatever is left archives as before.
+  - a run held because the shop or the crawl is paused counts against none
+    of these (`worker/pause.py`).
 - Hold time is not part of `stats.cycle.cycle_seconds`: a held cycle's length
   ends when its sweep did.
 - Never on a `limit=` run.
@@ -157,6 +165,15 @@ is a failed attempt. `sitemap_veto = false` turns the veto off.
 `make status` shows the T1 tally under SHORT-PAGE END and each source's last
 confirmation under CONFIRM BEFORE ARCHIVING.
 
+**Re-check first (added 2026-11-17, `worker/recheck.py`).** Not a Phase 2 lane:
+when a person accepts a "wrong price or stock" report, the offers ticked get
+`listings.recheck_requested_at`. The next full run reads them first where the
+adapter can re-read by id (`rechecks_by_id`, WooCommerce's `include`, the same
+call T4 uses; at most 100 a run, counted as `stats.requests.recheck`), else at
+their partition's turn. Only a read that writes price and stock clears the
+marker; the details stage never does. Paused shops and `limit=` runs ask
+nothing.
+
 ### Known gaps in Phase 1
 
 - **T1 is not live anywhere.** It needs one shadow cycle per source with zero
@@ -194,10 +211,21 @@ every Nth cycle, for category.
   - a leaf-only product (one `/shop` does not show) would be seen only every Nth
     cycle and archived in between. The two passes must be diffed first, as
     CLAUDE.md requires before any partitioning change.
-- **What Phase 0 must show first.** The per-sweep leaf-category record must show
+- **What Phase 0 must show first.** The per-sweep category record
+  (`stats.categories`, in `make freshness`) must show
   **category churn below ~1 % of listings a cycle**, measured over at least two
   closed cycles. It must also show that no product is reachable only through a
   leaf. Then N can be chosen from the churn, with N = 4 as the starting point.
+- **Multi-category products.** Much of that churn is a product filed under
+  two leaves the crosswalk maps differently: the leaf swept last wins, so it
+  flips each cycle. Since 2026-11-19 each category partition records the
+  shop's category names it saw a listing under, per cycle, in
+  `attributes.categories_seen` (the Odoo and Wix adapters,
+  `records_categories_seen`), and `./makhzan categories-seen [--source ID]
+  [--conflicts-only]` reports them (`worker/categories_seen.py`). This is
+  record-only: the pipeline still assigns the category as before, and the
+  owner decides what multi-category products are filed under after one full
+  cycle of it.
 - **What it needs in code.** A per-partition cadence in
   `_partitions_for_this_run`: a leaf partition is due only every Nth cycle, and
   the cycle-close check expects only the partitions due this cycle. Archiving

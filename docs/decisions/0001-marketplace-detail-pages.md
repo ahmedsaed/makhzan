@@ -2,6 +2,18 @@
 
 **Status:** deferred · **Raised:** 2026-08-24 · **Decision:** revisit before scaling the marketplace beyond tools
 
+**Since (noted 2026-11-19):** partly overtaken. A product-page **details stage**
+now exists for any adapter with `fetch_details` (`worker/details.py`, off unless
+the source's `details = { enabled = true }`): at most `details.per_run` pages a
+run through the same paced client, filling description, specs, photos and
+`brand` (never a card's own brand), never price or stock. Whether it is on for
+the marketplace is per-source configuration. Separately, the manufacturer part
+number the marketplace states in its product URL is stored as
+`attributes.mfr_part_number` and read only as a stated fallback identifier, in
+departments with `shop_stated_identifiers` (`makhzan_schemas.identifiers.stated_identifiers`),
+which is the qualified shape the constraint below asks for. The private `sku`
+is still never written to `part_number`.
+
 ## The gap
 
 The marketplace's listing endpoint returns everything needed for a usable listing —
