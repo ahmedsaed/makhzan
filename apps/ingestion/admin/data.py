@@ -290,7 +290,7 @@ def attention(view: dict) -> list[dict]:
         ):
             msg = run["errors"][0] if run["errors"] else (run["error"] or "no error recorded")
             if msg.rstrip().endswith(":"):
-                # "partition p1: " with an exception that carried no text.
+                # "partition p1: TimeoutError: " with an exception that carried no text.
                 msg = f"{msg.rstrip()} (empty error message)"
             items.append(
                 _item(
