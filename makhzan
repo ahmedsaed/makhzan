@@ -15,6 +15,7 @@
 #   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
 #   ./makhzan reports [list|show ID|accept ID..|reject ID..]  # review "Report a problem"
 #   ./makhzan overrides [list|add A B --kind never|must --note ..|remove ID..]  # grouping rulings
+#   ./makhzan categories-seen [--source ID] [--conflicts-only]  # products in several shop categories
 #   ./makhzan ai [status|worker add|list|revoke|admin-token|mode|redecide|revoke|backlog|jobs|flags]
 #   ./makhzan ai import DIR [--dry-run|--verify]   # DIR where you typed it; copied to the worker
 #                            # AI matching (worker/ai.py, docs/ai/broker-api.md)
@@ -28,7 +29,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -271,6 +272,9 @@ case "$cmd" in
   # Grouping rulings: two listings never, or always, one product (worker/overrides.py).
   # Accepting a grouping report writes them too; a regroup applies them.
   overrides) "${COMPOSE[@]}" exec -T ingestion python -m worker.overrides "$@" ;;
+  # Every shop category a product appeared under in the last completed cycle,
+  # for products listed under several (worker/categories_seen.py). Read-only.
+  categories-seen) "${COMPOSE[@]}" exec -T ingestion python -m worker.categories_seen "$@" ;;
   # AI matching: workers' tokens, the admin token, the mode, decisions, the backlog.
   ai) cmd_ai "$@" ;;
   *) echo "unknown command: $cmd" >&2; usage 1 ;;

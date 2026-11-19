@@ -32,7 +32,7 @@ export PYTHONPATH := $(PRIVATE_CONFIG)$(if $(PYTHONPATH),:$(PYTHONPATH))
 PRIVATE_TESTS := $(wildcard $(PRIVATE_CONFIG)/tests)
 endif
 
-.PHONY: help setup infra migrate deps test test-ingestion test-api test-worker lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides ai broker admin pause db-pull db-load db-refresh deploy clean
+.PHONY: help setup infra migrate deps test test-ingestion test-api test-worker lint fmt api web worker ingest sources status freshness probe reindex regroup-dry-run retire-redirects reports overrides categories-seen ai broker admin pause db-pull db-load db-refresh deploy clean
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -130,6 +130,9 @@ reports:  ## Review visitors' reports: make reports [ARGS="show 12" | "accept 12
 
 overrides:  ## Grouping rulings: make overrides [ARGS="add A B --kind never --note why" | "remove 3"]
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.overrides $(ARGS)
+
+categories-seen:  ## Shop categories each product was listed under: make categories-seen [ARGS="--source ID"]
+	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.categories_seen $(ARGS)
 
 ai:  ## AI matching: make ai ARGS="status" | "worker add NAME --models kev" | "backlog" | "mode off"
 	cd apps/ingestion && $(RUN_ENV) poetry run python -m worker.ai $(ARGS)

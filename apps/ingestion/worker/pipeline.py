@@ -49,6 +49,7 @@ from makhzan_schemas.models import (
 from sqlalchemy import Integer, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from worker import categories_seen
 from worker.categorize import category_slug_for, seed_categories
 from worker.details import apply_details, carry_details, run_details
 from worker.http import (
@@ -148,6 +149,9 @@ async def _upsert_listing(
         # rarely), so it is carried over from the stored row and laid back on
         # top — or this sweep would wipe it. See worker/details.py.
         attributes = carry_details(existing.attributes, attributes)
+        # Likewise the categories it was seen under, one partition at a time
+        # (worker/categories_seen.py): the card knows only this partition's.
+        attributes = categories_seen.carry(existing.attributes, attributes)
     fields = dict(
         title_en=norm.title_en,
         title_ar=norm.title_ar,
@@ -362,6 +366,7 @@ async def _ingest_item(
     record_history: bool = True,
     categories: Counter | None = None,
     via: str = "sweep",
+    seen_in_cycle: str | None = None,
 ) -> str | None:
     """Normalize and upsert one item, or route it to review. Raises on bad items.
 
@@ -372,6 +377,10 @@ async def _ingest_item(
     `categories` counts how this item changed a stored listing's category
     (`_count_category_change`). `via` names the kind of read on the history
     rows it writes (`PriceObservation.via`).
+
+    `seen_in_cycle` (the cycle's start, from a full run's category-partition
+    sweep) records the shop's category names for this item on the listing,
+    `attributes.categories_seen`. Record only: it changes no category.
     """
     default_domain = adapter.supplier.domain
 
@@ -420,6 +429,13 @@ async def _ingest_item(
     stored_category = listing.category_id
 
     knows = adapter.knows_category(raw)
+    if seen_in_cycle and knows and source_categories:
+        # Before the crosswalk has its say: unmapped and ignored names are
+        # recorded too, for the person deciding what multi-category products
+        # are filed under. A pass that carries no category records nothing.
+        listing.attributes = categories_seen.record(
+            listing.attributes, seen_in_cycle, source_categories
+        )
     if knows and mapped is None and adapter.authoritative_categories:
         # Browsed by category, under one the crosswalk does not map. A product
         # can sit in two categories, one mapped and one not, and then whichever
@@ -720,6 +736,7 @@ async def _sweep_partition(
     ephemeral = limit is not None  # dev/testing runs leave cursors untouched
     cursor = None
     page = 1
+    seen_in_cycle = None
     if not ephemeral:
         cursor = await _get_cursor(session, adapter.source_id, partition)
         if cursor.exhausted:
@@ -728,6 +745,8 @@ async def _sweep_partition(
             return False
         if cursor.cycle_started_at is None:
             cursor.cycle_started_at = datetime.now(timezone.utc)
+        if adapter.records_categories_seen:
+            seen_in_cycle = await _cycle_start(session, adapter.source_id, cursor)
         page = cursor.next_page
         if page > 1 and resumed is not None:
             # Picking up mid-partition means this run did not see the pages
@@ -785,6 +804,7 @@ async def _sweep_partition(
                     observed,
                     record_history=not ephemeral,  # a `limit=` run leaves no history
                     categories=None if ephemeral else categories,
+                    seen_in_cycle=seen_in_cycle,
                 )
                 if skipped and not_products is not None:
                     not_products[f"{raw.title} ({skipped})"] += 1
@@ -806,6 +826,20 @@ async def _sweep_partition(
             return False
         page += 1
         await asyncio.sleep(await _pace(adapter))
+
+
+async def _cycle_start(session: AsyncSession, source_id: str, cursor: SourceCursor) -> str:
+    """The start of the source's cycle in flight, as its completion will stamp it.
+
+    The earliest `cycle_started_at` over all the source's cursors, which is
+    what `_finish_cycle_if_swept` records as `stats.cycle.cycle_started_at`: the
+    key `attributes.categories_seen` files this cycle's memberships under.
+    """
+    earliest = await session.scalar(
+        select(func.min(SourceCursor.cycle_started_at)).where(SourceCursor.source == source_id)
+    )
+    stamps = [t for t in (earliest, cursor.cycle_started_at) if t is not None]
+    return min(stamps).isoformat()
 
 
 def _requests_sent(
@@ -1706,6 +1740,8 @@ async def _logged_run(
                 stats["crosswalk"] = drift
             if limit is None and tally["pages"]:
                 stats["categories"] = {k: categories[k] for k in ("set", "moved", "cleared")}
+                if adapter.records_categories_seen:
+                    stats["categories_seen"] = True
             run.stats = stats
 
         # Durable before the sweep: a run that dies on page 1 still keeps it, and
@@ -1923,6 +1959,10 @@ async def _logged_run(
             # Recorded even when nothing changed: a zero here is a measurement,
             # its absence (older runs, `limit=` runs) is not.
             stats["categories"] = {k: categories[k] for k in ("set", "moved", "cleared")}
+            if adapter.records_categories_seen:
+                # This run's sweep recorded memberships: a cycle with a run
+                # lacking it (before the code that records them) is partial.
+                stats["categories_seen"] = True
         if tally["out_of_stock_kept"] or tally["out_of_stock_unknown"]:
             # Kept as out of stock rather than archived; "unknown" ones were
             # never stored, and a route with no price or photo creates nothing.

@@ -89,6 +89,8 @@ _WARRANTY_RE = re.compile(r"\b\d+\s*(?:years?|months?)\s+warranty\b", re.I)
 
 class OdooAdapter(SourceAdapter):
     source_type = SourceType.SCRAPED
+    #: Its category is the partition's (see `knows_category`).
+    records_categories_seen = True
 
     def __init__(
         self,
