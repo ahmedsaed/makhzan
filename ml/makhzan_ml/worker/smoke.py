@@ -10,7 +10,13 @@ no network beyond loopback (run it with `--network none`):
 3. the image holds no model weights: the Hub cache is empty and no weight-sized file is on disk;
 4. the entrypoint's own `--check` accepts a configuration for the model;
 5. a whole worker session runs against `fake_broker` with a fake judge: hello, a lease, the
-   payloads scored in order, the results posted, the empty lease ending the session.
+   payloads scored in order, the results posted, the empty lease ending the session;
+6. the same through the supervisor (`outside_window = "wait"`): the session runs in a forked
+   child, which loads and frees the model, under the container's restrictions;
+7. the broker proxy (`python -m makhzan_ml.worker.proxy`) forwards to a local listener, sends
+   a request naming another host to that same listener, and refuses a name as its target;
+8. with `--expect-revision`, the image records that commit (`MAKHZAN_IMAGE_REVISION`), which
+   the worker reports at hello.
 
 It says nothing about the model's scores: parity with the validated scores needs the weights and
 is the supervised first run (docs/ai/worker.md, "Parity with the validated scores").
@@ -163,9 +169,132 @@ def check_session(model: str, importable=judges.importable) -> None:
     log.info("session: %d jobs scored against the fake broker, ended once", len(jobs))
 
 
+def check_supervisor(model: str, importable=judges.importable) -> None:
+    """One window through the supervisor: a forked child runs the session and exits."""
+    from makhzan_ml.worker import supervisor
+
+    with FakeBroker({TOKEN: (f"smoke-{model}", [model])}) as broker:
+        jobs = [broker.add_job(model, {"ab": payload(f"sup {n} ab")}) for n in range(2)]
+        data = config(model, broker.url)
+        data["schedule"]["outside_window"] = "wait"
+        cfg = parse(data)
+        with tempfile.TemporaryDirectory() as tmp:
+            marks = Path(tmp) / "pids"
+
+            class ChildJudge(FakeJudge):
+                def __call__(self, key, rt):
+                    marks.open("a").write(f"load {os.getpid()}\n")
+                    judge = super().__call__(key, rt)
+                    judge.close_fn = lambda: marks.open("a").write(f"unload {os.getpid()}\n")
+                    return judge
+
+            fake = ChildJudge()
+
+            def make_worker():
+                client = Broker(cfg.broker_url, cfg.token, retry_max_s=5.0)
+                return run.Worker(cfg, client, load_judge=fake, importable=importable)
+
+            sup = supervisor.Supervisor(cfg, supervisor.ForkedSession(make_worker))
+            inner = sup.session.run
+
+            def once(ctl=None) -> int:
+                code = inner(ctl)
+                sup.request_stop("smoke done")
+                return code
+
+            sup.session.run = once
+            code = sup.run()
+            lines = marks.read_text().split() if marks.exists() else []
+        assert code == run.EXIT_OK, f"the supervised session exited {code}"
+        assert all(j.status == "done" for j in jobs), "a job is not done"
+        assert lines[0::2] == ["load", "unload"], f"load/unload in the child: {lines}"
+        assert int(lines[1]) != os.getpid(), "the model was loaded in the supervisor itself"
+    log.info("supervisor: one window in a forked child, model loaded and freed there")
+
+
+def check_proxy() -> None:
+    """The proxy, as its own process, over loopback (no network needed)."""
+    import socket
+    import threading
+    import time
+
+    received: list[bytes] = []
+    target = socket.create_server(("127.0.0.1", 0))
+    tport = target.getsockname()[1]
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = target.accept()
+            except OSError:
+                return
+            with conn:
+                data = b""
+                while chunk := conn.recv(65536):
+                    data += chunk
+                received.append(data)
+                conn.sendall(b"broker:" + data)
+
+    threading.Thread(target=serve, daemon=True).start()
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        pport = s.getsockname()[1]
+    cmd = [sys.executable, "-m", "makhzan_ml.worker.proxy", "--listen", f"127.0.0.1:{pport}",
+           "--to", f"127.0.0.1:{tport}"]  # fmt: skip
+    # The package's own root on the path, as the image's PYTHONPATH has it (and a test has not).
+    root = str(Path(__file__).resolve().parents[2])
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(filter(None, [root, os.environ.get("PYTHONPATH")])),
+    }
+    proc = subprocess.Popen(cmd, env=env)
+
+    def exchange(data: bytes) -> bytes:
+        deadline = time.monotonic() + 20
+        while True:
+            try:
+                c = socket.create_connection(("127.0.0.1", pport), timeout=5)
+                break
+            except OSError:
+                assert time.monotonic() < deadline, "the proxy never listened"
+                time.sleep(0.1)
+        with c:
+            c.sendall(data)
+            c.shutdown(socket.SHUT_WR)
+            out = b""
+            while chunk := c.recv(65536):
+                out += chunk
+        return out
+
+    try:
+        hello = b"POST /ai/v1/hello HTTP/1.1\r\nHost: broker-proxy\r\n\r\n{}"
+        assert exchange(hello) == b"broker:" + hello, "the proxy did not forward the bytes"
+        other = b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+        assert exchange(other) == b"broker:" + other, "a CONNECT went somewhere else"
+        assert received == [hello, other], "the target did not get exactly what was sent"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+        target.close()
+    bad = subprocess.run(
+        [sys.executable, "-m", "makhzan_ml.worker.proxy", "--listen", "127.0.0.1:8100",
+         "--to", "broker.example.test:8100"],
+        capture_output=True, text=True, timeout=60, env=env,
+    )  # fmt: skip
+    assert bad.returncode == 2 and "IP address" in bad.stderr, "a name was accepted as target"
+    log.info("proxy: forwards to its one target, CONNECT included; a name as target refused")
+
+
+def check_revision(expected: str) -> None:
+    got = os.environ.get("MAKHZAN_IMAGE_REVISION")
+    assert got == expected, f"MAKHZAN_IMAGE_REVISION {got!r}, expected {expected!r}"
+    log.info("revision: %s, reported at hello as %s", got, run.image_reference())
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m makhzan_ml.worker.smoke", description=__doc__)
     ap.add_argument("--model", required=True, choices=sorted(PINS))
+    ap.add_argument("--expect-revision", help="the commit the image must record")
     args = ap.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s", stream=sys.stderr
@@ -176,6 +305,10 @@ def main(argv: list[str] | None = None) -> int:
         check_no_weights()
         check_entrypoint(args.model)
         check_session(args.model)
+        check_supervisor(args.model)
+        check_proxy()
+        if args.expect_revision:
+            check_revision(args.expect_revision)
     except AssertionError as e:
         log.error("smoke test failed: %s", e)
         return 1

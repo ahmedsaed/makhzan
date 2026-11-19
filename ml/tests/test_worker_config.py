@@ -13,6 +13,7 @@ from makhzan_ml.worker.config import ConfigError, Schedule, Window, load, parse
 from makhzan_ml.worker.pins import PINS
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "ai" / "worker.md"
+DEPLOY = Path(__file__).resolve().parents[1] / "deploy" / "home-server"
 CAIRO = ZoneInfo("Africa/Cairo")
 
 
@@ -334,16 +335,24 @@ def test_every_documented_example_parses(name, body):
     data.get("compute", {}).pop("weights_cache", None)
     # The broker URL's placeholders, filled with a Tailscale address and a port.
     url = data["worker"]["broker_url"]
-    assert url == "http://<tailscale-ip>:<port>/ai/v1"
-    data["worker"]["broker_url"] = url.replace("<tailscale-ip>", "100.101.102.103").replace(
-        "<port>", "8080"
-    )
+    if name.startswith("home-"):  # through the compose stack's broker proxy
+        assert url == "http://broker-proxy:8100/ai/v1" and data["worker"]["broker_via_proxy"]
+    else:
+        assert url == "http://<tailscale-ip>:<port>/ai/v1"
+        data["worker"]["broker_url"] = url.replace("<tailscale-ip>", "100.101.102.103").replace(
+            "<port>", "8080"
+        )
     cfg = parse(data)
     assert cfg.name == name
     if name.startswith("desk-"):
         assert cfg.device == "gpu"
     if name.startswith("home-"):
         assert (cfg.device, cfg.threads, cfg.mmap) == ("cpu", 6, False)
+        assert cfg.schedule.outside_window == "wait"
+        # The documented example is the compose stack's file, minus its comments.
+        deployed = parse({**tomllib.loads((DEPLOY / f"{name}.toml").read_text()),
+                          "worker": {**data["worker"]}})  # fmt: skip
+        assert deployed.schedule == cfg.schedule and deployed.max_jobs == cfg.max_jobs
 
 
 @pytest.mark.parametrize(
@@ -376,3 +385,99 @@ def test_a_schedule_object_without_a_zone_still_works():
 
 def test_always_needs_no_zone():
     assert parse(base(schedule={"windows": "always"})).schedule.timezone is None
+
+
+# --- waiting for the window, and the broker proxy ------------------------------------------
+
+
+def test_outside_window_defaults_to_exit_and_takes_wait():
+    assert parse(base()).schedule.outside_window == "exit"
+    cfg = parse(base(schedule={"outside_window": "wait", "windows": ["01:00-05:00"],
+                               "timezone": "Africa/Cairo"}))  # fmt: skip
+    assert cfg.schedule.outside_window == "wait"
+    assert cfg.hello_config()["outside_window"] == "wait"
+    refused(base(schedule={"outside_window": "sleep"}), "outside_window")
+    refused(base(schedule={"outside_window": True}), "outside_window")
+
+
+def test_opens_at_is_the_next_start_and_follows_touching_windows():
+    s = Schedule((Window.parse("01:00-03:00"), Window.parse("03:00-05:00")), CAIRO)
+
+    def at(day, h, m=0):
+        return datetime(2026, 11, day, h, m, tzinfo=CAIRO)
+
+    assert s.opens_at(at(17, 0, 10)) == at(17, 1)
+    assert s.opens_at(at(17, 12)) == at(18, 1)
+    assert s.opens_at(at(17, 1)) == at(17, 3)  # strictly after
+    # After the run (01:00 to 05:00 as one), the next opening is tomorrow's.
+    assert s.opens_at(s.closes_at(at(17, 2))) == at(18, 1)
+    assert Schedule(None).opens_at(at(17, 2)) is None
+    midnight = Schedule((Window.parse("22:00-02:00"),), CAIRO)
+    assert midnight.opens_at(midnight.closes_at(at(17, 23))) == at(18, 22)
+    assert s.zone_name() == "Africa/Cairo"
+
+
+@pytest.mark.parametrize(
+    "url, via_proxy, ok",
+    [
+        ("http://broker-proxy:8100/ai/v1", True, True),
+        ("http://broker-proxy:8100/ai/v1", False, False),  # off: names stay refused
+        ("http://brokerproxy/ai/v1", True, False),  # only the proxy's exact name
+        ("http://db:5432/ai/v1", True, False),  # another service in the stack: never
+        ("http://broker-proxy.example.test:8100/ai/v1", True, False),
+        ("http://192.0.2.5/ai/v1", True, False),  # addresses keep their own rule
+        ("http://100.64.0.1:8080/ai/v1", True, True),
+        ("https://broker.example.test/ai/v1", True, True),
+    ],
+)
+def test_broker_via_proxy_allows_only_the_proxys_name(url, via_proxy, ok):
+    data = base(worker={"broker_url": url, "broker_via_proxy": via_proxy})
+    if ok:
+        assert parse(data).broker_via_proxy is via_proxy
+    else:
+        refused(data, "broker_url")
+
+
+@pytest.mark.parametrize(
+    "hosts, url, ok",
+    [
+        (["ai-proxy"], "http://ai-proxy:8100/ai/v1", True),
+        (["ai-proxy"], "http://broker-proxy:8100/ai/v1", False),  # the list replaces it
+        (["1234"], None, False),  # read as an address by the resolver
+        (["0x7f000001"], None, False),
+        (["proxy.example.test"], None, False),  # dotted: a real host
+        ([], None, False),
+        ("broker-proxy", None, False),  # a list, not a string
+    ],
+)
+def test_broker_proxy_hosts_is_an_allow_list_of_service_names(hosts, url, ok):
+    worker = {"broker_via_proxy": True, "broker_proxy_hosts": hosts}
+    if url:
+        worker["broker_url"] = url
+    data = base(worker=worker)
+    if ok:
+        assert parse(data).broker_proxy_hosts == tuple(hosts)
+    else:
+        refused(data, "broker_proxy_hosts|broker_url")
+
+
+def test_broker_proxy_hosts_needs_broker_via_proxy():
+    refused(base(worker={"broker_proxy_hosts": ["broker-proxy"]}), "only read with")
+    assert parse(base(worker={"broker_via_proxy": True})).broker_proxy_hosts == ("broker-proxy",)
+
+
+def test_no_new_lease_s_defaults_by_device_and_is_checked():
+    assert parse(base()).schedule.no_new_lease_s == 300
+    assert parse(base(compute={"device": "gpu"})).schedule.no_new_lease_s == 0
+    cairo = {"windows": ["01:00-05:00"], "timezone": "Africa/Cairo"}
+    assert parse(base(schedule={**cairo, "no_new_lease_s": 60})).schedule.no_new_lease_s == 60
+    assert parse(base(schedule=cairo)).hello_config()["no_new_lease_s"] == 300
+    refused(base(schedule={"no_new_lease_s": -1}), "0 or more")
+    refused(base(schedule={"no_new_lease_s": "5m"}), "no_new_lease_s")
+    refused(base(schedule={**cairo, "windows": ["01:00-01:05"]}), "no time to lease")
+
+
+def test_broker_via_proxy_is_a_boolean_and_says_how_to_allow_a_name():
+    refused(base(worker={"broker_via_proxy": "yes"}), "broker_via_proxy")
+    refused(base(worker={"broker_url": "http://broker-proxy:8100/ai/v1"}),
+            "needs broker_via_proxy = true")  # fmt: skip

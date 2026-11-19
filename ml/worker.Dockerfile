@@ -14,12 +14,15 @@
 # chain builds locally with `docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu`. The GPU
 # workers are local builds from the ml/ directory (docs/ai/worker.md, "Images"):
 #   docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/kev:1.0 \
+#     --build-arg IMAGE_REPO=makhzan-ml/kev-worker-gpu --build-arg REVISION="$(git rev-parse HEAD)" \
 #     -t makhzan-ml/kev-worker-gpu:1.0 ml
 #
 # Nothing here changes how the model scores: the worker sets the same environment the compose
 # services and the CPU benchmark used (makhzan_ml/worker/judges.py) and adds only the worker's
-# own standard-library code. Report the image at hello with -e MAKHZAN_IMAGE=... (its registry
-# digest, or a local build's id; the run commands in docs/ai/worker.md do).
+# own standard-library code. The image names itself at hello (run.image_reference): the
+# repository and the commit it was built from, baked in below, as <repo>:sha-<commit>, the tag
+# CI puts on exactly that tested build; -e MAKHZAN_IMAGE=... overrides it (a digest the host
+# resolved, or a local build's id).
 ARG BASE=makhzan-ml/kev-cpu-lean:1.0
 FROM ${BASE}
 
@@ -33,7 +36,14 @@ ENV PYTHONPATH=/opt/makhzan${PYTHONPATH:+:${PYTHONPATH}} \
 
 COPY makhzan_ml/__init__.py /opt/makhzan/makhzan_ml/__init__.py
 COPY makhzan_ml/worker /opt/makhzan/makhzan_ml/worker
-RUN python -c "import makhzan_ml.worker.run, makhzan_ml.worker.judges; print('makhzan_ml.worker ok')"
+RUN python -c "import makhzan_ml.worker.run, makhzan_ml.worker.judges, makhzan_ml.worker.supervisor, makhzan_ml.worker.proxy; print('makhzan_ml.worker ok')"
+
+# Last, so a new commit rebuilds only this layer. CI passes the commit it builds and the GHCR
+# repository (ml/docker-bake.hcl, .github/workflows/ai-worker-image-build.yml); a local build
+# says "local" unless given --build-arg REVISION=$(git rev-parse HEAD).
+ARG IMAGE_REPO=makhzan-ml/worker
+ARG REVISION=local
+ENV MAKHZAN_IMAGE_REPO=${IMAGE_REPO} MAKHZAN_IMAGE_REVISION=${REVISION}
 
 ENTRYPOINT ["python", "-m", "makhzan_ml.worker"]
 CMD ["--config", "/etc/makhzan-ai/worker.toml"]

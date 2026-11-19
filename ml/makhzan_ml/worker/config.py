@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, tzinfo
@@ -30,12 +31,16 @@ DEVICES = ("cpu", "gpu")
 #: pairing was never measured against the stored scores, so it is refused, not guessed.
 DTYPES = {"cpu": ("fp32",), "gpu": ("bf16",)}
 ON_EMPTY = ("exit", "wait")
+OUTSIDE_WINDOW = ("exit", "wait")
 #: Floors on the two intervals: a heartbeat or a poll every few milliseconds would only
 #: load the broker.
 MIN_HEARTBEAT_S = 5.0
 MIN_POLL_S = 5.0
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+#: A compose service name: one DNS label, no dots, so it can only name a container on the
+#: worker's own Docker network (resolved by Docker's embedded DNS), never a host elsewhere.
+_SERVICE_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class ConfigError(ValueError):
@@ -73,6 +78,11 @@ class Window:
         end = datetime.combine(now.date(), self.end, tzinfo=now.tzinfo)
         return end if end > now else end + timedelta(days=1)
 
+    def start_after(self, now: datetime) -> datetime:
+        """The first start of this window strictly after `now`."""
+        start = datetime.combine(now.date(), self.start, tzinfo=now.tzinfo)
+        return start if start > now else start + timedelta(days=1)
+
     def __str__(self) -> str:
         return f"{self.start:%H:%M}-{self.end:%H:%M}"
 
@@ -85,6 +95,12 @@ class Schedule:
     timezone: tzinfo | None = None  # None: the machine's local time
     on_empty: str = "exit"
     poll_s: float = 600.0
+    #: Outside every window: "exit" (started by a timer), or "wait" (stay up, sleep until
+    #: the next window, and run each window's session in a child process).
+    outside_window: str = "exit"
+    #: No new lease and no model load this close to a window's end (seconds), so a load or a
+    #: lease cannot start at 04:59 and keep a model in memory past the window.
+    no_new_lease_s: float = 0.0
 
     def now(self) -> datetime:
         return datetime.now(self.timezone) if self.timezone else datetime.now().astimezone()
@@ -105,6 +121,20 @@ class Schedule:
                 break
             end = max(here)
         return end
+
+    def opens_at(self, now: datetime) -> datetime | None:
+        """When the next window opens after `now`: the earliest start strictly after it.
+        None when always open. Called while closed, it is the window to sleep until; after
+        `closes_at`, the one after the current run (touching windows were one run)."""
+        if self.windows is None:
+            return None
+        return min(w.start_after(now) for w in self.windows)
+
+    def zone_name(self) -> str:
+        """The time zone the windows are read in, for the log."""
+        if self.timezone is not None:
+            return str(getattr(self.timezone, "key", None) or self.timezone)
+        return datetime.now().astimezone().tzname() or "local"
 
     def describe(self) -> str:
         return "always" if self.windows is None else ",".join(map(str, self.windows))
@@ -134,6 +164,11 @@ class Config:
     retry_max_s: float
     ca_file: Path | None = None
     token_file: Path | None = None
+    #: Plain http:// to a compose service name is allowed (the broker proxy on the
+    #: worker's internal Docker network); off, only addresses (see `_plain_http_ok`).
+    broker_via_proxy: bool = False
+    #: With broker_via_proxy: the host names plain http may go to (the proxy's service name).
+    broker_proxy_hosts: tuple[str, ...] = ("broker-proxy",)
     source: Path | None = None
 
     def hello_config(self) -> dict:
@@ -143,14 +178,26 @@ class Config:
             "max_jobs": self.max_jobs,
             "lease_s": self.lease_s,
             "on_empty": self.schedule.on_empty,
+            "outside_window": self.schedule.outside_window,
+            "no_new_lease_s": self.schedule.no_new_lease_s,
             "memory_gib": self.memory_gib,
         }
 
 
 _SCHEMA: dict[str, set[str]] = {
-    "worker": {"name", "broker_url", "token", "token_file", "ca_file", "model", "models"},
+    "worker": {
+        "name",
+        "broker_url",
+        "broker_via_proxy",
+        "broker_proxy_hosts",
+        "token",
+        "token_file",
+        "ca_file",
+        "model",
+        "models",
+    },
     "compute": {"device", "dtype", "threads", "nice", "memory_gib", "mmap", "weights_cache"},
-    "schedule": {"windows", "timezone", "on_empty", "poll_s"},
+    "schedule": {"windows", "timezone", "on_empty", "poll_s", "outside_window", "no_new_lease_s"},
     "leases": {"max_jobs", "lease_s", "heartbeat_s", "retry_max_s"},
 }
 _MODEL_KEYS = {"expect_version"}
@@ -205,7 +252,41 @@ def _plain_http_ok(host: str) -> bool:
     return ip.is_loopback or any(ip in net for net in TAILSCALE_NETS)
 
 
-def _broker_url(url: Any) -> str:
+def _service_name(host: str) -> bool:
+    """A compose service name: one label with a letter in it, and nothing the C resolver
+    would read as an address ("1234", "0x7f000001" are 127.0.0.1-style IPv4 forms)."""
+    if not _SERVICE_NAME.match(host) or not any(c.isalpha() for c in host):
+        return False
+    try:
+        socket.inet_aton(host)
+    except OSError:
+        return True
+    return False
+
+
+DEFAULT_PROXY_HOSTS = ("broker-proxy",)
+#: The default no_new_lease_s per device: a CPU load takes about 150 s and a request up to
+#: about 104 s on the home server, so nothing new starts in a window's last 5 minutes. A GPU
+#: loads in seconds.
+NO_NEW_LEASE_S = {"cpu": 300.0, "gpu": 0.0}
+
+
+def _proxy_hosts(worker: dict) -> tuple[str, ...]:
+    hosts = worker.get("broker_proxy_hosts", list(DEFAULT_PROXY_HOSTS))
+    if not isinstance(hosts, list) or not hosts:
+        raise ConfigError("[worker] broker_proxy_hosts: a non-empty list of service names")
+    for h in hosts:
+        if not isinstance(h, str) or not _service_name(h):
+            raise ConfigError(
+                f"[worker] broker_proxy_hosts: {h!r} is not a compose service name (one "
+                "label with a letter, no dots, not an address)"
+            )
+    return tuple(hosts)
+
+
+def _broker_url(
+    url: Any, *, via_proxy: bool = False, proxy_hosts: tuple[str, ...] = DEFAULT_PROXY_HOSTS
+) -> str:
     url = _typed("worker", "broker_url", url, str).rstrip("/")
     parts = urlsplit(url)
     if not parts.hostname:
@@ -218,11 +299,21 @@ def _broker_url(url: Any) -> str:
         raise ConfigError(f"[worker] broker_url {url!r}: {e}") from None
     # The broker is reached over Tailscale, http://<tailscale-ip>:<port>: the tailnet's
     # WireGuard tunnel encrypts it. Plain HTTP is accepted for a Tailscale or loopback
-    # address only; anything else must be https://.
-    if parts.scheme != "https" and not (parts.scheme == "http" and _plain_http_ok(parts.hostname)):
+    # address only; anything else must be https://. With broker_via_proxy, also the broker
+    # proxy's own service name (broker_proxy_hosts, "broker-proxy"), safe only inside the
+    # compose stack: on the worker's internal network (no other route out) that name can
+    # only be the proxy, which forwards to the broker's Tailscale address and nowhere else.
+    host = parts.hostname
+    plain_ok = _plain_http_ok(host) or (via_proxy and host in proxy_hosts)
+    if parts.scheme != "https" and not (parts.scheme == "http" and plain_ok):
         raise ConfigError(
             f"[worker] broker_url {url!r}: https://, or http:// to a Tailscale address "
             "(100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one"
+            + (
+                f", or to the broker proxy ({', '.join(proxy_hosts)})"
+                if via_proxy
+                else "; a compose service name (the broker proxy) needs broker_via_proxy = true"
+            )
         )
     if parts.username or parts.password or parts.query or parts.fragment:
         raise ConfigError("[worker] broker_url carries no credentials, query or fragment")
@@ -263,7 +354,11 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     name = _typed("worker", "name", worker.get("name"), str)
     if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", name):
         raise ConfigError(f"[worker] name {name!r}: lowercase letters, digits, '-', '_', '.'")
-    broker_url = _broker_url(worker.get("broker_url"))
+    via_proxy = _typed("worker", "broker_via_proxy", worker.get("broker_via_proxy", False), bool)
+    proxy_hosts = _proxy_hosts(worker)
+    if "broker_proxy_hosts" in worker and not via_proxy:
+        raise ConfigError("[worker] broker_proxy_hosts is only read with broker_via_proxy = true")
+    broker_url = _broker_url(worker.get("broker_url"), via_proxy=via_proxy, proxy_hosts=proxy_hosts)
     token, token_file = _token(worker, base)
     ca_file = None
     if "ca_file" in worker:
@@ -356,7 +451,26 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     on_empty = schedule.get("on_empty", "exit")
     if on_empty not in ON_EMPTY:
         raise ConfigError(f"[schedule] on_empty {on_empty!r}: one of {list(ON_EMPTY)}")
+    outside_window = schedule.get("outside_window", "exit")
+    if outside_window not in OUTSIDE_WINDOW:
+        raise ConfigError(
+            f"[schedule] outside_window {outside_window!r}: one of {list(OUTSIDE_WINDOW)}"
+        )
     poll_s = float(_positive("schedule", "poll_s", schedule.get("poll_s", 600)))
+    no_new_lease_s = _typed(
+        "schedule", "no_new_lease_s", schedule.get("no_new_lease_s", NO_NEW_LEASE_S[device]),
+        (int, float),
+    )  # fmt: skip
+    if no_new_lease_s < 0:
+        raise ConfigError(f"[schedule] no_new_lease_s {no_new_lease_s}: 0 or more")
+    for w in windows or ():
+        start = w.start.hour * 3600 + w.start.minute * 60
+        length = (w.end.hour * 3600 + w.end.minute * 60 - start) % 86400
+        if no_new_lease_s >= length:
+            raise ConfigError(
+                f"[schedule] no_new_lease_s {no_new_lease_s:.0f} leaves window {w} no time "
+                "to lease anything"
+            )
     if poll_s < MIN_POLL_S:
         raise ConfigError(f"[schedule] poll_s {poll_s}: at least {MIN_POLL_S:.0f} s")
 
@@ -377,6 +491,8 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     return Config(
         name=name,
         broker_url=broker_url,
+        broker_via_proxy=via_proxy,
+        broker_proxy_hosts=proxy_hosts,
         token=token,
         token_file=token_file,
         ca_file=ca_file,
@@ -389,7 +505,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         memory_gib=memory_gib,
         mmap=mmap,
         weights_cache=weights_cache,
-        schedule=Schedule(windows, tz, on_empty, poll_s),
+        schedule=Schedule(windows, tz, on_empty, poll_s, outside_window, float(no_new_lease_s)),
         max_jobs=max_jobs,
         lease_s=lease_s,
         heartbeat_s=heartbeat_s,

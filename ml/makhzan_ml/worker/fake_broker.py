@@ -31,8 +31,8 @@ to `path`; `fail(path, times, after=True)` handles the call and then drops the c
 (an answer lost on the way back); `lose_lease(job_id)` makes the job no longer held by its
 worker; `expire(lease_id)` expires a lease now.
 
-Binds 127.0.0.1 only, plain HTTP: the worker accepts http:// for a loopback address
-and nothing else.
+Binds 127.0.0.1 by default, plain HTTP: the worker accepts http:// for a loopback
+address (or a Tailscale one, or the broker proxy's service name when configured).
 """
 
 from __future__ import annotations
@@ -88,11 +88,16 @@ class FakeBroker:
         versions: dict[str, str] | None = None,
         max_attempts: int = 3,
         clock=time.monotonic,
+        host: str = "127.0.0.1",
+        port: int = 0,
     ):
         self.tokens = tokens  # token -> (worker name, model keys)
         self.versions = versions or {k: p.model_version for k, p in PINS.items()}
         self.max_attempts = max_attempts
         self.clock = clock
+        #: Where it listens: loopback by default. Another address only for a stand-in in a
+        #: container (the compose end-to-end run), where the broker proxy forwards to it.
+        self.host, self.port = host, port
         self.jobs: dict[int, FakeJob] = {}
         self.calls: list[tuple[str, dict]] = []
         self.sessions: dict[str, dict] = {}
@@ -221,12 +226,12 @@ class FakeBroker:
                     return
                 self._send(code, out)
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
         self._server.daemon_threads = True
         threading.Thread(
             target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
         ).start()
-        return f"http://127.0.0.1:{self._server.server_port}/ai/v1"
+        return f"http://{self.host}:{self._server.server_port}/ai/v1"
 
     def stop(self) -> None:
         if self._server is not None:

@@ -27,6 +27,9 @@ The worker images build on the lean CPU images and the pplx shim from PR #57
 | `judges.py` | loads a model in-process on the validated scoring path; no mmap; pin checks |
 | `pins.py` | what each model key is pinned to (a copy of `makhzan_schemas.ai.policy.MODELS`, held equal by a test) |
 | `run.py` | one session, from hello to the last release |
+| `supervisor.py` | with `outside_window = "wait"`: stays up, sleeps until each window, runs that window's session in a child process |
+| `proxy.py` | the broker proxy: a TCP forwarder to one fixed address, the compose stack's only way out |
+| `smoke.py` | the image check CI runs before pushing (no weights, no network) |
 | `fake_broker.py` | an in-process broker that follows the contract, for the tests and the parity check |
 | `parity.py` | the worker's scores, end to end, against stored validated scores |
 
@@ -52,8 +55,10 @@ The parity check below confirms it on stored GPU scores.
 
 ## Lifecycle
 
-1. **Window.** Outside every window, the worker exits 0 and sends nothing. Start it at the
-   window's start, with a systemd timer or cron.
+1. **Window.** Outside every window, what happens is `outside_window`: with `"exit"` (the
+   default) the worker exits 0 and sends nothing, for something else to start it at the
+   window's start. With `"wait"` it stays up and waits for the window itself (below,
+   "Waiting for the window"): this is how the home server runs it, as a compose service.
 2. **Pre-flight.** The model key must be loadable in this image. Each model image holds
    one model's code, so naming a key the image lacks is refused before anything is sent. If
    the container's memory limit (cgroup v2 `memory.max`) is below `memory_gib`, the worker
@@ -108,8 +113,8 @@ The parity check below confirms it on stored GPU scores.
      `POST /release`, reason `graceful`, which counts no attempt; another worker or a later
      window picks it up;
    - the model is unloaded.
-6. **Empty queue.** With `on_empty = "exit"`, the worker exits. With `"wait"`, it polls every
-   `poll_s` until the window ends.
+6. **Empty queue.** With `on_empty = "exit"`, the session ends (and with `outside_window =
+   "exit"` the worker exits). With `"wait"`, it polls every `poll_s` until the window ends.
 7. **Session end, exactly once.** The broker records a session's end at an empty lease
    ("empty") or at a graceful release, with jobs or without ("released"). The worker ends
    every session it opened exactly once:
@@ -120,6 +125,66 @@ The parity check below confirms it on stored GPU scores.
      graceful release naming no jobs (broker-api.md §3.5);
    - nothing is sent to a broker that is unreachable or refused the token (401);
    - a stop that comes before hello opens no session at all.
+
+### Waiting for the window
+
+With `[schedule] outside_window = "wait"` the process never exits on its own. It becomes a
+supervisor (`supervisor.py`) that loads no model and runs no thread of its own:
+
+1. Outside every window it logs `sleeping until 01:00 (Africa/Cairo)` and sleeps until the
+   next window opens, re-measuring against the wall clock at least every 15 minutes.
+2. When the window opens it logs `window open` and forks a child that runs one ordinary
+   session, steps 2 to 7 above, exactly what a worker started at the window would run: hello,
+   leases, the model loaded on the first lease with jobs, and at the window's end the
+   graceful stop (the request in flight finished, its scores submitted, the rest of the lease
+   released, the session ended, the model unloaded).
+3. The child then exits, and with it every byte the model, torch and the allocator held:
+   nothing depends on `free()` returning memory to the system. The supervisor logs `window
+   closed; model unloaded` and sleeps until the next window. Between windows the container
+   holds the supervisor's few tens of MB.
+4. It loops until SIGTERM or SIGINT. While asleep, it exits 0 at once. During a window, it
+   forwards the signal to the child, which stops gracefully, and exits with the child's code.
+
+The combinations with `on_empty`:
+
+- `on_empty = "exit"`: an empty queue ends that window's session early, the model is freed,
+  and the supervisor sleeps until the next window (not the rest of this one; touching windows
+  count as one).
+- `on_empty = "wait"`: the child keeps polling every `poll_s` until the window's end, with
+  the model held once loaded.
+
+**One model at a time, enforced.** Each session takes no new lease and starts no model load
+in its window's last `no_new_lease_s` (300 s on CPU). If a session is still running
+`KILL_AFTER_S` (4.5 minutes) after its window's end all the same, the supervisor SIGKILLs it
+and logs `KILLING the session` at ERROR, so the next worker's window (5 minutes later on the
+home server) never finds its model in memory. 4.5 minutes is above the graceful stop's bound
+on the home server's CPU (about 170 s) and below the gap. A killed session cannot release
+its lease: it expires at the broker and charges the job in hand one attempt. The supervisor
+waits for its child with a polling `waitpid` against that deadline, never a blocking one.
+
+**Signals, safely.** The supervisor's SIGTERM/SIGINT handler only records the signal; Python
+also writes it to a wakeup pipe, so any sleep ends at once (`select`), and the main loop
+turns the record into a stop and forwards it to a running child. SIGTERM and SIGINT are
+blocked across the fork and the stop flag is read right after blocking them, so a signal
+that came just before is seen and nothing is forked, and one during the fork is forwarded as
+soon as the child's pid is known. The session (`run.Worker`) does the same with a watcher
+thread: its handler does nothing, the wakeup pipe carries the signal, and the thread calls
+`request_stop`, which now lands even while the main thread is inside a forward pass. Neither
+handler takes a lock.
+
+A session that fails is logged and the supervisor sleeps until the next window: a model that
+will not load, version drift, a refused token or a child killed (for memory, say) would only
+fail again if retried at once, and a compose `restart: unless-stopped` would turn an exit into
+a loop. Only an unreachable broker (exit 4) is tried again inside the window, every
+`poll_s`. With `windows = "always"` there is no next window: a session that ended is started
+again after `poll_s`.
+
+The child is a fork rather than a new interpreter so that it starts at once and shares the
+supervisor's configuration; the parent has imported nothing but the worker's
+standard-library modules (torch is imported in the child, by the load), and SIGTERM and
+SIGINT are blocked across the fork, so a signal arriving meanwhile reaches the child once its
+handlers are in place. `nice` is applied in each child, so it does not accumulate across
+windows.
 
 **Retries.** A network failure, a 5xx or a 429 is retried with exponential backoff: 1 s, 2 s,
 4 s and so on, capped at 60 s, and never shorter than a `Retry-After`. Retries continue for
@@ -152,8 +217,9 @@ for the heartbeat join:
   release ends the session, so no session release follows), then the join: about 170 s;
 - the GPU: the 60 s of retries outlast any request, then 3 × 10 s and the join: about 100 s.
 
-Anything still undelivered is logged before the process exits. Set `--stop-timeout` above
-the bound: 240 s on the home server's CPU, 120 s on the GPU.
+Anything still undelivered is logged before the process exits. Set the stop timeout above
+the bound: 240 s on the home server's CPU (`stop_grace_period: 240s` in its compose stack),
+120 s on the GPU (`--stop-timeout 120`).
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its job,
 order, request hash and score (never the payload), the moment it is known not to have
@@ -174,9 +240,13 @@ header.
 
 ### Exit codes
 
+With `outside_window = "wait"` these are each window's session's codes, which the supervisor
+logs; the process itself exits only on a signal (0 while asleep, else the session's code) or
+for a configuration it cannot read (2).
+
 | Code | Meaning |
 |---|---|
-| 0 | the window ended, the queue was empty (`on_empty = "exit"`), or the worker started outside its window |
+| 0 | the window ended, the queue was empty (`on_empty = "exit"`), or the worker started outside its window; with `outside_window = "wait"`, a SIGTERM while asleep |
 | 1 | the model failed on 3 different jobs in a row, or an unexpected error |
 | 2 | configuration error, memory limit below `memory_gib`, or a model that will not load as pinned. Its lease goes back gracefully: the fault is the worker's, so the jobs are charged no attempt |
 | 3 | version drift: the broker's registry runs another model version (at hello, or 409 at lease) |
@@ -196,7 +266,9 @@ this image can load the model key, and exits.
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | required | the worker's name, as registered (`ai_workers.name`) |
-| `broker_url` | required | the broker's base URL over Tailscale, `http://<tailscale-ip>:<port>/ai/v1`. Plain `http://` is accepted only to a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one (127.0.0.0/8, ::1: the tests, the parity check, a broker on the same machine), and only as an address, never a name (not even `localhost`) and with no zone id; a malformed port is refused at load; anything else must be `https://` |
+| `broker_url` | required | the broker's base URL over Tailscale, `http://<tailscale-ip>:<port>/ai/v1`, or the compose stack's proxy, `http://broker-proxy:8100/ai/v1` (with `broker_via_proxy`). Plain `http://` is accepted only to a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback one (127.0.0.0/8, ::1: the tests, the parity check, a broker on the same machine), and only as an address, never a name (not even `localhost`) and with no zone id, unless `broker_via_proxy` is set; a malformed port is refused at load; anything else must be `https://` |
+| `broker_via_proxy` | `false` | `true` also accepts plain `http://` to the broker proxy's name, exactly, and no other name. Safe only inside the compose stack: on the worker's internal Docker network, which has no other route out, the name can only be the proxy, which forwards only to the broker's Tailscale address. Never set it for a worker on an ordinary network. Off, a name is refused as before |
+| `broker_proxy_hosts` | `["broker-proxy"]` | with `broker_via_proxy`: the exact names allowed, each a compose service name (one DNS label with a letter in it, no dots, nothing the resolver reads as an address such as `1234` or `0x7f000001`) |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
 | `ca_file` | system CAs | for an `https://` broker only: a CA bundle to trust instead, for a privately signed certificate |
 | `model` | required | the one model key served, from `policy.MODELS`: `"kev"` or `"pplx"`. The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
@@ -226,6 +298,8 @@ this image can load the model key, and exits.
 | `windows` | `"always"` | `"always"`, or one or more `"HH:MM-HH:MM"` in local time. A window may cross midnight (`"22:00-02:00"`). Windows that touch or overlap run on as one |
 | `timezone` | required with windows | an IANA zone such as `"Africa/Cairo"`. Required whenever `windows` is not `"always"`: a container's local time is UTC unless told otherwise, so a window without a zone would run at the wrong hours |
 | `on_empty` | `"exit"` | `"exit"` or `"wait"` |
+| `no_new_lease_s` | 300 on CPU, 0 on GPU | no new lease and no model load this close to a window's end (seconds), so a CPU load (about 150 s) cannot start at 04:59 and hold a model past the window. A session that would start inside it does nothing; a lease taken just before it goes back whole, gracefully, with nothing loaded. Must be shorter than every window |
+| `outside_window` | `"exit"` | `"exit"`: outside every window, exit 0 (started by something else at the window). `"wait"`: stay up, sleep until each window, run its session in a child process that exits at the window's end ("Waiting for the window") |
 | `poll_s` | 600 | with `"wait"`, how often to ask for work again; at least 5 |
 
 ### `[leases]`
@@ -239,16 +313,19 @@ this image can load the model key, and exits.
 
 ## Example configurations
 
-These four are examples. The windows are the design's proposal, not decided times. Hosts and
-tokens are placeholders. The worker's tests parse every block below.
+These four are examples. The home server's windows are the owner's (Kev 01:00–05:00, pplx
+05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts and tokens are
+placeholders. The worker's tests parse every block below, and the compose stack's two files.
 
-The home server's Kev worker:
+The home server's Kev worker, as `ml/deploy/home-server/home-kev.toml` has it: through the
+compose stack's broker proxy, waiting for its window:
 
 ```toml
 # home-kev.toml
 [worker]
 name = "home-kev"
-broker_url = "http://<tailscale-ip>:<port>/ai/v1"
+broker_url = "http://broker-proxy:8100/ai/v1"
+broker_via_proxy = true
 token_file = "/run/secrets/makhzan-ai-token"
 model = "kev"
 
@@ -265,8 +342,9 @@ mmap = false
 weights_cache = "/models"
 
 [schedule]
-windows = ["00:30-04:30"]
+windows = ["01:00-05:00"]
 timezone = "Africa/Cairo"
+outside_window = "wait"
 on_empty = "exit"
 
 [leases]
@@ -275,13 +353,16 @@ lease_s = 900
 heartbeat_s = 60
 ```
 
-The home server's pplx worker. Its window follows Kev's, so the two never share the memory:
+The home server's pplx worker. Its window follows Kev's, so the two never share the memory
+and starts 5 minutes after Kev's ends, since Kev's graceful stop can run about 4 minutes past
+05:00:
 
 ```toml
 # home-pplx.toml
 [worker]
 name = "home-pplx"
-broker_url = "http://<tailscale-ip>:<port>/ai/v1"
+broker_url = "http://broker-proxy:8100/ai/v1"
+broker_via_proxy = true
 token_file = "/run/secrets/makhzan-ai-token"
 model = "pplx"
 
@@ -298,8 +379,9 @@ mmap = false
 weights_cache = "/models"
 
 [schedule]
-windows = ["04:30-06:30"]
+windows = ["05:05-07:00"]
 timezone = "Africa/Cairo"
+outside_window = "wait"
 on_empty = "exit"
 
 [leases]
@@ -380,10 +462,13 @@ One build both loads the image on the runner and, on `main`, pushes it to GHCR b
 untagged, in the same step: the push comes **before** the checks below, which run on the
 loaded copy of that same build:
 
-- `python -m makhzan_ml.worker.smoke --model <key>` runs in it with `--network none`: torch
-  sees no CUDA device and `fla` is absent, the model's code and (for Kev) its pinned commit
-  are present, no weight-named file is in the image, the entrypoint's `--check` passes, and a
-  whole session runs against the fake broker with a fake judge;
+- `python -m makhzan_ml.worker.smoke --model <key> --expect-revision <commit>` runs in it
+  with `--network none`, read-only, all capabilities dropped: torch sees no CUDA device and
+  `fla` is absent, the model's code and (for Kev) its pinned commit are present, no
+  weight-named file is in the image, the entrypoint's `--check` passes, a whole session runs
+  against the fake broker with a fake judge, the same runs through the supervisor's forked
+  child, the broker proxy forwards over loopback to a test listener (a `CONNECT` to another
+  host included) and refuses a name as its target, and the image records the commit built;
 - a scan of the exported filesystem fails on any file over 100 MB that is not a shared
   library, whatever it is called.
 
@@ -409,15 +494,16 @@ docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu@sha256:<digest>
 docker pull ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu@sha256:<digest>
 ```
 
-The home server runs `:latest`, pulled before each run, and passes the digest that resolved to
-as `MAKHZAN_IMAGE` (below), so the broker's record names the exact image, whatever `latest`
-points at later. Run the inspect after the pull: `RepoDigests` is empty for an image that was
-not pulled from a registry.
-
-```bash
-docker pull ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest
-IMG=$(docker image inspect -f '{{index .RepoDigests 0}}' ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest)
-```
+**Each image names itself at hello.** A container cannot see its own digest, so the build
+bakes in what it is: CI passes the commit it builds and the GHCR repository into the bake
+(`REVISION`, `IMAGE_REPO`), and the worker layer records them as `MAKHZAN_IMAGE_REVISION` and
+`MAKHZAN_IMAGE_REPO`, last, so a new commit rebuilds only that layer. At hello the worker
+reports `ghcr.io/ahmedsaed/makhzan/<image>:sha-<commit>`, the tag CI puts on exactly the
+tested build of that commit, and the broker keeps it with the session (`ai_sessions.hello`,
+free text). `MAKHZAN_IMAGE`, when set, overrides it (a digest, or a local build's id). A local
+build without a revision says `makhzan-ml/<image>:local`. The smoke test checks, in CI, that
+the image records the commit being built. The home server runs `:latest` through compose,
+and the broker's record names the commit `latest` was when it was pulled.
 
 A build whose pins changed (a new model version) is refused by the worker's `expect_version`
 check until its configuration is updated, so a `latest` that moved never scores under a stale
@@ -442,8 +528,10 @@ docker run --rm --network none --entrypoint python makhzan-ml/kev-worker-cpu:loc
 
 ```bash
 docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/kev:1.0 \
+  --build-arg IMAGE_REPO=makhzan-ml/kev-worker-gpu --build-arg REVISION="$(git rev-parse HEAD)" \
   -t makhzan-ml/kev-worker-gpu:1.0 ml
 docker build -f ml/worker.Dockerfile --build-arg BASE=makhzan-ml/pplx-decider:1.3 \
+  --build-arg IMAGE_REPO=makhzan-ml/pplx-worker-gpu --build-arg REVISION="$(git rev-parse HEAD)" \
   -t makhzan-ml/pplx-worker-gpu:1.0 ml
 ```
 
@@ -456,82 +544,107 @@ base built before that change records none, and the worker only logs that.
 
 ## Running on the home server (CPU, capped)
 
-The caps:
-
-- **CPU**: 6 threads (`threads = 6` and `--cpus=6`), a lowered priority (`nice = 10`,
-  applied by the worker itself), and `--cpu-shares=256`, so anything else on the machine
-  wins contention.
-- **Memory**: `--memory=20g --memory-swap=20g`, so there is no swap.
-- **Weights**: no mmap (`mmap = false`), read-only from the HDD cache.
-- **Network**: egress to the broker only.
-- **`--rm`**.
-
-The weights directory is a Hugging Face home whose `hub/` holds the pinned snapshots as
-real files (copied with `rsync -L`, as for the CPU benchmark), plus `trees/` and `refs/`.
+The home server runs both CPU workers as one compose stack, `ml/deploy/home-server/`: a
+folder with `compose.yml`, a `.env` (from `.env.example`), the two worker TOMLs and their token
+files. No systemd timers and no host firewall rules. Its README says how to set it up.
 
 ```bash
-NAME=home-kev   # or home-pplx, with pplx-worker-cpu
-REPO=ghcr.io/ahmedsaed/makhzan/kev-worker-cpu
-TAG=latest   # to roll back, an older sha-<commit>
-docker pull "$REPO:$TAG"
-IMAGE=$(docker image inspect -f '{{index .RepoDigests 0}}' "$REPO:$TAG")   # after the pull
-docker run --rm --name "makhzan-ai-$NAME" --init --stop-timeout 240 \
-  --cpus=6 --cpu-shares=256 --memory=20g --memory-swap=20g \
-  --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
-  --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
-  --network makhzan-ai \
-  -e MAKHZAN_IMAGE="$IMAGE" \
-  -v "<weights dir>:/models:ro" \
-  -v "<config dir>/$NAME.toml:/etc/makhzan-ai/worker.toml:ro" \
-  -v "<config dir>/$NAME.token:/run/secrets/makhzan-ai-token:ro" \
-  "$IMAGE"
+docker compose up -d                            # start, and after any change
+docker compose pull && docker compose up -d     # update to the latest tested images
+docker compose logs -f kev                      # sleeping until 01:00, window open, ...
 ```
 
-- `--stop-timeout 240` covers the bound under "A stop sets one deadline": about 144 s for
-  the slowest CPU request in flight, about 170 s for a model load in flight (the 60 s of
-  retries runs out during the load, leaving one 10 s attempt for the lease's release, plus
-  the 10 s heartbeat join).
-- The worker stops itself at the window's end in any case; the timer only starts it.
-- `--user` must be able to read the weights and the two mounted files.
-- `MAKHZAN_IMAGE` is the registry digest `latest` resolved to after the pull (the inspect must
-  follow the pull: `RepoDigests` is empty for an image not pulled from a registry), and the
-  container runs that digest, so the broker's record of each session names exactly the image CI built and
-  smoke-tested.
-- A new build is picked up by the pull before the next run. A build whose pins changed is
-  refused by `expect_version` until the configuration follows. To roll back, set `TAG`
-  to an older `sha-<commit>` (the digest is in that run's summary).
+- **Scheduling.** Each worker stays up with `outside_window = "wait"` ("Waiting for the
+  window") and `restart: unless-stopped`: Kev 01:00–05:00, pplx 05:05–07:00, Africa/Cairo.
+  **One model at a time on the machine** (the owner's rule: 31 GB in all, other services
+  running) is guaranteed by the two windows not overlapping, by a 5-minute gap after Kev's
+  window, which covers its graceful stop running about 4 minutes past 05:00 (a request in
+  flight, up to about 104 s, or a model load, about 150 s, then its last posts), and by each
+  window's session running in a child process that exits at the window's end, so the memory
+  is back before the next window. `ml/tests/test_worker_deploy.py` holds the gap.
+- **The caps**, per worker: `cpus: 6` with `threads = 6`, `cpu_shares: 256` (anything else on
+  the machine wins contention) and `nice = 10` (applied by each session), `mem_limit: 20g`
+  with `memswap_limit: 20g` (no swap), `read_only: true` with a 256 MB tmpfs `/tmp` and
+  `HOME=/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, `user` from `.env`, `init: true`, and
+  `stop_grace_period: 240s`, which covers the bound under "A stop sets one deadline": about
+  144 s for the slowest CPU request in flight, about 170 s for a model load in flight.
+- **Mounts**, read-only: the weights at `/models` (a Hugging Face home whose `hub/` holds the
+  pinned snapshots as real files, copied with `rsync -L`), the worker's TOML at
+  `/etc/makhzan-ai/worker.toml`, and its token at `/run/secrets/makhzan-ai-token`.
+  `--user` must be able to read all three.
+- **`TZ=Africa/Cairo`** sets the log's timestamps only; the windows are read in the TOML's
+  `timezone`.
+- **Updates.** `docker compose pull && docker compose up -d` recreates a worker whose image
+  changed; a recreated worker stopping mid-window does the graceful stop. A build whose pins
+  changed is refused by `expect_version` until the TOMLs follow. To roll back, set `KEV_IMAGE`
+  or `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag (the digest is in that run's
+  summary).
 
-**Egress to the broker only.** The broker is reached over Tailscale at
-`http://<tailscale-ip>:<port>`; the host's Tailscale client carries the traffic, encrypted.
-`makhzan-ai` is a user-defined bridge network whose subnet may reach only that address and
-port. The rules go in Docker's `DOCKER-USER` chain. Each `-I` inserts at the top, so add the
-DROP first:
+**Egress to the broker only, inside compose.** The workers are on `broker-only`, a Docker
+network with `internal: true`: no route out, no DNS beyond the stack's service names. Their
+one way out is `broker-proxy`, which sits on that network and on an ordinary bridge and
+forwards one TCP port to the broker's Tailscale address (`BROKER_TARGET`), and nothing else.
+It is our own code, `python -m makhzan_ml.worker.proxy --listen 10.231.89.2:8100 --to <ip>:8100`
+(it listens on its fixed address on `broker-only` only, never on the bridge)
+(standard library asyncio), run from the Kev worker image with no model loaded, read-only,
+no capabilities, non-root, 128 MB. It reads no request, so nothing a worker sends can name
+another destination (a `CONNECT` or an absolute URL is only bytes delivered to the broker,
+which refuses them), and its target must be an IP, never a name. The host's Tailscale client
+carries its traffic to the broker, encrypted. The workers' `broker_url` is
+`http://broker-proxy:8100/ai/v1` with `broker_via_proxy = true`.
 
-```bash
-docker network create --driver bridge --subnet <subnet> makhzan-ai
-iptables -I DOCKER-USER -s <subnet> -j DROP
-iptables -I DOCKER-USER -s <subnet> -d <tailscale-ip> -p tcp --dport <port> -j ACCEPT
-iptables -I DOCKER-USER -s <subnet> -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-```
+`internal: true` alone leaves the host an address on the network's bridge, and a container
+could reach host services listening on all interfaces through it (the end-to-end run below
+reached sshd that way). The network therefore sets `com.docker.network.bridge.inhibit_ipv4`,
+which leaves the host without one; it needs Docker Engine 26 or newer, and the stack's
+README has the check to run after `up -d` (the engine's version, the connections, and an
+external DNS lookup that must fail). The workers also have `pids_limit: 256`, and the README
+runs each worker's `--check` before the first `up -d`, so a configuration error does not
+become a restart loop.
 
-The broker URL is an address, so the worker needs no DNS lookup. The rules must be restored
-at boot, for example with `iptables-save` and the distribution's restore service. The worker
-enforces what it can on its side: plain `http://` only to a Tailscale or loopback address,
-offline model loading, proxy settings ignored, and no other peer.
+**End to end, with fake components (2026-11-19).** The stack was run on the desktop from
+local bake builds (`makhzan-ml/{kev,pplx}-worker-cpu:e2e`), unchanged but for an override that
+added a fake broker container (`fake_broker`, on the proxy's bridge at a fixed address standing
+in for the broker's Tailscale address) and wrapped the workers' own entrypoint with a fake
+judge that holds 1.5 GB while loaded and takes 20 s a request; windows a few minutes long.
+Kev had two windows (03:38–03:40, 03:43–03:44) and pplx one (03:40–03:42):
 
-**Starting at the window.** One timer per worker, at its window's start:
+- **The cycle**, in each worker's log: `sleeping until 03:38 (Africa/Cairo)`, then `window
+  open` at 03:38:00.000, hello through the proxy, the model loaded in a child (pid 14). At
+  03:40:00 the window ended mid-job: the request in flight finished, its job was submitted,
+  the next job went back with a graceful release, the model was unloaded, the session ended
+  "released", and the supervisor logged `window closed; model unloaded` and `sleeping until
+  03:43`. The second window ran in a new child (pid 17) and ended the same way, then
+  `sleeping until Fri 03:38`. pplx opened at 03:40:00, as Kev's closed, and did the same. The
+  broker's record had three sessions, each ended once, no attempt charged, and hello's image
+  `makhzan-ml/kev-worker-cpu:sha-<commit>` from the baked revision.
+- **Memory** (`docker stats` every 10 s): 14.7 MiB per worker while asleep, 1.53 GiB while
+  the fake model was loaded, back to 14.7 MiB within 10 s of each window's end, and never
+  both workers loaded at once. The proxy used 12.5 MiB.
+- **Stop**: `docker compose stop kev` while it slept took 0.16 s, exit code 0.
+- **Egress**, from inside the Kev container: the proxy connected, and a POST through it got
+  the broker's 401. The broker's address directly, 1.1.1.1:443, docker0 and DNS for any
+  outside name all failed (network unreachable, no resolution). With `internal: true` alone,
+  the network's gateway (the host's address on the bridge) accepted a connection to sshd;
+  with `inhibit_ipv4` the network has no gateway address and ports 22, 5432 and 6379 there
+  were refused.
 
-```ini
-# /etc/systemd/system/makhzan-ai-home-kev.timer
-[Timer]
-OnCalendar=*-*-* 00:30:00
-Persistent=false
-[Install]
-WantedBy=timers.target
-```
+**Re-run after the review fixes (2026-11-19).** The same harness, rebuilt at the fixes' commit,
+with `no_new_lease_s = 30` (a test window of 3 minutes cannot hold the default 300) and pplx's
+fake judge taking 600 s a request:
 
-The timer's service runs the `docker run` above (`Type=oneshot`). Do the same for `home-pplx`
-at 04:30. If a run is late, it ends at its window's end all the same.
+- `docker compose run --rm --no-deps <worker> --config ... --check` printed `configuration
+  ok` with the image's commit for both, as the README now has it before `up -d`.
+- The proxy logged `forwarding 10.231.89.2:8100`; from the egress bridge its address there
+  refused the connection. From the workers' network only the proxy connected, an external
+  `getaddrinfo` failed, the network had no gateway, and `pids_limit` was 256.
+- Kev stopped leasing at 04:07:40, its window's last 30 s (`no new lease in the window's last
+  30 s`), unloaded, and slept until the next day: memory 1.53 GiB to 15 MiB at once.
+- pplx's request outlasted its window (04:08–04:10): the window's end asked it to stop, the
+  request could not be interrupted, and at 04:14:30.001, 270 s after the end, the
+  supervisor logged `KILLING the session (pid 8)` and SIGKILLed it; memory went from
+  1.53 GiB to 15 MiB in the next sample, and the supervisor slept until the next day. Its two
+  leased jobs stayed leased at the broker until their lease would expire.
 
 ## Running on the desktop (GPU) for a backlog
 
@@ -696,6 +809,29 @@ no model. CI runs it with the ingestion suite.
     for a job being settled; a heartbeat naming each job as it starts, before its results,
     with an integer job id; a crash charged to the job in hand alone; an unannounced prompt
     version logged.
+- **Waiting for the window** (`test_worker_supervisor.py`), with a fake clock across several
+  windows and days: the model loaded only inside a window and unloaded by its end, never two
+  loads without an unload, nothing held while asleep, one session per window ended once at
+  the broker; the sleep messages; sleeps chunked and landing on the window's start; an empty
+  queue with `on_empty = "exit"` sleeping until the next window, touching windows counted as
+  one; a stop during a window graceful and final; an unreachable broker retried inside the
+  window, other failures (and a child killed by a signal) waiting for the next; `always`
+  restarting after `poll_s`; SIGTERM while asleep exiting at once with 0 (a real signal);
+  and, forking for real, the model loaded and freed in the child, not the supervisor, and a
+  SIGTERM during a window forwarded to the child, which stops gracefully. The entrypoint runs
+  the supervisor only for `"wait"`, and imports neither torch nor a thread.
+- **One model at a time, enforced**, on a fake clock: no session, lease or load inside
+  `no_new_lease_s` (a lease taken just before it goes back uncharged with nothing loaded); a
+  real child that ignores SIGTERM killed at the window's end plus 4.5 minutes (05:04:30,
+  before pplx's 05:05); the deadline the supervisor sets; a stop seen before the fork forks
+  nothing, one recorded during it reaches the child; the signal handler only records. The
+  compose file: the proxy listens on its internal address only, workers have `pids_limit`.
+- **The broker proxy** (`test_worker_proxy.py`): bytes forwarded both ways, a `CONNECT` or
+  an absolute URL delivered to the target all the same, an unreachable target, the
+  connection limit, idle connections closed, targets as IP addresses only.
+- **Configuration and image**: `outside_window`, `broker_via_proxy` (service names only with
+  it, never dotted or numeric ones), the compose examples parsing, their windows never
+  overlapping, and the image reported at hello.
 - **Pins**: `pins.PINS` equals `policy.MODELS`, the worker's request hash equals
   `prompt.request_sha256` on rendered requests, the mapped-weights check can fire, and scores
   outside [0, 1] are refused.
@@ -708,10 +844,25 @@ no model. CI runs it with the ingestion suite.
   load (about 150 s on CPU), which runs past the window; the window is checked again
   right after the load, so nothing is scored, and the lease goes back gracefully, but the
   model was loaded for nothing and the worker overstays its window by the load's length.
-- **Freeing Kev's memory on unload** at the end of a session is coded (the atexit hook that
-  held it is removed) but has not been measured with real models.
-- **No systemd units or network rules are shipped**: only the examples above. Setting them up
-  on the home server is a separate, supervised step.
+- **Freeing Kev's memory on unload** inside a long-lived process is coded (the atexit hook
+  that held it is removed, then `gc.collect()` and `malloc_trim`) but has not been measured
+  with real models. A worker that waits for its window does not depend on it: each window's
+  session is a child process that exits.
+- **The compose stack has not run on the home server.** It ran end to end on the desktop
+  with fake components only ("Running on the home server"). Setting it up there, with the
+  real broker and weights, is a separate, supervised step; the old timers and the
+  `DOCKER-USER` rules, if they were ever installed, are to be removed by hand then.
+- **The 5-minute gap after Kev's window is an estimate from the measured worst cases** (a
+  request of about 104 s or a load of about 150 s, then up to 3 × 10 s of last posts and a
+  10 s join: about 4 minutes). It is now enforced from the stopping side: no lease or load in
+  a window's last 5 minutes, and a kill 4.5 minutes after its end. Nothing checks from the
+  starting side that the other worker has unloaded (the two containers share no state).
+- **`inhibit_ipv4` depends on the Docker Engine.** Without it an `internal` network still
+  lets a container reach the host's own services; an engine that ignores the option leaves
+  that open. The stack's README has the check; the desktop's engine (29.x) honours it.
+- **The end-to-end compose run is not in CI.** CI's smoke test covers the supervisor's fork
+  and the proxy inside the image; the stack itself (networks, caps, the proxy as the only
+  route) was checked once by hand.
 - **A failed run on `main` leaves an untagged image in GHCR** (see "Images"). The full fix is
   to push only after the checks, from a copy kept byte for byte, for example an OCI layout
   exported by the same bake and copied with `skopeo copy --preserve-digests`.

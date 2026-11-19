@@ -1,0 +1,108 @@
+# The home server's CPU AI-matching workers: the whole deployment is this file, a .env, two
+# worker TOMLs and two token files in one folder. No systemd timers, no host firewall rules.
+# README.md beside this file says how to set it up; docs/ai/worker.md is the reference.
+#
+#   docker compose up -d                              # start (and after every change)
+#   docker compose pull && docker compose up -d       # update to the latest tested images
+#   docker compose logs -f kev                        # watch a worker
+#
+# Each worker stays up and waits for its own window (outside_window = "wait" in its TOML):
+# Kev 01:00-05:00, pplx 05:05-07:00, Africa/Cairo. Each window's session runs in a child
+# process that exits at the window's end, so between windows a worker holds no model, and
+# since the windows never overlap and leave 5 minutes for Kev's graceful stop, only one
+# model is ever in memory on this machine.
+#
+# Network: the workers sit on `broker-only`, an internal network with no route anywhere.
+# Their one way out is `broker-proxy`, our own TCP forwarder (makhzan_ml.worker.proxy), which
+# joins that network to an ordinary bridge and forwards one port to the broker's Tailscale
+# address, and to nothing else.
+
+name: makhzan-ai
+
+x-hardening: &hardening
+  restart: unless-stopped
+  init: true
+  user: "${UID:?set UID in .env}:${GID:?set GID in .env}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+x-worker: &worker
+  <<: *hardening
+  # The owner's caps: 6 CPUs at a low share (anything else on the machine wins contention),
+  # 20 GB of memory and no swap, a small writable /tmp only.
+  cpus: 6
+  cpu_shares: 256
+  mem_limit: 20g
+  memswap_limit: 20g
+  tmpfs:
+    - /tmp:size=256m
+  # Covers the graceful stop's bound on this CPU (docs/ai/worker.md, "A stop sets one
+  # deadline"): a request or a model load in flight, then the last posts.
+  stop_grace_period: 240s
+  pids_limit: 256
+  environment:
+    HOME: /tmp
+    # Log timestamps only: the windows are read in the TOML's own `timezone`.
+    TZ: Africa/Cairo
+  networks: [broker-only]
+  depends_on: [broker-proxy]
+
+services:
+  broker-proxy:
+    <<: *hardening
+    # The Kev worker image, for the proxy module only: no model is loaded, nothing else runs.
+    image: ${KEV_IMAGE:-ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest}
+    entrypoint: ["python", "-m", "makhzan_ml.worker.proxy"]
+    # Listens on its address on the workers' internal network only, never on the egress
+    # bridge, so nothing outside the stack can use it.
+    command:
+      - --listen
+      - ${PROXY_ADDRESS:-10.231.89.2}:8100
+      - --to
+      - ${BROKER_TARGET:?set BROKER_TARGET in .env}
+    environment:
+      TZ: Africa/Cairo  # log timestamps, as the workers'
+    cpus: 0.5
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    networks:
+      broker-only:
+        ipv4_address: ${PROXY_ADDRESS:-10.231.89.2}
+      egress: {}
+
+  kev:
+    <<: *worker
+    image: ${KEV_IMAGE:-ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest}
+    volumes:
+      - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}:/models:ro
+      - ${WORKER_DIR:?set WORKER_DIR in .env}/home-kev.toml:/etc/makhzan-ai/worker.toml:ro
+      - ${WORKER_DIR:?set WORKER_DIR in .env}/home-kev.token:/run/secrets/makhzan-ai-token:ro
+
+  pplx:
+    <<: *worker
+    image: ${PPLX_IMAGE:-ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu:latest}
+    volumes:
+      - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}:/models:ro
+      - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.toml:/etc/makhzan-ai/worker.toml:ro
+      - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.token:/run/secrets/makhzan-ai-token:ro
+
+networks:
+  # No egress: Docker drops anything leaving an internal network. It still gives the host an
+  # address on the bridge, though, so a container could reach host services listening on all
+  # interfaces (sshd, a database); inhibit_ipv4 leaves the host without one (README.md says
+  # how to check it took).
+  broker-only:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+    # A fixed subnet, so the proxy can listen on a fixed address in it (.env can move both).
+    ipam:
+      config:
+        - subnet: ${BROKER_NET_SUBNET:-10.231.89.0/24}
+  # An ordinary bridge, for the proxy alone.
+  egress: {}
