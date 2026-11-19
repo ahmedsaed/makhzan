@@ -436,24 +436,35 @@ The regroup reads standing "same" decisions (`decisions.load_ai_same`) at the
 next rebuild, only when the mode is `live`.
 
 **What the regroup found (`ai_decisions.effect`).** A live regroup that is not
-a dry run then writes, on every standing "same" decision, `effect`,
-`blocked_reason` and `checked_at` (`decisions.record_effects`), from where
-each outcome was decided rather than worked out again:
+a dry run then records `effect` and `blocked_reason` on every standing "same"
+decision it read (`decisions.record_effects`), from where each outcome was
+decided rather than worked out again. It runs in its own short transaction
+after the rebuild has committed, rows in id order, with a 5 s lock timeout:
+a conflict with the broker, or any failure, is logged and reported as
+`ai_effects_error`, and costs the rebuild nothing. `load_ai_same` decides, in
+this order:
 
-- `inactive`: a listing not active or outside `policy.DOMAINS` (so not read),
-  or a pipeline no longer registered; stale and revoked "same" decisions are
-  marked `inactive` once;
+- `inactive`: a listing not active or outside `policy.DOMAINS`;
 - `overridden`: a person's ruling covers the pair;
-- `in_effect`: the two listings are in one product, by an AI join or already
-  by the rules;
-- `blocked`, with `blocked_reason`: `same shop` or `not mutual best`
-  (`load_ai_same`), or the AI phase's veto (`grouping._ai_veto`, the first it
-  meets): `same shop` (the two clusters share one), `never merge`, `Kev floor`
-  (a group-check score below `KEV_BLOCK` between two members), `values`,
-  `form`, `price`.
+- `blocked` `same shop`: the pair's own two listings are one shop's;
+- `inactive`: a pipeline no longer registered;
+- `blocked` `not mutual best`.
 
-A dry run, the preview included, writes none, and a regroup while the mode is
-`off` leaves the last live regroup's values (and `checked_at`) as they were.
+A pair read and acted on is `blocked` with the AI phase's veto
+(`grouping._ai_veto`, the first it meets): `clusters share a shop` (a shop has
+a listing on both sides), `never merge`, `Kev floor` (a group-check score
+below `KEV_BLOCK` between two members), `values`, `form`, `price`. Then any
+`blocked` decision whose two listings are in one product, by an AI join or
+already by the rules, is `in_effect`. Stale and revoked "same" decisions are
+marked `inactive` once.
+
+Only decisions the regroup read are written, so one the broker commits during
+the regroup stays NULL (status: "unchecked") until the next. A row is written
+only when its effect or reason changed, and its `checked_at` is when that last
+happened (or the first time it was set). When the last live regroup ran is one
+stamp, `worker_state['ai_effects_checked_at']`. A dry run, the preview
+included, writes none. When the mode goes off the last effects are kept (owner
+decision): the stamp's age, "checked Nh ago" in status, says how old they are.
 `./makhzan ai status`, `make status` and the admin dashboard's AI page count
 them per pipeline.
 

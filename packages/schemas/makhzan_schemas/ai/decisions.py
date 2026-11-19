@@ -20,14 +20,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import and_, func, literal_column, select, update
+from sqlalchemy import and_, bindparam, func, literal_column, not_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME, rank
 from makhzan_schemas.ai.policy import DOMAINS, GROUP_CHECK_MODEL, KEV_BLOCK
 from makhzan_schemas.enums import ListingStatus
-from makhzan_schemas.models import AiDecision, Listing
+from makhzan_schemas.models import AiDecision, Listing, WorkerState
 from makhzan_schemas.overrides import Overrides, Pair, pair
 
 STANDING, STALE, REVOKED = "standing", "stale", "revoked"
@@ -35,8 +36,12 @@ STANDING, STALE, REVOKED = "standing", "stale", "revoked"
 #: What a live regroup found of a standing "same" decision (`ai_decisions.effect`).
 IN_EFFECT, BLOCKED, INACTIVE, OVERRIDDEN = "in_effect", "blocked", "inactive", "overridden"
 #: The reasons `load_ai_same` itself refuses a decision; the AI phase's own are
-#: `grouping._ai_veto`'s.
+#: `grouping._ai_veto`'s ("clusters share a shop" is the phase's, distinct from
+#: "same shop": the pair's own two listings are one shop's).
 SAME_SHOP, NOT_MUTUAL_BEST = "same shop", "not mutual best"
+#: `worker_state` key: when the last live regroup recorded the effects,
+#: `{"at": "<iso>"}`. One stamp per regroup, not one per row.
+EFFECTS_CHECKED_KEY = "ai_effects_checked_at"
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +61,18 @@ class AiSame:
     - `rank`: each pair's strength (`pipelines.rank`: its stages' lower
       scores, last stage first), which orders competing pairs in the AI
       phase. Not the decision id: a re-score renews that.
-    - `skipped`: standing "same" decisions between two active, served
-      listings that are not read, by decision id, with the effect and reason
-      they get unless the pair ends up in one product anyway
-      (`record_effects`): `blocked` for one shop's two listings or a pair not
-      each other's best, `overridden` for a ruled pair, `inactive` for an
-      unregistered pipeline.
+    - `skipped`: standing "same" decisions this read saw but does not act
+      on, by decision id, with their effect and reason (`record_effects`):
+      `inactive` for a listing not active or outside `policy.DOMAINS`;
+      `overridden` for a ruled pair; `blocked` for one shop's two listings
+      ("same shop") or a pair not each other's best ("not mutual best");
+      `inactive` for an unregistered pipeline. A ruling is checked before
+      the shop and the pipeline. Only a `blocked` one becomes `in_effect`
+      when its pair ends up in one product anyway (by the rules).
+    - `read`: every standing "same" decision this read saw (acted on or
+      skipped), by id, with its pair: the only decisions `record_effects`
+      labels, so one the broker commits during the regroup stays unchecked
+      rather than being called inactive.
     """
 
     pairs: frozenset[Pair] = frozenset()
@@ -69,6 +80,7 @@ class AiSame:
     no: frozenset[Pair] = frozenset()
     rank: dict[Pair, tuple[float, ...]] = field(default_factory=dict)
     skipped: dict[int, tuple[str, str | None]] = field(default_factory=dict)
+    read: dict[int, Pair] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.pairs)
@@ -136,7 +148,31 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     rows = []
     unknown: set[str] = set()
     skipped: dict[int, tuple[str, str | None]] = {}
+    read: dict[int, Pair] = {}
+    # Standing "same" decisions not read because a listing is not active or
+    # is outside the served departments: seen, and so labelled inactive.
+    out = (
+        select(AiDecision.id, AiDecision.listing_a, AiDecision.listing_b)
+        .join(la, la.id == AiDecision.listing_a)
+        .join(lb, lb.id == AiDecision.listing_b)
+        .where(
+            AiDecision.state == STANDING,
+            AiDecision.outcome == SAME,
+            not_(
+                and_(
+                    la.status == ListingStatus.ACTIVE,
+                    lb.status == ListingStatus.ACTIVE,
+                    la.domain.in_(DOMAINS),
+                    lb.domain.in_(DOMAINS),
+                )
+            ),
+        )
+    )
+    for decision_id, a, b in await session.execute(out):
+        read[decision_id] = pair(a, b)
+        skipped[decision_id] = (INACTIVE, None)
     for decision_id, pipeline_name, a, b, scores, shop_a, shop_b in await session.execute(query):
+        read[decision_id] = pair(a, b)
         # A person's ruling wins; one shop's two listings never merge, so such
         # a decision cannot act.
         if overrides.kind(a, b) is not None:
@@ -194,7 +230,7 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
         )
     )
     no = frozenset(pair(a, b) for a, b in no_rows.all())
-    return AiSame(frozenset(pairs), ids, no, ranks, skipped)
+    return AiSame(frozenset(pairs), ids, no, ranks, skipped, read)
 
 
 async def record_effects(
@@ -204,57 +240,84 @@ async def record_effects(
     group_of: Mapping[uuid.UUID, str],
     now: datetime,
 ) -> dict[str, int]:
-    """Write what a live regroup found of every standing "same" decision:
-    `effect`, `blocked_reason` and `checked_at` (= `now`).
+    """Record what a live regroup found of the standing "same" decisions it
+    read (`ai.read`): `effect` and `blocked_reason`, and `checked_at` on a
+    row whose effect or reason changed (or was first set). Flushed, not
+    committed: the caller runs it in its own short transaction after the
+    regroup has committed.
 
-    Nothing is worked out again here; the outcomes come from where they were
-    decided. In this order:
+    Nothing is worked out again; each outcome comes from where it was
+    decided. A decision `load_ai_same` skipped keeps the effect it gave
+    (checked in this order there: a listing not active or outside
+    `policy.DOMAINS`, inactive; a ruling, overridden; one shop's two
+    listings, blocked "same shop"; an unregistered pipeline, inactive; not
+    mutual best, blocked). A read pair the AI phase refused is blocked with
+    its veto (`refused`, `grouping._ai_veto`). Then any `blocked` one whose
+    two listings are in one product (`group_of`), by an AI join or by the
+    rules, is `in_effect`.
 
-    - `inactive`: a listing not active or outside `policy.DOMAINS` (the
-      decision was not among those `load_ai_same` read), or a pipeline no
-      longer registered;
-    - `overridden`: a person's ruling covers the pair (`load_ai_same`);
-    - `in_effect`: the two listings are in one product (`group_of`), by an AI
-      join or already by the rules;
-    - `blocked`, with `blocked_reason`: refused by `load_ai_same` (same shop,
-      not mutual best), or by the AI phase (`refused`, `grouping._ai_veto`).
-
-    Stale and revoked "same" decisions are marked `inactive` once. Returns
-    the counts by effect.
+    Only decisions in `ai.read` are written, so one the broker committed
+    after the read stays unchecked (NULL) until the next live regroup; and
+    only while still standing. Stale and revoked "same" decisions are
+    marked `inactive` once. Rows are written in id order, and only where
+    the effect or reason changed (IS DISTINCT FROM). The regroup-wide stamp
+    is `worker_state[EFFECTS_CHECKED_KEY]`. Returns the counts by effect.
     """
-    rows = (
-        await session.execute(
-            select(AiDecision.id, AiDecision.listing_a, AiDecision.listing_b).where(
-                AiDecision.state == STANDING, AiDecision.outcome == SAME
-            )
-        )
-    ).all()
     counts: dict[str, int] = {}
     values = []
-    for decision_id, a, b in rows:
-        key = pair(a, b)
+    for decision_id in sorted(ai.read):
+        a, b = key = ai.read[decision_id]
         if decision_id in ai.skipped:
             effect, reason = ai.skipped[decision_id]
-        elif key in ai.pairs:
-            effect, reason = BLOCKED, refused.get(key)
         else:
-            effect, reason = INACTIVE, None
+            # Read and acted on: refused by the AI phase, or joined (or
+            # already together); the final groups below say which.
+            effect, reason = BLOCKED, refused.get(key)
         if effect == BLOCKED and a in group_of and group_of.get(a) == group_of.get(b):
             effect, reason = IN_EFFECT, None
         counts[effect] = counts.get(effect, 0) + 1
-        values.append(
-            {"id": decision_id, "effect": effect, "blocked_reason": reason, "checked_at": now}
-        )
+        values.append({"d_id": decision_id, "d_effect": effect, "d_reason": reason})
+    table = AiDecision.__table__
     if values:
-        await session.execute(update(AiDecision), values)
+        await session.execute(
+            update(table)
+            .where(
+                table.c.id == bindparam("d_id"),
+                table.c.state == STANDING,
+                table.c.effect.is_distinct_from(bindparam("d_effect"))
+                | table.c.blocked_reason.is_distinct_from(bindparam("d_reason")),
+            )
+            .values(
+                effect=bindparam("d_effect"), blocked_reason=bindparam("d_reason"), checked_at=now
+            ),
+            values,
+        )
     await session.execute(
-        update(AiDecision)
+        update(table)
         .where(
-            AiDecision.state != STANDING,
-            AiDecision.outcome == SAME,
-            AiDecision.effect.is_distinct_from(INACTIVE),
+            table.c.state != STANDING,
+            table.c.outcome == SAME,
+            table.c.effect.is_distinct_from(INACTIVE),
         )
         .values(effect=INACTIVE, blocked_reason=None, checked_at=now)
-        .execution_options(synchronize_session=False)
     )
+    stamp = {"at": now.isoformat()}
+    await session.execute(
+        insert(WorkerState)
+        .values(key=EFFECTS_CHECKED_KEY, value=stamp)
+        .on_conflict_do_update(
+            index_elements=[WorkerState.key], set_={"value": stamp, "updated_at": func.now()}
+        )
+    )
+    await session.flush()
     return counts
+
+
+async def effects_checked_at(session: AsyncSession) -> datetime | None:
+    """When the last live regroup recorded the effects, or None."""
+    state = await session.get(WorkerState, EFFECTS_CHECKED_KEY)
+    value = state.value if state is not None and isinstance(state.value, dict) else {}
+    try:
+        return datetime.fromisoformat(value["at"]) if value.get("at") else None
+    except (TypeError, ValueError):
+        return None

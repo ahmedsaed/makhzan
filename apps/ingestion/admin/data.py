@@ -780,7 +780,6 @@ async def ai_view(session) -> dict:
     # (`ai_decisions.effect`), summed over pipelines.
     effects: dict[str, int] = {}
     blocked: dict[str, int] = {}
-    checked_at = None
     for entry in (data.get("decisions") or {}).values():
         for key in totals:
             totals[key] += entry.get(key, 0)
@@ -788,8 +787,6 @@ async def ai_view(session) -> dict:
             effects[key] = effects.get(key, 0) + n
         for key, n in (entry.get("blocked") or {}).items():
             blocked[key] = blocked.get(key, 0) + n
-        if entry.get("checked_at") and (checked_at is None or entry["checked_at"] > checked_at):
-            checked_at = entry["checked_at"]
     return {
         "status": data,
         "flags": flags,
@@ -801,6 +798,6 @@ async def ai_view(session) -> dict:
         "effects": {
             "counts": effects,
             "blocked": sorted(blocked.items(), key=lambda kv: (-kv[1], kv[0])),
-            "checked_at": checked_at,
+            "checked_at": data.get("effects_checked_at"),
         },
     }

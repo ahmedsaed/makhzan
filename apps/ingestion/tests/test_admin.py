@@ -798,6 +798,9 @@ async def test_hostile_text_from_shops_and_visitors_is_escaped_everywhere(queued
 async def test_the_ai_page_shows_what_the_last_live_regroup_found(queued):
     from datetime import UTC, datetime
 
+    from makhzan_schemas.ai.decisions import EFFECTS_CHECKED_KEY
+    from makhzan_schemas.models import WorkerState
+
     decision_id = await _decision()
     async with _client() as client:
         await _session(client)
@@ -806,6 +809,9 @@ async def test_the_ai_page_shows_what_the_last_live_regroup_found(queued):
             row = await session.get(AiDecision, decision_id)
             row.effect, row.blocked_reason = "blocked", "values"
             row.checked_at = datetime.now(UTC)
+            session.add(
+                WorkerState(key=EFFECTS_CHECKED_KEY, value={"at": datetime.now(UTC).isoformat()})
+            )
             await session.commit()
         page = (await client.get("/ai")).text
     assert "at the last live regroup" in page

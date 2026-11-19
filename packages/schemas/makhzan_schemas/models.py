@@ -1165,13 +1165,17 @@ class AiDecision(Base):
       `revoke_note`).
 
     The regroup reads standing "same" decisions only when the mode is `live`
-    (`ai.mode`), or in a dry run's preview. `effect`, `blocked_reason` and
-    `checked_at` are what the last live regroup found of a "same" decision
+    (`ai.mode`), or in a dry run's preview. `effect` and `blocked_reason` are
+    what the last live regroup found of a "same" decision
     (`ai.decisions.record_effects`; a dry run writes none): `in_effect` (the
     pair is in one product, by AI or by the rules), `blocked` (with the veto
     that refused it), `inactive` (a listing gone, archived or outside the
     served departments, or the decision no longer standing), `overridden` (a
-    person ruled on the pair). Unchanged while the mode is off.
+    person ruled on the pair). NULL: no live regroup has read it yet (one the
+    broker wrote during a regroup, say). `checked_at` is when this row's
+    effect or reason last changed, or was first set; when the last live
+    regroup ran is `worker_state['ai_effects_checked_at']`. Kept as they are
+    when the mode goes off (owner): that stamp's age says how old they are.
     """
 
     __tablename__ = "ai_decisions"

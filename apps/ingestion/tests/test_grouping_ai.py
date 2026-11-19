@@ -570,6 +570,13 @@ async def _effects() -> dict[int, tuple[str | None, str | None, datetime | None]
         return {i: (effect, reason, at) for i, effect, reason, at in rows}
 
 
+async def _checked_stamp() -> datetime | None:
+    from makhzan_schemas.ai.decisions import effects_checked_at
+
+    async with SessionLocal() as session:
+        return await effects_checked_at(session)
+
+
 async def _set(listing_id, **values) -> None:
     async with SessionLocal() as session:
         row = await session.get(Listing, listing_id)
@@ -663,6 +670,16 @@ async def test_a_live_regroup_writes_each_same_decisions_effect():
     # A "not same" decision has no effect to record.
     assert found[no] == (None, None, None)
     assert stats["ai_effects"] == {"in_effect": 3, "blocked": 4, "inactive": 2, "overridden": 1}
+    stamp = await _checked_stamp()
+    assert stamp is not None
+
+    # The next live regroup changes nothing: no row is rewritten, so each
+    # row's checked_at stays when its effect was set; the regroup-wide stamp
+    # moves.
+    await _rebuild()
+    again = await _effects()
+    assert {i: again[i] for i in ids.values()} == {i: found[i] for i in ids.values()}
+    assert await _checked_stamp() > stamp
 
 
 async def test_a_dry_run_or_an_off_regroup_writes_no_effect():
@@ -692,3 +709,53 @@ def test_the_ai_phase_names_the_veto_it_refused_and_groups_as_without_it():
     assert _shape(with_refused) == _shape(_group_listings(listings, None, Overrides(), ai))
     assert refused == {pair(x.id, y.id): "values"}
     assert _together(with_refused, u, v)
+
+
+def test_a_shop_on_both_sides_is_named_apart_from_one_shops_own_pair():
+    # y and z are one product by the rules (one identifier); x is AI-same as
+    # z, but x's shop also sells y, so the clusters share a shop.
+    x = _mem("Example motor driver board", "shop-a")
+    y = _mem("Example stepper controller QK21", "shop-a", "QK21")
+    z = _mem("Example stepper controller QK21", "shop-b", "QK21")
+    refused: dict = {}
+    _group_listings([x, y, z], None, Overrides(), _ai((x, z)), refused)
+    assert refused == {pair(x.id, z.id): "clusters share a shop"}
+
+
+async def test_a_decision_written_during_the_regroup_stays_unchecked(monkeypatch):
+    a, b = await _two_products()
+    c = await _listing(await _supplier("shop-c"), "Sonar ranging unit")
+    read = await _decision(a, b)
+    late: list[int] = []
+    real = grouping.load_ai_same
+
+    async def load_then_the_broker_writes(session, overrides):
+        ai = await real(session, overrides)
+        late.append(await _decision(b, c))  # committed after the read
+        return ai
+
+    monkeypatch.setattr(grouping, "load_ai_same", load_then_the_broker_writes)
+    await _mode("live")
+    stats = await _rebuild()
+    found = await _effects()
+    assert found[read][:2] == ("in_effect", None)
+    assert found[late[0]] == (None, None, None)
+    assert stats["ai_effects"] == {"in_effect": 1}
+
+
+async def test_failing_to_record_the_effects_never_costs_the_rebuild(monkeypatch):
+    a, b = await _two_products()
+    decision = await _decision(a, b)
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("lock timeout")
+
+    monkeypatch.setattr(grouping, "record_effects", broken)
+    await _mode("live")
+    stats = await _rebuild()
+    assert stats["merged"] == 1 and "ai_effects" not in stats
+    assert stats["ai_effects_error"] == "RuntimeError: lock timeout"
+    ra, rb = await _rows(a, b)
+    assert ra.product_id == rb.product_id  # the rebuild committed
+    assert (await _effects())[decision] == (None, None, None)
+    assert await _checked_stamp() is None

@@ -235,19 +235,22 @@ def test_the_decisions_line_says_what_the_last_live_regroup_found():
             "overridden": 7,
             "unchecked": 20,
         },
-        "blocked": {"same shop": 540, "values": 37, "not mutual best": 51, "Kev floor": 12},
-        "checked_at": "2026-11-19T09:30:00+00:00",
+        "blocked": {
+            "same shop": 540,
+            "values": 37,
+            "not mutual best": 51,
+            "clusters share a shop": 12,
+        },
     }
-    line = next(
-        x for x in format_text(_status_fixture(match=entry)).splitlines() if "decisions" in x
-    )
+    data = _status_fixture(match=entry)
+    data["effects_checked_at"] = "2026-11-19T09:30:00+00:00"
+    line = next(x for x in format_text(data).splitlines() if "decisions" in x)
     assert line == (
         "  decisions match    standing: same 6329 (in effect 4512, blocked 640 (same shop 540, "
-        "not mutual best 51, values 37, Kev floor 12), inactive 1150, overridden 7, unchecked 20, "
-        "checked 2h ago), not same 12000; stale 40, revoked 2; new in 7 d: same 300"
+        "not mutual best 51, values 37, clusters share a shop 12), inactive 1150, overridden 7, "
+        "unchecked 20, checked 2h ago), not same 12000; stale 40, revoked 2; new in 7 d: same 300"
     )
-    # Never checked (the mode has not been live): the line is as it was.
-    entry = {**entry, "checked_at": None}
+    # Never checked (no live regroup has run): the line is as it was.
     line = next(
         x for x in format_text(_status_fixture(match=entry)).splitlines() if "decisions" in x
     )

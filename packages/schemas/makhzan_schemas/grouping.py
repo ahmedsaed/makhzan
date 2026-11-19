@@ -51,6 +51,7 @@ idempotent recompute — cheap at this scale; can be made incremental later.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from collections import Counter, defaultdict
@@ -79,6 +80,8 @@ from makhzan_schemas.values import value_tokens, values_conflict, without_values
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+log = logging.getLogger(__name__)
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -774,8 +777,10 @@ def _ai_phase(
     return [live[i] for i in sorted(live)]
 
 
-#: The vetoes `_ai_veto` names, in the order it checks them.
-AI_SAME_SHOP, AI_NEVER_MERGE, AI_KEV_FLOOR = "same shop", "never merge", "Kev floor"
+#: The vetoes `_ai_veto` names, in the order it checks them. "clusters share a
+#: shop" is a shop with a listing on both sides, distinct from `load_ai_same`'s
+#: "same shop" (the pair's own two listings are one shop's).
+AI_SHARED_SHOP, AI_NEVER_MERGE, AI_KEV_FLOOR = "clusters share a shop", "never merge", "Kev floor"
 AI_VALUES, AI_FORM, AI_PRICE = "values", "form", "price"
 
 
@@ -785,7 +790,7 @@ def _ai_veto(
     """The first of today's vetoes or the P14 group check that keeps two whole
     clusters from becoming one product on an AI pair, or None when none does."""
     if x.suppliers & y.suppliers:
-        return AI_SAME_SHOP
+        return AI_SHARED_SHOP
     for mx, ex in zip(x.members, x.evidence, strict=True):
         if rulings.never_with(mx.id, y.members):
             return AI_NEVER_MERGE
@@ -1403,7 +1408,8 @@ async def rebuild_products(
     effect cites it under `removed_overrides` (`_cite_overrides`). Each
     ruling's `status` is then written (`override_status`), and, in a live
     regroup that is not a dry run, each standing "same" decision's `effect`
-    (`ai.decisions.record_effects`).
+    (`ai.decisions.record_effects`), in its own transaction after the
+    rebuild has committed (`_record_ai_effects`), so it can never cost it.
 
     `reidentify` first re-reads every active listing's identifier with the
     current rules and the family guard (`assign_identifiers`): what makes a rule
@@ -1659,12 +1665,14 @@ async def rebuild_products(
 
     session.add_all(events)
     _record_statuses(ruling_rows, listings, groups, overrides, now)
-    # What became of each standing "same" decision: only in a real, live
-    # regroup (a dry run, the preview included, writes none).
-    effects = None
-    if mode == LIVE and not dry_run:
-        group_of = {listing.id: key for key, items in groups.items() for listing in items}
-        effects = await record_effects(session, ai, refused, group_of, now)
+    # What became of each standing "same" decision is recorded only in a real,
+    # live regroup (a dry run, the preview included, records none), after the
+    # rebuild has committed (below). Read the groups now, before the commit
+    # expires the listings.
+    record = mode == LIVE and not dry_run
+    group_of = (
+        {listing.id: key for key, items in groups.items() for listing in items} if record else {}
+    )
     await session.flush()
     stats = {
         "products": len(groups),
@@ -1682,8 +1690,7 @@ async def rebuild_products(
         "reidentified": reidentified,
         "ai_mode": "preview" if ai_preview else mode,
     }
-    if effects is not None:
-        stats["ai_effects"] = effects
+
     if ai or ai_preview:
         group_of = {listing.id: key for key, items in groups.items() for listing in items}
         stats["ai_pairs"] = len(ai.pairs)
@@ -1701,7 +1708,36 @@ async def rebuild_products(
         await session.rollback()
     else:
         await session.commit()
+    if record:
+        stats.update(await _record_ai_effects(session, ai, refused, group_of, now))
     return stats
+
+
+#: How long recording the effects waits on a row the broker holds.
+EFFECTS_LOCK_TIMEOUT = "5s"
+
+
+async def _record_ai_effects(
+    session: AsyncSession,
+    ai: AiSame,
+    refused: dict[Pair, str],
+    group_of: dict[uuid.UUID, str],
+    now: datetime,
+) -> dict:
+    """`ai.decisions.record_effects` in its own short transaction, after the
+    regroup has committed: a diagnostic, so a lock conflict with the broker
+    (which writes `ai_decisions` meanwhile) or any other failure costs the
+    rebuild nothing. It is logged and reported as `ai_effects_error`, and the
+    next live regroup records them again."""
+    try:
+        await session.execute(text(f"SET LOCAL lock_timeout = '{EFFECTS_LOCK_TIMEOUT}'"))
+        effects = await record_effects(session, ai, refused, group_of, now)
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 - the rebuild is committed; this must not fail it
+        await session.rollback()
+        log.warning("AI decision effects not recorded: %s", exc)
+        return {"ai_effects_error": f"{type(exc).__name__}: {exc}"}
+    return {"ai_effects": effects}
 
 
 @dataclass
