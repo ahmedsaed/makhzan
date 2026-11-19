@@ -5,9 +5,11 @@
 #
 #   docker buildx bake -f ml/docker-bake.hcl kev-worker-cpu --load    # or pplx-worker-cpu
 #
-# CI (.github/workflows/ai-worker-images.yml) adds the registry tags and OCI labels through
-# docker/metadata-action, whose bake file replaces the `*-meta` targets below, and the GHA cache
-# through --set. No model weights go into any image: they are mounted from the host at run time.
+# CI (.github/workflows/ai-worker-image-build.yml) adds the OCI labels through
+# docker/metadata-action, whose bake file merges into the `*-meta` targets below, and through
+# --set clears the local tags, loads the image, pushes the same build by digest and sets the GHA
+# cache; the registry tags go on only after the smoke test. No model weights go into any image:
+# they are mounted from the host at run time.
 # The GPU images stay local builds (docs/ai/worker.md, "Images").
 
 group "default" {
@@ -34,8 +36,8 @@ target "pplx-cpu-lean" {
 
 # --- the workers --------------------------------------------------------------------------
 
-# Local tags; in CI docker/metadata-action's bake file (bake-target = "<image>-meta") replaces
-# these with the GHCR tags and adds source, revision and created labels.
+# Local tags (CI clears them); in CI docker/metadata-action's bake file (bake-target =
+# "<image>-meta") adds the source, revision and created labels.
 target "kev-worker-cpu-meta" {
   tags = ["makhzan-ml/kev-worker-cpu:local"]
 }

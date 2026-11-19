@@ -1,9 +1,10 @@
 name: AI worker images
 
 # The CPU AI-matching workers (docs/ai/worker.md, "Images"): each is its lean model image plus
-# the worker layer, built as one chain by ml/docker-bake.hcl, smoke-tested without weights, then
-# pushed to GHCR. The home server pulls them by digest. No model weights go into any image, and
-# the GPU images (~26 GB) stay local builds. Pull requests touching ml/ build and smoke-test only.
+# the worker layer, built as one chain by ml/docker-bake.hcl and smoke-tested without weights;
+# on main, the very build that was tested is pushed to GHCR by digest. The home server pulls
+# them by digest. No model weights go into any image, and the GPU images (~26 GB) stay local
+# builds. The steps are in ai-worker-image-build.yml; this file decides who may push.
 
 on:
   push:
@@ -11,156 +12,41 @@ on:
     paths:
       - "ml/**"
       - ".github/workflows/ai-worker-images.yml"
+      - ".github/workflows/ai-worker-image-build.yml"
   pull_request:
     paths:
       - "ml/**"
       - ".github/workflows/ai-worker-images.yml"
+      - ".github/workflows/ai-worker-image-build.yml"
   workflow_dispatch:
 
+# A pull request's run gives way to its next push. A run on main is never cancelled: it could
+# be cut between the push and the tags, leaving an untagged image and no digest in a summary.
 concurrency:
   group: ai-worker-images-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
 
 jobs:
-  build:
-    name: ${{ matrix.image }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  # Pull requests, and manual runs from any other branch: build and smoke-test, never push, and
+  # never hold packages: write.
+  check:
+    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ai-worker-image-build.yml
+    with:
+      push: false
+
+  # main only: build, smoke-test, then push that same build. One job, not build then push: the
+  # digest pushed must be the image tested, and handing a 2.6 GB image between jobs would mean
+  # an artifact and a re-push that could change it.
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: kev-worker-cpu
-            base: kev-cpu-lean
-            model: kev
-            licence: /opt/kev/LICENSE
-          - image: pplx-worker-cpu
-            base: pplx-cpu-lean
-            model: pplx
-            licence: /opt/pplx/LICENSE /opt/pplx/NOTICE
-    env:
-      PUSH: ${{ github.event_name != 'pull_request' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # torch's CPU wheel and its neighbours are ~2.5 GB per image, held twice (the builder's
-      # cache and the image loaded for the smoke test); the runner's preinstalled SDKs are not
-      # needed here.
-      - name: Free runner disk
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL
-          docker image prune --all --force
-          df -h /
-
-      - name: Lowercase owner for GHCR
-        id: prep
-        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Image metadata (tags + labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ steps.prep.outputs.owner }}/makhzan/${{ matrix.image }}
-          # Replaces the local tags in ml/docker-bake.hcl's <image>-meta target.
-          bake-target: ${{ matrix.image }}-meta
-          tags: |
-            type=sha,format=long
-            type=sha,format=short
-
-      # The base and then the worker on it, in one bake: the worker's FROM is the named context
-      # target:<base>, never a registry tag. Each target keeps its own GHA cache scope.
-      - name: Build (lean base, then the worker on it) and load
-        uses: docker/bake-action@v6
-        with:
-          source: .
-          files: |
-            ml/docker-bake.hcl
-            ${{ steps.meta.outputs.bake-file-tags }}
-            ${{ steps.meta.outputs.bake-file-labels }}
-          targets: ${{ matrix.image }}
-          load: true
-          set: |
-            ${{ matrix.base }}.cache-from=type=gha,scope=${{ matrix.base }}
-            ${{ matrix.base }}.cache-to=type=gha,mode=max,scope=${{ matrix.base }}
-            ${{ matrix.image }}.cache-from=type=gha,scope=${{ matrix.image }}
-            ${{ matrix.image }}.cache-to=type=gha,mode=max,scope=${{ matrix.image }}
-
-      # No weights and no network: CPU-only torch, no fla, the model's code and pins present,
-      # no weight file in the image, the entrypoint's --check, and a whole session against the
-      # fake broker with a fake judge (ml/makhzan_ml/worker/smoke.py). Run under the home
-      # server's container restrictions. Scoring parity needs the weights and stays the
-      # supervised first run on the home server.
-      - name: Smoke test (no weights, no network)
-        env:
-          IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
-          MODEL: ${{ matrix.model }}
-          LICENCE: ${{ matrix.licence }}
-        run: |
-          docker run --rm --network none --read-only --tmpfs /tmp:size=256m \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --entrypoint python "$IMAGE" -m makhzan_ml.worker.smoke --model "$MODEL"
-          # The upstream licence travels with the image.
-          read -ra files <<<"$LICENCE"
-          docker run --rm --network none --entrypoint sh "$IMAGE" -c \
-            'for f in "$@"; do test -s "$f" || { echo "missing $f"; exit 1; }; done
-             grep -q "Apache License" "$1"' sh "${files[@]}"
-          size=$(docker image inspect -f '{{.Size}}' "$IMAGE")
-          echo "IMAGE_MB=$(( size / 1000000 ))" >> "$GITHUB_ENV"
-
-      - name: Log in to GHCR
-        if: env.PUSH == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # The same bake again, now pushing: every layer comes from the build just smoke-tested.
-      - name: Push
-        id: push
-        if: env.PUSH == 'true'
-        uses: docker/bake-action@v6
-        with:
-          source: .
-          files: |
-            ml/docker-bake.hcl
-            ${{ steps.meta.outputs.bake-file-tags }}
-            ${{ steps.meta.outputs.bake-file-labels }}
-          targets: ${{ matrix.image }}
-          push: true
-          set: |
-            ${{ matrix.base }}.cache-from=type=gha,scope=${{ matrix.base }}
-            ${{ matrix.image }}.cache-from=type=gha,scope=${{ matrix.image }}
-
-      - name: Summary (digest to pull)
-        env:
-          REPO: ghcr.io/${{ steps.prep.outputs.owner }}/makhzan/${{ matrix.image }}
-          TARGET: ${{ matrix.image }}
-          METADATA: ${{ steps.push.outputs.metadata }}
-        run: |
-          {
-            echo "### $TARGET"
-            echo
-            echo "Built from \`$GITHUB_SHA\`, smoke test passed, ${IMAGE_MB} MB uncompressed."
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$PUSH" != "true" ]; then
-            echo "Not pushed (pull request)." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          digest=$(jq -r --arg t "$TARGET" '.[$t]["containerimage.digest"] // empty' <<<"$METADATA")
-          case "$digest" in sha256:*) ;; *) echo "no digest in the bake metadata"; exit 1 ;; esac
-          {
-            echo '```bash'
-            echo "docker pull $REPO@$digest"
-            echo "MAKHZAN_IMAGE=$REPO@$digest"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "$REPO@$digest"
+    uses: ./.github/workflows/ai-worker-image-build.yml
+    with:
+      push: true
