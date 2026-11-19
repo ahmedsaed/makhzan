@@ -1,0 +1,80 @@
+# The home server's AI workers, as one compose stack
+
+Everything the home server needs to run makhzan's CPU AI-matching workers is one folder:
+`compose.yml`, a `.env`, the two worker TOMLs and their token files. There are no systemd
+timers and no host firewall rules. The reference is `docs/ai/worker.md`.
+
+| Service | What it is |
+|---|---|
+| `kev` | `home-kev`: Kev on CPU, window 01:00–05:00 (Africa/Cairo) |
+| `pplx` | `home-pplx`: pplx on CPU, window 05:00–07:00 (Africa/Cairo) |
+| `broker-proxy` | our own TCP forwarder (`makhzan_ml.worker.proxy`), the workers' only way out |
+
+## Set up
+
+1. Make the folder and copy in `compose.yml`, `home-kev.toml`, `home-pplx.toml`, and
+   `.env.example` as `.env`. Fill in `.env`: the folder itself (`WORKER_DIR`), the weights
+   (`WEIGHTS_DIR`, a Hugging Face home whose `hub/` holds the pinned snapshots as real files,
+   copied with `rsync -L`), the user to run as (`UID`, `GID`: `id -u`, `id -g`), and the
+   broker's Tailscale address and port (`BROKER_TARGET`, an IP, never a name).
+2. Put each worker's broker token in `home-kev.token` and `home-pplx.token` (`chmod 600`,
+   owned by that user). The broker issues them: `./makhzan ai worker add home-kev --models kev`.
+3. `docker compose up -d`.
+
+Update to the latest tested images with `docker compose pull && docker compose up -d`. To
+roll back, set `KEV_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
+whose pins changed is refused by the TOMLs' `expect_version` until they follow.
+
+## How it behaves
+
+- **Each worker waits for its own window** (`outside_window = "wait"`). Outside it, the
+  container holds only a small supervisor process, no model: `docker stats` shows a few tens
+  of MB. When the window opens, the supervisor forks a session that says hello, leases,
+  loads the model on the first lease with jobs, scores, and stops gracefully at the window's
+  end (finishes the request in flight, submits, releases the rest, ends the session, unloads).
+  The child then exits, so all of the model's memory goes back to the system. The log says
+  `sleeping until 01:00 (Africa/Cairo)`, `window open`, `window closed; model unloaded`.
+- **An empty queue** (`on_empty = "exit"`) ends that window's session early and frees the
+  model until the next window. Set `on_empty = "wait"` to keep polling every `poll_s` until
+  the window's end instead, with the model held once loaded.
+- **One model at a time on this machine**, guaranteed by the two windows not overlapping:
+  Kev's ends at 05:00, where pplx's starts. Keep it that way when changing them. One caveat:
+  Kev's graceful stop can run a few minutes past 05:00 (a request in flight, up to about
+  104 s on this CPU, or a model load, about 150 s, then its last posts), and pplx loads on its
+  first lease after 05:00. If the two models (about 18 GB each) cannot be held at once,
+  leave a gap, for example start pplx at 05:05.
+- **`docker compose stop`** while a worker sleeps exits at once; during a window it is the
+  graceful stop, within `stop_grace_period` (240 s).
+- **The image names itself at hello** as `ghcr.io/ahmedsaed/makhzan/<image>:sha-<commit>`,
+  the commit CI built and tested, so the broker's record says which build scored.
+
+## The network
+
+The workers are on `broker-only`, a Docker network with `internal: true`: no route out, no
+DNS beyond the stack's own service names. `broker-proxy` is on that network and on an
+ordinary bridge (`egress`), and forwards one TCP port to `BROKER_TARGET`, byte for byte, and
+to nothing else: it reads no request, so nothing a worker sends can name another
+destination. The host's Tailscale client carries the proxy's traffic to the broker, as it did
+for the workers before. The worker TOMLs say `broker_url = "http://broker-proxy:8100/ai/v1"`
+with `broker_via_proxy = true`, the only case where the worker accepts plain http to a name.
+
+`internal: true` alone still gives the host an address on that network's bridge, so a worker
+could reach a host service listening on all interfaces. `com.docker.network.bridge.inhibit_ipv4`
+removes that address; it needs a recent Docker Engine. Check it after `docker compose up -d`:
+only the proxy should connect.
+
+```bash
+docker compose exec -T kev python - <<'EOF'
+import socket
+for host, port in [("broker-proxy", 8100), ("1.1.1.1", 443), ("172.17.0.1", 22)]:
+    try:
+        socket.create_connection((host, port), timeout=5).close(); print(host, port, "CONNECTED")
+    except OSError as e:
+        print(host, port, "blocked:", e)
+EOF
+docker network inspect makhzan-ai_broker-only -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+```
+
+The last line should print nothing (or `invalid IP`): no host address on the bridge. If it
+prints an address, the engine ignored the option; try connecting to that address from the
+container as above, and if it answers, update Docker before relying on the isolation.

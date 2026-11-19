@@ -1,0 +1,34 @@
+# home-kev: Kev on the home server's CPU, 01:00-05:00 Cairo time, waiting between windows.
+# The broker is reached through the compose stack's broker proxy (compose.yml).
+[worker]
+name = "home-kev"
+broker_url = "http://broker-proxy:8100/ai/v1"
+broker_via_proxy = true
+token_file = "/run/secrets/makhzan-ai-token"
+model = "kev"
+
+[model.kev]
+expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
+
+[compute]
+device = "cpu"
+dtype = "fp32"
+threads = 6
+nice = 10
+memory_gib = 20
+mmap = false
+weights_cache = "/models"
+
+[schedule]
+# Must not overlap home-pplx's window: one model at a time on this machine.
+windows = ["01:00-05:00"]
+timezone = "Africa/Cairo"
+outside_window = "wait"
+# An empty queue ends this window's session and frees the model until the next window;
+# "wait" would keep the model loaded and poll every poll_s until the window's end.
+on_empty = "exit"
+
+[leases]
+max_jobs = 2   # 4 requests, about 6 minutes on this CPU (about 86 s a request)
+lease_s = 900
+heartbeat_s = 60

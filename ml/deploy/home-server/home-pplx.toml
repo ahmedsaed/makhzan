@@ -1,0 +1,34 @@
+# home-pplx: pplx on the home server's CPU, 05:00-07:00 Cairo time, right after Kev's window,
+# waiting between windows. The broker is reached through the compose stack's broker proxy.
+[worker]
+name = "home-pplx"
+broker_url = "http://broker-proxy:8100/ai/v1"
+broker_via_proxy = true
+token_file = "/run/secrets/makhzan-ai-token"
+model = "pplx"
+
+[model.pplx]
+expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
+
+[compute]
+device = "cpu"
+dtype = "fp32"
+threads = 6
+nice = 10
+memory_gib = 20
+mmap = false
+weights_cache = "/models"
+
+[schedule]
+# Must not overlap home-kev's window: one model at a time on this machine.
+windows = ["05:00-07:00"]
+timezone = "Africa/Cairo"
+outside_window = "wait"
+# An empty queue ends this window's session and frees the model until the next window;
+# "wait" would keep the model loaded and poll every poll_s until the window's end.
+on_empty = "exit"
+
+[leases]
+max_jobs = 2
+lease_s = 900
+heartbeat_s = 60
