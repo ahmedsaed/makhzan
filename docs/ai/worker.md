@@ -629,6 +629,23 @@ Kev had two windows (03:38–03:40, 03:43–03:44) and pplx one (03:40–03:42):
   with `inhibit_ipv4` the network has no gateway address and ports 22, 5432 and 6379 there
   were refused.
 
+**Re-run after the review fixes (2026-11-19).** The same harness, rebuilt at the fixes' commit,
+with `no_new_lease_s = 30` (a test window of 3 minutes cannot hold the default 300) and pplx's
+fake judge taking 600 s a request:
+
+- `docker compose run --rm --no-deps <worker> --config ... --check` printed `configuration
+  ok` with the image's commit for both, as the README now has it before `up -d`.
+- The proxy logged `forwarding 10.231.89.2:8100`; from the egress bridge its address there
+  refused the connection. From the workers' network only the proxy connected, an external
+  `getaddrinfo` failed, the network had no gateway, and `pids_limit` was 256.
+- Kev stopped leasing at 04:07:40, its window's last 30 s (`no new lease in the window's last
+  30 s`), unloaded, and slept until the next day: memory 1.53 GiB to 15 MiB at once.
+- pplx's request outlasted its window (04:08–04:10): the window's end asked it to stop, the
+  request could not be interrupted, and at 04:14:30.001, 270 s after the end, the
+  supervisor logged `KILLING the session (pid 8)` and SIGKILLed it; memory went from
+  1.53 GiB to 15 MiB in the next sample, and the supervisor slept until the next day. Its two
+  leased jobs stayed leased at the broker until their lease would expire.
+
 ## Running on the desktop (GPU) for a backlog
 
 The owner decides when a backlog runs (P10). A desktop GPU worker connects to the broker and

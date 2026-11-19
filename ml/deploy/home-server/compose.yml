@@ -64,6 +64,8 @@ services:
       - ${PROXY_ADDRESS:-10.231.89.2}:8100
       - --to
       - ${BROKER_TARGET:?set BROKER_TARGET in .env}
+    environment:
+      TZ: Africa/Cairo  # log timestamps, as the workers'
     cpus: 0.5
     mem_limit: 128m
     memswap_limit: 128m
