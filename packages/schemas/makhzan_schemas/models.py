@@ -1165,9 +1165,13 @@ class AiDecision(Base):
       `revoke_note`).
 
     The regroup reads standing "same" decisions only when the mode is `live`
-    (`ai.mode`), or in a dry run's preview. `effect`,
-    `blocked_reason` and `checked_at` are for what a regroup found
-    (`in_effect`, `blocked`, `inactive`, `overridden`); nothing writes them yet.
+    (`ai.mode`), or in a dry run's preview. `effect`, `blocked_reason` and
+    `checked_at` are what the last live regroup found of a "same" decision
+    (`ai.decisions.record_effects`; a dry run writes none): `in_effect` (the
+    pair is in one product, by AI or by the rules), `blocked` (with the veto
+    that refused it), `inactive` (a listing gone, archived or outside the
+    served departments, or the decision no longer standing), `overridden` (a
+    person ruled on the pair). Unchanged while the mode is off.
     """
 
     __tablename__ = "ai_decisions"

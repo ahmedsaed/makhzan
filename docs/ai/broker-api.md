@@ -435,6 +435,28 @@ that blocks the winning pair can therefore let the losing pair merge instead.
 The regroup reads standing "same" decisions (`decisions.load_ai_same`) at the
 next rebuild, only when the mode is `live`.
 
+**What the regroup found (`ai_decisions.effect`).** A live regroup that is not
+a dry run then writes, on every standing "same" decision, `effect`,
+`blocked_reason` and `checked_at` (`decisions.record_effects`), from where
+each outcome was decided rather than worked out again:
+
+- `inactive`: a listing not active or outside `policy.DOMAINS` (so not read),
+  or a pipeline no longer registered; stale and revoked "same" decisions are
+  marked `inactive` once;
+- `overridden`: a person's ruling covers the pair;
+- `in_effect`: the two listings are in one product, by an AI join or already
+  by the rules;
+- `blocked`, with `blocked_reason`: `same shop` or `not mutual best`
+  (`load_ai_same`), or the AI phase's veto (`grouping._ai_veto`, the first it
+  meets): `same shop` (the two clusters share one), `never merge`, `Kev floor`
+  (a group-check score below `KEV_BLOCK` between two members), `values`,
+  `form`, `price`.
+
+A dry run, the preview included, writes none, and a regroup while the mode is
+`off` leaves the last live regroup's values (and `checked_at`) as they were.
+`./makhzan ai status`, `make status` and the admin dashboard's AI page count
+them per pipeline.
+
 **Rebuild after a window (P16).** The broker cannot see worker windows, so it
 uses what it can see: when a worker ends a session, by a graceful `/release`,
 or by a lease that came back empty, and new standing decisions were written
@@ -670,9 +692,9 @@ backlog run's `scores-*.jsonl` and writes the decisions they make.
   changes once more. `worker.ai_import` counts these and recommends
   `./makhzan ai backlog`; it queues nothing.
 - Applying a new policy: `redecide` is a dry run only.
-- Writing `ai_decisions.effect` after each regroup (the columns exist; nothing
-  writes them yet), and citing revoked decisions on the regroup that undoes
-  them (`revoked_ai_decisions`).
+- Citing revoked decisions on the regroup that undoes them
+  (`revoked_ai_decisions`).
 - Flags other than `poison_job` and `version_drift`: P12's rules-merged
   audit is counted in status, not flagged, since no threshold is chosen; no
-  `blocked_same` is written until `effect` is.
+  `blocked_same` flag is written, though `effect = 'blocked'` now records
+  each blocked "same" decision and its reason.

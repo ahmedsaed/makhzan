@@ -219,6 +219,41 @@ def _status_fixture(**decisions) -> dict:
     }
 
 
+def test_the_decisions_line_says_what_the_last_live_regroup_found():
+    from makhzan_schemas.ai.status import format_text
+
+    entry = {
+        "same": 6329,
+        "not_same": 12000,
+        "stale": 40,
+        "revoked": 2,
+        "new_7d": {"same": 300},
+        "effects": {
+            "in_effect": 4512,
+            "blocked": 640,
+            "inactive": 1150,
+            "overridden": 7,
+            "unchecked": 20,
+        },
+        "blocked": {"same shop": 540, "values": 37, "not mutual best": 51, "Kev floor": 12},
+        "checked_at": "2026-11-19T09:30:00+00:00",
+    }
+    line = next(
+        x for x in format_text(_status_fixture(match=entry)).splitlines() if "decisions" in x
+    )
+    assert line == (
+        "  decisions match    standing: same 6329 (in effect 4512, blocked 640 (same shop 540, "
+        "not mutual best 51, values 37, Kev floor 12), inactive 1150, overridden 7, unchecked 20, "
+        "checked 2h ago), not same 12000; stale 40, revoked 2; new in 7 d: same 300"
+    )
+    # Never checked (the mode has not been live): the line is as it was.
+    entry = {**entry, "checked_at": None}
+    line = next(
+        x for x in format_text(_status_fixture(match=entry)).splitlines() if "decisions" in x
+    )
+    assert line.startswith("  decisions match    standing: same 6329, not same 12000;")
+
+
 def test_a_worker_seen_after_the_status_snapshot_is_not_seen_in_the_future():
     """`now` is the status transaction's start; a worker that calls the broker
     while status reads stamps `last_seen_at` a moment later. That once printed
@@ -245,3 +280,23 @@ def test_a_worker_seen_after_the_status_snapshot_is_not_seen_in_the_future():
     ]
     out = format_text(data)
     assert "last seen 0h ago" in out and "-1h" not in out
+
+
+async def test_status_counts_each_same_decisions_effect_after_a_live_regroup(capsys):
+    from makhzan_schemas.ai.mode import set_ai_mode
+    from makhzan_schemas.grouping import rebuild_products
+
+    decision = await _decision("same", 0.9, 0.97)
+    async with SessionLocal() as session:
+        await set_ai_mode(session, "live")
+        await session.commit()
+    async with SessionLocal() as session:
+        await rebuild_products(session)
+    async with SessionLocal() as session:
+        row = await session.get(AiDecision, decision)
+    assert row.effect == "in_effect" and row.checked_at is not None
+    assert await ai.run(["status"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "standing: same 1 (in effect 1, blocked 0, inactive 0, overridden 0, checked 0h ago)" in out
+    )

@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 
-from sqlalchemy import and_, func, literal_column, select
+from sqlalchemy import and_, func, literal_column, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -29,6 +31,12 @@ from makhzan_schemas.models import AiDecision, Listing
 from makhzan_schemas.overrides import Overrides, Pair, pair
 
 STANDING, STALE, REVOKED = "standing", "stale", "revoked"
+
+#: What a live regroup found of a standing "same" decision (`ai_decisions.effect`).
+IN_EFFECT, BLOCKED, INACTIVE, OVERRIDDEN = "in_effect", "blocked", "inactive", "overridden"
+#: The reasons `load_ai_same` itself refuses a decision; the AI phase's own are
+#: `grouping._ai_veto`'s.
+SAME_SHOP, NOT_MUTUAL_BEST = "same shop", "not mutual best"
 
 log = logging.getLogger(__name__)
 
@@ -48,12 +56,19 @@ class AiSame:
     - `rank`: each pair's strength (`pipelines.rank`: its stages' lower
       scores, last stage first), which orders competing pairs in the AI
       phase. Not the decision id: a re-score renews that.
+    - `skipped`: standing "same" decisions between two active, served
+      listings that are not read, by decision id, with the effect and reason
+      they get unless the pair ends up in one product anyway
+      (`record_effects`): `blocked` for one shop's two listings or a pair not
+      each other's best, `overridden` for a ruled pair, `inactive` for an
+      unregistered pipeline.
     """
 
     pairs: frozenset[Pair] = frozenset()
     ids: dict[Pair, int] = field(default_factory=dict)
     no: frozenset[Pair] = frozenset()
     rank: dict[Pair, tuple[float, ...]] = field(default_factory=dict)
+    skipped: dict[int, tuple[str, str | None]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.pairs)
@@ -120,12 +135,19 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     )
     rows = []
     unknown: set[str] = set()
+    skipped: dict[int, tuple[str, str | None]] = {}
     for decision_id, pipeline_name, a, b, scores, shop_a, shop_b in await session.execute(query):
-        # One shop's two listings never merge, so such a decision cannot act.
-        if shop_a == shop_b or overrides.kind(a, b) is not None:
+        # A person's ruling wins; one shop's two listings never merge, so such
+        # a decision cannot act.
+        if overrides.kind(a, b) is not None:
+            skipped[decision_id] = (OVERRIDDEN, None)
+            continue
+        if shop_a == shop_b:
+            skipped[decision_id] = (BLOCKED, SAME_SHOP)
             continue
         if pipeline_name not in PIPELINES:
             unknown.add(pipeline_name)
+            skipped[decision_id] = (INACTIVE, None)
             continue
         rows.append((decision_id, a, b, rank(stage_mins(scores), pipeline_name), shop_a, shop_b))
 
@@ -158,6 +180,8 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             pairs.add(key)
             ids[key] = decision_id
             ranks[key] = strength
+        else:
+            skipped[decision_id] = (BLOCKED, NOT_MUTUAL_BEST)
 
     # Constants from code, never input: the jsonpath is written out in full.
     below = literal_column(
@@ -170,4 +194,67 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
         )
     )
     no = frozenset(pair(a, b) for a, b in no_rows.all())
-    return AiSame(frozenset(pairs), ids, no, ranks)
+    return AiSame(frozenset(pairs), ids, no, ranks, skipped)
+
+
+async def record_effects(
+    session: AsyncSession,
+    ai: AiSame,
+    refused: Mapping[Pair, str],
+    group_of: Mapping[uuid.UUID, str],
+    now: datetime,
+) -> dict[str, int]:
+    """Write what a live regroup found of every standing "same" decision:
+    `effect`, `blocked_reason` and `checked_at` (= `now`).
+
+    Nothing is worked out again here; the outcomes come from where they were
+    decided. In this order:
+
+    - `inactive`: a listing not active or outside `policy.DOMAINS` (the
+      decision was not among those `load_ai_same` read), or a pipeline no
+      longer registered;
+    - `overridden`: a person's ruling covers the pair (`load_ai_same`);
+    - `in_effect`: the two listings are in one product (`group_of`), by an AI
+      join or already by the rules;
+    - `blocked`, with `blocked_reason`: refused by `load_ai_same` (same shop,
+      not mutual best), or by the AI phase (`refused`, `grouping._ai_veto`).
+
+    Stale and revoked "same" decisions are marked `inactive` once. Returns
+    the counts by effect.
+    """
+    rows = (
+        await session.execute(
+            select(AiDecision.id, AiDecision.listing_a, AiDecision.listing_b).where(
+                AiDecision.state == STANDING, AiDecision.outcome == SAME
+            )
+        )
+    ).all()
+    counts: dict[str, int] = {}
+    values = []
+    for decision_id, a, b in rows:
+        key = pair(a, b)
+        if decision_id in ai.skipped:
+            effect, reason = ai.skipped[decision_id]
+        elif key in ai.pairs:
+            effect, reason = BLOCKED, refused.get(key)
+        else:
+            effect, reason = INACTIVE, None
+        if effect == BLOCKED and a in group_of and group_of.get(a) == group_of.get(b):
+            effect, reason = IN_EFFECT, None
+        counts[effect] = counts.get(effect, 0) + 1
+        values.append(
+            {"id": decision_id, "effect": effect, "blocked_reason": reason, "checked_at": now}
+        )
+    if values:
+        await session.execute(update(AiDecision), values)
+    await session.execute(
+        update(AiDecision)
+        .where(
+            AiDecision.state != STANDING,
+            AiDecision.outcome == SAME,
+            AiDecision.effect.is_distinct_from(INACTIVE),
+        )
+        .values(effect=INACTIVE, blocked_reason=None, checked_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    return counts

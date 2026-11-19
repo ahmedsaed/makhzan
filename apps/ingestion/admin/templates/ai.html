@@ -41,6 +41,7 @@
       <div><span>Same</span><b>{{ a.totals.same|num }}</b></div><div><span>Not same</span><b>{{ a.totals.not_same|num }}</b></div>
       <div><span>Stale</span><b>{{ a.totals.stale|num }}</b></div><div><span>Revoked</span><b>{{ a.totals.revoked|num }}</b></div>
     </div>
+    {% set ef = a.effects %}{% if ef.checked_at %}<p class="muted small" style="margin:10px 0 0">Same, at the last live regroup ({{ ef.checked_at|age }}): in effect {{ ef.counts.in_effect|num }}, blocked {{ ef.counts.blocked|num }}{% if ef.blocked %} ({% for reason, n in ef.blocked %}{{ reason }} {{ n|num }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}, inactive {{ ef.counts.inactive|num }}, overridden {{ ef.counts.overridden|num }}{% if ef.counts.unchecked %}, unchecked {{ ef.counts.unchecked|num }}{% endif %}.</p>{% endif %}
     <p class="muted small" style="margin:10px 0 0">Re-scores due: {{ s.rescore_due.due|num }} ({{ s.rescore_due.open_job }} with an open job, {{ s.rescore_due.dead_job }} dead, {{ s.rescore_due.no_job }} with none). Policy <span class="mono">{{ s.policy.name }}</span>.</p>
   </div></section>
   <section class="panel"><header><h2>Pipelines</h2></header><div class="body" style="display:flex;flex-direction:column;gap:8px">

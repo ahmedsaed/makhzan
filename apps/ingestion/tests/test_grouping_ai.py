@@ -532,3 +532,163 @@ def test_a_pair_with_no_known_strength_sorts_last():
     # x-m has no rank: it must not outrank x-n, however weak x-n is.
     ai = AiSame(frozenset({xm, xn}), {xm: 1, xn: 2}, frozenset(), {xn: (0.01,)})
     assert _together(_group_listings([x, m, n], None, None, ai), x, n)
+
+
+# --- what a live regroup found of each decision (ai_decisions.effect) -------
+
+
+async def _decision(x, y, *, outcome="same", kev=0.9, pplx=0.97, state="standing") -> int:
+    a, b = pair(x, y)
+    row = AiDecision(
+        pipeline="match",
+        listing_a=a,
+        listing_b=b,
+        outcome=outcome,
+        decided_by="pplx",
+        scores={
+            "kev": {"model": "kev", "ab": kev, "ba": kev, "min": kev},
+            "pplx": {"model": "pplx", "ab": pplx, "ba": pplx, "min": pplx},
+        },
+        policy_version="p1",
+        content_sha256_a=b"\0" * 32,
+        content_sha256_b=b"\0" * 32,
+        state=state,
+    )
+    async with SessionLocal() as session:
+        session.add(row)
+        await session.commit()
+    return row.id
+
+
+async def _effects() -> dict[int, tuple[str | None, str | None, datetime | None]]:
+    async with SessionLocal() as session:
+        rows = await session.execute(
+            select(
+                AiDecision.id, AiDecision.effect, AiDecision.blocked_reason, AiDecision.checked_at
+            )
+        )
+        return {i: (effect, reason, at) for i, effect, reason, at in rows}
+
+
+async def _set(listing_id, **values) -> None:
+    async with SessionLocal() as session:
+        row = await session.get(Listing, listing_id)
+        for key, value in values.items():
+            setattr(row, key, value)
+        await session.commit()
+
+
+async def test_a_live_regroup_writes_each_same_decisions_effect():
+    from makhzan_schemas.enums import ListingStatus
+    from makhzan_schemas.models import GroupingOverride
+
+    shop_a, shop_b, shop_c = [await _supplier(s) for s in ("shop-a", "shop-b", "shop-c")]
+    # In effect by AI: titles the rules keep apart.
+    ai_a = await _listing(shop_a, "Example ultrasonic ranging sensor")
+    ai_b = await _listing(shop_b, "Distance meter board, sonar")
+    # In effect already by the rules: one identifier, identical titles.
+    rules_a = await _listing(shop_a, "Example gear motor XQ130", "XQ130")
+    rules_b = await _listing(shop_b, "Example gear motor XQ130", "XQ130")
+    # Blocked by the AI phase: values (5 V against 12 V).
+    v_a = await _listing(shop_a, "Example relay board 5V")
+    v_b = await _listing(shop_b, "Switching module 12V")
+    # Blocked by the AI phase: a Kev confident no with a rules-merged member.
+    k_x = await _listing(shop_a, "Example rotary knob encoder")
+    k_y = await _listing(shop_b, "Example servo tester ZT48", "ZT48")
+    k_z = await _listing(shop_c, "Example servo tester ZT48", "ZT48")
+    # Blocked before the phase: one shop's two listings.
+    s_a = await _listing(shop_c, "Example tilt switch")
+    s_b = await _listing(shop_c, "Ball vibration sensor")
+    # Not mutual best: n_x's stronger match in shop B is n_y, so n_x / n_w is not read.
+    n_x = await _listing(shop_c, "Example infrared receiver")
+    n_y = await _listing(shop_b, "IR sensor head")
+    n_w = await _listing(shop_b, "Remote control eye")
+    # Inactive: an archived listing, and one outside the served departments.
+    gone_a = await _listing(shop_a, "Example buzzer active")
+    gone_b = await _listing(shop_b, "Beeper module")
+    dom_a = await _listing(shop_a, "Example spanner set")
+    dom_b = await _listing(shop_b, "Wrench kit")
+    # Overridden: a person ruled the pair apart.
+    o_a = await _listing(shop_a, "Example joystick module")
+    o_b = await _listing(shop_b, "Thumb stick board")
+    await _rebuild()
+    await _set(gone_b, status=ListingStatus.ARCHIVED)
+    await _set(dom_b, domain="tools")
+    async with SessionLocal() as session:
+        lo, hi = pair(o_a, o_b)
+        session.add(
+            GroupingOverride(
+                listing_a=lo,
+                listing_b=hi,
+                kind=rulings.NEVER,
+                source="manual",
+                note="test",
+                created_by="test",
+            )
+        )
+        await session.commit()
+
+    ids = {
+        "ai": await _decision(ai_a, ai_b),
+        "rules": await _decision(rules_a, rules_b),
+        "values": await _decision(v_a, v_b),
+        "kev": await _decision(k_x, k_y),
+        "shop": await _decision(s_a, s_b),
+        "best": await _decision(n_x, n_y, pplx=0.99),
+        "second": await _decision(n_x, n_w, pplx=0.95),
+        "gone": await _decision(gone_a, gone_b),
+        "domain": await _decision(dom_a, dom_b),
+        "ruled": await _decision(o_a, o_b),
+        "stale": await _decision(ai_a, rules_b, state="stale"),
+    }
+    no = await _decision(k_x, k_z, outcome="not_same", kev=0.01)
+    await _mode("live")
+    stats = await _rebuild()
+    found = await _effects()
+    want = {
+        "ai": ("in_effect", None),
+        "rules": ("in_effect", None),
+        "values": ("blocked", "values"),
+        "kev": ("blocked", "Kev floor"),
+        "shop": ("blocked", "same shop"),
+        "best": ("in_effect", None),
+        "second": ("blocked", "not mutual best"),
+        "gone": ("inactive", None),
+        "domain": ("inactive", None),
+        "ruled": ("overridden", None),
+        "stale": ("inactive", None),
+    }
+    assert {name: found[i][:2] for name, i in ids.items()} == want
+    assert all(found[i][2] is not None for i in ids.values())
+    # A "not same" decision has no effect to record.
+    assert found[no] == (None, None, None)
+    assert stats["ai_effects"] == {"in_effect": 3, "blocked": 4, "inactive": 2, "overridden": 1}
+
+
+async def test_a_dry_run_or_an_off_regroup_writes_no_effect():
+    a, b = await _two_products()
+    decision = await _decision(a, b)
+    await _rebuild()  # mode off
+    assert (await _effects())[decision] == (None, None, None)
+    await _rebuild(dry_run=True, ai_preview=True)
+    assert (await _effects())[decision] == (None, None, None)
+    await _mode("live")
+    stats = await _rebuild(dry_run=True)
+    assert "ai_effects" not in stats and stats["merged"] == 1
+    assert (await _effects())[decision] == (None, None, None)
+    await _rebuild()
+    assert (await _effects())[decision][:2] == ("in_effect", None)
+
+
+def test_the_ai_phase_names_the_veto_it_refused_and_groups_as_without_it():
+    x = _mem("Example relay board 5V", "shop-a")
+    y = _mem("Switching module 12V", "shop-b")
+    u = _mem("Example ultrasonic ranging sensor", "shop-a")
+    v = _mem("Distance meter board, sonar", "shop-b")
+    listings = [x, y, u, v]
+    ai = _ai((x, y), (u, v))
+    refused: dict = {}
+    with_refused = _group_listings(listings, None, Overrides(), ai, refused)
+    assert _shape(with_refused) == _shape(_group_listings(listings, None, Overrides(), ai))
+    assert refused == {pair(x.id, y.id): "values"}
+    assert _together(with_refused, u, v)

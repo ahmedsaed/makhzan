@@ -793,3 +793,20 @@ async def test_hostile_text_from_shops_and_visitors_is_escaped_everywhere(queued
         # In the copy buttons' single-quoted attribute, a quote is JSON-escaped.
         assert "onclick='alert(4)" not in crawl.text
         assert "\\u0027 onclick=\\u0027alert(4)" in crawl.text
+
+
+async def test_the_ai_page_shows_what_the_last_live_regroup_found(queued):
+    from datetime import UTC, datetime
+
+    decision_id = await _decision()
+    async with _client() as client:
+        await _session(client)
+        assert "at the last live regroup" not in (await client.get("/ai")).text
+        async with SessionLocal() as session:
+            row = await session.get(AiDecision, decision_id)
+            row.effect, row.blocked_reason = "blocked", "values"
+            row.checked_at = datetime.now(UTC)
+            await session.commit()
+        page = (await client.get("/ai")).text
+    assert "at the last live regroup" in page
+    assert "in effect 0, blocked 1 (values 1), inactive 0, overridden 0" in page
