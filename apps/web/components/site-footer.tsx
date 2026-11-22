@@ -36,7 +36,9 @@ export const FOOTER_GROUPS = [
 /**
  * On a phone: the logo, two columns of groups, then the theme toggle and
  * "Made by Merope". From `md`, the groups sit in a row beside the logo and
- * the toggle moves to the right. Every link is 44 px tall (S4).
+ * the toggle moves to the right, on the logo's line at the top rather than
+ * centred on the groups. Every link is 44 px tall on a phone (S4); from `md`,
+ * where S4 does not apply, 32 px, so the groups sit closer.
  *
  * One "Footer" landmark holds the three groups, each a list named by its
  * visible heading: three navs made a screen reader's landmark list three
@@ -70,12 +72,12 @@ export function SiteFooter() {
                 >
                   {group.title}
                 </h2>
-                <ul aria-labelledby={headingId} className="flex flex-col items-start">
+                <ul aria-labelledby={headingId} className="flex flex-col items-start md:mt-1">
                   {group.links.map((link) => (
                     <li key={link.href}>
                       <Link
                         href={link.href}
-                        className="flex h-11 items-center text-ink-2 hover:text-ink"
+                        className="flex h-11 items-center text-ink-2 hover:text-ink md:h-8"
                       >
                         {link.label}
                       </Link>
@@ -86,7 +88,7 @@ export function SiteFooter() {
             );
           })}
         </nav>
-        <div className="flex flex-[1_1_100%] flex-wrap items-center gap-x-6 gap-y-3 md:flex-[1_1_auto] md:justify-end md:self-center">
+        <div className="flex flex-[1_1_100%] flex-wrap items-center gap-x-6 gap-y-3 md:mt-1 md:h-11 md:flex-[1_1_auto] md:justify-end">
           <ThemeToggle />
           <p className="text-ink-2">
             Made by{" "}
