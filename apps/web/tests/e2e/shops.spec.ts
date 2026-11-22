@@ -328,7 +328,7 @@ test("a stale shop says so in plain language (F3)", async ({ page }) => {
   await page.goto("/shops/stale-shop");
   await expect(page.locator('[data-tier="warn"]')).toContainText("80 days ago");
   await expect(page.locator("[data-stale-note]")).toHaveText(
-    /^We can't reach this shop's site at the moment\. Its prices and stock are as of \d{1,2} [A-Z][a-z]{2}( \d{4})? and may have changed\.$/,
+    /^We can't reach this shop's site at the moment\. Its prices and stock are as of \d{1,2} [A-Z][a-z]{2,3}( \d{4})? and may have changed\.$/,
   );
 });
 
