@@ -162,6 +162,10 @@ function OfferList({
   );
 }
 
+/** One run of the offer's second line, with its leading "·" in the gutter. */
+const META_RUN =
+  "relative flex flex-wrap items-baseline gap-x-1.5 ps-3 before:absolute before:start-1 before:text-ink-3 before:content-['·']";
+
 /**
  * One offer, led by the shop's own title: a shop legitimately lists several
  * variants of one product, and without the title those rows are identical
@@ -182,7 +186,7 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
   return (
     <OfferRowShell
       offer={offer.id}
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_title_price'_'shop_fresh_view'_'extra_extra_extra'_'listing_listing_listing'] last:border-b-0"
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-1.5 gap-y-1 border-b border-line px-4 py-3 [grid-template-areas:'title_price'_'meta_view'_'extra_extra'_'listing_listing'] last:border-b-0"
     >
       <div className="[grid-area:title]">
         <span
@@ -193,29 +197,34 @@ function OfferRow({ offer, productTitle, now }: { offer: Offer; productTitle: st
           {title}
         </span>
       </div>
-      <div className="text-[13px] [grid-area:shop]">
-        <span className="flex flex-wrap items-baseline gap-x-1.5">
-          {supplier ? (
-            <Link
-              href={routes.shop(supplier.slug)}
-              className="font-semibold whitespace-nowrap text-ink hover:underline"
-            >
-              {supplier.name}
-            </Link>
-          ) : (
-            <span className="text-ink-2">Unknown shop</span>
-          )}
-          {/* In stock is the norm in this list and goes unsaid; anything else
-              is the row's business. */}
-          {isAiMatched(offer) && <AiBadge className="self-center" />}
-          {!isInStock(offer.stock_signal) && <StockBadge signal={offer.stock_signal} />}
-        </span>
-      </div>
-      <div className="text-[13px] [grid-area:fresh]">
-        <span aria-hidden="true" className="me-1.5 text-ink-3">
-          ·
-        </span>
-        <Freshness lastVerified={parseVerified(offer.last_verified_at)} now={now} />
+      {/* The shop (with its badges) and the check date are two runs that
+          wrap as wholes: side by side when the line has room, the date on a
+          line of its own when it has not, never broken a word a line. Each
+          run is led by a "·" drawn in the gutter the inner row is pulled
+          into; the outer box clips that gutter (sideways only, so the badges keep their 44px tap height), so a run starting a line
+          shows no dot and only a run following another on its line does. */}
+      <div className="overflow-x-clip text-[13px] [grid-area:meta]">
+        <div className="-ms-3 flex flex-wrap items-baseline gap-y-0.5">
+          <span className={META_RUN}>
+            {supplier ? (
+              <Link
+                href={routes.shop(supplier.slug)}
+                className="font-semibold whitespace-nowrap text-ink hover:underline"
+              >
+                {supplier.name}
+              </Link>
+            ) : (
+              <span className="text-ink-2">Unknown shop</span>
+            )}
+            {/* In stock is the norm in this list and goes unsaid; anything
+                else is the row's business. */}
+            {isAiMatched(offer) && <AiBadge className="self-center" />}
+            {!isInStock(offer.stock_signal) && <StockBadge signal={offer.stock_signal} />}
+          </span>
+          <span className={META_RUN}>
+            <Freshness lastVerified={parseVerified(offer.last_verified_at)} now={now} />
+          </span>
+        </div>
       </div>
       <div className="ps-3 text-end whitespace-nowrap [grid-area:price]">
         {span === null ? (
