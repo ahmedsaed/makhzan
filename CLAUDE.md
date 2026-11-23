@@ -821,9 +821,22 @@ under exactly "Services". Narrow on purpose — a false positive deletes real st
 It reads `source_categories`, so an adapter that does not implement it is never
 checked for services.
 
-Suppliers do publish SKUs, but they are **private catalogue codes, not MPNs**
-(one shop uses numeric ids, another descriptive ones). Across ~10k SKUs only 15
-are shared by two suppliers, and those are coincidences. Do not group on them.
+Suppliers do publish SKUs, and they are usually **private catalogue codes, not
+MPNs** (one shop uses numeric ids, another descriptive ones). Across the
+electronics shops' ~10k SKUs only 15 are shared by two suppliers, and those are
+coincidences. Never group on a SKU, **unless the source is verified and opted
+in** with `sku_is_part_number = true` (Shopify and Odoo adapters; any other
+refuses the key). Some electrical shops' SKUs are the maker's own references
+(Schneider `A9F77150`, the same breaker in every shop), measured before opting in:
+coverage, exact matches with another shop, and a sample of them read as the same
+product (owner, 2026-11-24). An opted-in SKU becomes `RawItem.part_number`, so
+it is `attributes.adapter_part_number` and wins over the title rules, works in a
+department with none, and is keyed and folded like any identifier
+(`mpn:<domain>:ID`). It is still evidence, not proof: title agreement admits and
+every veto refuses. A Shopify product with several variants takes no SKU (its
+listing is the range, one SKU per variant); Odoo gives a template a reference
+only when it has one variant. Matching one shop's listing to one variant of
+another's range is not built (owner's call).
 
 ## AI and model work
 

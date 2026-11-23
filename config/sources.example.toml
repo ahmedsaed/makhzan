@@ -48,6 +48,14 @@
 # per_run product pages a run, after the sweep, for listings never read, whose
 # change token moved, or read over max_age_days ago (worker/details.py). Off by
 # default; every other adapter refuses the key.
+#
+# Shopify and Odoo also take `sku_is_part_number = true`: this shop's SKU (an
+# Odoo card's internal reference) is the manufacturer's part number, so it
+# becomes the listing's part number and may group it with other shops' listings
+# of that code, title agreement and every veto still applying. A Shopify product
+# with several variants takes none. Off by default, because most shops' SKUs are
+# private codes; set it only on a shop measured to use makers' references
+# (CLAUDE.md, "Suppliers do publish SKUs"). Every other adapter refuses the key.
 
 # How to reach a shop, read by a person where the shop's details are published
 # (its site's contact page or footer, its Facebook page, its Google Maps

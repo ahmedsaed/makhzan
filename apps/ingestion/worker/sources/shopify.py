@@ -80,8 +80,14 @@ class ShopifyAdapter(SourceAdapter):
         collections: bool = False,
         skip_collections: Sequence[str] = (),
         end_on_short_page: str = SHADOW,
+        sku_is_part_number: bool = False,
     ) -> None:
         self.source_id = source_id
+        #: This shop's SKU is the manufacturer's part number, verified against
+        #: its catalogue (sources.toml says how). Off by default: most shops'
+        #: SKUs are private codes that match across shops only by accident.
+        #: See `part_number_from_sku` for which listings take it.
+        self.sku_is_part_number = sku_is_part_number
         #: End the feed on a page of fewer than `PER_PAGE` products instead of
         #: asking for the empty one after it. Shadow until proven: see
         #: worker/sources/short_page.py.
@@ -323,8 +329,24 @@ class ShopifyAdapter(SourceAdapter):
             availability_text="in stock" if variant.get("available") else "out of stock",
             category_hint=(p.get("product_type") or None),
             images=images,
+            part_number=part_number_from_sku(variants) if self.sku_is_part_number else None,
             raw=raw,
         )
+
+
+def part_number_from_sku(variants: list[dict]) -> str | None:
+    """The SKU a listing may take as its part number, for a shop whose SKUs are
+    manufacturer references (`sku_is_part_number`).
+
+    Only a product with one variant (or none) has one. A product with several
+    is the whole range — one SKU per breaker rating, per colour — and the
+    listing is that range, so no one variant's SKU says what it is: taking the
+    first would file the whole range as its first rating.
+    """
+    if len(variants) > 1:
+        return None
+    sku = (variants[0].get("sku") or "").strip() if variants else ""
+    return sku or None
 
 
 def _compare_at(variant: dict) -> str | None:
