@@ -27,11 +27,20 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("respiratory", "Respiratory Protection", "أقنعة التنفس", "personal-protection"),
     ("workwear", "Workwear & Hi-Vis", "ملابس العمل", "personal-protection"),
     ("knee-protection", "Knee Protection", "واقيات الركبة", "personal-protection"),
+    # Work at height: harnesses, lanyards and energy absorbers, retractable fall
+    # arresters, anchors, lifelines and rope grabs. Rescue tripods and stretchers
+    # stay in rescue-equipment; ladders and scaffolding are not protection.
+    ("fall-protection", "Fall Protection", "الحماية من السقوط", "personal-protection"),
     ("first-aid", "First Aid", "الإسعافات الأولية", "personal-protection"),
     ("safety-signage", "Safety Signage", "لافتات التحذير", "personal-protection"),
     ("fire-extinguishers", "Fire Extinguishers", "طفايات الحريق", "fire-protection"),
     ("fire-alarms", "Fire Alarms & Evacuation", "إنذار وإخلاء", "fire-protection"),
     ("fire-cabinets", "Cabinets, Reels & Racks", "خزائن وبكرات الحريق", "fire-protection"),
+    # What carries water and foam to a fire: hoses and their couplings, branch
+    # pipes and nozzles, hydrant landing valves, foam concentrate, eductors and
+    # foam trolleys. Extinguishers keep their own leaf, and the cabinet or reel a
+    # hose is stored on stays in fire-cabinets.
+    ("fire-hoses", "Hoses, Nozzles & Foam", "خراطيم وفوهات ورغوة الإطفاء", "fire-protection"),
     ("rescue-equipment", "Rescue Equipment", "معدات الإنقاذ", "fire-protection"),
 ]
 

@@ -52,3 +52,11 @@ def test_a_crosswalk_to_a_missing_category_stops_the_sync(tmp_path, monkeypatch,
 def test_the_error_names_the_missing_refs():
     with pytest.raises(ValueError, match="'Lamps' -> electrical:nope"):
         check_crosswalk_targets("shop", {"Lamps": ("electrical", "nope")})
+
+
+@pytest.mark.parametrize("ref", ["safety:fall-protection", "safety:fire-hoses"])
+def test_the_safety_leaves_a_safety_shop_maps_to_exist(ref):
+    """The private crosswalk maps a safety shop's fall-protection and
+    fire-fighting product types here; the sync refuses it until these exist."""
+    domain, slug = ref.split(":")
+    check_crosswalk_targets("shop", {"Things": (domain, slug)})

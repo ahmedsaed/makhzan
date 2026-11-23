@@ -119,6 +119,18 @@ export const SAFETY_ICONS: Record<string, Glyph> = {
       </>
     ),
   },
+  "safety:fall-protection": {
+    label: "Fall Protection",
+    kind: "category",
+    body: (
+      <>
+        <path d="M12 2v3.5" />
+        <circle cx="12" cy="7" r="1.5" />
+        <path d="M7 5.5 10 15M17 5.5 14 15M8.6 10.5h6.8M7.5 15h9" />
+        <path d="M9 15c-1.5 2-1.5 4.5 0 6.5M15 15c1.5 2 1.5 4.5 0 6.5" />
+      </>
+    ),
+  },
   "safety:first-aid": {
     label: "First Aid",
     kind: "category",
@@ -169,6 +181,18 @@ export const SAFETY_ICONS: Record<string, Glyph> = {
         <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
         <circle cx="12" cy="12" r="5" />
         <circle cx="12" cy="12" r="1.5" />
+      </>
+    ),
+  },
+  "safety:fire-hoses": {
+    label: "Hoses, Nozzles & Foam",
+    kind: "category",
+    body: (
+      <>
+        <path d="M2.5 20.5c3 0 4.5-2 4.5-4.5S8.5 11 11 11" />
+        <rect x="11" y="9" width="2.5" height="4" rx="0.5" />
+        <path d="M13.5 9.25 18 10.5v1l-4.5 1.25z" />
+        <path d="M19.75 8.5 21.5 7.5M20 11h2M19.75 13.5l1.75 1" />
       </>
     ),
   },

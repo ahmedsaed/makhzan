@@ -9,6 +9,7 @@ The shops are fictional.
 
 from __future__ import annotations
 
+import pytest
 from selectolax.parser import HTMLParser
 
 from worker.normalize import clean_description, normalize_item
@@ -203,6 +204,86 @@ def test_the_spec_tables_brand_stands_in_for_the_shops_own_name():
     assert _volta()._to_raw(_product(body_html=body)).brand == "Acme"
     generic = "<ul><li>Brand: Generic</li></ul>"
     assert _volta()._to_raw(_product(body_html=generic)).brand is None
+
+
+@pytest.mark.parametrize("vendor", ["Generic", "generic", "GENERIC", " Generic ", "غير محدد"])
+def test_a_placeholder_vendor_is_not_a_brand(vendor):
+    """A safety shop types "Generic" where a brand would go; an industrial shop
+    "غير محدد" ("unspecified"). Neither names a maker."""
+    assert _volta()._to_raw(_product(vendor=vendor, body_html="")).brand is None
+
+
+def test_the_spec_tables_brand_stands_in_for_a_placeholder_vendor():
+    body = "<table><tr><td>Brand</td><td>Acme</td></tr></table>"
+    assert _volta()._to_raw(_product(vendor="Generic", body_html=body)).brand == "Acme"
+
+
+def test_a_vendor_that_only_contains_generic_is_a_brand():
+    assert _volta()._to_raw(_product(vendor="Generic Tools Co")).brand == "Generic Tools Co"
+
+
+# Ask for price: a safety shop tags a product it will not price online
+# `ask_for_price`, and its feed price is a placeholder.
+
+ASKED = {"title": "Default Title", "price": "0.00", "available": False, "sku": ""}
+
+
+def test_ask_for_price_is_price_on_request_never_zero():
+    raw = _volta()._to_raw(_product(tags=["ask_for_price", "fall"], variants=[ASKED]))
+    norm = normalize_item(raw)
+
+    assert raw.raw["price_on_request"] is True
+    assert raw.price_text is None
+    assert norm.price is None
+    assert norm.attributes["price_on_request"] is True
+    assert raw.availability_text == "out of stock", "stock is still the feed's"
+
+
+@pytest.mark.parametrize("tag", ["Ask_For_Price", "ASK_FOR_PRICE", " ask_for_price "])
+def test_the_tag_is_read_in_any_case(tag):
+    raw = _volta()._to_raw(_product(tags=[tag], variants=[ASKED]))
+    assert raw.raw["price_on_request"] is True and raw.price_text is None
+
+
+def test_the_tag_is_read_from_a_comma_separated_string_too():
+    raw = _volta()._to_raw(_product(tags="fall, ask_for_price", variants=[ASKED]))
+    assert raw.raw["price_on_request"] is True
+
+
+def test_on_request_drops_a_placeholder_price_that_is_not_zero():
+    """Three "min order 500" shoes carry the tag at 540.00 (compare-at 600.00);
+    their product page shows no price, only the "Ask for Price" button."""
+    variant = {"price": "540.00", "compare_at_price": "600.00", "available": False}
+    raw = _volta()._to_raw(_product(tags=["ask_for_price", "foot"], variants=[variant]))
+    assert raw.price_text is None and raw.raw["price_on_request"] is True
+    assert "compare_at_price" not in raw.raw
+
+
+def test_on_request_variants_carry_no_price():
+    variants = [
+        {"title": "S", "price": "0.00", "available": False, "sku": "A"},
+        {"title": "L", "price": "0.00", "available": False, "sku": "B"},
+    ]
+    raw = _volta()._to_raw(_product(tags=["ask_for_price"], variants=variants))
+    assert raw.raw["variants"] == [
+        {"title": "S", "in_stock": False, "sku": "A"},
+        {"title": "L", "in_stock": False, "sku": "B"},
+    ]
+
+
+@pytest.mark.parametrize("tags", [[], ["relay"], ["price-pending"], None])
+def test_a_zero_price_without_the_tag_stays_as_it_was(tags):
+    """Only the tag says "on request". An industrial shop's `price-pending` is
+    an internal mark on a priced product, not a request for a quote."""
+    raw = _volta()._to_raw(_product(tags=tags, variants=[ASKED]))
+    assert "price_on_request" not in raw.raw
+    assert raw.price_text == "0.00"
+
+
+def test_a_tagless_priced_product_keeps_its_price_and_compare_at():
+    raw = _volta()._to_raw(_product(tags=["price-pending"]))
+    assert raw.price_text == "150.00" and raw.raw["compare_at_price"] == "180.00"
+    assert "price_on_request" not in raw.raw
 
 
 def test_variants_and_options_are_kept_when_there_is_a_choice():
