@@ -83,6 +83,16 @@ async def _clean_tables(_schema):
 
 
 @pytest.fixture(autouse=True)
+def _no_crawl_pool(monkeypatch):
+    """No test sends from a real address pool (worker/egress.py) unless it sets one."""
+    from worker import egress as egress_mod
+
+    monkeypatch.delenv(egress_mod.POOL_ENV, raising=False)
+    egress_mod._POOL_CACHE.clear()
+    egress_mod._LAST_GOOD.clear()
+
+
+@pytest.fixture(autouse=True)
 def _fresh_host_gate(monkeypatch):
     """The per-host pace gate is process-wide state: no test inherits another's."""
     from worker import http as http_mod

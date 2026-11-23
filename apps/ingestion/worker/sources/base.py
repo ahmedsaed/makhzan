@@ -526,6 +526,12 @@ class SourceAdapter(ABC):
     #: config by the registry, so any adapter takes it.
     identity: str = "browser"
 
+    #: Where its requests leave from: "ipv4" (the default, the server's own
+    #: address) or "ipv6" (a random address of the crawl pool, falling back to
+    #: IPv4 when a connection fails). See worker/egress.py. Set from a source's
+    #: config by the registry, so any adapter takes it.
+    egress: str = "ipv4"
+
     def source_categories(self, raw: RawItem) -> list[str]:
         """The source's own category names for this item, normalised.
 

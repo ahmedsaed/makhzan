@@ -61,6 +61,7 @@ from worker.http import (
     logging_requests,
     set_host_pace,
 )
+from worker.egress import configured_pool, using_egress
 from worker.identity import Identity, identity_for, using_identity
 from worker.normalize import REVIEW_THRESHOLD, not_a_product
 from worker import recheck
@@ -1602,6 +1603,18 @@ async def _partitions_for_this_run(
     return outstanding[:budget] if budget else outstanding
 
 
+def _egress_stats(adapter: SourceAdapter, log: RequestLog) -> dict:
+    """`stats.egress`: the source's egress, the pool's size, and per host how requests left.
+
+    Empty for an IPv4 source on a server without a pool, which is every run
+    before the pool existed: nothing to say. Never on /how-we-crawl.
+    """
+    hosts = log.egress_stats()
+    if adapter.egress == "ipv4" and not hosts:
+        return {}
+    return {"mode": adapter.egress, "pool": len(configured_pool()), "hosts": hosts}
+
+
 async def _run(
     source_id: str,
     adapter: SourceAdapter,
@@ -1616,13 +1629,14 @@ async def _run(
     the run's `stats.pacing` is the pace the shop actually saw — and sent as
     the source's identity (`identity` in its config, worker/identity.py), which
     every client the run makes reads, so no request goes out as anything else.
+    Likewise its egress (`egress`, worker/egress.py): where each request leaves from.
     """
     identity = identity_for(adapter.identity)
     # Reads before this were earlier runs': a listing's first read in this run
     # is a check, its later ones are not (`_count_check`).
     started = _RUN_STARTED.set(datetime.now(timezone.utc))
     try:
-        with logging_requests() as log, using_identity(identity):
+        with logging_requests() as log, using_identity(identity), using_egress(adapter.egress):
             return await _logged_run(
                 source_id, adapter, partitions, limit=limit, log=log, identity=identity
             )
@@ -1729,6 +1743,8 @@ async def _logged_run(
                 stats["requests"] = sent
             stats["pacing"] = log.pacing()
             stats["identity"] = identity.describe()
+            if egress := _egress_stats(adapter, log):
+                stats["egress"] = egress
             if log.robots_state:
                 stats["robots"] = dict(log.robots_state)
             if validators := log.validator_stats():
@@ -1915,6 +1931,8 @@ async def _logged_run(
         # Who the run said it was, and what robots.txt said, for `make status`.
         # Never on /how-we-crawl.
         stats["identity"] = identity.describe()
+        if egress := _egress_stats(adapter, log):
+            stats["egress"] = egress
         if log.robots_state:
             stats["robots"] = dict(log.robots_state)
         if stopped:

@@ -44,6 +44,7 @@ from worker.http import (
     note_trouble,
     take_turn,
 )
+from worker.egress import transport_for_run
 from worker.identity import ROBOTS_TOKEN, current_identity
 
 #: Re-read a host's robots.txt this often. A sweep of one source runs for hours,
@@ -405,11 +406,15 @@ class RobotsCache:
             # Redirects are followed by hand, each hop a paced and logged
             # request (as worker/http.py does for pages): http to https is the
             # common one, and httpx following it sent it unpaced and uncounted.
+            # From the run's egress too (worker/egress.py): the shop sees
+            # robots.txt asked from the same addresses as its pages.
+            transport = transport_for_run()
             async with httpx.AsyncClient(
                 timeout=TIMEOUT_SECONDS,
                 follow_redirects=False,
                 headers=dict(identity.headers),
                 auth=identity.auth,
+                **({"transport": transport} if transport is not None else {}),
             ) as client:
                 response = await client.get(f"{host}/robots.txt")
                 for _ in range(MAX_REDIRECTS):

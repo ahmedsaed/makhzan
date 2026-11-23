@@ -13,6 +13,7 @@
 #   ./makhzan restore FILE [--yes] # replace the database with a backup (restore-db.sh)
 #   ./makhzan retire SOURCE [--yes] # remove a source and its listings (dry run without --yes)
 #   ./makhzan probe [--source ID]   # ask each shop how it answers each crawler identity
+#   ./makhzan egress list|check     # the crawl's IPv6 pool; check sends one request per address
 #   ./makhzan reports [list|show ID|accept ID..|reject ID..]  # review "Report a problem"
 #   ./makhzan overrides [list|add A B --kind never|must --note ..|remove ID..]  # grouping rulings
 #   ./makhzan categories-seen [--source ID] [--conflicts-only]  # products in several shop categories
@@ -29,7 +30,7 @@ export MAKHZAN_CALLER_PWD="$PWD"
 cd "$(dirname "$0")"
 
 usage() {
-  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -270,6 +271,9 @@ case "$cmd" in
   # The crawler's own client, in the ingestion image; run it while no crawl is
   # running, since its 15 s per-host gap is its own, not the worker's.
   probe) exec ./scripts/probe-suppliers.sh "$@" ;;
+  # The crawl's IPv6 pool (worker/egress.py): check asks an IPv6 echo service,
+  # never a shop, from each address, and says which ones work.
+  egress) "${COMPOSE[@]}" exec -T ingestion python -m worker.egress "$@" ;;
   # Visitors' reports from product pages: the list shows each with what the
   # page showed then; accept/reject set status and reviewed_at (worker/reports.py).
   reports) "${COMPOSE[@]}" exec -T ingestion python -m worker.reports "$@" ;;
