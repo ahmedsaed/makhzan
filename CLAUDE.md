@@ -592,6 +592,17 @@ major units. Getting this wrong is silent — prices are just 100x off.
 **Odoo never serves an empty page.** It repeats its last page forever, so the end
 signal is "this page has the same ids as the previous one".
 
+**An Odoo shop can be read in another language, and can have no stock signal.**
+`lang_prefix = "/en"` builds every URL under the prefix (listing pages, product
+pages, the probe) and reads the prefixed card links; partitions are then that
+language's category slugs, since Odoo answers the default-language slug under
+`/en/` with a 301 (two requests a page). Where a product has no translation Odoo
+shows its default-language name, and normalization files a title by its script,
+so the fallback lands in `title_ar` at no cost; a translated listing keeps no
+Arabic title (that would be a second sweep). `stock_signal = false` is for a
+shop whose cards say nothing about stock: listings are "unknown", which the site
+shows as "Availability unknown", never "in stock" for want of a ribbon.
+
 **An identifier is evidence, not proof.** Part numbers are extracted from titles,
 so they also match titles that merely *reference* a part — "bracket for SG90",
 "robot arm kit with 4x SG90". Listings sharing an identifier are only merged when

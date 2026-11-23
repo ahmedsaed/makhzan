@@ -19,6 +19,16 @@ that changes when the product is edited. All of it is read here. The full
 description, the photo gallery and datasheet links are only on the product page —
 one request per product — so they are read by the details stage
 (worker/details.py), a few a run, when that token says the product changed.
+
+Two options for a shop that differs from the first one this was written for:
+  - `lang_prefix` ("/en") reads the shop in a language other than its default:
+    every URL is built under the prefix, and the cards' prefixed links are read.
+    Where a product has no translation Odoo shows its default-language name on
+    the prefixed page, and normalization files a title by its script, so such a
+    listing gets `title_ar` and no `title_en`: the fallback costs no request.
+  - `stock_signal = False` for a shop whose cards show no stock at all (it
+    loads by JavaScript, and its ribbons are marketing): every listing is then
+    "unknown", never "in stock" for want of an "Out of stock" ribbon.
 """
 
 from __future__ import annotations
@@ -108,8 +118,17 @@ class OdooAdapter(SourceAdapter):
         details: dict | None = None,
         end_on_short_page: str = SHADOW,
         sitemap_veto: bool = True,
+        lang_prefix: str | None = None,
+        stock_signal: bool = True,
     ) -> None:
         self.source_id = source_id
+        #: The language path every URL is built under ("/en"), or "" for the
+        #: shop's default language. A product's id is its own whatever the
+        #: language, so switching it changes titles, not listings.
+        self.lang_prefix = _lang_prefix(lang_prefix)
+        #: Whether the cards say anything about stock. Without it a listing's
+        #: stock is unknown, which the site shows as such, not as in stock.
+        self.stock_signal = stock_signal
         #: End a partition on the page whose pager says it is the last, instead
         #: of fetching the repeat Odoo serves after it. Shadow until proven:
         #: see worker/sources/short_page.py.
@@ -118,6 +137,8 @@ class OdooAdapter(SourceAdapter):
         #: and read its product page (T12). The sitemap never counts as "seen".
         self.sitemap_veto = sitemap_veto
         self.base_url = base_url.rstrip("/")
+        #: Where the listing pages and the product pages live: /shop, or /en/shop.
+        self._shop = f"{self.base_url}{self.lang_prefix}/shop"
         self.supplier = supplier
         self.enabled = enabled
         #: Crosswalk from this shop's own category slug to (domain, leaf).
@@ -164,14 +185,15 @@ class OdooAdapter(SourceAdapter):
             keys.insert(0, "")
         return keys or [""]
 
+    def _listing_url(self, partition: str) -> str:
+        # /shop/category/<slug> pages exactly like /shop does.
+        return f"{self._shop}/category/{partition}" if partition else self._shop
+
     def probe_url(self) -> str | None:
-        partition = self.partitions()[0]
-        url = f"{self.base_url}/shop/category/{partition}" if partition else f"{self.base_url}/shop"
-        return str(httpx.URL(url, params={"page": 1}))
+        return str(httpx.URL(self._listing_url(self.partitions()[0]), params={"page": 1}))
 
     async def fetch_page(self, partition: str, page: int) -> Page:
-        # /shop/category/<slug> pages exactly like /shop does.
-        url = f"{self.base_url}/shop/category/{partition}" if partition else f"{self.base_url}/shop"
+        url = self._listing_url(partition)
         async with make_client() as client:
             html = await get_text(client, url, {"page": page})
         tree = HTMLParser(html)
@@ -236,7 +258,7 @@ class OdooAdapter(SourceAdapter):
         failed = 0
         for row in held[:CONFIRM_PAGES]:
             try:
-                url = _product_url(row.source_url, self.base_url)
+                url = _product_url(row.source_url, self.base_url, self.lang_prefix)
             except ValueError:
                 out.absent.add(row.external_id)  # no page to ask: as before
                 continue
@@ -296,7 +318,7 @@ class OdooAdapter(SourceAdapter):
                 locs += [html_unescape(loc) for loc in _LOC.findall(part.text)]
         ids = set()
         for loc in locs:
-            path = urlsplit(loc.strip()).path.rstrip("/")
+            path = _without_prefix(urlsplit(loc.strip()).path.rstrip("/"), self.lang_prefix)
             if not path.startswith("/shop/") or path.startswith(("/shop/category/", "/shop/page/")):
                 continue
             if match := _ID_RE.search(path):
@@ -324,7 +346,7 @@ class OdooAdapter(SourceAdapter):
         reaches the browser only for the shop's analytics, beside a stock count
         the shop chose not to display.
         """
-        url = _product_url(listing.source_url, self.base_url)
+        url = _product_url(listing.source_url, self.base_url, self.lang_prefix)
         response = await fetcher.get(DETAILS_LABEL, url)
         return parse_product_page(response.text, self.base_url)
 
@@ -345,12 +367,14 @@ class OdooAdapter(SourceAdapter):
         return self._folded_categories.get(normalize_category_name(category))
 
     def _to_raw(self, card, partition: str = "") -> RawItem | None:
-        link = card.css_first("a[href^='/shop/']")
+        link = card.css_first(f"a[href^='{self.lang_prefix}/shop/']")
         href = link.attributes.get("href") if link else None
         if not href:
             return None
         match = _ID_RE.search(href.split("?")[0])
-        external_id = match.group(1) if match else href
+        # A link with no id in it is kept whole, as before, but without the
+        # language: the same product must not become two listings by language.
+        external_id = match.group(1) if match else _without_prefix(href, self.lang_prefix)
 
         # Prefer schema.org microdata (stabler than theme classes); fall back to
         # the visible theme markup if a card ever omits it.
@@ -358,6 +382,11 @@ class OdooAdapter(SourceAdapter):
             ".o_wsale_products_item_title"
         )
         title = name_el.text(strip=True) if name_el else (link.text(strip=True) if link else None)
+        if not title and self.lang_prefix:
+            # An empty translated name: the card's other names for it. Odoo
+            # shows the default-language name where there is no translation
+            # at all, so this is only a translation saved empty.
+            title = _card_name(card, link)
 
         # itemprop=price is a clean machine value ("1695.0"); .oe_currency_value
         # is locale-formatted ("1,695.00"). Take the microdata when present.
@@ -400,7 +429,7 @@ class OdooAdapter(SourceAdapter):
             brand=_brand(lines),
             price_text=price_text,
             currency=currency,
-            availability_text=self._stock_hint(card),
+            availability_text=self._stock_hint(card) if self.stock_signal else None,
             category_hint=partition or None,
             images=images,
             raw=raw,
@@ -418,6 +447,37 @@ class OdooAdapter(SourceAdapter):
         if "arriving soon" in text:
             return "arriving soon"
         return "in stock"
+
+
+def _lang_prefix(value: str | None) -> str:
+    """ "/en" from "en", "/en/" or "/en"; "" for none. Only a plain path segment."""
+    if not value:
+        return ""
+    segment = value.strip().strip("/")
+    if not re.fullmatch(r"[A-Za-z]{2,3}(?:[_-][A-Za-z0-9]{2,4})?", segment):
+        raise ValueError(f"lang_prefix must be a language path like '/en', got {value!r}")
+    return f"/{segment}"
+
+
+def _without_prefix(path: str, prefix: str) -> str:
+    """The path as the shop's default language writes it."""
+    if prefix and (path == prefix or path.startswith(prefix + "/")):
+        return path[len(prefix) :] or "/"
+    return path
+
+
+def _card_name(card, link) -> str | None:
+    """The product's name from the card's other places: the image's alt text
+    without its "[reference]", the link's title, the card's aria-label."""
+    img = card.css_first("img")
+    alt = (img.attributes.get("alt") or "") if img else ""
+    article = card.css_first("article[aria-label]")
+    candidates = (
+        _REFERENCE_RE.sub("", alt),
+        (link.attributes.get("title") or "") if link else "",
+        (article.attributes.get("aria-label") or "") if article else "",
+    )
+    return next((c.strip() for c in candidates if c and c.strip()), None)
 
 
 def _pager_says_last(tree: HTMLParser, page: int) -> bool:
@@ -495,20 +555,22 @@ def _brand(lines: list[str]) -> str | None:
 # ---------------------------------------------------------------------- #
 
 
-def _product_url(source_url: str | None, base_url: str) -> str:
+def _product_url(source_url: str | None, base_url: str, lang_prefix: str = "") -> str:
     """The product page to read: the stored URL, on the shop's own host, no query.
 
     Card links carry `?category=N` while a category is browsed, which robots.txt
-    forbids; the stored URL is already without it, and this makes sure.
+    forbids; the stored URL is already without it, and this makes sure. Under a
+    `lang_prefix` the page is that language's, whichever the URL was stored in.
     """
     if not source_url:
         raise ValueError("the listing has no product URL")
     parts, shop = urlsplit(urljoin(base_url + "/", source_url)), urlsplit(base_url)
     if (parts.scheme, parts.netloc) != (shop.scheme, shop.netloc):
         raise ValueError(f"{source_url} is not on {base_url}")
-    if not parts.path.startswith("/shop/"):
+    path = _without_prefix(parts.path, lang_prefix) if lang_prefix else parts.path
+    if not path.startswith("/shop/"):
         raise ValueError(f"{source_url} is not a product page")
-    return f"{parts.scheme}://{parts.netloc}{parts.path}"
+    return f"{parts.scheme}://{parts.netloc}{lang_prefix}{path}"
 
 
 def parse_product_page(page_html: str, base_url: str) -> dict:
