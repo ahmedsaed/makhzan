@@ -11,6 +11,11 @@ changes what the listing costs. Shopify prices are already in major units
 ("4950.00"). `updated_at` is not kept: one shop stamps every product with the
 time of the request, so it says nothing about change.
 
+A product a shop sells but will not price online is tagged for it, and its
+feed price is a placeholder: `price_on_request`, with no price (see
+`_PRICE_ON_REQUEST_TAGS`). A vendor that names no maker ("Generic") is no brand,
+like the shop's own name.
+
 What the feed does NOT carry is stock quantity: `inventory_quantity` is only in
 `/products/<handle>.json` and the product page, one request per product.
 
@@ -53,12 +58,42 @@ _MERCHANDISING_COLLECTIONS = ("frontpage", "all")
 _NO_OPTION = ("title", "default title")
 #: Values a spec table puts under "Brand" that name no brand.
 _NOT_A_BRAND = {"generic", "oem", "no brand", "none", "n/a", "na", "original", "unbranded"}
+#: Vendors that name no maker, as a shop types them in place of a brand: a safety
+#: shop's "Generic" (13 of 475 products) and an industrial shop's "غير محدد"
+#: ("unspecified", 40 of 919). Only spellings seen in a saved feed; compared
+#: case-folded, whitespace collapsed.
+_PLACEHOLDER_VENDORS = {"generic", "غير محدد"}
+#: Tags a shop puts on a product it sells but will not price online. A safety
+#: shop's theme reads `ask_for_price` to hide the price and show an "Ask for
+#: Price" button; the feed then carries a placeholder price (0.00 on three
+#: products, 540.00 on three "min order 500" shoes whose page shows none). No
+#: other Shopify feed seen has such a tag: an industrial shop's `price-pending`
+#: is on a priced, purchasable product, an internal workflow mark, so it is not
+#: here. Compared case-insensitively.
+_PRICE_ON_REQUEST_TAGS = {"ask_for_price"}
 #: Host labels that say nothing about whose shop it is.
 _HOST_NOISE = {"www", "store", "shop", "com", "eg", "net", "org", "co", "myshopify"}
 
 
 def _fold(text: str | None) -> str:
     return re.sub(r"[^0-9a-z]", "", (text or "").lower())
+
+
+def _is_placeholder_vendor(vendor: str) -> bool:
+    return " ".join(vendor.split()).casefold() in _PLACEHOLDER_VENDORS
+
+
+def _tags(p: dict) -> list[str]:
+    """The product's tags: a list in products.json; a string (the Admin API's
+    shape) is split on commas."""
+    tags = p.get("tags") or []
+    if isinstance(tags, str):
+        tags = tags.split(",")
+    return [str(t).strip() for t in tags if str(t).strip()]
+
+
+def _price_on_request(p: dict) -> bool:
+    return any(t.casefold() in _PRICE_ON_REQUEST_TAGS for t in _tags(p))
 
 
 class ShopifyAdapter(SourceAdapter):
@@ -268,7 +303,7 @@ class ShopifyAdapter(SourceAdapter):
         )
 
     def _brand(self, vendor: str | None, specs: dict[str, str]) -> str | None:
-        if vendor and not self.is_own_name(vendor):
+        if vendor and not self.is_own_name(vendor) and not _is_placeholder_vendor(vendor):
             return vendor
         # Failing that, the shop's own spec table is the next best word on it.
         for key, value in specs.items():
@@ -297,12 +332,18 @@ class ShopifyAdapter(SourceAdapter):
             raw["documents"] = documents
         if videos := videos_from_html(body):
             raw["videos"] = videos
-        if compare_at := _compare_at(variant):
+        # On request, the feed's price is a placeholder the shop's page does not
+        # show, whatever it is (0.00, or 540.00 on three shoes): no price, no
+        # struck-through "was" price, and no price on any variant.
+        on_request = _price_on_request(p)
+        if on_request:
+            raw["price_on_request"] = True
+        elif compare_at := _compare_at(variant):
             raw["compare_at_price"] = compare_at
         if options := _options(p):
             raw["options"] = options
         if len(variants) > 1:
-            raw["variants"] = [_variant(v) for v in variants]
+            raw["variants"] = [_variant(v, priced=not on_request) for v in variants]
         # When the shop published it — a real date, unlike `updated_at`, which
         # at least one shop stamps with the time of the request on every product.
         if published := _iso_date(p.get("published_at")):
@@ -318,7 +359,7 @@ class ShopifyAdapter(SourceAdapter):
             title=p.get("title"),
             description=html_to_text(body),
             brand=self._brand(vendor, specs),
-            price_text=variant.get("price"),
+            price_text=None if on_request else variant.get("price"),
             currency=self.currency,
             availability_text="in stock" if variant.get("available") else "out of stock",
             category_hint=(p.get("product_type") or None),
@@ -353,7 +394,7 @@ def _options(p: dict) -> dict[str, list[str]]:
     return options
 
 
-def _variant(v: dict) -> dict:
+def _variant(v: dict, *, priced: bool = True) -> dict:
     """One purchasable variant, in the shared shape: {title, price, in_stock, sku?}.
 
     No stock quantity: the feed does not carry it. No compare-at price either —
@@ -361,7 +402,7 @@ def _variant(v: dict) -> dict:
     """
     out = {
         "title": v.get("title"),
-        "price": v.get("price"),
+        "price": v.get("price") if priced else None,
         "in_stock": bool(v.get("available")),
         "sku": v.get("sku") or None,
     }
