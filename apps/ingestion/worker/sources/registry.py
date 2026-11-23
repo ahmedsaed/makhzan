@@ -58,6 +58,37 @@ def adapter_class(adapter: str) -> type[SourceAdapter]:
     return cls
 
 
+def check_crosswalk_targets(name: str, categories: dict[str, tuple[str, str]]) -> None:
+    """Refuse a crosswalk that points at a category this code's taxonomy lacks.
+
+    `load_crosswalk` checks only the `domain:slug` form. A ref to a slug that
+    doesn't exist (a typo, or a crosswalk deployed before the taxonomy change
+    it relies on) built fine and then filed every listing under it as
+    uncategorized, silently, with no drift report. Called from
+    `build_adapter`, so the deploy's sync fails instead.
+    """
+    import makhzan_schemas.domains  # noqa: F401  (registers every profile)
+    from makhzan_schemas.domains.base import PROFILES
+
+    leaves: dict[str, set[str]] = {}
+    unknown: dict[str, str] = {}
+    for source_name, (domain, slug) in categories.items():
+        if domain not in leaves:
+            # Not get_profile: it falls back to the default domain, which
+            # would hide a misspelled one.
+            profile = PROFILES.get(domain)
+            taxonomy = profile.taxonomy if profile else []
+            leaves[domain] = {leaf for leaf, _en, _ar, parent in taxonomy if parent}
+        if slug not in leaves[domain]:
+            unknown[source_name] = f"{domain}:{slug}"
+    if unknown:
+        sample = ", ".join(f"{k!r} -> {v}" for k, v in list(unknown.items())[:5])
+        raise ValueError(
+            f"crosswalk {name!r} points at {len(unknown)} categories this code does not "
+            f"have (deploy the taxonomy first?): {sample}"
+        )
+
+
 def build_adapter(source: Source) -> SourceAdapter:
     """Construct the adapter a Source row describes.
 
@@ -99,6 +130,7 @@ def build_adapter(source: Source) -> SourceAdapter:
         raise ValueError("target_cycle_days needs max_pages_per_run as its ceiling")
     if crosswalk is not None:
         loaded = load_crosswalk(crosswalk)
+        check_crosswalk_targets(crosswalk, loaded.categories)
         options["categories"] = loaded.categories
         if loaded.partitions:
             options["partition_keys"] = loaded.partitions
