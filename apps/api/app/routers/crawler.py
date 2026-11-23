@@ -11,6 +11,8 @@ ids (source ids included) or anything about our servers. A paused shop is
 by adding detail. A shop removed at its request is retired
 (worker/sources/retire.py), which deletes its source and its runs, so it
 simply stops appearing here: there is no "removed" state to report.
+A shop whose sources are all `listed = false` (crawled, not shown on the site)
+does appear: this page is the record of whom we crawl, not of whom we list.
 
 Everything comes from `ingestion_runs`: when each run started and finished,
 `stats.requests` and `stats.pacing` (makhzan_schemas.crawl). Runs from before

@@ -9,10 +9,9 @@ from datetime import UTC, datetime, timedelta
 from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
-from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.grouping import representative, representative_key
 from makhzan_schemas.matching import matched_by
-from makhzan_schemas.models import Listing, Product, ProductRedirect
+from makhzan_schemas.models import Listing, Product, ProductRedirect, Supplier
 from makhzan_schemas.pricing import unit_price
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -53,7 +52,9 @@ async def get_product(
                 select(Listing)
                 # An archived listing keeps its product, which is how a withdrawn
                 # product still knows its last price; it is not an offer any more.
-                .where(Listing.product_id == product_id, Listing.status == ListingStatus.ACTIVE)
+                # Nor is a hidden source's (`listed = false`), which keeps the
+                # product it offered before it was hidden in the same way.
+                .where(Listing.product_id == product_id, Listing.is_public())
                 .options(selectinload(Listing.supplier))
             )
         )
@@ -103,14 +104,25 @@ async def get_product(
         OfferRead.model_validate(o).model_copy(update={"matched_by": how[o.id]}) for o in offers
     ]
 
+    # A product emptied because its only shop was hidden (`listed = false`)
+    # keeps that shop's photo, which would name the hidden shop on its badge
+    # and hotlink its site: neither is shown while the shop is hidden.
+    image, image_shop = product.image, product.image_supplier if product.image else None
+    if image_shop is not None:
+        shown = await session.scalar(
+            select(Supplier.is_shown()).where(Supplier.id == product.image_supplier_id)
+        )
+        if not shown:
+            image, image_shop = None, None
+
     return ProductRead(
         id=product.id,
         part_number=product.part_number,
         title_en=product.title_en,
         title_ar=product.title_ar,
         brand=product.brand,
-        image=product.image,
-        image_shop=product.image_supplier if product.image else None,
+        image=image,
+        image_shop=image_shop,
         supplier_count=product.supplier_count,
         offer_count=product.offer_count,
         min_price=product.min_price,

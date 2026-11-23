@@ -51,6 +51,7 @@
       {% elif s.state in ("between", "stalled") %}cycle started {{ s.cycle_started_at|age }} · no run active (last finished {{ s.last_finished|age }})
       {% elif s.state == "idle" %}idle: last sweep completed, last finished {{ s.last_finished|age }}
       {% else %}no cursor yet: never swept{% endif %}
+      {% if s.hidden %}<div><span class="chip c-warn plain">hidden</span> {{ hidden_text }}</div>{% endif %}
       {% if s.pending %} · resumes at {% for p, page in s.pending[:3] %}<span class="mono">{{ p or "default" }} page {{ page }}</span>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
     </div>
     <div class="acts">

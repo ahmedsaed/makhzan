@@ -66,7 +66,7 @@ from makhzan_schemas.ai.decisions import AiSame, load_ai_same, record_effects
 from makhzan_schemas.ai.mode import LIVE, ai_mode
 from makhzan_schemas.domains import DEFAULT_DOMAIN, get_profile
 from makhzan_schemas.identifiers import Identifier, fold_identifier, identifier_pattern
-from makhzan_schemas.enums import ListingStatus, ProductEventKind, StockSignal
+from makhzan_schemas.enums import ProductEventKind, StockSignal
 from makhzan_schemas.models import (
     GroupingOverride,
     Listing,
@@ -1398,6 +1398,9 @@ async def rebuild_products(
 ) -> dict:
     """Regroup active listings into products, keeping every product's id.
 
+    Only listings of listed sources (`Listing.is_public`): a hidden source is
+    crawled but grouped into nothing, as though its listings were archived.
+
     Groups are computed exactly as before (`_group_listings`, every veto
     intact); `plan_identity` then decides which existing product each group is.
     Nothing is deleted: a product whose offers joined another is marked
@@ -1436,7 +1439,12 @@ async def rebuild_products(
         (
             await session.execute(
                 select(Listing)
-                .where(Listing.status == ListingStatus.ACTIVE)
+                # A hidden source's listings (`listed = false`) are not grouped:
+                # they make, join and change no product. One that belonged to a
+                # product leaves it as an archived one does, keeping its
+                # `product_id`, so its product is emptied if nothing else
+                # offers it and revives if the source is listed again.
+                .where(Listing.is_public())
                 .options(selectinload(Listing.supplier))
                 # Group order follows query order (the first listing names a
                 # group's domain); a fixed order keeps a rebuild reproducible.

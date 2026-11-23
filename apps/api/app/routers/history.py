@@ -16,7 +16,7 @@ from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import ListingHistory, PricePoint, ProductHistory
 from makhzan_schemas.enums import ListingStatus
-from makhzan_schemas.models import Listing, PriceObservation, Product
+from makhzan_schemas.models import Listing, PriceObservation, Product, listed_source
 from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,7 +90,11 @@ async def listing_history(
     days: int = _DAYS,
     session: AsyncSession = Depends(get_session),
 ) -> ListingHistory:
-    if await session.get(Listing, listing_id) is None:
+    if not await session.scalar(
+        select(func.count())
+        .select_from(Listing)
+        .where(Listing.id == listing_id, Listing.from_listed_source())
+    ):
         raise HTTPException(status_code=404, detail="listing not found")
     return (await _histories(session, [listing_id], _since(days)))[listing_id]
 
@@ -113,7 +117,8 @@ async def product_history(
     product = await session.get(Product, product_id)
     if product is None or product.merged_into is not None:
         raise HTTPException(status_code=404, detail="product not found")
-    offers = select(Listing.id).where(Listing.product_id == product_id)
+    # Never a hidden source's listing (`listed = false`), active or archived.
+    offers = select(Listing.id).where(Listing.product_id == product_id, listed_source(Listing))
     if product.delisted_at is None:
         offers = offers.where(Listing.status == ListingStatus.ACTIVE)
     listing_ids = list((await session.execute(offers)).scalars().all())

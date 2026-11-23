@@ -53,6 +53,7 @@ from worker.admin_jobs import (
 )
 from worker.overrides import OverrideRefused, add_override
 from worker.reports import review_reports, ruling_line
+from worker.status import HIDDEN_TEXT
 
 from admin import auth, data
 from admin.render import filters
@@ -465,7 +466,12 @@ async def crawl_view(request: Request):
     await sweep_lost_jobs()
     async with SessionLocal() as db:
         view = await data.crawl_view(db)
-    return await page(request, "crawl.html", "crawl", {"c": view, "max_limit": MAX_LIMIT})
+    return await page(
+        request,
+        "crawl.html",
+        "crawl",
+        {"c": view, "max_limit": MAX_LIMIT, "hidden_text": HIDDEN_TEXT},
+    )
 
 
 @app.get("/catalog", response_class=HTMLResponse)

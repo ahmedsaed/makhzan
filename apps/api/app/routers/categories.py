@@ -27,7 +27,10 @@ async def stats(session: AsyncSession = Depends(get_session)) -> dict:
     products = await session.scalar(
         select(func.count()).select_from(Product).where(Product.is_listed())
     )
-    suppliers = await session.scalar(select(func.count()).select_from(Supplier))
+    # Not a shop only hidden sources (`listed = false`) name.
+    suppliers = await session.scalar(
+        select(func.count()).select_from(Supplier).where(Supplier.is_shown())
+    )
     categories = await session.scalar(
         select(func.count(distinct(Product.category_id))).where(
             Product.category_id.is_not(None), Product.is_listed()

@@ -40,7 +40,7 @@
       <button class="btn sm" type="submit">Apply</button></form></header>
   <div class="tw tall"><table><thead><tr><th>Shop</th><th>Department</th><th class="n">Total</th><th class="n">Archived</th><th class="n">Uncat</th><th class="n">No price</th><th class="n">On request</th><th>Verified</th></tr></thead><tbody>
     {% for r in k.rows %}{% set days = r.verified|age_days %}
-    <tr><td class="mono">{{ r.shop }}</td><td>{{ r.domain }}</td><td class="n">{{ r.total|num }}</td>{{ m.n(r.archived) }}
+    <tr><td class="mono">{{ r.shop }}{% if r.hidden %} <span class="chip c-warn plain" title="listed = false in sources.toml: crawled, not on the site">{{ r.hidden|num }} hidden</span>{% endif %}</td><td>{{ r.domain }}</td><td class="n">{{ r.total|num }}</td>{{ m.n(r.archived) }}
       <td class="n{% if not r.uncategorized %} zero{% endif %}">{% if r.uncategorized %}<span class="chip c-info plain">{{ r.uncategorized|num }}</span>{% else %}0{% endif %}</td>
       {{ m.n(r.unpriced) }}{{ m.n(r.on_request) }}
       <td>{% if days is not none and days >= 45 %}<span class="chip c-crit">{{ r.verified|age }}</span>{% elif days is not none and days >= 3 %}<span class="chip c-warn plain">{{ r.verified|age }}</span>{% else %}{{ r.verified|age }}{% endif %}</td></tr>

@@ -6,6 +6,8 @@
 For a source that should never have been in a database — a test source that
 reached production — or a supplier makhzan no longer lists. Disabling a source
 (`enabled = false`) only stops it being crawled; its listings stay on the site.
+Hiding it (`listed = false`) keeps it crawled and takes it off the site,
+deleting nothing.
 
 Deletes the source's listings, runs, cursors and review items, its row in
 `sources`, its supplier unless another source still lists under it, and the

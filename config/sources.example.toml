@@ -12,6 +12,11 @@
 #   base_url   The shop's origin. Omit only for sources with no host.
 #   enabled    Defaults to true. A disabled source is still built, so it can be
 #              run by hand, but the daily refresh skips it.
+#   listed     Defaults to true. false: crawl the shop and store its listings
+#              (runs, cursors, archiving, details, categories_seen) but show
+#              nothing on the site: no products, search, offers, shop page or
+#              counts. /how-we-crawl still names it. Flipping it takes effect
+#              at the next rebuild and reindex; see CLAUDE.md.
 #   supplier   The shop: slug and name, plus optionally website_url, name_ar,
 #              area, governorate and domain (the fallback vertical for listings
 #              the crosswalk does not place; defaults to electronics), and how

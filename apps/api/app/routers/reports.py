@@ -44,7 +44,6 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from makhzan_schemas import reports as rules
-from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Listing, Product, ProductRedirect, Report
 from makhzan_schemas.search import category_ref
 from pydantic import BaseModel, ConfigDict, Field
@@ -183,7 +182,7 @@ async def _resolve(session: AsyncSession, product_id: uuid.UUID) -> Product | No
 async def _offers(session: AsyncSession, product_id: uuid.UUID) -> list[Listing]:
     rows = await session.scalars(
         select(Listing)
-        .where(Listing.product_id == product_id, Listing.status == ListingStatus.ACTIVE)
+        .where(Listing.product_id == product_id, Listing.is_public())
         .options(selectinload(Listing.supplier))
         .order_by(Listing.price.asc().nulls_last(), Listing.id)
     )

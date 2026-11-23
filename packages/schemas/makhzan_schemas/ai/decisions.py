@@ -28,7 +28,7 @@ from sqlalchemy.orm import aliased
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME, rank
 from makhzan_schemas.ai.policy import DOMAINS, GROUP_CHECK_MODEL, KEV_BLOCK
 from makhzan_schemas.enums import ListingStatus
-from makhzan_schemas.models import AiDecision, Listing, WorkerState
+from makhzan_schemas.models import AiDecision, Listing, WorkerState, listed_source
 from makhzan_schemas.overrides import Overrides, Pair, pair
 
 STANDING, STALE, REVOKED = "standing", "stale", "revoked"
@@ -125,6 +125,10 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             and_(
                 la.status == ListingStatus.ACTIVE,
                 lb.status == ListingStatus.ACTIVE,
+                # A hidden source's listing (`listed = false`) is grouped into
+                # nothing, so a decision naming it cannot act: inactive.
+                listed_source(la),
+                listed_source(lb),
                 AiDecision.state == STANDING,
             )
         )
@@ -162,6 +166,8 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
                 and_(
                     la.status == ListingStatus.ACTIVE,
                     lb.status == ListingStatus.ACTIVE,
+                    listed_source(la),
+                    listed_source(lb),
                     la.domain.in_(DOMAINS),
                     lb.domain.in_(DOMAINS),
                 )

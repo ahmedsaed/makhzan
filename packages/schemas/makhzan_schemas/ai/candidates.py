@@ -187,7 +187,9 @@ async def load_catalogue(session: AsyncSession, domains: Iterable[str] = DOMAINS
     rows = await session.execute(
         select(Listing, Category.name_en)
         .outerjoin(Category, Category.id == Listing.category_id)
-        .where(Listing.status == ListingStatus.ACTIVE, Listing.domain.in_(list(domains)))
+        # A hidden source's listings (`listed = false`) are never candidates;
+        # listed again, they are new to `ai_listing_state` and found then.
+        .where(Listing.is_public(), Listing.domain.in_(list(domains)))
         .order_by(Listing.id)
     )
     listings, views = [], {}
@@ -352,9 +354,7 @@ async def record_hashes(session: AsyncSession, catalogue: Catalogue, now: dateti
     and if it comes back it is new again."""
     # The same scope as `load_catalogue`, as a subquery: tens of thousands of
     # ids would not fit in one statement's parameters.
-    scope = select(Listing.id).where(
-        Listing.status == ListingStatus.ACTIVE, Listing.domain.in_(list(DOMAINS))
-    )
+    scope = select(Listing.id).where(Listing.is_public(), Listing.domain.in_(list(DOMAINS)))
     await session.execute(delete(AiListingState).where(AiListingState.listing_id.not_in(scope)))
     rows = [
         {
@@ -490,7 +490,7 @@ class AuditTrigger:
         listings = list(
             await session.scalars(
                 select(Listing).where(
-                    Listing.status == ListingStatus.ACTIVE,
+                    Listing.is_public(),
                     Listing.domain.in_(DOMAINS),
                     Listing.product_id.is_not(None),
                 )
@@ -558,14 +558,14 @@ class RescoreTrigger:
             select(AiDecision, AiListingState.content_sha256, Listing.status)
             .join(AiListingState, AiListingState.listing_id == AiDecision.listing_a)
             .join(Listing, Listing.id == AiDecision.listing_a)
-            .where(AiDecision.state == STANDING)
+            .where(AiDecision.state == STANDING, Listing.from_listed_source())
         )
         side_a = {d.id: (d, h, s) for d, h, s in rows}
         rows_b = await session.execute(
             select(AiDecision.id, AiListingState.content_sha256, Listing.status)
             .join(AiListingState, AiListingState.listing_id == AiDecision.listing_b)
             .join(Listing, Listing.id == AiDecision.listing_b)
-            .where(AiDecision.state == STANDING)
+            .where(AiDecision.state == STANDING, Listing.from_listed_source())
         )
         side_b = {i: (h, s) for i, h, s in rows_b}
         self.counts = Counter()

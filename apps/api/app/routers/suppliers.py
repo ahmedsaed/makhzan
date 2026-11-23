@@ -1,5 +1,9 @@
 """Suppliers endpoints — every shop, one shop's profile, and its listings (from the DB).
 
+A shop only hidden sources name (`listed = false`) is not here at all: a 404,
+and absent from the list. A hidden source's listings are never counted or
+listed, even under a shop another source shows.
+
 All of it is scoped to ACTIVE listings. That is the load-bearing part: a sweep
 archives listings it no longer sees, and a page that kept counting them would
 advertise stock the supplier has withdrawn.
@@ -14,7 +18,7 @@ from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contact import resolve_contact
 from makhzan_schemas.contracts import HEAVY_DETAILS, ListingRead
-from makhzan_schemas.enums import ListingStatus, StockSignal
+from makhzan_schemas.enums import StockSignal
 from makhzan_schemas.models import Category, Listing, Supplier
 from makhzan_schemas.search import category_ref
 from sqlalchemy import case, func, select
@@ -26,7 +30,7 @@ router = APIRouter(tags=["suppliers"])
 #: How many categories a shop page lists under "biggest categories".
 TOP_CATEGORIES = 8
 
-_ACTIVE = Listing.status == ListingStatus.ACTIVE
+_ACTIVE = Listing.is_public()
 # IN_STOCK only, matching Product.in_stock: the two counts would otherwise
 # disagree about the same listings on adjacent pages.
 _IN_STOCK = Listing.stock_signal == StockSignal.IN_STOCK
@@ -40,7 +44,7 @@ _ROW_EXCLUDE: dict = {**{field: True for field in HEAVY_DETAILS}, "supplier": {"
 
 async def _get_supplier(session: AsyncSession, slug: str) -> Supplier:
     supplier = (
-        await session.execute(select(Supplier).where(Supplier.slug == slug))
+        await session.execute(select(Supplier).where(Supplier.slug == slug, Supplier.is_shown()))
     ).scalar_one_or_none()
     if supplier is None:
         raise HTTPException(status_code=404, detail="supplier not found")
@@ -109,7 +113,7 @@ async def list_suppliers(session: AsyncSession = Depends(get_session)) -> list[d
     """Every supplier, biggest first. Includes ones with no active listings, so a
     shop the crawler lost entirely still appears (with zeros) rather than vanishing;
     hiding it is the page's call."""
-    suppliers = (await session.execute(select(Supplier))).scalars().all()
+    suppliers = (await session.execute(select(Supplier).where(Supplier.is_shown()))).scalars().all()
     activity = await _activity(session)
     domains = await _domains(session)
     rows = [

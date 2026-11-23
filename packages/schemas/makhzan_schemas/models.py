@@ -28,7 +28,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    exists,
     func,
+    or_,
+    select,
     text,
     true,
 )
@@ -123,6 +126,18 @@ class Supplier(TimestampMixin, Base):
     contact: Mapped[dict | None] = mapped_column(JSONB)
 
     listings: Mapped[list[Listing]] = relationship(back_populates="supplier")
+
+    @classmethod
+    def is_shown(cls):
+        """SQL: the shop may appear on the site (its page, the shop list, counts).
+
+        Hidden only when sources name it and every one of them is `listed =
+        false`; a shop no source names (one being retired, a test row) shows."""
+        names = Source.supplier["slug"].astext == cls.slug
+        return or_(
+            ~exists().where(names, Source.listed.is_(False)),
+            exists().where(names, Source.listed.is_(True)),
+        )
 
 
 class Category(TimestampMixin, Base):
@@ -294,6 +309,20 @@ class Listing(TimestampMixin, Base):
     supplier: Mapped[Supplier] = relationship(back_populates="listings")
     category: Mapped[Category | None] = relationship()
     product: Mapped[Product | None] = relationship(back_populates="listings")
+
+    @classmethod
+    def from_listed_source(cls):
+        """SQL: the listing's source is not hidden (`Source.listed`).
+
+        A source with `listed = false` is crawled like any other, but nothing it
+        stores reaches the public: not grouping, search, offers, shop pages or
+        counts. See `listed_source` for an aliased listing."""
+        return listed_source(cls)
+
+    @classmethod
+    def is_public(cls):
+        """SQL: what the site may show as an offer: active, from a listed source."""
+        return and_(cls.status == ListingStatus.ACTIVE, listed_source(cls))
 
 
 class Product(TimestampMixin, Base):
@@ -555,6 +584,12 @@ class Source(TimestampMixin, Base):
     adapter: Mapped[str] = mapped_column(String(255), nullable=False)
     base_url: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    #: sources.toml's `listed` (default true), rewritten by every sync. False
+    #: means crawl and store, but show nothing: the source's listings are left
+    #: out of grouping, search and every public endpoint, and a shop only
+    #: hidden sources name has no page (`Listing.from_listed_source`,
+    #: `Supplier.is_shown`). /how-we-crawl still names it: we do crawl it.
+    listed: Mapped[bool] = mapped_column(default=True, server_default=true(), nullable=False)
     #: SupplierInfo fields: slug, name, domain, website_url, name_ar, ...
     supplier: Mapped[dict] = mapped_column(JSONB, nullable=False)
     #: Adapter keyword arguments — pacing, crosswalk name, platform options.
@@ -1385,3 +1420,9 @@ class AdminAction(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def listed_source(listing) -> object:
+    """SQL: `listing` (the Listing class or an alias of it) comes from a source
+    that is not hidden. A source with no row in `sources` counts as listed."""
+    return listing.source.not_in(select(Source.source_id).where(Source.listed.is_(False)))
