@@ -1,10 +1,13 @@
-"""Recording every category a product is listed under (worker/categories_seen.py).
+"""Recording every category a product is listed under, and filing it under one
+(worker/categories_seen.py).
 
 A shop browsed by category partitions shows a product filed under several
-categories once per partition, and the pipeline keeps whichever partition was
-swept last. These tests pin that the memberships are recorded per cycle, that
-sweeps do not erase them, and that recording them changes nothing else: the
-category assigned, the AI's view of a listing.
+categories once per partition. It used to keep whichever partition was swept
+last; it now keeps the one the owner's rule chooses from every name seen this
+cycle and the last (the rule itself: test_category_rule.py). These tests pin
+that the memberships are recorded per cycle, that sweeps do not erase them,
+that the category no longer depends on sweep order, and that a source that
+does not record them is unchanged.
 """
 
 from __future__ import annotations
@@ -215,19 +218,156 @@ def test_record_keeps_order_drops_duplicates_and_the_oldest_cycles():
 
 
 # --------------------------------------------------------------------------- #
-# No behaviour change
+# The category
 # --------------------------------------------------------------------------- #
 
 
-async def test_the_last_mapped_partition_swept_still_decides_the_category():
-    """Regression: recording changes no assignment. Two mapped leaves, the
-    later partition wins, in either order; an unmapped one clears nothing."""
+async def _moves() -> list[int]:
+    """`stats.categories` moved + cleared, per run, oldest first."""
+    async with SessionLocal() as s:
+        rows = (
+            await s.execute(
+                select(IngestionRun.stats["categories"])
+                .where(IngestionRun.source == SRC)
+                .order_by(IngestionRun.started_at)
+            )
+        ).all()
+    return [(r[0] or {}).get("moved", 0) + (r[0] or {}).get("cleared", 0) for r in rows]
+
+
+async def test_the_category_no_longer_depends_on_sweep_order():
+    """Pins the owner's rule where this test used to pin "the last mapped
+    partition swept wins" (changed on purpose, 2026-11-23). Two mapped leaves
+    and no `prefer`: the first ref alphabetically, in either order, and an
+    unmapped partition after them changes nothing."""
     await _seed_taxonomy()
     await run_source(SRC, PartitionedShop(["cat-resistors", "cat-capacitors"]))
     assert await _slug_of() == "capacitors"
     await run_source(SRC, PartitionedShop(["cat-capacitors", "cat-resistors", "cat-unmapped"]))
-    assert await _slug_of() == "resistors"
+    assert await _slug_of() == "capacitors"
     await run_source(SRC, PartitionedShop(["cat-unmapped", ""]))
+    assert await _slug_of() == "capacitors"
+
+
+async def test_prefer_outranks_the_ref():
+    await _seed_taxonomy()
+    shop = PartitionedShop(["cat-capacitors", "cat-resistors"])
+    shop.preferred_categories = ("cat-resistors",)
+    await run_source(SRC, shop)
+    assert await _slug_of() == "resistors"
+
+
+async def test_stable_across_cycles_runs_and_orders():
+    """Once a cycle has seen both categories, later cycles split over runs,
+    each in another order, never move the category, mid-cycle included: no
+    flip to re-queue AI scores."""
+    await _seed_taxonomy()
+    await run_source(SRC, PartitionedShop(["cat-resistors", "cat-capacitors", ""]))
+    assert await _slug_of() == "capacitors"
+    orders = [
+        ["cat-capacitors", "cat-unmapped", "cat-resistors", ""],
+        ["", "cat-unmapped", "cat-resistors", "cat-capacitors"],
+        ["cat-unmapped", "cat-capacitors", "", "cat-resistors"],
+        ["cat-resistors", "", "cat-unmapped", "cat-capacitors"],
+    ]
+    for order in orders:
+        for _ in order:
+            await run_source(SRC, PartitionedShop(order, max_partitions_per_run=1))
+            assert await _slug_of() == "capacitors"
+    assert len(await _cycles()) == 1 + len(orders)
+    assert sum((await _moves())[1:]) == 0
+
+
+async def test_the_old_rule_flipped_where_the_new_one_does_not():
+    """The same cycles on a source that does not record: the last mapped
+    partition swept decides, so the category moves mid-cycle."""
+
+    class Unrecorded(PartitionedShop):
+        records_categories_seen = False
+
+    await _seed_taxonomy()
+    for order in (["cat-resistors", "cat-capacitors"], ["cat-capacitors", "cat-resistors"]):
+        for _ in order:
+            await run_source(SRC, Unrecorded(order, max_partitions_per_run=1))
+    assert await _slug_of() == "resistors"
+    assert sum(await _moves()) == 2
+
+
+async def test_a_removed_category_drops_out_once_absent_from_both_cycles():
+    """Filed under capacitors (alphabetically ahead) while the shop lists it
+    under both; the shop then drops it from capacitors. The cycle after still
+    has the last one's sighting, so nothing moves mid-cycle; the next one, with
+    capacitors in neither kept cycle, files it under resistors."""
+    await _seed_taxonomy()
+    both = {"cat-resistors": ["p1"], "cat-capacitors": ["p1"]}
+    gone = {"cat-resistors": ["p1"], "cat-capacitors": []}
+    parts = ["cat-resistors", "cat-capacitors"]
+    await run_source(SRC, PartitionedShop(parts, listed=both))
+    assert await _slug_of() == "capacitors"
+    await run_source(SRC, PartitionedShop(parts, listed=gone))
+    assert await _slug_of() == "capacitors"
+    await run_source(SRC, PartitionedShop(parts, listed=gone))
+    assert await _slug_of() == "resistors"
+
+
+async def test_an_unmapped_only_sighting_leaves_a_mapped_category_alone():
+    """The authoritative miss rule still holds once the mapped sighting has
+    left both kept cycles, and the listing is never inferred."""
+    await _seed_taxonomy()
+    await run_source(SRC, PartitionedShop(["cat-resistors"]))
+    for _ in range(3):
+        await run_source(SRC, PartitionedShop(["cat-unmapped"]))
+    listing = await _listing()
+    assert "cat-resistors" not in str(listing.attributes[KEY])
+    assert await _slug_of() == "resistors"
+
+
+async def test_never_inferred_on_an_authoritative_source():
+    """A listing only ever under unmapped names stays uncategorized, even with
+    a title the keyword rules would read."""
+
+    class Titled(PartitionedShop):
+        async def fetch_page(self, partition, page):
+            result = await super().fetch_page(partition, page)
+            for item in result.items:
+                item.title = "10k ohm resistor 1/4W"
+            return result
+
+    await _seed_taxonomy()
+    await run_source(SRC, Titled(["cat-unmapped", "cat-brand-x"]))
+    assert await _slug_of() is None
+
+
+async def test_the_whole_shop_pass_never_clears_the_chosen_category():
+    await _seed_taxonomy()
+    await run_source(SRC, PartitionedShop(["cat-resistors", "cat-capacitors"]))
+    for _ in range(3):
+        await run_source(SRC, PartitionedShop([""]))
+    assert await _slug_of() == "capacitors"
+
+
+async def test_a_limit_run_files_by_the_stored_set_too():
+    """A `limit=` run records nothing, but reads what is recorded: sweeping one
+    partition alone does not move the category."""
+    await _seed_taxonomy()
+    await run_source(SRC, PartitionedShop(["cat-capacitors", "cat-resistors"]))
+    await run_source(SRC, PartitionedShop(["cat-resistors"]), limit=5)
+    assert await _slug_of() == "capacitors"
+
+
+async def test_a_source_that_does_not_record_still_takes_the_last_mapped_partition():
+    """Byte for byte as before for every other source: the later partition
+    wins, in either order; an unmapped one clears nothing."""
+
+    class TagShop(PartitionedShop):
+        records_categories_seen = False
+
+    await _seed_taxonomy()
+    await run_source(SRC, TagShop(["cat-resistors", "cat-capacitors"]))
+    assert await _slug_of() == "capacitors"
+    await run_source(SRC, TagShop(["cat-capacitors", "cat-resistors", "cat-unmapped"]))
+    assert await _slug_of() == "resistors"
+    await run_source(SRC, TagShop(["cat-unmapped", ""]))
     assert await _slug_of() == "resistors"
 
 
@@ -263,6 +403,7 @@ async def _seed_source(tmp_path, monkeypatch):
             Source(
                 source_id=SRC,
                 adapter="odoo",
+                base_url="https://shop.test",
                 supplier={"slug": SRC, "name": "Test Shop"},
                 config={"crosswalk": "test-shop"},
             )
@@ -305,8 +446,10 @@ async def test_the_report_lists_multi_category_products_of_the_last_completed_cy
     assert "    2  cat-brand-x  +  cat-resistors" in text
     conflicts, rest = text.split("at most one mapped leaf")
     assert "p1  Widget p1" in conflicts and "p2" not in conflicts.split("leaves (1):")[1]
-    # Today's category, not the cycle's: the run in flight swept resistors last.
-    assert "stored today: electronics:resistors" in conflicts
+    # p1 sits in capacitors and resistors: the rule files it under capacitors
+    # (no `prefer`, the first ref), and the report says so.
+    assert "stored today: electronics:capacitors" in conflicts
+    assert "rule picks:   electronics:capacitors" in conflicts
     conflicts, rest = " ".join(conflicts.split()), " ".join(rest.split())
     assert "cat-capacitors -> electronics:capacitors" in conflicts
     assert "cat-brand-x -> ignored" in rest

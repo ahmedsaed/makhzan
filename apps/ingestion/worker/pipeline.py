@@ -381,7 +381,9 @@ async def _ingest_item(
 
     `seen_in_cycle` (the cycle's start, from a full run's category-partition
     sweep) records the shop's category names for this item on the listing,
-    `attributes.categories_seen`. Record only: it changes no category.
+    `attributes.categories_seen`. On a source that records them, the category
+    is then the one the owner's rule chooses from every name seen this cycle
+    and the last (`categories_seen.choose`), not this partition's alone.
     """
     default_domain = adapter.supplier.domain
 
@@ -432,11 +434,24 @@ async def _ingest_item(
     knows = adapter.knows_category(raw)
     if seen_in_cycle and knows and source_categories:
         # Before the crosswalk has its say: unmapped and ignored names are
-        # recorded too, for the person deciding what multi-category products
-        # are filed under. A pass that carries no category records nothing.
+        # recorded too, for the report. A pass that carries no category
+        # records nothing.
         listing.attributes = categories_seen.record(
             listing.attributes, seen_in_cycle, source_categories
         )
+    if adapter.records_categories_seen and knows and source_categories:
+        # Filed under several categories, a product used to take whichever
+        # partition was swept last, and flipped every cycle (each flip
+        # re-queuing its AI scores). The owner's rule picks one from the set
+        # it was seen under, this cycle and the last, whatever the order; this
+        # partition's names count even on a run that records nothing. Before
+        # the miss rule below: an unmapped partition still leaves the category
+        # alone when nothing it was seen under maps.
+        mapped = categories_seen.choose(
+            adapter, [*categories_seen.names_seen(listing.attributes), *source_categories]
+        )
+        domain = mapped[0] if mapped else default_domain
+        slug = mapped[1] if mapped else None
     if knows and mapped is None and adapter.authoritative_categories:
         # Browsed by category, under one the crosswalk does not map. A product
         # can sit in two categories, one mapped and one not, and then whichever

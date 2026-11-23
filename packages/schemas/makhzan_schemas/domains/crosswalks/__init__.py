@@ -131,7 +131,10 @@ class Crosswalk:
     #: For a source that tags a listing with several categories at once: the
     #: mapped names that win when a listing carries more than one, most preferred
     #: first. A tag listed here beats any tag that is not; between unlisted tags
-    #: the source's own order decides. Every name must also be mapped.
+    #: the source's own order decides. Every name must also be mapped. For a
+    #: source browsed by category (`records_categories_seen`), the same list
+    #: ranks the categories a listing was seen under, ahead of the ref
+    #: (step 4 of `worker.categories_seen.choose`).
     prefer: tuple[str, ...] = ()
     #: Source categories left unmapped on purpose: brand tags, generic buckets,
     #: anything whose name says nothing about type. Not mapped, never guessed

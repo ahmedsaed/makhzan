@@ -222,10 +222,10 @@ every Nth cycle, for category.
   shop's category names it saw a listing under, per cycle, in
   `attributes.categories_seen` (the Odoo and Wix adapters,
   `records_categories_seen`), and `./makhzan categories-seen [--source ID]
-  [--conflicts-only]` reports them (`worker/categories_seen.py`). This is
-  record-only: the pipeline still assigns the category as before, and the
-  owner decides what multi-category products are filed under after one full
-  cycle of it.
+  [--conflicts-only]` reports them (`worker/categories_seen.py`). Since
+  2026-11-24 the pipeline files such a product by the owner's rule over the
+  names seen in both kept cycles, not by sweep order, so that churn stops
+  (CLAUDE.md; step 3 of the rule is not built).
 - **What it needs in code.** A per-partition cadence in
   `_partitions_for_this_run`: a leaf partition is due only every Nth cycle, and
   the cycle-close check expects only the partitions due this cycle. Archiving

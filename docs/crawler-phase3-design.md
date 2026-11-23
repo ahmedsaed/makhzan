@@ -1,6 +1,6 @@
 **Status:** design only (2026-11-13); waits for 4–8 weeks of Phase 0 data. Decisions P3-D1…D12 are open.
 
-As of 2026-11-19 nothing in this design is built. Its prerequisites from Phases 0 and 1 are: the per-listing `checks`/`changes` counters (`pipeline._count_check`), `make freshness`, the category-churn counters (`stats.categories`) and T4/T12 confirm-before-archive, all live since 2026-11-13; T1 is still in shadow; T3, T9 and T13 (Phase 2) are not started. For P3-D11, the Odoo and Wix shops also record per cycle which shop categories each listing was seen under (`attributes.categories_seen`, `./makhzan categories-seen`, since 2026-11-19, record-only).
+As of 2026-11-19 nothing in this design is built. Its prerequisites from Phases 0 and 1 are: the per-listing `checks`/`changes` counters (`pipeline._count_check`), `make freshness`, the category-churn counters (`stats.categories`) and T4/T12 confirm-before-archive, all live since 2026-11-13; T1 is still in shadow; T3, T9 and T13 (Phase 2) are not started. For P3-D11, the Odoo and Wix shops also record per cycle which shop categories each listing was seen under (`attributes.categories_seen`, `./makhzan categories-seen`, since 2026-11-19; since 2026-11-24 the category is chosen from them by the owner's rule, not sweep order).
 
 # Crawler scheduling, Phase 3: read what matters, sweep the rest slowly
 

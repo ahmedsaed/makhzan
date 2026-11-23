@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from makhzan_schemas.contact import email_address, https_url, map_url, phone_number
 from makhzan_schemas.contracts import NormalizedListing, RawItem
 from makhzan_schemas.domains.base import DEFAULT_DOMAIN
+from makhzan_schemas.domains.crosswalks import fold_crosswalk, normalize_category_name
 from makhzan_schemas.enums import SourceType
 
 from worker.http import POLITE_DELAY, CycleFetcher
@@ -512,12 +513,18 @@ class SourceAdapter(ABC):
     ignored_categories: tuple[str, ...] = ()
 
     #: A source whose category comes from the partition being swept, so a
-    #: product filed under several categories is seen once under each and keeps
-    #: whichever was swept last. True records each partition's name on the
-    #: listing (`attributes.categories_seen`, worker/categories_seen.py), for a
-    #: person to judge multi-category products by. Record only: it changes no
-    #: category. Off for sources that read every category off the item itself.
+    #: product filed under several categories is seen once under each. True
+    #: records each partition's name on the listing (`attributes.categories_seen`)
+    #: and files the listing under the one category the owner's rule chooses
+    #: from every name seen this cycle and the last (`categories_seen.choose`),
+    #: rather than under whichever partition was swept last. Off for sources
+    #: that read every category off the item itself, which are unchanged.
     records_categories_seen: bool = False
+
+    #: The crosswalk's `prefer`, for a source that records categories seen:
+    #: step 4 of the rule ranks these names first. Set by the registry (a
+    #: tag-cloud source takes `prefer` as a constructor argument instead).
+    preferred_categories: tuple[str, ...] = ()
 
     #: Who the crawler says it is to this shop: "browser" (the default, what
     #: every source has always sent) or "makhzanbot" (an honest User-Agent,
@@ -564,6 +571,27 @@ class SourceAdapter(ABC):
         Always consulted, ahead of keyword inference: a mapping is a fact and
         inference is a guess. What `authoritative_categories` controls is only
         what happens on a miss — no category at all, or fall back to inference.
+        """
+        return None
+
+    def category_for_name(self, name: str) -> tuple[str, str] | None:
+        """The crosswalk's (domain, slug) for one of the source's category names.
+
+        What `categories_seen.choose` maps each name a listing was seen under
+        with. Folded like every crosswalk lookup (`normalize_category_name`).
+        """
+        folded = self.__dict__.get("_folded_for_name")
+        if folded is None:
+            folded = self._folded_for_name = fold_crosswalk(self.categories)
+        return folded.get(normalize_category_name(name))
+
+    def category_parent(self, name: str) -> str | None:
+        """The shop's own parent of one of its category names, if the adapter knows it.
+
+        Step 2 of the multi-category rule: a listing seen under a category and
+        one of its ancestors is filed under the more specific. None (the
+        default) means no shop tree is known, and only our taxonomy's parent
+        links apply.
         """
         return None
 

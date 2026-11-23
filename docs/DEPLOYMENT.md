@@ -222,7 +222,7 @@ terminate TLS there, and you're live.
 `crawl on|off`, `shop pause|resume`, `admin password`, `logs`, `stop`, `start`,
 `backup`, `restore`, `migrate`, `retire`, `probe`, `reports`, `overrides`,
 `categories-seen [--source ID] [--conflicts-only]` (every shop category a
-product was listed under last cycle; read-only, record-only for now), and `ai`
+product was listed under last cycle, and the category the rule picks; read-only), and `ai`
 (`status`, workers and tokens, `mode`, `backlog`, `jobs`, and `ai import DIR`
 for a locally scored backlog; `./makhzan help` lists them). Run it on the server, or from a
 laptop with `DEPLOY_HOST` set (it re-runs itself over SSH). `status` is the one

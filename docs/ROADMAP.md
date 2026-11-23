@@ -213,10 +213,11 @@ Kept short; `git log` has the detail.
 
 ### 1. In progress
 
-1. **Products in several categories** (the Odoo shop, the Wix shop). After one
-   full cycle of `categories_seen` recording (#74), the owner reviews
-   `./makhzan categories-seen` and decides how a multi-category product is
-   filed; until then the last mapped partition swept wins.
+1. **Products in several categories** (the Odoo shop, the Wix shop). The
+   owner's rule (2026-11-23) files one from the set seen over two cycles:
+   mapped names only, the more specific of parent and child, `prefer`, then the
+   ref. Built except step 3 (prefer what other shops' listings of the same
+   product use), which needs grouping and so a placement decision by the owner.
 2. **The audit review**: the owner reviews the AI audit of merges the rules
    made (the producers' rules-merged audit), to find wrong rules merges.
 3. **Per-listing category overrides**, like grouping rulings (note required,
