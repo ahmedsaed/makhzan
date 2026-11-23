@@ -26,8 +26,8 @@ test("how-we-crawl names our robots.txt token and gives the block to copy", asyn
   await page.getByRole("tab", { name: "robots.txt" }).click();
   await expect(page.getByText("Our robots.txt token is makhzanbot")).toBeVisible();
   await expect(page.locator("#block pre")).toHaveText("User-agent: makhzanbot\nDisallow: /");
-  // Truthful during the move: not every request says makhzanbot yet.
-  await expect(page.getByText("one shop at a time")).toBeVisible();
+  // Every enabled shop is on makhzanbot now (the move ended 2026-11-18).
+  await expect(page.getByText("Every shop we read is on it.")).toBeVisible();
 });
 
 test("how-we-crawl says how to recognise and verify us, on the public origin", async ({ page }) => {
