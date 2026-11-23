@@ -1,18 +1,30 @@
-"""Every shop category a listing appeared under, per cycle, and a report on them.
+"""Every shop category a listing appeared under, per cycle, the one it is filed
+under, and a report on them.
 
     python -m worker.categories_seen [--source ID] [--conflicts-only]
 
 `./makhzan categories-seen ...` runs it in the production worker, and `make
 categories-seen ARGS="..."` against the local database. Read-only.
 
-**Record only.** A shop browsed by category partitions (the Odoo shop, the Wix
-shop) says which category a product is in only by listing it on that
-category's pages. A product filed under several is seen once per partition, and
-the pipeline assigns whichever partition was swept last, so a product in two
-leaves that map differently flips category from cycle to cycle. Nothing here
-changes that: the pipeline still assigns the category exactly as before. What
-this adds is the evidence, so a person can decide what multi-category products
-should be filed under.
+A shop browsed by category partitions (the Odoo shop, the Wix shop) says which
+category a product is in only by listing it on that category's pages. A product
+filed under several is seen once per partition. It used to take whichever
+partition was swept last, so a product in two leaves that map differently
+flipped category every cycle, and each flip re-queued its AI scores (the
+category is in the prompt). The owner's rule (2026-11-23, `choose`) files it
+instead under one category chosen from the **set** of names it was seen under,
+deterministically and never by sweep order:
+
+1. Names the crosswalk does not map, ignored ones included, drop out.
+2. A name whose descendant also remains drops out, by the shop's own tree
+   (`SourceAdapter.category_parent`) and then by our taxonomy's parent links:
+   a parent-held product takes what the parent maps to, a child's mapping
+   beats it.
+3. (Not done: prefer the category other shops' listings of the same product
+   use. That needs grouping, which runs at rebuild, and grouping reads the
+   category (a listing's domain scopes its identifiers, and the category is in
+   the AI prompt), so where it belongs is the owner's call. See CLAUDE.md.)
+4. The crosswalk's `prefer` ranking, then the ref alphabetically.
 
 Each category partition's upsert adds the shop's own name for the partition
 (`source_categories(raw)`, mapped, unmapped or ignored alike) to the listing's
@@ -30,8 +42,15 @@ category (`knows_category` False, the whole-shop pass) records nothing, nor do
 a category partition. The list-page upsert rebuilds attributes from the card, so
 `carry` lays the stored value back on (as `worker.details.carry_details` does).
 
-Nothing reads the key but this report: the AI prompt (`makhzan_schemas.ai.prompt`)
-and the API read named attribute keys only.
+The rule reads the **union** of both kept cycles (`names_seen`), so a partition
+not yet swept this cycle cannot make the category flip mid-cycle. A category the
+shop really removed drops out once it is absent from both: when the cycle after
+the one that last saw it starts, which is one to two cycles after the removal.
+It is applied by the pipeline on every sweep that knows the category, and only
+for a source with `records_categories_seen`.
+
+Nothing else reads the key: the AI prompt (`makhzan_schemas.ai.prompt`) and the
+API read named attribute keys only.
 """
 
 from __future__ import annotations
@@ -42,13 +61,18 @@ import sys
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import datetime
+from functools import cache
 from itertools import combinations
+from typing import TYPE_CHECKING
 
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.domains.crosswalks import load_crosswalk, normalize_category_name
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Category, IngestionRun, Listing, Source
 from sqlalchemy import func, select
+
+if TYPE_CHECKING:
+    from worker.sources.base import SourceAdapter
 
 KEY = "categories_seen"
 
@@ -101,6 +125,88 @@ def in_cycle(attributes: object, cycle_started: datetime) -> list[str]:
         if _when(stamp) == cycle_started and isinstance(listed, list):
             return listed
     return []
+
+
+def names_seen(attributes: object) -> list[str]:
+    """Every name the listing was seen under in the kept cycles, oldest cycle first."""
+    stored = attributes.get(KEY) if isinstance(attributes, dict) else None
+    if not isinstance(stored, dict):
+        return []
+    out: list[str] = []
+    for stamp in sorted((s for s in stored if _when(s) is not None), key=_when):
+        listed = stored[stamp]
+        for name in listed if isinstance(listed, list) else ():
+            if isinstance(name, str) and name and name not in out:
+                out.append(name)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# The rule
+# --------------------------------------------------------------------------- #
+
+
+@cache
+def _taxonomy_parents(domain: str) -> dict[str, str]:
+    from makhzan_schemas.domains import get_profile
+
+    return {slug: parent for slug, _en, _ar, parent in get_profile(domain).taxonomy if parent}
+
+
+def _taxonomy_ancestors(ref: tuple[str, str]) -> set[tuple[str, str]]:
+    domain, slug = ref
+    parents = _taxonomy_parents(domain)
+    out: set[tuple[str, str]] = set()
+    while (slug := parents.get(slug)) and (domain, slug) not in out:
+        out.add((domain, slug))
+    return out
+
+
+def _shop_ancestors(adapter: SourceAdapter, name: str) -> set[str]:
+    out: set[str] = set()
+    while (name := adapter.category_parent(name)) and normalize_category_name(name) not in out:
+        out.add(normalize_category_name(name))
+    return out
+
+
+def choose(adapter: SourceAdapter, names: Iterable[str]) -> tuple[str, str] | None:
+    """The one (domain, slug) a listing seen under `names` is filed under, or None.
+
+    The owner's rule (module docstring): unmapped and ignored names drop out;
+    of a name and its ancestor, by the shop's tree and then by our taxonomy,
+    the more specific stays; then the crosswalk's `prefer`, then the ref. Step 3
+    (other shops' listings of the same product) is not implemented. Depends on
+    the set of names only, never their order. None when no name is mapped.
+    """
+    mapped: dict[str, tuple[str, str]] = {}
+    for name in names:
+        folded = normalize_category_name(name)
+        # The crosswalk refuses a name both mapped and ignored, so an ignored
+        # name never maps: step 1 is "keep the mapped ones".
+        if folded and folded not in mapped and (ref := adapter.category_for_name(name)):
+            mapped[folded] = ref
+    if not mapped:
+        return None
+    # Step 2, the shop's tree: drop a name one of whose descendants remains.
+    held_by_descendant = set()
+    for folded in mapped:
+        held_by_descendant |= _shop_ancestors(adapter, folded)
+    names_left = {n: r for n, r in mapped.items() if n not in held_by_descendant} or mapped
+    # Step 2, our taxonomy: drop a ref one of whose descendants remains.
+    refs = set(names_left.values())
+    covered = set().union(*(_taxonomy_ancestors(r) for r in refs))
+    refs = (refs - covered) or refs
+    if len(refs) == 1:
+        return next(iter(refs))
+    # Step 4: the crosswalk's `prefer`, then the ref.
+    preference = {normalize_category_name(n): i for i, n in enumerate(adapter.preferred_categories)}
+    unranked = len(preference)
+
+    def rank(ref: tuple[str, str]) -> tuple[int, str]:
+        best = min((preference.get(n, unranked) for n, r in names_left.items() if r == ref))
+        return best, f"{ref[0]}:{ref[1]}"
+
+    return min(refs, key=rank)
 
 
 # --------------------------------------------------------------------------- #
@@ -168,8 +274,10 @@ async def collect(session, source: str) -> dict:
     started = _when((cycle or {}).get("cycle_started_at"))
     out["cycle"] = cycle if started else None
 
-    config = await session.scalar(select(Source.config).where(Source.source_id == source))
+    row = await session.scalar(select(Source).where(Source.source_id == source))
+    config = row.config if row is not None else None
     mapped, ignored, out["why_no_crosswalk"] = _crosswalk(config)
+    adapter, out["why_no_pick"] = _adapter(row)
 
     rows = (
         await session.execute(
@@ -206,16 +314,37 @@ async def collect(session, source: str) -> dict:
             folded = normalize_category_name(name)
             maps.append((name, mapped.get(folded) or (IGNORED if folded in ignored else UNMAPPED)))
         leaves = {target for _, target in maps if target not in (UNMAPPED, IGNORED)}
+        pick = None
+        if adapter is not None:
+            # What the pipeline reads: both kept cycles, not this one alone.
+            chosen = choose(adapter, names_seen(attributes))
+            pick = f"{chosen[0]}:{chosen[1]}" if chosen else None
         out["products"].append(
             {
                 "external_id": external_id,
                 "title": title_en or title_ar or "",
                 "stored": f"{domain}:{slug}" if slug else None,
+                "pick": pick,
                 "categories": maps,
                 "distinct_leaves": len(leaves),
             }
         )
     return out
+
+
+def _adapter(row) -> tuple[SourceAdapter | None, str | None]:
+    """The source's adapter, for the rule's pick, or why there is none."""
+    from worker.sources.registry import build_adapter
+
+    if row is None:
+        return None, "no sources row"
+    try:
+        adapter = build_adapter(row)
+    except Exception as exc:  # noqa: BLE001 — the report goes on without the pick
+        return None, f"the adapter could not be built: {type(exc).__name__}: {exc}"
+    if not adapter.records_categories_seen:
+        return None, "the source does not file listings by the categories seen"
+    return adapter, None
 
 
 def summary(report: dict) -> dict:
@@ -227,6 +356,7 @@ def summary(report: dict) -> dict:
     return {
         "multi": len(products),
         "conflicts": sum(1 for p in products if p["distinct_leaves"] >= 2),
+        "pending": sum(1 for p in products if p.get("pick") and p["pick"] != p["stored"]),
         "pairs": pairs.most_common(15),
     }
 
@@ -260,6 +390,8 @@ def format_report(report: dict, *, conflicts_only: bool = False) -> list[str]:
         )
     if report["why_no_crosswalk"]:
         lines.append(f"  (mappings not shown: {report['why_no_crosswalk']})")
+    if report.get("why_no_pick"):
+        lines.append(f"  (the rule's pick not shown: {report['why_no_pick']})")
 
     s = summary(report)
     lines.append(
@@ -267,6 +399,11 @@ def format_report(report: dict, *, conflicts_only: bool = False) -> list[str]:
         f"{s['multi']} under two or more; {s['conflicts']} of those under two or more "
         "distinct mapped leaves"
     )
+    if s["pending"]:
+        lines.append(
+            f"  {s['pending']} of them stored under another category than the rule picks: "
+            "the listing's next category sweep files it there"
+        )
     if s["pairs"]:
         lines.append("  most common pairs:")
         lines += [f"    {count:5d}  {a}  +  {b}" for (a, b), count in s["pairs"]]
@@ -290,6 +427,9 @@ def format_report(report: dict, *, conflicts_only: bool = False) -> list[str]:
         for p in group:
             lines.append(f"    {p['external_id']}  {p['title']}")
             lines.append(f"        stored today: {p['stored'] or 'uncategorized'}")
+            if p.get("pick") or not report.get("why_no_pick"):
+                # Over both kept cycles, as the pipeline reads them.
+                lines.append(f"        rule picks:   {p.get('pick') or 'nothing mapped'}")
             width = max(len(name) for name, _ in p["categories"])
             lines += [f"        {name:{width}s}  -> {t}" for name, t in p["categories"]]
     return lines

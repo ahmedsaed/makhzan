@@ -366,6 +366,28 @@ class OdooAdapter(SourceAdapter):
             return None
         return self._folded_categories.get(normalize_category_name(category))
 
+    def category_parent(self, name: str) -> str | None:
+        """The shop's parent of a category, read off the category slugs.
+
+        Odoo builds a category's slug from its display name, which is its path
+        ("Power / Low Voltage" -> `power-low-voltage-109`) unless the shop set
+        an SEO name. So among the categories
+        this source knows (partitions, crosswalk, ignore), a category's parent
+        is the one whose slug, record id dropped, is the longest prefix of its
+        own followed by a hyphen. A shop with SEO names (the Odoo shop's slugs
+        are like that) shows no such prefixes and gets no tree, which is the
+        same as before. The risk is a top-level name that happens to start
+        with another's ("power-tools" and "power-tools-accessories"): the
+        second would be taken as the first's child, so a product listed under
+        both takes the second's mapping, one of the shop's own categories.
+        """
+        parents = self.__dict__.get("_shop_parents")
+        if parents is None:
+            parents = self._shop_parents = _slug_tree(
+                [*self.partition_keys, *self.categories, *self.ignored_categories]
+            )
+        return parents.get(normalize_category_name(name))
+
     def _to_raw(self, card, partition: str = "") -> RawItem | None:
         link = card.css_first(f"a[href^='{self.lang_prefix}/shop/']")
         href = link.attributes.get("href") if link else None
@@ -478,6 +500,21 @@ def _card_name(card, link) -> str | None:
         (article.attributes.get("aria-label") or "") if article else "",
     )
     return next((c.strip() for c in candidates if c and c.strip()), None)
+
+
+def _slug_tree(keys) -> dict[str, str]:
+    """{folded slug: folded parent slug} for category slugs that embed their path."""
+    stems = {}
+    for key in keys:
+        folded = normalize_category_name(key)
+        if folded:
+            stems[folded] = _ID_RE.sub("", folded)
+    tree = {}
+    for child, stem in stems.items():
+        parents = [p for p, s in stems.items() if p != child and stem.startswith(f"{s}-")]
+        if parents:
+            tree[child] = max(parents, key=lambda p: (len(stems[p]), p))
+    return tree
 
 
 def _pager_says_last(tree: HTMLParser, page: int) -> bool:

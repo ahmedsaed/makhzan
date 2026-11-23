@@ -96,7 +96,9 @@ def build_adapter(source: Source) -> SourceAdapter:
     not accept is a TypeError here rather than a setting silently ignored. The
     one key resolved on the way is `crosswalk`, a file name, which becomes the
     `categories` table — and, for a source browsed by category, the
-    `partition_keys` to sweep, or for a tag-cloud source its `prefer` order.
+    `partition_keys` to sweep, and its `prefer` order: a tag-cloud source's
+    constructor takes it, and a source that records the categories it saw a
+    listing under gets it as `preferred_categories`.
     `identity` is read by the pipeline, never the adapter, and must name one
     of `worker.identity.IDENTITIES`; so is `egress`, one of
     `worker.egress.EGRESSES`.
@@ -134,9 +136,11 @@ def build_adapter(source: Source) -> SourceAdapter:
         options["categories"] = loaded.categories
         if loaded.partitions:
             options["partition_keys"] = loaded.partitions
-        if loaded.prefer:
+        if loaded.prefer and not adapter_class(source.adapter).records_categories_seen:
             # Only a source that reads several tags per listing takes this; any
             # other adapter refuses the keyword, which is the right failure.
+            # A source that records the categories it saw a listing under ranks
+            # them with it too (set below, as the rule's step 4).
             options["prefer"] = loaded.prefer
     if source.base_url is not None:
         options["base_url"] = source.base_url
@@ -146,6 +150,9 @@ def build_adapter(source: Source) -> SourceAdapter:
         enabled=source.enabled,
         **options,
     )
+    if crosswalk is not None and loaded.prefer and adapter.records_categories_seen:
+        # Read by `categories_seen.choose`, never by the adapter itself.
+        adapter.preferred_categories = loaded.prefer
     if crosswalk is not None and loaded.ignore:
         # Read only by the drift check, so set here rather than passed in:
         # every adapter has it, a bespoke one kept elsewhere included.

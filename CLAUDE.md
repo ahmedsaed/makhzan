@@ -163,7 +163,9 @@ its catalogue: 8 of the Odoo shop's 2,875 products are filed under nothing, so p
 on categories alone would stop seeing them and a completed cycle would archive
 them — real stock, deleted, silently. That shop therefore also sweeps `/shop`, and
 `OdooAdapter` sweeps **leaf** categories only, because a parent page repeats
-everything its children list and the two need not map to the same leaf.
+everything its children list and the two need not map to the same leaf. (A shop
+whose parents hold products directly sweeps them too, and the multi-category
+rule below files a product seen under both by the child.)
 
 Before switching any source to category partitioning, crawl every category once
 and diff the product ids against a whole-catalogue sweep. That is the only way
@@ -191,16 +193,40 @@ says otherwise. Tag-cloud sources (`authoritative_categories` False) are
 unchanged — a miss there falls through to inference, and "I was in a position to
 know, and there is none" still clears.
 
-**Which categories a listing was seen under is recorded, not acted on**
-(`worker/categories_seen.py`). On the Odoo and Wix shops (`records_categories_seen`)
-a product filed under several categories takes whichever partition was swept last,
-so some flip every cycle (and each flip re-queues AI scores). Full-run sweeps of a
-category partition record `attributes.categories_seen` per `cycle_started_at`
-(this cycle and the last; unmapped and ignored names too; carried over by
-`_upsert_listing` like the details), and `./makhzan categories-seen
-[--source ID] [--conflicts-only]` reports the last completed cycle. Assignment
-is unchanged (last mapped partition wins, pinned by a test): how to treat
-multi-category products is the owner's call after one full cycle.
+**A product filed under several categories gets one, from the set it was seen
+under** (`worker/categories_seen.py`, owner, 2026-11-23). On the Odoo and Wix
+shops (`records_categories_seen`) it used to take whichever partition was swept
+last, so some flipped every cycle and each flip re-queued AI scores (the category
+is in the prompt). Full-run sweeps of a category partition record
+`attributes.categories_seen` per `cycle_started_at` (this cycle and the last;
+unmapped and ignored names too; carried over by `_upsert_listing` like the
+details), and every sweep that knows the category, `limit=` runs included, files
+the listing by `categories_seen.choose` over the **union** of both kept cycles,
+deterministically, no AI, never by sweep order:
+
+1. Unmapped and ignored names drop out.
+2. Of a name and its ancestor, the more specific stays: by the shop's own tree
+   (`SourceAdapter.category_parent`; `OdooAdapter` reads it off slugs that embed
+   the path, as the second Odoo shop's do, and the Odoo shop's SEO slugs give
+   none), then by our taxonomy's parent links (inert today: a crosswalk may name
+   leaves only). A parent-held product takes the parent's mapping; a child's
+   beats it.
+3. **Not done:** prefer the category other shops' listings of the same product
+   use. It needs grouping, which runs at rebuild, and grouping reads the
+   category (a listing's domain scopes its identifier keys, and the AI prompt
+   shows it), so a post-regroup pass would feed back into the next regroup.
+   Where it belongs is the owner's call.
+4. The crosswalk's `prefer` (the registry hands it to these adapters as
+   `preferred_categories`), then the ref alphabetically.
+
+The union is what keeps a partition not yet swept this cycle from moving the
+category mid-cycle; a category the shop really removed drops out when it is in
+neither kept cycle, one to two cycles after the removal. The other guarantees
+hold: the whole-shop pass never clears, a set with nothing mapped is the
+authoritative miss (the stored category stays, never inferred), and every source
+without `records_categories_seen` still takes the last mapped partition (pinned
+by a test). `./makhzan categories-seen [--source ID] [--conflicts-only]` reports
+the last completed cycle, with the rule's pick beside the stored category.
 
 Progress is **durable per page**: after each page the pipeline commits and advances
 a `SourceCursor`. A run that dies on page 40 of 43 keeps 39 pages, and the next
