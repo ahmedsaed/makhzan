@@ -885,7 +885,7 @@ async def egress(session, source_filter: str | None, days: int = 30) -> None:
             line += f"  {YELLOW}failing from: " + ", ".join(f"{a} ({n})" for a, n in worst)
             line += f"{RESET}"
         if row["configured"] == "ipv6" and (row["pool"] == 0 or row["no_pool"]):
-            line += f"  {YELLOW}no pool on the worker ({'CRAWL_IPV6_ADDRESSES'}){RESET}"
+            line += f"  {YELLOW}no pool on the worker (crawl-pool.yaml){RESET}"
         if not row["enabled"]:
             line += f"  {DIM}(disabled){RESET}"
         print(line)

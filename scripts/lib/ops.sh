@@ -32,6 +32,18 @@ ops_stack() {
       exit 1
     fi
     export COMPOSE_PROJECT_NAME
+    # The worker uses the host's network and finds db, redis and search on
+    # MAKHZAN_LOOPBACK (docker-compose.prod.yml). Left at production's
+    # 127.0.0.1, a throwaway stack's `run ingestion ...` (a reindex, a seed)
+    # would act on production's database and search index.
+    case "${MAKHZAN_LOOPBACK:-127.0.0.1}" in
+      127.0.0.1 | localhost)
+        echo "This stack is not production, but MAKHZAN_LOOPBACK is production's" >&2
+        echo "127.0.0.1, so its worker would use production's database. Set" >&2
+        echo "MAKHZAN_LOOPBACK=127.0.0.2 (or another 127.x address) in its env file." >&2
+        exit 1
+        ;;
+    esac
     # shellcheck disable=SC2034 # read by the scripts that source this
     STACK_ENV="COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME MAKHZAN_ENV_FILE=$MAKHZAN_ENV_FILE MAKHZAN_COMPOSE_FILE=$MAKHZAN_COMPOSE_FILE "
   fi

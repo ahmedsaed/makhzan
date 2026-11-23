@@ -197,12 +197,15 @@ node), so it is never published. The crawl can instead send from a pool of
 IPv6 addresses that carry nothing else (`worker/egress.py`), which can be
 published and given reverse DNS.
 
-- **The pool** is `CRAWL_IPV6_ADDRESSES` in the worker's environment, separated
-  by commas or whitespace. Every entry must be a global IPv6 address, or the
-  worker refuses to start. `./makhzan egress list` prints it. `./makhzan
-  egress check` sends one request from each address to an IPv6 echo service
-  (never a shop), and fails any address that cannot connect or that the
-  service sees as a different address.
+- **The pool** is `crawl-pool.yaml` in the private configuration, an `ipv6:`
+  list of addresses (`docs/server/ipv6.md` there says which are the server's
+  own). `MAKHZAN_CRAWL_POOL` names the file. Production sets it for the
+  worker, so a laptop or a test run has no pool. At startup, a file that is
+  named but missing, or an entry that is not a global IPv6 address, stops the
+  worker (later edits: see "Deployment notes"). `./makhzan egress list` prints the pool. `./makhzan egress check`
+  sends one request from each address to an IPv6 echo service (never a shop),
+  and fails any address that cannot connect or that the service sees as a
+  different address.
 - **Per source**, `egress = "ipv4"` (the default) or `egress = "ipv6"` in its
   config. Each request of an IPv6 source leaves from a pool address chosen at
   random: pages, retries, redirect hops, robots.txt and the details stage alike.
@@ -237,21 +240,28 @@ published and given reverse DNS.
 
 Blocked shops stay disabled whatever their egress.
 
+## Deployment notes
+
+- **The worker uses host networking** so it can bind the addresses, which sit
+  directly on the server's interface (`docker-compose.prod.yml`). `db`,
+  `redis` and `search` publish their usual ports on the stack's own loopback
+  address (`MAKHZAN_LOOPBACK`, production's `127.0.0.1`), and the worker's
+  hosts file maps their names there, so the URLs in `.env.prod` are
+  unchanged. A throwaway stack beside production uses another address
+  (`127.0.0.2`), which `scripts/lib/ops.sh` enforces. Redis takes a password
+  now that the host can reach it (`REDIS_PASSWORD`, docs/DEPLOYMENT.md).
+- **A pool file edited while the worker runs** is read again, without a
+  restart. If the new file is invalid or missing (a bad commit, or a read
+  mid-`git pull`), the worker keeps the last good pool and logs the error, so
+  one bad commit cannot stop every source. The same file at startup stops the
+  worker.
+
 ## Not done yet
 
-- **Sending from the pool in production.** The worker runs on Docker's default
-  bridge network, which has no IPv6, so it cannot bind the host's addresses
-  yet. Waiting on the host's assignment: either host networking for the
-  ingestion service, or an IPv6 network for it, depending on how the
-  addresses are delivered. Until then, leave `CRAWL_IPV6_ADDRESSES` unset and
-  no source on `"ipv6"`. Set the pool in the same deploy that gives the worker
-  IPv6: once the worker has IPv6 and no pool is set, an unbound client may
-  pick the server's own IPv6 address for a shop that has one.
 - **Publishing the pool.** `/how-we-crawl` and a JSON list of the addresses,
   with their reverse DNS name (`crawler.merope.dev`: an AAAA record per
   address, DNS-only, and a PTR per address set by the host). Needs a mock-up
   first; it ships with or before the first shop on IPv6.
-
 - **Cloudflare registration.** Submitted to Cloudflare's verified bots
   directory on 2026-11-10; on 2026-11-12 Cloudflare requested changes, asking
   for a registered business, which the operator does not have yet. Pending.

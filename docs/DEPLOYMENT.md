@@ -132,6 +132,17 @@ Edit `.env.prod`:
   with it, kept 24 hours, never the address itself. `deploy.sh` stops if it is
   unset, and the API refuses reports without it. Changing it resets every
   sender's count, nothing else.
+- `REDIS_PASSWORD` — a random secret (`openssl rand -hex 32`, hex so it needs
+  no escaping in a URL). Redis is published on the host's loopback for the
+  worker, which uses host networking (the crawl's IPv6 pool,
+  `docs/crawler-identity.md`), and arq unpickles what it reads from Redis, so
+  it takes a password. `REDIS_URL` must carry it:
+  `redis://:<REDIS_PASSWORD>@redis:6379`. `deploy.sh` stops if either is
+  missing or they disagree.
+- `MAKHZAN_LOOPBACK` — the loopback address this stack publishes `db`, `redis`
+  and `search` on, and where its worker finds them (default `127.0.0.1`).
+  Production leaves it unset. A throwaway stack beside production must set
+  another (`127.0.0.2`); `ops.sh` refuses one that does not.
 - `TRUSTED_PROXY_HOPS` — how many entries at the right of `X-Forwarded-For`
   our own proxies wrote (default 1). The API sees only the web container as its
   peer, so the visitor's address, for the report rate limit, is the entry that
@@ -411,7 +422,10 @@ with a deploy or restore.)
 `MAKHZAN_ENV_FILE` and `MAKHZAN_COMPOSE_FILE` point `backup-db.sh` and
 `restore-db.sh` at another stack, for trying a restore without production. They
 refuse unless `COMPOSE_PROJECT_NAME` is set too: without it another env file
-still addresses the production containers.
+still addresses the production containers. Its env file also needs its own
+`MAKHZAN_LOOPBACK` (e.g. `127.0.0.2`): the worker uses the host's network, so
+with production's `127.0.0.1` a `run ingestion ...` there would reach
+production's database, Redis and search index.
 
 ## Deploying
 

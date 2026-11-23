@@ -4,8 +4,10 @@ Chosen per source by `egress = "ipv4" | "ipv6"` in its config (default "ipv4",
 so nothing changes until a shop is switched by hand, after a probe shows it
 answers over IPv6).
 
-The pool is a fixed set of addresses used for crawling and nothing else
-(`CRAWL_IPV6_ADDRESSES`). It is published on /how-we-crawl with its reverse DNS
+The pool is a fixed set of addresses used for crawling and nothing else,
+listed in `crawl-pool.yaml` in the private configuration (`MAKHZAN_CRAWL_POOL`
+names the file; production sets it, so a laptop or a test run has no pool),
+so changing it is a reviewed commit. It is published on /how-we-crawl with its reverse DNS
 name, so a shop can verify and block it like any other part of our identity.
 Each request of an IPv6 source goes out from one of them at random. The owner's
 ruling (2026-11-23): the set changes only as the crawler grows, never in
@@ -38,9 +40,9 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import logging
 import os
 import random
-import re
 import socket
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
@@ -51,8 +53,8 @@ IPV4 = "ipv4"
 IPV6 = "ipv6"
 EGRESSES = (IPV4, IPV6)
 
-#: The pool, separated by commas or whitespace. Read when a client is built.
-POOL_ENV = "CRAWL_IPV6_ADDRESSES"
+#: The environment variable naming the pool file. Unset or empty: no pool.
+POOL_ENV = "MAKHZAN_CRAWL_POOL"
 
 #: What every IPv4 connection binds once a pool exists: any local IPv4 address.
 IPV4_ANY = "0.0.0.0"
@@ -69,29 +71,85 @@ def check_egress(value: object) -> str:
     return value  # type: ignore[return-value]
 
 
-def parse_pool(value: str) -> tuple[str, ...]:
-    """The addresses in `value`, validated, deduplicated and sorted.
+def parse_pool(value: object, *, where: str = POOL_ENV) -> tuple[str, ...]:
+    """The addresses in a pool file's `ipv6` list, validated, deduplicated and sorted.
 
     A typo must fail loudly rather than silently shrink the pool: every entry
     has to be a global unicast IPv6 address.
     """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{where}: `ipv6` must be a list of addresses")
     out: set[str] = set()
-    for item in re.split(r"[\s,]+", value.strip()):
-        if not item:
-            continue
+    for item in value:
         try:
-            address = ipaddress.IPv6Address(item)
+            address = ipaddress.IPv6Address(str(item).strip())
         except ValueError as exc:
-            raise ValueError(f"{POOL_ENV}: {item!r} is not an IPv6 address") from exc
+            raise ValueError(f"{where}: {item!r} is not an IPv6 address") from exc
         if not address.is_global:
-            raise ValueError(f"{POOL_ENV}: {item} is not a global address")
+            raise ValueError(f"{where}: {address} is not a global address")
         out.add(str(address))
     return tuple(sorted(out, key=ipaddress.IPv6Address))
 
 
+def load_pool_file(path: str) -> tuple[str, ...]:
+    """The pool listed in the YAML file at `path`: `ipv6: [address, ...]`."""
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        try:
+            data = yaml.safe_load(handle) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"{path}: not valid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a mapping with an `ipv6` list")
+    unknown = set(data) - {"ipv6"}
+    if unknown:
+        raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
+    return parse_pool(data.get("ipv6"), where=path)
+
+
+#: (path, mtime) -> pool: a client is built per request, the file read once.
+_POOL_CACHE: dict[tuple[str, float], tuple[str, ...]] = {}
+
+
+#: The last pool read successfully, kept when a later read fails.
+_LAST_GOOD: dict[str, tuple[str, ...]] = {}
+
+log = logging.getLogger(__name__)
+
+
 def configured_pool() -> tuple[str, ...]:
-    """The crawl pool from the environment; empty when none is configured."""
-    return parse_pool(os.environ.get(POOL_ENV, ""))
+    """The crawl pool from the file `MAKHZAN_CRAWL_POOL` names; empty when unset.
+
+    Named but missing or invalid is an error, not an empty pool: a pool that
+    vanished must not quietly turn every IPv6 source into an IPv4 one. That
+    error stops the worker at startup (`worker.main.startup`). Once a pool has
+    been read, a later failed read (a bad commit, or a read during `git pull`)
+    keeps the last good one and logs why, so one bad file cannot make every
+    client of every source raise.
+    """
+    path = os.environ.get(POOL_ENV, "").strip()
+    if not path:
+        return ()
+    try:
+        mtime = os.stat(path).st_mtime
+        key = (path, mtime)
+        if key not in _POOL_CACHE:
+            pool = load_pool_file(path)
+            _POOL_CACHE.clear()
+            _POOL_CACHE[key] = pool
+            _LAST_GOOD[path] = pool
+        return _POOL_CACHE[key]
+    except (OSError, ValueError, ImportError) as exc:
+        error = ValueError(f"{POOL_ENV}={path}: {exc}")
+        if isinstance(exc, FileNotFoundError):
+            error = ValueError(f"{POOL_ENV}={path}: no such file")
+        if path in _LAST_GOOD:
+            log.error("%s; keeping the last good pool (%d addresses)", error, len(_LAST_GOOD[path]))
+            return _LAST_GOOD[path]
+        raise error from exc
 
 
 _EGRESS: ContextVar[str] = ContextVar("crawler_egress", default=IPV4)
@@ -257,14 +315,14 @@ def main(argv: list[str] | None = None) -> int:
         description="The crawl's IPv6 pool: list it, or check every address works.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("list", help=f"the pool as {POOL_ENV} gives it")
+    sub.add_parser("list", help="the pool as the file MAKHZAN_CRAWL_POOL names gives it")
     check = sub.add_parser("check", help="one request from each address to an IPv6 echo service")
     check.add_argument("--url", default=ECHO_URL, help=f"the echo service (default {ECHO_URL})")
     args = parser.parse_args(argv)
 
     pool = configured_pool()
     if not pool:
-        print(f"no pool: {POOL_ENV} is empty in this environment")
+        print(f"no pool: {POOL_ENV} names no file in this environment")
         return 1
     if args.command == "list":
         for address in pool:
@@ -284,7 +342,9 @@ def main(argv: list[str] | None = None) -> int:
     failed = [r for r in results if not r["ok"]]
     print(f"\n{len(results) - len(failed)} of {len(results)} addresses work")
     if failed:
-        print(f"Remove the failing ones from {POOL_ENV} (or report them to the host by address).")
+        print(
+            "Remove the failing ones from crawl-pool.yaml (or report them to the host by address)."
+        )
     return 1 if failed else 0
 
 

@@ -89,15 +89,77 @@ def _transport(wire: _Wire, egress: str = IPV6, pool=POOL, picks=None) -> Egress
 # --------------------------------------------------------------------------- #
 
 
-def test_the_pool_is_validated_deduplicated_and_sorted():
-    assert egress_mod.parse_pool(f" {G2}, {G1}\n{G1} ") == (G1, G2)
-    assert egress_mod.parse_pool("") == ()
+def _pool_file(tmp_path, monkeypatch, body: str):
+    path = tmp_path / "crawl-pool.yaml"
+    path.write_text(body)
+    monkeypatch.setenv(egress_mod.POOL_ENV, str(path))
+    egress_mod._POOL_CACHE.clear()
+    egress_mod._LAST_GOOD.clear()
+    return path
+
+
+def test_the_pool_is_read_from_its_file_validated_deduplicated_and_sorted(tmp_path, monkeypatch):
+    _pool_file(tmp_path, monkeypatch, f"# the crawl pool\nipv6:\n  - {G2}\n  - {G1}\n  - {G1}\n")
+    assert egress_mod.configured_pool() == (G1, G2)
+
+
+def test_no_file_named_is_no_pool_and_a_named_file_missing_is_an_error(tmp_path, monkeypatch):
+    assert egress_mod.configured_pool() == ()
+    monkeypatch.setenv(egress_mod.POOL_ENV, str(tmp_path / "gone.yaml"))
+    with pytest.raises(ValueError, match="no such file"):
+        egress_mod.configured_pool()
 
 
 @pytest.mark.parametrize("bad", ["203.0.113.4", "not-an-address", "fd00::1", "::1", "2001:db8::1"])
-def test_a_pool_entry_that_is_not_a_global_ipv6_address_is_refused(bad):
-    with pytest.raises(ValueError, match=egress_mod.POOL_ENV):
-        egress_mod.parse_pool(f"{G1},{bad}")
+def test_a_pool_entry_that_is_not_a_global_ipv6_address_is_refused(tmp_path, monkeypatch, bad):
+    _pool_file(tmp_path, monkeypatch, f'ipv6:\n  - {G1}\n  - "{bad}"\n')
+    with pytest.raises(ValueError, match="crawl-pool.yaml"):
+        egress_mod.configured_pool()
+
+
+@pytest.mark.parametrize("body", ["ipv6: 2607:f8b0:4005:80a::200e\n", "addresses: []\n", "- x\n"])
+def test_a_pool_file_of_the_wrong_shape_is_refused(tmp_path, monkeypatch, body):
+    _pool_file(tmp_path, monkeypatch, body)
+    with pytest.raises(ValueError):
+        egress_mod.configured_pool()
+
+
+def test_a_pool_file_broken_after_a_good_read_keeps_the_last_good_pool(tmp_path, monkeypatch):
+    """One bad commit, or a read mid-`git pull`, must not make every client raise."""
+    import os
+
+    path = _pool_file(tmp_path, monkeypatch, f"ipv6: [{G1}]\n")
+    assert egress_mod.configured_pool() == (G1,)
+    path.write_text("ipv6: [not-an-address\n")
+    os.utime(path, (1, 2))
+    assert egress_mod.configured_pool() == (G1,)
+    path.unlink()
+    assert egress_mod.configured_pool() == (G1,)
+
+
+async def test_a_bad_pool_file_at_startup_stops_the_worker(tmp_path, monkeypatch):
+    from worker import main as main_mod
+
+    _pool_file(tmp_path, monkeypatch, "ipv6: [nope]\n")
+    loaded = []
+
+    async def load_adapters():
+        loaded.append(True)
+
+    monkeypatch.setattr(main_mod, "load_adapters", load_adapters)
+    with pytest.raises(ValueError, match="crawl-pool.yaml"):
+        await main_mod.startup({})
+    assert loaded == []
+
+
+def test_an_edited_pool_file_is_read_again(tmp_path, monkeypatch):
+    import os
+
+    path = _pool_file(tmp_path, monkeypatch, f"ipv6: [{G1}]\n")
+    assert egress_mod.configured_pool() == (G1,)
+    path.write_text(f"ipv6: [{G1}, {G2}]\n")
+    os.utime(path, (1, 2))  # a different mtime, whatever the clock's resolution
+    assert egress_mod.configured_pool() == (G1, G2)
 
 
 def _source(**config) -> Source:
@@ -123,9 +185,9 @@ def test_without_a_pool_an_ipv4_client_is_built_exactly_as_before(monkeypatch):
     assert type(client._transport) is httpx.AsyncHTTPTransport
 
 
-def test_with_a_pool_an_ipv4_source_binds_ipv4_only(monkeypatch):
+def test_with_a_pool_an_ipv4_source_binds_ipv4_only(tmp_path, monkeypatch):
     """A server that now has IPv6 must not send an IPv4 source's requests over it."""
-    monkeypatch.setenv(egress_mod.POOL_ENV, f"{G1},{G2}")
+    _pool_file(tmp_path, monkeypatch, f"ipv6: [{G1}, {G2}]\n")
     bound: list[str] = []
     monkeypatch.setattr(
         egress_mod, "http_transport", lambda a: bound.append(a) or httpx.MockTransport(None)
@@ -135,8 +197,8 @@ def test_with_a_pool_an_ipv4_source_binds_ipv4_only(monkeypatch):
     assert bound == [IPV4_ANY]
 
 
-def test_an_ipv6_run_takes_the_pool_from_the_environment(monkeypatch):
-    monkeypatch.setenv(egress_mod.POOL_ENV, f"{G1},{G2}")
+def test_an_ipv6_run_takes_the_pool_from_its_file(tmp_path, monkeypatch):
+    _pool_file(tmp_path, monkeypatch, f"ipv6: [{G1}, {G2}]\n")
     bound: list[str] = []
     monkeypatch.setattr(
         egress_mod, "http_transport", lambda a: bound.append(a) or httpx.MockTransport(None)
@@ -253,10 +315,10 @@ def test_an_ipv4_source_without_a_pool_records_no_egress():
     assert _egress_stats(adapter, http_mod.RequestLog()) == {}
 
 
-def test_an_ipv6_source_records_its_mode_pool_and_hosts(monkeypatch):
+def test_an_ipv6_source_records_its_mode_pool_and_hosts(tmp_path, monkeypatch):
     from worker.pipeline import _egress_stats
 
-    monkeypatch.setenv(egress_mod.POOL_ENV, f"{G1},{G2}")
+    _pool_file(tmp_path, monkeypatch, f"ipv6: [{G1}, {G2}]\n")
     adapter = build_adapter(_source(egress="ipv6"))
     log = http_mod.RequestLog()
     log.note_egress("shop.test", address=G1)

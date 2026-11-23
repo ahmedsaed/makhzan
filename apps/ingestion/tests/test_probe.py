@@ -312,13 +312,17 @@ def test_the_sites_list_is_read_as_label_and_url(tmp_path):
 
 
 async def test_ipv6_is_asked_from_one_pool_address_as_the_sources_own_signed_identity(
-    wire, monkeypatch
+    wire, monkeypatch, tmp_path
 ):
     clock = wire["clock"]
     gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
     wire["aaaa"] = ["2606:4700::1"]
     pool = "2607:f8b0:4005:80a::200e"
-    monkeypatch.setenv(egress_mod.POOL_ENV, pool)
+    pool_file = tmp_path / "crawl-pool.yaml"
+    pool_file.write_text(f"ipv6: [{pool}]\n")
+    monkeypatch.setenv(egress_mod.POOL_ENV, str(pool_file))
+    egress_mod._POOL_CACHE.clear()
+    egress_mod._LAST_GOOD.clear()
     target = probe_mod.Target("shop", "https://shop.test/products.json", identity="makhzanbot")
     rows, _ = await probe_mod.probe([target], gate=gate)
 

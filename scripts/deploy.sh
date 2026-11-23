@@ -64,6 +64,25 @@ if [ -z "$report_salt" ]; then
   echo "e.g. REPORT_IP_SALT=\$(openssl rand -base64 32): docs/DEPLOYMENT.md." >&2
   exit 1
 fi
+# Redis is published on the host's loopback for the worker, so it takes a
+# password (docker-compose.prod.yml), and every service's REDIS_URL must carry
+# the same one or the stack comes up unable to queue anything.
+redis_password="$(set -a; . ./.env.prod; echo "${REDIS_PASSWORD:-}")"
+redis_url="$(set -a; . ./.env.prod; echo "${REDIS_URL:-}")"
+if [ -z "$redis_password" ]; then
+  echo "REDIS_PASSWORD is not set in .env.prod. Set it to a random secret," >&2
+  echo "e.g. REDIS_PASSWORD=\$(openssl rand -hex 32), and REDIS_URL to" >&2
+  echo "redis://:<that password>@redis:6379: docs/DEPLOYMENT.md." >&2
+  exit 1
+fi
+case "$redis_url" in
+  *":${redis_password}@"*) ;;
+  *)
+    echo "REDIS_URL in .env.prod does not carry REDIS_PASSWORD. Set it to" >&2
+    echo "redis://:<REDIS_PASSWORD>@redis:6379: docs/DEPLOYMENT.md." >&2
+    exit 1
+    ;;
+esac
 if [ "${SKIP_PULL:-0}" != "1" ]; then
   echo "==> Updating the configuration in ${config_dir}"
   git -C "$config_dir" pull --ff-only 9>&-

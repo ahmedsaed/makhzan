@@ -498,8 +498,8 @@ browser sources that remain; do not bump it to get past a WAF.
 
 **Where requests leave from is per source too: `egress = "ipv4"` (default) or
 `"ipv6"`** (`worker/egress.py`, `docs/crawler-identity.md`). An IPv6 source sends
-each request from a random address of `CRAWL_IPV6_ADDRESSES`, a fixed pool that
-carries nothing but the crawl and is published with its reverse DNS. The pace
+each request from a random address of the pool (`crawl-pool.yaml` in the private
+configuration, named by `MAKHZAN_CRAWL_POOL`), a fixed set that carries nothing but the crawl and is published with its reverse DNS. The pace
 gate stays per host, never per address. A failed IPv6 *connection* falls back to
 IPv4 and is counted (`stats.egress`, EGRESS in `make status`); a 403 or 429
 never changes the address, and the set is never changed to get past a block

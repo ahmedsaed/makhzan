@@ -21,7 +21,7 @@ home page):
     signed      makhzanbot with a Web Bot Auth signature (only with a key)
     ipv6        whether the shop can be crawled over IPv6 (worker/egress.py): its
                 host's IPv6 address (AAAA), then, with a crawl pool configured
-                (CRAWL_IPV6_ADDRESSES), the page asked as the source's own
+                (crawl-pool.yaml), the page asked as the source's own
                 identity from one pool address, with no fallback to IPv4
 
 Each other cell is the status code and the HTTP version the server answered with.

@@ -11,7 +11,9 @@
 # is published (WEB_PORT) for your proxy to front; the API is internal and the
 # web service proxies /api to it (Next.js rewrites). The AI broker is bound
 # to BROKER_BIND, the server's Tailscale address, and reached only over
-# Tailscale (docs/ai/broker-deploy.md). db / search / redis are internal-only. Data lives in named volumes (docker volume ls).
+# Tailscale (docs/ai/broker-deploy.md). db / search / redis are published on
+# the host's loopback only (MAKHZAN_LOOPBACK), for the worker (host networking,
+# below); nothing outside the server reaches them. Redis takes a password. Data lives in named volumes (docker volume ls).
 #
 # The services read ${MAKHZAN_ENV_FILE:-.env.prod}: backup-db.sh and restore-db.sh set
 # MAKHZAN_ENV_FILE so a throwaway stack (its own COMPOSE_PROJECT_NAME and env file) can
@@ -48,6 +50,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - db_data:/var/lib/postgresql/data
+    # Loopback only, for the worker on the host's network (see ingestion).
+    # MAKHZAN_LOOPBACK is this stack's own loopback address: production's is
+    # 127.0.0.1, and a throwaway stack beside it must use another (127.0.0.2),
+    # or its worker would reach production's services (scripts/lib/ops.sh).
+    ports:
+      - "${MAKHZAN_LOOPBACK:-127.0.0.1}:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -62,13 +70,28 @@ services:
       MEILI_ENV: production
     volumes:
       - meili_data:/meili_data
+    ports:
+      - "${MAKHZAN_LOOPBACK:-127.0.0.1}:7700:7700"
 
   redis:
     image: redis:7-alpine
     <<: *restart
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    # A password since it is published on the host's loopback: arq unpickles
+    # what it reads from Redis, so anything able to write to it could run code
+    # in the worker. REDIS_URL in the env file carries the same password.
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in the env file (docs/DEPLOYMENT.md)}
     volumes:
       - redis_data:/data
+    ports:
+      - "${MAKHZAN_LOOPBACK:-127.0.0.1}:6379:6379"
 
   # One-shot: apply Alembic migrations and seed the sources table from
   # sources.toml, then exit. api/ingestion wait for success. The sync is part of
@@ -173,6 +196,23 @@ services:
       target: prod
     <<: [*restart, *private-config]
     env_file: ${MAKHZAN_ENV_FILE:-.env.prod}
+    # The crawl's IPv6 pool (worker/egress.py, docs/crawler-identity.md): the
+    # addresses sit on the host's interface, so the worker shares the host's
+    # network to bind them. The names in .env.prod's URLs (db, redis, search)
+    # resolve to this stack's loopback address, where those services publish
+    # their usual ports, so the URLs are unchanged. It listens on nothing.
+    network_mode: host
+    extra_hosts:
+      - "db:${MAKHZAN_LOOPBACK:-127.0.0.1}"
+      - "redis:${MAKHZAN_LOOPBACK:-127.0.0.1}"
+      - "search:${MAKHZAN_LOOPBACK:-127.0.0.1}"
+    environment:
+      MAKHZAN_SOURCES: /workspace/private/sources.toml
+      MAKHZAN_CROSSWALKS: /workspace/private/crosswalks
+      PYTHONPATH: /workspace/private
+      # Only the worker sends from the pool: the file it reads, which the
+      # private configuration holds. Unset everywhere else.
+      MAKHZAN_CRAWL_POOL: /workspace/private/crawl-pool.yaml
     depends_on:
       db:
         condition: service_healthy
