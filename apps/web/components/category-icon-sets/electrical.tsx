@@ -448,6 +448,29 @@ export const ELECTRICAL_ICONS: Record<string, Glyph> = {
       </>
     ),
   },
+  "electrical:cables-wires": {
+    label: "Cables & Wires",
+    kind: "category",
+    body: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <circle cx="12" cy="8.75" r="2.25" />
+        <circle cx="9.25" cy="13.75" r="2.25" />
+        <circle cx="14.75" cy="13.75" r="2.25" />
+      </>
+    ),
+  },
+  "electrical:wall-plates": {
+    label: "Cover Plates & Frames",
+    kind: "category",
+    body: (
+      <>
+        <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" />
+        <rect x="8" y="8" width="8" height="8" rx="1" />
+        <path d="M12 5.75h0M12 18.25h0" />
+      </>
+    ),
+  },
   // Lighting
   "electrical:lamps": {
     label: "Lamps & Bulbs",
@@ -478,6 +501,17 @@ export const ELECTRICAL_ICONS: Record<string, Glyph> = {
       <>
         <rect x="2.5" y="6.5" width="19" height="11" rx="1.5" />
         <path d="M6.5 12h11M14 8.5l3.5 3.5-3.5 3.5" />
+      </>
+    ),
+  },
+  "electrical:light-fixtures": {
+    label: "Light Fixtures",
+    kind: "category",
+    body: (
+      <>
+        <path d="M12 2v5.5" />
+        <path d="M5 16 8.5 7.5h7L19 16z" />
+        <path d="M10 18.5a2 2 0 0 0 4 0" />
       </>
     ),
   },

@@ -8,7 +8,8 @@ inside a taxonomy built around resistors and dev boards would serve neither.
 
 The catalogue is dominated by switchgear (breakers, contactors, overload relays)
 and control devices (push buttons, pilot lamps, PLCs), which is what an
-industrial panel is made of.
+industrial panel is made of. Building installation (wire, wall plates, light
+fixtures) came with a second electrical shop, which sells to contractors too.
 
 No identifier extraction. Manufacturers do use catalogue references here
 (Schneider LC1D09, Siemens 3RT), and they are genuine cross-supplier identifiers,
@@ -74,11 +75,21 @@ TAXONOMY: list[tuple[str, str, str, str | None]] = [
     ("terminal-blocks", "Terminal Blocks", "قواعد التوصيل", "wiring-distribution"),
     ("junctions", "Junctions & Connectors", "وصلات كهربائية", "wiring-distribution"),
     ("enclosures", "Panels & Enclosures", "اللوحات والصناديق", "wiring-distribution"),
+    # Conduit is cable management: it routes and protects cable, as trunking does.
     ("cable-management", "Cable Management", "تنظيم الكابلات", "wiring-distribution"),
+    # Building wire and installation cable (power, data, telephone, bus), sold by
+    # the metre or the coil. Device leads (USB, HDMI) are not installation cable.
+    ("cables-wires", "Cables & Wires", "الكابلات والأسلاك", "wiring-distribution"),
+    # The cover frames and plates a wall switch or socket is finished with: a
+    # separate purchase from the device behind it, so neither leaf can hold them.
+    ("wall-plates", "Cover Plates & Frames", "إطارات وأغطية المفاتيح", "wiring-distribution"),
     # Lighting
     ("lamps", "Lamps & Bulbs", "لمبات", "lighting"),
     ("floodlights", "Floodlights", "كشافات", "lighting"),
     ("emergency-lighting", "Emergency Lighting", "إضاءة الطوارئ", "lighting"),
+    # Luminaires: ceiling, pendant, wall, outdoor, track and strip lighting, and
+    # their shades and fittings. `lamps` is the bulb that goes in one.
+    ("light-fixtures", "Light Fixtures", "وحدات الإضاءة", "lighting"),
     # Power supply & quality
     ("ups", "UPS", "مصادر طاقة غير منقطعة", "power-quality"),
     ("power-supplies", "Power Supplies", "مصادر التغذية", "power-quality"),
