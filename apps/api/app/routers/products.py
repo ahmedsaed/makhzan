@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from app.deps import get_session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from makhzan_schemas.contracts import OfferRead, ProductRead, ProductSummary
-from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.grouping import representative, representative_key
 from makhzan_schemas.matching import matched_by
 from makhzan_schemas.models import Listing, Product, ProductRedirect
@@ -53,7 +52,9 @@ async def get_product(
                 select(Listing)
                 # An archived listing keeps its product, which is how a withdrawn
                 # product still knows its last price; it is not an offer any more.
-                .where(Listing.product_id == product_id, Listing.status == ListingStatus.ACTIVE)
+                # Nor is a hidden source's (`listed = false`), which keeps the
+                # product it offered before it was hidden in the same way.
+                .where(Listing.product_id == product_id, Listing.is_public())
                 .options(selectinload(Listing.supplier))
             )
         )

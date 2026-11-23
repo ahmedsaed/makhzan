@@ -14,7 +14,7 @@ from decimal import Decimal
 from itertools import count
 
 from makhzan_schemas.enums import ListingStatus, SourceType, StockSignal
-from makhzan_schemas.models import Category, Listing, Product, Supplier
+from makhzan_schemas.models import Category, Listing, Product, Source, Supplier
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _seq = count(1)
@@ -183,3 +183,25 @@ async def make_product(
     session.add(product)
     await session.commit()
     return product
+
+
+async def make_source(
+    session: AsyncSession,
+    *,
+    supplier: Supplier,
+    source_id: str | None = None,
+    listed: bool = True,
+) -> Source:
+    """A `sources` row naming `supplier`. Its id defaults to the supplier's slug,
+    which is the `source` `make_listing` stamps on a listing."""
+    source = Source(
+        source_id=source_id or supplier.slug,
+        adapter="woocommerce",
+        base_url=f"https://{supplier.slug}.test",
+        listed=listed,
+        supplier={"slug": supplier.slug, "name": supplier.name},
+        config={},
+    )
+    session.add(source)
+    await session.commit()
+    return source

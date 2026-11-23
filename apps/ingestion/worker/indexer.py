@@ -14,7 +14,6 @@ import os
 from collections import defaultdict
 
 import meilisearch
-from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Category, Listing, Product, Supplier
 from makhzan_schemas.search import (
     FILTERABLE_ATTRIBUTES,
@@ -173,7 +172,9 @@ async def reindex_all(session: AsyncSession, client: meilisearch.Client) -> int:
                 Listing.attributes["adapter_part_number"].astext,
             )
             .join(Supplier, Supplier.id == Listing.supplier_id)
-            .where(Listing.status == ListingStatus.ACTIVE, Listing.product_id.is_not(None))
+            # Public listings only: a hidden source's listing (`listed = false`)
+            # may still point at a product it offered before it was hidden.
+            .where(Listing.is_public(), Listing.product_id.is_not(None))
         )
     ).all():
         shops[product_id].add(slug)

@@ -168,6 +168,7 @@ async def _sweeps(session) -> tuple[dict, list[dict]]:
                 "shop": (row.supplier or {}).get("slug") or row.source_id,
                 "state": "paused" if status.is_paused(row.enabled, row.paused_at) else "never",
                 "disabled": not row.enabled,
+                "hidden": not row.listed,
                 "paused": (
                     {"at": row.paused_at, "by": row.paused_by, "note": row.pause_note}
                     if row.paused_at

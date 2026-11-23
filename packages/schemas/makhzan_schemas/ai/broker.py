@@ -43,6 +43,7 @@ from makhzan_schemas.models import (
     AiSession,
     AiWorker,
     GroupingOverride,
+    Listing,
     WorkerState,
 )
 
@@ -438,6 +439,16 @@ async def _prepare(
         or b.listing.status != ListingStatus.ACTIVE
     ):
         job.status, job.last_error = CANCELLED, "a listing is no longer active"
+        return None
+    hidden = await session.scalar(
+        select(func.count())
+        .select_from(Listing)
+        .where(Listing.id.in_((job.listing_a, job.listing_b)), ~Listing.from_listed_source())
+    )
+    if hidden:
+        # Queued before its source was set `listed = false`: grouped into
+        # nothing now, so not worth a model's time.
+        job.status, job.last_error = CANCELLED, "a listing's source is hidden"
         return None
     if await _overridden(session, job.listing_a, job.listing_b):
         job.status, job.last_error = CANCELLED, "a person has ruled on the pair"

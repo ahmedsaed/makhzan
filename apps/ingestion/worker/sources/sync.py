@@ -5,7 +5,7 @@
 Every source in the file is upserted by `id`; a row the file does not name is
 left alone and reported, since the table is the runtime source of truth and may
 hold sources added some other way. The file wins for every source it does name,
-`enabled` included.
+`enabled` and `listed` included.
 
 Each source's `supplier` table also owns the shop's listed contact details (phone,
 WhatsApp, email, address, map link, hours, branches, and where and when a person
@@ -37,7 +37,7 @@ from worker.sources.base import SupplierInfo
 from worker.sources.registry import build_adapter
 
 #: Keys that are columns. Everything else in an entry is adapter config.
-_COLUMNS = {"id", "adapter", "base_url", "enabled", "supplier"}
+_COLUMNS = {"id", "adapter", "base_url", "enabled", "listed", "supplier"}
 
 
 def read_sources(path: Path) -> list[Source]:
@@ -55,11 +55,19 @@ def read_sources(path: Path) -> list[Source]:
             raise ValueError(f"{path}: duplicate source id {entry['id']!r}")
         seen.add(entry["id"])
 
+        for flag in ("enabled", "listed"):
+            if not isinstance(entry.get(flag, True), bool):
+                raise ValueError(
+                    f"{path}: source {entry['id']!r}: {flag} must be true or false, "
+                    f"not {entry[flag]!r}"
+                )
         row = Source(
             source_id=entry["id"],
             adapter=entry["adapter"],
             base_url=entry.get("base_url"),
             enabled=entry.get("enabled", True),
+            # False: crawled and stored, shown nowhere public (Source.listed).
+            listed=entry.get("listed", True),
             supplier=_stored_form(entry["supplier"]),
             config={k: v for k, v in entry.items() if k not in _COLUMNS},
         )
@@ -139,13 +147,17 @@ async def sync_sources(session: AsyncSession, rows: list[Source]) -> dict[str, l
         "shop_details": [],
     }
     for row in rows:
+        # A row built in code may leave it unset; the column's default applies
+        # only on insert, and an update must not write NULL over it.
+        if row.listed is None:
+            row.listed = True
         current = existing.pop(row.source_id, None)
         if current is None:
             session.add(row)
             report["created"].append(row.source_id)
             continue
         changed = False
-        for field in ("adapter", "base_url", "enabled", "supplier", "config"):
+        for field in ("adapter", "base_url", "enabled", "listed", "supplier", "config"):
             if getattr(current, field) != getattr(row, field):
                 setattr(current, field, getattr(row, field))
                 changed = True

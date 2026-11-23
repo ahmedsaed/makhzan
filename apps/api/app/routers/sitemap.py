@@ -19,7 +19,6 @@ from datetime import datetime
 
 from app.deps import get_session
 from fastapi import APIRouter, Depends, Query
-from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import Listing, Product
 from pydantic import BaseModel
 from sqlalchemy import and_, exists, func, select
@@ -62,7 +61,7 @@ class SitemapPage(BaseModel):
 # product the next regroup will mark withdrawn.
 _has_active_offer = and_(
     Product.is_listed(),
-    exists().where(Listing.product_id == Product.id, Listing.status == ListingStatus.ACTIVE),
+    exists().where(Listing.product_id == Product.id, Listing.is_public()),
 )
 
 

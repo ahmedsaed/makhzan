@@ -108,6 +108,27 @@ as constructor arguments, so an unknown key is an error rather than a setting
 silently ignored. The table is seeded from `sources.toml` by `make sources`,
 and in production by the `migrate` service on every deploy.
 
+**`listed = false` crawls a shop without showing it** (`Source.listed`, a
+column like `enabled`, rewritten by every sync). The source is swept as any
+other: runs, cursors, archiving, rechecks, the details stage and
+`categories_seen` all run, so its data can be studied before it goes public.
+Nothing of it reaches the public: the regroup reads only `Listing.is_public()`
+(active *and* from a listed source), so its listings make, join and change no
+product and are never indexed; the AI producers skip them and the broker
+cancels a job naming one; every API read of offers, a listing, a shop or a
+count filters on `Listing.is_public()` / `listed_source()` /
+`Supplier.is_shown()` (a shop is hidden when every source naming it is
+unlisted). Those API filters are needed, not belt and braces: a hidden
+listing keeps the `product_id` it had, exactly as an archived one does. So
+**listed → hidden** at the next regroup is "as if archived": its listings
+leave their products, a product nobody else offers is emptied
+(`delisted_at`, an EMPTIED event, "no longer listed", never deleted), a
+shared one just loses the offer; **hidden → listed** groups them normally and,
+through that kept pointer, revives the same product ids. Both take effect at
+the next rebuild and reindex, not at the sync. /how-we-crawl still names a
+hidden shop: we do crawl it. `make status` (SWEEP PROGRESS, CATALOG) and the
+dashboard's Crawl and Catalog pages mark it hidden.
+
 **A shop's contact details have two writers, merged per field.** What a person
 read where the shop's details are published (its site, its Facebook, its Google
 Maps listing, which the shop may not have claimed) goes in its

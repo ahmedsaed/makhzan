@@ -148,7 +148,9 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
     `state` is one of: `paused` (disabled in sources.toml, or paused by a
     person: `disabled` and `paused` say which), `running`, `between` (an open
     cycle, nothing running, a run finished within `STALLED_AFTER`), `stalled`,
-    or `idle` (the last cycle completed; cursors reset).
+    or `idle` (the last cycle completed; cursors reset). `hidden` is the
+    source's `listed = false` (sources.toml): crawled as normal, nothing shown
+    on the site, which is why its products are nowhere to be found there.
     """
     declared = await collect_declared_partitions(session)
     sources = {
@@ -156,7 +158,7 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
         for row in (
             await session.execute(
                 select(Source.source_id, Source.enabled, Source.paused_at, Source.paused_by)
-                .add_columns(Source.pause_note, Source.supplier)
+                .add_columns(Source.pause_note, Source.supplier, Source.listed)
                 .order_by(Source.source_id)
             )
         ).all()
@@ -215,6 +217,7 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
                 "state": state,
                 "disabled": disabled,
                 "paused": pause,
+                "hidden": row is not None and not row.listed,
                 "cycle_started_at": min(starts) if starts else None,
                 "active_since": active.get(source),
                 "last_finished": last,
@@ -232,6 +235,10 @@ async def collect_sweep_progress(session, source_filter: str | None) -> dict:
 def is_paused(enabled: bool, paused_at) -> bool:
     """The one rule for "the daily run skips it": disabled in sources.toml, or paused by a person."""
     return not enabled or paused_at is not None
+
+
+#: What a hidden source (`listed = false`) means, as status and the dashboard say it.
+HIDDEN_TEXT = "hidden: listed = false in sources.toml; crawled, but nothing of it is on the site"
 
 
 def pause_text(entry: dict) -> str:
@@ -296,6 +303,8 @@ async def sweep_progress(session, source_filter: str | None) -> None:
 
         print(f"  {source:22s} {_bar(done, total)} {done:>4}/{total} partitions  {state}")
         print(f"  {DIM}{'':22s} {cycle}{RESET}")
+        if entry.get("hidden"):
+            print(f"  {YELLOW}{'':22s} {HIDDEN_TEXT}{RESET}")
         for partition, page in entry["pending"][:5]:
             print(f"  {DIM}{'':22s} resumes at {partition} page {page}{RESET}")
 
@@ -1341,7 +1350,10 @@ async def content_coverage(session) -> dict[str, dict[str, int]]:
 
 
 async def collect_catalog(session, source_filter: str | None) -> list[dict]:
-    """Listings per supplier and department, with the things that signal a broken crawl."""
+    """Listings per supplier and department, with the things that signal a broken crawl.
+
+    `hidden` counts those from a source with `listed = false`: stored, never shown.
+    """
     # "Contact for price" is the shop's choice, not a broken crawl, so it is
     # counted apart. Read as the API reads it: JSON true and no price.
     on_request = Listing.attributes.contains({"price_on_request": True})
@@ -1356,6 +1368,7 @@ async def collect_catalog(session, source_filter: str | None) -> list[dict]:
                 func.count(Listing.id).filter(Listing.price.is_(None), ~on_request),
                 func.count(Listing.id).filter(Listing.price.is_(None), on_request),
                 func.max(Listing.last_verified_at),
+                func.count(Listing.id).filter(~Listing.from_listed_source()),
             )
             .join(Listing, Listing.supplier_id == Supplier.id)
             .group_by(Supplier.slug, Listing.domain)
@@ -1364,7 +1377,7 @@ async def collect_catalog(session, source_filter: str | None) -> list[dict]:
     ).all()
     keys = ("shop", "domain", "total", "archived", "uncategorized", "unpriced", "on_request")
     return [
-        {**dict(zip(keys, row[:7], strict=True)), "verified": row[7]}
+        {**dict(zip(keys, row[:7], strict=True)), "verified": row[7], "hidden": row[8]}
         for row in rows
         if not source_filter or source_filter in row[0]
     ]
@@ -1393,6 +1406,7 @@ async def catalog(session, source_filter: str | None) -> None:
         print(
             f"  {r['shop']:22s} {r['domain']:12s} {r['total']:>7} {r['archived']:>9} {uncat}"
             f" {noprice} {r['on_request']:>7}  {_age(r['verified'])}"
+            + (f"  {YELLOW}{r['hidden']} hidden (listed = false){RESET}" if r["hidden"] else "")
         )
     await price_history(session)
 
