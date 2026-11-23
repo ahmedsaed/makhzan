@@ -40,6 +40,8 @@ from makhzan_schemas.models import (
 )
 from sqlalchemy import and_, func, or_, select
 
+from worker.egress import NO_POOL
+
 DIM, BOLD, RED, YELLOW, GREEN, RESET = (
     "\033[2m",
     "\033[1m",
@@ -741,6 +743,154 @@ async def crawler_identity(session, source_filter: str | None) -> None:
         print(line)
 
 
+#: IPv6 fallbacks over this share of a source's IPv6 attempts in a week are flagged.
+EGRESS_FALLBACK_WARN = 0.10
+
+
+async def collect_egress(session, source_filter: str | None, days: int = 30) -> dict:
+    """Where each source's requests left from (worker/egress.py), over `days` and the last week.
+
+    Read from the runs' `stats.egress`, never from this environment: the admin
+    service does not hold the pool. Per source: the configured egress, the
+    pool size its last run saw, requests over IPv6 and IPv4, and IPv6
+    connections that fell back to IPv4 (by why) over the window and the last 7
+    days, and the most any one pool address sent the shop in the window —
+    the figure to watch when deciding whether the pool needs to grow. A week
+    of fallbacks over `EGRESS_FALLBACK_WARN` of the IPv6 attempts is flagged:
+    switching the shop back to "ipv4" is a person's call.
+    """
+    now = datetime.now(timezone.utc)
+    since, week = now - timedelta(days=days), now - timedelta(days=7)
+    query = select(Source.source_id, Source.config, Source.enabled).order_by(Source.source_id)
+    if source_filter:
+        query = query.where(Source.source_id == source_filter)
+    sources = (await session.execute(query)).all()
+    runs = (
+        select(IngestionRun.source, IngestionRun.started_at, IngestionRun.stats["egress"])
+        .where(IngestionRun.stats.has_key("egress"), IngestionRun.started_at >= since)
+        .order_by(IngestionRun.started_at.desc())
+    )
+    if source_filter:
+        runs = runs.where(IngestionRun.source == source_filter)
+    seen: dict[str, list] = {}
+    for source, started_at, egress in (await session.execute(runs)).all():
+        seen.setdefault(source, []).append((started_at, egress or {}))
+
+    rows = []
+    for source_id, config, enabled in sources:
+        configured = (config or {}).get("egress", "ipv4")
+        window = {"ipv6": 0, "ipv4": 0, "fallback": 0}
+        weekly = {"ipv6": 0, "fallback": 0}
+        reasons: dict[str, int] = {}
+        per_address: dict[str, int] = {}
+        failures: dict[str, int] = {}
+        no_pool = 0
+        pool = None
+        for started_at, egress in seen.get(source_id, []):
+            if pool is None:
+                pool = egress.get("pool")
+            for entry in (egress.get("hosts") or {}).values():
+                for key in window:
+                    window[key] += entry.get(key, 0)
+                # No pool on the worker is configuration, not the shop's IPv6
+                # failing: kept out of the attempts the flag is measured on.
+                unpooled = (entry.get("fallback_reasons") or {}).get(NO_POOL, 0)
+                no_pool += unpooled
+                if started_at >= week:
+                    weekly["ipv6"] += entry.get("ipv6", 0)
+                    weekly["fallback"] += entry.get("fallback", 0) - unpooled
+                for why, count in (entry.get("fallback_reasons") or {}).items():
+                    reasons[why] = reasons.get(why, 0) + count
+                for address, count in (entry.get("addresses") or {}).items():
+                    per_address[address] = per_address.get(address, 0) + count
+                for address, count in (entry.get("address_failures") or {}).items():
+                    failures[address] = failures.get(address, 0) + count
+        attempts = weekly["ipv6"] + weekly["fallback"]
+        share = weekly["fallback"] / attempts if attempts else 0.0
+        rows.append(
+            {
+                "source": source_id,
+                "configured": configured,
+                "enabled": enabled,
+                "pool": pool,
+                "runs": len(seen.get(source_id, [])),
+                "window": window,
+                "week_fallback": weekly["fallback"],
+                "week_attempts": attempts,
+                "week_fallback_share": share,
+                "reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
+                "addresses_used": len(per_address),
+                "max_per_address": max(per_address.values(), default=0),
+                # Pool addresses whose connections failed, most first: one
+                # address failing for every shop is a dead address.
+                "address_failures": dict(sorted(failures.items(), key=lambda kv: -kv[1])),
+                "flagged": configured == "ipv6" and attempts > 0 and share > EGRESS_FALLBACK_WARN,
+                "no_pool": no_pool,
+            }
+        )
+    # Across shops: an address failing for several shops is the address, not them.
+    by_address: dict[str, dict[str, int]] = {}
+    for row in rows:
+        for address, count in row["address_failures"].items():
+            by_address.setdefault(address, {})[row["source"]] = count
+    return {
+        "days": days,
+        "warn_share": EGRESS_FALLBACK_WARN,
+        "sources": rows,
+        "address_failures": dict(
+            sorted(by_address.items(), key=lambda kv: (-len(kv[1]), -sum(kv[1].values())))
+        ),
+    }
+
+
+async def egress(session, source_filter: str | None, days: int = 30) -> None:
+    data = await collect_egress(session, source_filter, days)
+    rows = [r for r in data["sources"] if r["configured"] == "ipv6" or r["runs"]]
+    if not rows:
+        return
+    _header(f"EGRESS (last {data['days']} days)")
+    for address, shops in data["address_failures"].items():
+        if len(shops) > 1:
+            print(
+                f"  {RED}{address} failed for {len(shops)} shops "
+                f"({sum(shops.values())} connections): check it with "
+                f"python -m worker.egress check{RESET}"
+            )
+    for row in rows:
+        w = row["window"]
+        line = f"  {row['source']:22s} {row['configured']:5s}"
+        if not row["runs"]:
+            print(f"{line} {DIM}no run has recorded it yet{RESET}")
+            continue
+        line += f" ipv6 {w['ipv6']}, ipv4 {w['ipv4']}, fell back {w['fallback']}"
+        if row["addresses_used"]:
+            line += (
+                f"; {row['addresses_used']} of {row['pool'] or '?'} addresses, "
+                f"at most {row['max_per_address']} from one"
+            )
+        if row["week_attempts"]:
+            colour = RED if row["flagged"] else (YELLOW if row["week_fallback"] else GREEN)
+            line += (
+                f"  {colour}week: {row['week_fallback']} of {row['week_attempts']} "
+                f"IPv6 attempts fell back ({row['week_fallback_share']:.0%}){RESET}"
+            )
+        if row["reasons"]:
+            line += (
+                f"  {DIM}(" + ", ".join(f"{k} {v}" for k, v in row["reasons"].items()) + f"){RESET}"
+            )
+        if row["flagged"]:
+            line += f'  {RED}consider egress = "ipv4"{RESET}'
+        if row["address_failures"]:
+            worst = list(row["address_failures"].items())[:3]
+            line += f"  {YELLOW}failing from: " + ", ".join(f"{a} ({n})" for a, n in worst)
+            line += f"{RESET}"
+        if row["configured"] == "ipv6" and (row["pool"] == 0 or row["no_pool"]):
+            line += f"  {YELLOW}no pool on the worker ({'CRAWL_IPV6_ADDRESSES'}){RESET}"
+        if not row["enabled"]:
+            line += f"  {DIM}(disabled){RESET}"
+        print(line)
+
+
 #: A host served from a stale robots.txt copy older than this is flagged.
 STALE_COPY_WARN_DAYS = 7
 
@@ -1427,6 +1577,7 @@ async def main(argv: list[str] | None = None) -> None:
         await archive_confirmation(session, args.source)
         await crawler_identity(session, args.source)
         await robots_health(session, args.source)
+        await egress(session, args.source)
         await recent_runs(session, args.source, args.runs)
         await rechecks(session)
         await crosswalk_drift(session, args.source)

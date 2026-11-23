@@ -19,8 +19,13 @@ home page):
     browser     the browser identity (what sources send by default)
     makhzanbot  the honest identity, unsigned
     signed      makhzanbot with a Web Bot Auth signature (only with a key)
+    ipv6        whether the shop can be crawled over IPv6 (worker/egress.py): its
+                host's IPv6 address (AAAA), then, with a crawl pool configured
+                (CRAWL_IPV6_ADDRESSES), the page asked as the source's own
+                identity from one pool address, with no fallback to IPv4
 
 Each other cell is the status code and the HTTP version the server answered with.
+The first three columns go out over IPv4, from the server's own address.
 
 **Why Python and not curl.** It used to be a curl script. curl differs from the
 crawler's httpx client in its TLS fingerprint (JA3/JA4), in negotiating HTTP/2
@@ -55,7 +60,7 @@ from pathlib import Path
 
 import httpx
 
-from worker import http
+from worker import egress, http
 from worker.http import HostBackingOff, host_of, make_client, take_turn
 from worker.identity import BROWSER, MAKHZANBOT, Identity, identity_for, using_identity
 from worker.robots import ROBOTS_TOKEN, _agent_token
@@ -63,7 +68,7 @@ from worker.robots import ROBOTS_TOKEN, _agent_token
 #: Seconds between two requests to one host, at least: the crawler's pace.
 MIN_GAP = 15.0
 
-COLUMNS = ("robots", "browser", "makhzanbot", "signed")
+COLUMNS = ("robots", "browser", "makhzanbot", "signed", "ipv6")
 
 
 @dataclass
@@ -175,6 +180,59 @@ async def _get(identity: Identity, url: str, gate: _Gate) -> tuple[Cell, httpx.R
     return Cell(status=response.status_code, http_version=response.http_version), response
 
 
+async def _ipv6_addresses(host: str) -> list[str]:
+    """The host's IPv6 addresses (AAAA), or none: what decides whether IPv6 is worth asking."""
+    import socket
+
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, 443, family=socket.AF_INET6, type=socket.SOCK_STREAM)
+    except OSError:
+        return []
+    return sorted({info[4][0] for info in infos})
+
+
+async def _ipv6(
+    identity: Identity,
+    url: str,
+    gate: _Gate,
+    *,
+    pool: tuple[str, ...] | None = None,
+    choose: Callable[[list[str]], str] | None = None,
+) -> Cell:
+    """Whether `url` answers over IPv6 from the crawl pool, asked as `identity`.
+
+    No AAAA record: nothing is sent, the cell says so. A pool configured: one
+    GET from one pool address at random, through the same gate, and no
+    fallback, so a failure to connect shows as one. No pool: the DNS answer
+    alone, so a shop can be checked before the addresses exist.
+    """
+    import random
+
+    hostname = httpx.URL(url).host
+    if not await _ipv6_addresses(hostname):
+        return Cell(note="no IPv6 address")
+    pool = egress.configured_pool() if pool is None else pool
+    if not pool:
+        return Cell(note="has IPv6; no pool here")
+    address = (choose or random.choice)(list(pool))
+    await gate.wait(url)
+    try:
+        async with make_client(
+            identity=identity, transport=egress.http_transport(address)
+        ) as client:
+            response = await client.get(url)
+    except httpx.HTTPError as exc:
+        if isinstance(exc, httpx.TimeoutException):
+            http.note_trouble(host_of(url))
+        return Cell(error=f"ERR {type(exc).__name__}")
+    host = host_of(url)
+    http.note_response(host, response.status_code)
+    if response.status_code in http._RETRYABLE:
+        http.hold_host(host, response.headers.get("Retry-After"))
+    return Cell(status=response.status_code, http_version=response.http_version)
+
+
 async def _robots(identity: Identity, url: str, gate: _Gate) -> Cell:
     """What robots.txt says of `url`, read through the crawler's own cache (`worker.robots.ROBOTS`).
 
@@ -281,6 +339,13 @@ async def _probe_target(row: Row, identities: dict[str, Identity], gate: _Gate) 
             row.cells[column] = Cell()
         else:
             row.cells[column] = (await _get(identity, target.url, gate))[0]
+    if robots.forbids or refusal(target.url):
+        row.cells["ipv6"] = Cell(error="not asked")
+    else:
+        # As the source's own identity, signed where it is: what a run would send.
+        own = identities.get("signed") if target.identity == MAKHZANBOT else None
+        own = own or identities.get(target.identity) or identities["browser"]
+        row.cells["ipv6"] = await _ipv6(own, target.url, gate)
 
 
 # --------------------------------------------------------------------------- #
@@ -346,7 +411,14 @@ def target_for(adapter, sites: dict[str, str]) -> Target | None:
 # Output
 # --------------------------------------------------------------------------- #
 
-_WIDTHS = {"source": 14, "robots": 26, "browser": 11, "makhzanbot": 11, "signed": 11}
+_WIDTHS = {
+    "source": 14,
+    "robots": 26,
+    "browser": 11,
+    "makhzanbot": 11,
+    "signed": 11,
+    "ipv6": 22,
+}
 
 
 def _line(values: dict[str, str]) -> str:
@@ -366,6 +438,10 @@ browser 200, makhzanbot 403/429
                             signed, and write to the shop. A shop already on
                             makhzanbot is not switched back to get past it.
 403/429 in every column   → not the headers. Compare with a run from another IP.
+ipv6 200                  → the shop answers our pool over IPv6: it can be given
+                            egress = "ipv6" (worker/egress.py).
+ipv6 no IPv6 address      → it stays on IPv4; nothing was sent over IPv6.
+ipv6 ERR, IPv4 columns 200 → IPv6 is broken between us and the shop: leave it on IPv4.
 robots unreadable/ERR     → a run would refuse the host today unless it holds a good
                             copy (make status, ROBOTS.TXT); its pages were not asked.
 robots DISALLOWS          → the shop's robots.txt rules this page out for makhzanbot

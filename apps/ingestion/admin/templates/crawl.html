@@ -3,7 +3,7 @@
 {% macro probe_result(row) -%}
 <div class="probe"><span class="muted">Probe {{ row.created_at|age }}:</span> {{ m.job_chip(row) }}
   {% if row.status == "done" and row.result %}
-    {% for col in ("robots", "browser", "makhzanbot", "signed") %}{% set cell = row.result.cells.get(col) %}{% if cell %}
+    {% for col in ("robots", "browser", "makhzanbot", "signed", "ipv6") %}{% set cell = row.result.cells.get(col) %}{% if cell %}
       <span class="chip plain {{ 'c-ok' if cell.status and cell.status < 300 else ('c-neutral' if not cell.status and not cell.error else 'c-crit') }} mono">{{ col }} {{ cell.text }}</span>
     {% endif %}{% endfor %}
     <span class="muted mono">{{ row.result.url }}</span>
@@ -179,6 +179,26 @@
     </tbody></table></div>
   </section>
 </div>
+
+<section class="panel" id="egress">
+  <header><div><h2>Egress</h2><p>Where each shop's requests left from, last {{ c.egress.days }} days. IPv6 connections that fail fall back to IPv4; a week over {{ (c.egress.warn_share * 100)|round|int }}% is flagged. Switching a shop back is <span class="mono">egress = "ipv4"</span> in sources.toml.</p></div></header>
+  <div class="tw"><table><thead><tr><th>Shop</th><th>Configured</th><th class="num">IPv6</th><th class="num">IPv4</th><th class="num">Fell back</th><th>This week</th><th>Addresses</th></tr></thead><tbody>
+    {% for r in c.egress.sources if r.configured == "ipv6" or r.runs %}
+    <tr><td class="mono">{{ r.source }}</td><td><span class="chip {{ 'c-brand' if r.configured == 'ipv6' else 'c-neutral' }} plain">{{ r.configured }}</span>{% if not r.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
+      {% if r.runs %}
+      <td class="num">{{ r.window.ipv6|num }}</td><td class="num">{{ r.window.ipv4|num }}</td><td class="num">{{ r.window.fallback|num }}</td>
+      <td class="wrap">{% if r.week_attempts %}<span class="chip {{ 'c-crit' if r.flagged else ('c-warn' if r.week_fallback else 'c-ok') }}">{{ r.week_fallback }} of {{ r.week_attempts }} fell back</span>{% else %}<span class="muted">no IPv6 attempts</span>{% endif %}
+        {% if r.reasons %}<div class="muted small">{% for why, n in r.reasons.items() %}{{ why }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+        {% if r.configured == "ipv6" and (r.pool == 0 or r.no_pool) %}<div class="muted small">no pool on the worker</div>{% endif %}
+        {% if r.address_failures %}<div class="muted small">failing from: {% for a, n in r.address_failures.items() %}{% if loop.index <= 3 %}<span class="mono">{{ a }}</span> ({{ n }}){% if not loop.last and loop.index < 3 %}, {% endif %}{% endif %}{% endfor %}</div>{% endif %}</td>
+      <td class="wrap">{% if r.addresses_used %}{{ r.addresses_used }} of {{ r.pool or "?" }}, at most {{ r.max_per_address|num }} from one{% else %}<span class="muted">none</span>{% endif %}</td>
+      {% else %}<td colspan="5" class="muted">no run has recorded it yet</td>{% endif %}</tr>
+    {% else %}<tr><td colspan="7" class="muted">No shop is on IPv6 and no run recorded its egress.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% for address, shops in c.egress.address_failures.items() if shops|length > 1 %}
+  <p class="err small"><span class="mono">{{ address }}</span> failed for {{ shops|length }} shops ({{ shops.values()|sum }} connections): check it with <span class="mono">python -m worker.egress check</span>.</p>
+  {% endfor %}
+</section>
 
 <section class="panel" id="drift">
   <header><div><h2>Crosswalk drift</h2><p>Crosswalks live in the private configuration. Both buttons copy a snippet to paste there; nothing is written from this page.</p></div></header>

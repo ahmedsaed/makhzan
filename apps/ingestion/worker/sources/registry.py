@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from makhzan_schemas.botauth import signature_agent_header
 
+from worker.egress import IPV4, check_egress
 from worker.identity import BROWSER, IDENTITIES, MAKHZANBOT, site_url
 from worker.sources.base import SourceAdapter, SupplierInfo
 
@@ -66,7 +67,8 @@ def build_adapter(source: Source) -> SourceAdapter:
     `categories` table — and, for a source browsed by category, the
     `partition_keys` to sweep, or for a tag-cloud source its `prefer` order.
     `identity` is read by the pipeline, never the adapter, and must name one
-    of `worker.identity.IDENTITIES`.
+    of `worker.identity.IDENTITIES`; so is `egress`, one of
+    `worker.egress.EGRESSES`.
     """
     options = dict(source.config or {})
     crosswalk = options.pop("crosswalk", None)
@@ -82,6 +84,7 @@ def build_adapter(source: Source) -> SourceAdapter:
             raise ValueError(
                 f"identity = 'makhzanbot' needs SITE_URL set to the public https:// origin: {exc}"
             ) from exc
+    egress = check_egress(options.pop("egress", IPV4))
     target_cycle_days = options.pop("target_cycle_days", None)
     if target_cycle_days is not None and (
         isinstance(target_cycle_days, bool)
@@ -120,6 +123,8 @@ def build_adapter(source: Source) -> SourceAdapter:
         adapter.target_cycle_days = float(target_cycle_days)
     # Likewise: the pipeline sends the whole run as this identity.
     adapter.identity = identity
+    # And over this egress (worker/egress.py).
+    adapter.egress = egress
     return adapter
 
 

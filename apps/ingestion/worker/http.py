@@ -27,6 +27,8 @@ from email.utils import parsedate_to_datetime
 import httpx
 from makhzan_schemas.crawl import pacing_stats
 
+from worker.egress import transport_for_run
+
 # Re-exported: the header sets live with the identities that send them.
 from worker.identity import (  # noqa: F401
     BROWSER_HEADERS,
@@ -182,6 +184,56 @@ class RequestLog:
         #: Per host, how many 2xx responses carried a cache validator
         #: (`note_validators`). `stats.validators`, never `stats.pacing`.
         self.validators: dict[str, Counter[str]] = defaultdict(Counter)
+        #: Per host, how requests left (worker/egress.py): over IPv6, over IPv4,
+        #: and IPv6 connections that fell back to IPv4, by why. `stats.egress`.
+        self.egress: dict[str, Counter[str]] = defaultdict(Counter)
+        self.egress_fallbacks: dict[str, Counter[str]] = defaultdict(Counter)
+        #: Per host, requests by the pool address they left from, and the pool
+        #: addresses whose connection failed (and fell back): a dead address
+        #: shows up here by name.
+        self.egress_addresses: dict[str, Counter[str]] = defaultdict(Counter)
+        self.egress_address_failures: dict[str, Counter[str]] = defaultdict(Counter)
+
+    def note_egress(
+        self,
+        host: str,
+        *,
+        address: str | None = None,
+        fallback: str | None = None,
+        ipv4: bool = False,
+    ) -> None:
+        """Count how one request left: from `address` over IPv6, or over IPv4 and why.
+
+        Called by `worker.egress.EgressTransport` per connection attempt that
+        sent the request. Never in `stats.pacing`: /how-we-crawl publishes what
+        was sent, and the address set is published there on its own.
+        """
+        counts = self.egress[host]
+        if fallback is not None:
+            counts["fallback"] += 1
+            self.egress_fallbacks[host][fallback] += 1
+            if address is not None:
+                self.egress_address_failures[host][address] += 1
+        elif ipv4:
+            counts["ipv4"] += 1
+        else:
+            counts["ipv6"] += 1
+            if address is not None:
+                self.egress_addresses[host][address] += 1
+
+    def egress_stats(self) -> dict[str, dict]:
+        """`stats.egress` hosts: per host, requests by family, fallbacks by why, by address."""
+        out: dict[str, dict] = {}
+        for host, counts in sorted(self.egress.items()):
+            entry: dict = {key: counts[key] for key in ("ipv6", "ipv4", "fallback") if counts[key]}
+            if self.egress_fallbacks[host]:
+                entry["fallback_reasons"] = dict(sorted(self.egress_fallbacks[host].items()))
+            if self.egress_addresses[host]:
+                entry["addresses"] = dict(sorted(self.egress_addresses[host].items()))
+            if self.egress_address_failures[host]:
+                entry["address_failures"] = dict(sorted(self.egress_address_failures[host].items()))
+            out[host] = entry
+        return out
 
     def note_validators(self, host: str, response: httpx.Response) -> None:
         """Count whether a 2xx response carried `ETag` / `Last-Modified` (T11, measure only).
@@ -382,6 +434,10 @@ def make_client(*, identity: Identity | None = None, **kwargs) -> httpx.AsyncCli
     `send`, so each is signed afresh.
     """
     identity = identity or current_identity()
+    if "transport" not in kwargs:
+        # The run's egress (worker/egress.py): None, httpx's own, without a pool.
+        if (transport := transport_for_run()) is not None:
+            kwargs["transport"] = transport
     # Redirects are followed by `_request`, one hop at a time: followed here,
     # httpx sent each hop at once, past the pace gate and missing from the
     # request log, so a shop's server could see two requests a few ms apart

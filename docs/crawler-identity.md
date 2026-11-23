@@ -190,7 +190,67 @@ One shop at a time, starting with one that does not sit behind a strict WAF.
    `browser`. That is the "fall back to a disguised crawler" pattern the
    research note rules out.
 
+## Where requests leave from: the IPv6 pool
+
+The server's IPv4 address carries other traffic too (it is a Tailscale exit
+node), so it is never published. The crawl can instead send from a pool of
+IPv6 addresses that carry nothing else (`worker/egress.py`), which can be
+published and given reverse DNS.
+
+- **The pool** is `CRAWL_IPV6_ADDRESSES` in the worker's environment, separated
+  by commas or whitespace. Every entry must be a global IPv6 address, or the
+  worker refuses to start. `./makhzan egress list` prints it. `./makhzan
+  egress check` sends one request from each address to an IPv6 echo service
+  (never a shop), and fails any address that cannot connect or that the
+  service sees as a different address.
+- **Per source**, `egress = "ipv4"` (the default) or `egress = "ipv6"` in its
+  config. Each request of an IPv6 source leaves from a pool address chosen at
+  random: pages, retries, redirect hops, robots.txt and the details stage alike.
+- **The pace stays per host.** `take_turn` keys on the shop's host, never on
+  our address, so a shop gets the same requests at the same gaps from one
+  address or twenty. Never pace per address.
+- **The set is fixed** (owner, 2026-11-23). It grows only with the crawler,
+  never in answer to a block: a shop that refuses us is written to, as in
+  step 5 above, and a blocked shop is never moved to fresh addresses.
+- **Fallback.** A connection that fails over IPv6 (no IPv6 address for the
+  host, refused, a connect timeout) is retried once over IPv4. Only failures
+  before anything was sent fall back, so a shop never gets a request twice.
+  A 403 or a 429 is the shop's answer: it never changes the address.
+- **Recorded** in each run's `stats.egress`: per host, requests over IPv6 and
+  over IPv4, fallbacks by why, and requests and failures per pool address. Not
+  in `stats.pacing`. `./makhzan status` (**EGRESS**) and the dashboard's Crawl
+  page show 30 days per shop, the most any one address sent it, and a week's
+  fallback share, flagged over 10%. An address failing for several shops is
+  named on its own.
+- With a pool configured, an IPv4 source binds 0.0.0.0, so the server's own
+  IPv6 address is never used for crawling. Without one, clients are built
+  exactly as before.
+
+### Moving a shop to IPv6
+
+1. `./makhzan probe --source <id>`. The `ipv6` column checks for an AAAA
+   record and, with a pool configured, asks the page once from one pool address
+   as the shop's own identity, with no fallback. It must say 200.
+2. Add `egress = "ipv6"` to the source in `sources.toml`, commit, deploy.
+3. Watch **EGRESS** after the next run. If the shop's IPv6 keeps failing, set
+   it back to `"ipv4"`: that is a connectivity call, not a block.
+
+Blocked shops stay disabled whatever their egress.
+
 ## Not done yet
+
+- **Sending from the pool in production.** The worker runs on Docker's default
+  bridge network, which has no IPv6, so it cannot bind the host's addresses
+  yet. Waiting on the host's assignment: either host networking for the
+  ingestion service, or an IPv6 network for it, depending on how the
+  addresses are delivered. Until then, leave `CRAWL_IPV6_ADDRESSES` unset and
+  no source on `"ipv6"`. Set the pool in the same deploy that gives the worker
+  IPv6: once the worker has IPv6 and no pool is set, an unbound client may
+  pick the server's own IPv6 address for a shop that has one.
+- **Publishing the pool.** `/how-we-crawl` and a JSON list of the addresses,
+  with their reverse DNS name (`crawler.merope.dev`: an AAAA record per
+  address, DNS-only, and a PTR per address set by the host). Needs a mock-up
+  first; it ships with or before the first shop on IPv6.
 
 - **Cloudflare registration.** Submitted to Cloudflare's verified bots
   directory on 2026-11-10; on 2026-11-12 Cloudflare requested changes, asking

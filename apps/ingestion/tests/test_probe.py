@@ -14,6 +14,7 @@ import pytest
 from makhzan_schemas import botauth
 from test_botauth import RFC_JWK_D, RFC_JWK_X, verify
 
+from worker import egress as egress_mod
 from worker import http as http_mod
 from worker import probe as probe_mod
 from worker import robots as robots_mod
@@ -68,6 +69,20 @@ def wire(monkeypatch):
     )
     monkeypatch.setenv("SITE_URL", "https://makhzan.test")
     monkeypatch.setenv(botauth.KEY_ENV, RFC_JWK_D)
+    # No real DNS, and pool connections to the same handler (`ipv6` column).
+    state["aaaa"] = []
+    state["bound"] = []
+
+    async def aaaa(host):
+        return list(state["aaaa"])
+
+    def bound(address):
+        state["bound"].append(address)
+        return transport
+
+    monkeypatch.setattr(probe_mod, "_ipv6_addresses", aaaa)
+    monkeypatch.setattr(egress_mod, "http_transport", bound)
+    monkeypatch.delenv(egress_mod.POOL_ENV, raising=False)
     state["clock"] = clock
     return state
 
@@ -95,6 +110,7 @@ async def test_each_column_is_the_crawlers_own_request_for_that_identity(wire):
         "browser": "200 h1.1",
         "makhzanbot": "200 h1.1",
         "signed": "200 h1.1",
+        "ipv6": "no IPv6 address",  # no AAAA record: nothing sent over IPv6
     }
     # Fifteen seconds between any two requests to the host.
     times = [t for t, _ in wire["sent"]]
@@ -293,3 +309,34 @@ def test_the_sites_list_is_read_as_label_and_url(tmp_path):
         "shop-a": "https://a.test/x?y=1",
         "shop-b": "https://b.test/",
     }
+
+
+async def test_ipv6_is_asked_from_one_pool_address_as_the_sources_own_signed_identity(
+    wire, monkeypatch
+):
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    wire["aaaa"] = ["2606:4700::1"]
+    pool = "2607:f8b0:4005:80a::200e"
+    monkeypatch.setenv(egress_mod.POOL_ENV, pool)
+    target = probe_mod.Target("shop", "https://shop.test/products.json", identity="makhzanbot")
+    rows, _ = await probe_mod.probe([target], gate=gate)
+
+    assert rows[0].cells["ipv6"].text() == "200 h1.1"
+    assert wire["bound"][-1] == pool  # bound to the pool address, no fallback transport
+    last = wire["sent"][-1][1]
+    assert last.headers["User-Agent"].startswith("makhzanbot/1.0")
+    verify(last, RFC_JWK_X)
+    # Still 15 s after the request before it to the same host.
+    times = [t for t, _ in wire["sent"]]
+    assert times[-1] - times[-2] >= 15.0
+
+
+async def test_ipv6_without_a_pool_reports_the_dns_answer_and_sends_nothing(wire):
+    clock = wire["clock"]
+    gate = probe_mod._Gate(15.0, clock=clock, sleep=clock.sleep)
+    wire["aaaa"] = ["2606:4700::1"]
+    target = probe_mod.Target("shop", "https://shop.test/products.json")
+    rows, _ = await probe_mod.probe([target], gate=gate)
+    assert rows[0].cells["ipv6"].text() == "has IPv6; no pool here"
+    assert len(wire["sent"]) == 4  # robots.txt and the three IPv4 columns only

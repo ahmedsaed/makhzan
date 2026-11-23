@@ -209,6 +209,7 @@ async def crawl_view(session) -> dict:
         "confirm": await status.collect_archive_confirmation(session, None),
         "identity": await status.collect_crawler_identity(session, None),
         "robots": await status.collect_robots_health(session, None),
+        "egress": await status.collect_egress(session, None),
         "stale_copy_days": status.STALE_COPY_WARN_DAYS,
         "drift": await status.collect_crosswalk_drift(session, None),
         "details": details,
@@ -323,6 +324,18 @@ def attention(view: dict) -> list[dict]:
                     )
                 )
 
+    for row in (view.get("egress") or {}).get("sources", []):
+        if row["flagged"]:
+            items.append(
+                _item(
+                    "warn",
+                    f"{row['source']}: IPv6 connections failing",
+                    f"{row['week_fallback']} of {row['week_attempts']} IPv6 attempts this week "
+                    f'fell back to IPv4; consider egress = "ipv4" in sources.toml',
+                    "/crawl#egress",
+                )
+            )
+
     for e in view["details"]["sources"]:
         n = e.get("runs_to_catch_up")
         if n and n >= DETAILS_BEHIND_RUNS:
@@ -415,6 +428,7 @@ async def overview(session, counts: dict) -> dict:
         "runs": await status.collect_recent_runs(session, None, 8),
         "runs_all": await status.collect_recent_runs(session, None, 60),
         "robots": await status.collect_robots_health(session, None),
+        "egress": await status.collect_egress(session, None),
         "stale_copy_days": status.STALE_COPY_WARN_DAYS,
         "drift": await status.collect_crosswalk_drift(session, None),
         "details": details,

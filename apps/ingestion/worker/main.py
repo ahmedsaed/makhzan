@@ -93,6 +93,12 @@ _REBUILD_LOCK = asyncio.Lock()
 
 
 async def startup(ctx: dict) -> None:
+    # A malformed crawl pool must stop the worker here, not fail every request
+    # of every IPv6 source later (worker/egress.py).
+    from worker.egress import POOL_ENV, configured_pool
+
+    if pool := configured_pool():
+        log.info("%s: %d IPv6 addresses in the crawl pool", POOL_ENV, len(pool))
     await load_adapters()
     async with SessionLocal() as session:
         await close_interrupted_runs(session)
