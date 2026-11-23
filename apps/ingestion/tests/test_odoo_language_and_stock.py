@@ -47,7 +47,7 @@ async def _items(adapter, monkeypatch, html=PAGE_EN, partition=""):
 
 @pytest.mark.parametrize(
     "partition,url",
-    [("", f"{BASE}/en/shop"), ("wires-cables-14", f"{BASE}/en/shop/category/wires-cables-14")],
+    [("", f"{BASE}/en/shop"), ("cables-7", f"{BASE}/en/shop/category/cables-7")],
 )
 async def test_listing_pages_are_read_under_the_prefix(monkeypatch, partition, url):
     _, fetched = await _items(_english(), monkeypatch, partition=partition)
