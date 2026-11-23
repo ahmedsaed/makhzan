@@ -3,8 +3,14 @@ import type { Metadata } from "next";
 
 import { Link } from "@/components/link";
 import { Container } from "@/components/section";
-import { fetchCrawlerActivity } from "@/lib/api";
-import { CONTENTS, crawlingContent as content, SECTION, SITE } from "@/lib/content/crawling";
+import { type CrawlerAddresses, fetchCrawlerActivity, fetchCrawlerAddresses } from "@/lib/api";
+import {
+  ADDRESSES_JSON_PATH,
+  CONTENTS,
+  crawlingContent as content,
+  SECTION,
+  SITE,
+} from "@/lib/content/crawling";
 import { pageMetadata } from "@/lib/metadata";
 import { routes } from "@/lib/routes";
 import { siteUrl } from "@/lib/site";
@@ -29,7 +35,10 @@ export const metadata: Metadata = pageMetadata({
 });
 
 export default async function HowWeCrawlPage() {
-  const activity = await fetchCrawlerActivity();
+  const [activity, addresses] = await Promise.all([
+    fetchCrawlerActivity(),
+    fetchCrawlerAddresses(),
+  ]);
   // The copy names our own origin (the User-Agent, the key directory) as SITE;
   // it is filled in here from SITE_URL so one image serves any host.
   const origin = siteUrl().origin;
@@ -46,7 +55,7 @@ export default async function HowWeCrawlPage() {
         <div className="min-w-0">
           <Hero />
           <WhatWeRead />
-          <Recognise withSite={withSite} />
+          <Recognise withSite={withSite} addresses={addresses} />
           <Robots />
           <Pace />
           <Keep />
@@ -244,7 +253,13 @@ function WhatWeRead() {
   );
 }
 
-function Recognise({ withSite }: { withSite: (text: string) => string }) {
+function Recognise({
+  withSite,
+  addresses,
+}: {
+  withSite: (text: string) => string;
+  addresses: CrawlerAddresses | null;
+}) {
   const { verify } = content;
   const { request, notes, tabs } = verify;
   const noteItems = [
@@ -333,12 +348,28 @@ function Recognise({ withSite }: { withSite: (text: string) => string }) {
               </div>
             ),
           },
+          ...(addresses
+            ? [
+                {
+                  id: "addresses",
+                  label: tabs.addresses.label,
+                  content: <AddressesPanel addresses={addresses} withSite={withSite} />,
+                },
+              ]
+            : []),
         ]}
       />
 
       <div className="mt-3.5 grid grid-cols-[22px_minmax(0,1fr)] items-start gap-2.5 rounded-card border border-line bg-surface px-3.5 py-3 text-[14.5px]">
         <Mark kind="info" />
-        <b className="font-semibold text-ink">{verify.noAddresses}</b>
+        {addresses ? (
+          <span className="text-ink-2">
+            <b className="font-semibold text-ink">{verify.withAddresses.title}</b>{" "}
+            {verify.withAddresses.body}
+          </span>
+        ) : (
+          <b className="font-semibold text-ink">{verify.noAddresses}</b>
+        )}
       </div>
     </Section>
   );
@@ -627,3 +658,52 @@ function Contact() {
  * against the runtime SITE_URL rather than whatever the build machine had.
  */
 export const dynamic = "force-dynamic";
+
+/** The published address list (GET /crawler/addresses): the IPv6 pool, how to
+ *  check an address with reverse DNS, and the IPv4 the rest is read from. */
+function AddressesPanel({
+  addresses,
+  withSite,
+}: {
+  addresses: CrawlerAddresses;
+  withSite: (text: string) => string;
+}) {
+  const copy = content.verify.tabs.addresses;
+  const name = addresses.reverse_dns ?? "";
+  const example = addresses.ipv6[0];
+  return (
+    <div className="text-[15px] text-ink-2" data-crawler-addresses>
+      <p>{copy.lead}</p>
+      <ul className="my-2.5 list-none rounded-card border border-line bg-ground px-3 py-2.5 font-mono text-[12.5px] leading-[1.75] text-ink md:columns-2 md:gap-6">
+        {addresses.ipv6.map((address) => (
+          <li key={address} className="break-all">
+            {address}
+          </li>
+        ))}
+      </ul>
+      <p>{copy.jsonLead}</p>
+      <Snippet text={withSite(`${SITE}${ADDRESSES_JSON_PATH}`)} name="address list URL" />
+      {name ? (
+        <>
+          <p className="mt-2.5">
+            <b className="font-semibold text-ink">{copy.checkTitle}</b>, {copy.checkLead}
+          </p>
+          <ol className="mt-1 list-decimal pl-5">
+            {copy.checkSteps.map((step) => (
+              <li key={step}>{step.replace("{name}", name)}</li>
+            ))}
+          </ol>
+          {example ? <Snippet text={`host ${example}`} name="reverse DNS lookup" /> : null}
+        </>
+      ) : null}
+      {addresses.ipv4.map((entry) => (
+        <p key={entry.address} className="mt-2.5">
+          {(entry.shared ? copy.sharedIpv4 : copy.dedicatedIpv4).replace(
+            "{address}",
+            entry.address,
+          )}
+        </p>
+      ))}
+    </div>
+  );
+}

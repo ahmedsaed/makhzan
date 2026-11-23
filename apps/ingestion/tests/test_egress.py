@@ -443,3 +443,89 @@ async def test_the_check_fails_an_address_the_server_does_not_send_from(monkeypa
     )
     (result,) = await egress_mod.check_pool((G1,))
     assert result["ok"] is False and result["seen"] == G2
+
+
+# --------------------------------------------------------------------------- #
+# The pool file's publishing keys, and a dedicated IPv4 address
+# --------------------------------------------------------------------------- #
+
+V4 = "8.8.8.8"
+
+
+def test_publish_states_the_addresses_with_their_reverse_dns(tmp_path, monkeypatch):
+    _pool_file(
+        tmp_path,
+        monkeypatch,
+        f"ipv6: [{G1}, {G2}]\nipv4:\n  - address: {V4}\n    shared: true\n"
+        "reverse_dns: Crawler.Example.dev.\npublish: true\n",
+    )
+    config = egress_mod.configured_pool_config()
+    assert config.published() == {
+        "reverse_dns": "crawler.example.dev",
+        "ipv6": [G1, G2],
+        "ipv4": [{"address": V4, "shared": True}],
+    }
+    # Shared: published, never bound.
+    assert config.ipv4_bind == IPV4_ANY
+
+
+def test_nothing_is_published_until_the_file_says_so(tmp_path, monkeypatch):
+    _pool_file(tmp_path, monkeypatch, f"ipv6: [{G1}]\nreverse_dns: crawler.example.dev\n")
+    assert egress_mod.configured_pool_config().published() is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "ipv6: []\npublish: true\n",  # publish without a reverse DNS name
+        "ipv6: []\npublish: yes please\n",
+        "ipv6: []\nreverse_dns: not a host\n",
+        "ipv6: []\nipv4: [10.0.0.1]\n",
+        "ipv6: []\nipv4:\n  - address: 10.0.0.1\n",  # not global
+        "ipv6: []\nipv4:\n  - address: 8.8.8.8\n    shared: maybe\n",
+    ],
+)
+def test_bad_publishing_keys_are_refused(tmp_path, monkeypatch, body):
+    _pool_file(tmp_path, monkeypatch, body)
+    with pytest.raises(ValueError):
+        egress_mod.configured_pool_config()
+
+
+def test_a_dedicated_ipv4_address_is_bound_for_every_ipv4_connection(tmp_path, monkeypatch):
+    _pool_file(tmp_path, monkeypatch, f"ipv6: []\nipv4:\n  - address: {V4}\n    shared: false\n")
+    bound: list[str] = []
+    monkeypatch.setattr(
+        egress_mod, "http_transport", lambda a: bound.append(a) or httpx.MockTransport(None)
+    )
+    transport = egress_mod.transport_for_run()
+    assert isinstance(transport, EgressTransport)
+    assert bound == [V4]
+
+
+async def test_the_worker_publishes_and_unpublishes_the_list(tmp_path, monkeypatch):
+    from makhzan_schemas import crawl
+
+    from worker import main as main_mod
+
+    path = _pool_file(
+        tmp_path,
+        monkeypatch,
+        f"ipv6: [{G1}]\nreverse_dns: crawler.example.dev\npublish: true\n",
+    )
+    async with SessionLocal() as session:
+        await main_mod.publish_crawl_addresses(session)
+        found = await crawl.crawl_addresses_in(session)
+        assert found is not None and found[0]["ipv6"] == [G1]
+
+        import os
+
+        path.write_text(f"ipv6: [{G1}]\nreverse_dns: crawler.example.dev\npublish: false\n")
+        os.utime(path, (1, 2))
+        await main_mod.publish_crawl_addresses(session)
+        assert await crawl.crawl_addresses_in(session) is None
+
+
+def test_publishing_nothing_is_refused(tmp_path, monkeypatch):
+    _pool_file(tmp_path, monkeypatch, "ipv6: []\nreverse_dns: crawler.example.dev\npublish: true\n")
+    with pytest.raises(ValueError, match="no addresses"):
+        egress_mod.configured_pool_config()

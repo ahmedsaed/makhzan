@@ -241,3 +241,33 @@ async def crawler_activity(session: AsyncSession = Depends(get_session)) -> dict
             "next_run_at": crawl.next_refresh(now, crawl.REFRESH_HOUR) if crawling else None,
         },
     }
+
+
+@router.get("/crawler/addresses")
+async def crawler_addresses(session: AsyncSession = Depends(get_session)) -> dict:
+    """The addresses our crawler sends from, as /how-we-crawl publishes them.
+
+    Stated by the worker from the private pool file, and only once that file
+    says `publish: true` (worker/egress.py): until then, 404, and the page
+    shows no list. Each `ipv6` address, and each `ipv4` one not `shared`,
+    resolves back to `reverse_dns`. A shared one is the server's own address,
+    which also carries other services, so it has no crawler name and the
+    signature is the check for it. `updated_at` is when the worker last stated
+    the list.
+    """
+    from fastapi import HTTPException
+
+    found = await crawl.crawl_addresses_in(session)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no crawler addresses are published")
+    value, updated_at = found
+    return {
+        "reverse_dns": value.get("reverse_dns"),
+        "ipv6": [a for a in value.get("ipv6") or [] if isinstance(a, str)],
+        "ipv4": [
+            {"address": e["address"], "shared": bool(e.get("shared", True))}
+            for e in value.get("ipv4") or []
+            if isinstance(e, dict) and isinstance(e.get("address"), str)
+        ],
+        "updated_at": updated_at.isoformat() if updated_at else None,
+    }

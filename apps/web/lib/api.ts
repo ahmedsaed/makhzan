@@ -581,6 +581,26 @@ export type CrawlerActivity = {
   };
 };
 
+/** The addresses the crawler sends from, once the owner publishes them
+ *  (GET /crawler/addresses). `shared` IPv4: the server's own, with no crawler
+ *  reverse DNS. */
+export type CrawlerAddresses = {
+  reverse_dns: string | null;
+  ipv6: string[];
+  ipv4: { address: string; shared: boolean }[];
+  updated_at: string | null;
+};
+
+/** The published address list, or null: none published yet (404), or the API
+ *  is down. The page then says, as before, that we publish no addresses. */
+export async function fetchCrawlerAddresses(): Promise<CrawlerAddresses | null> {
+  try {
+    return await getOrNull<CrawlerAddresses>("/crawler/addresses", { revalidate: ACTIVITY_TTL });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The crawler's public record, or null when the API cannot give it. Every page
  * that shows it renders without it: /how-we-crawl must stay readable when the
