@@ -106,6 +106,24 @@ async def startup(ctx: dict) -> None:
         # The API reports the crawl flag from here, not from its own
         # environment: `./makhzan crawl off` recreates this container alone.
         await crawl.record_crawl_enabled(session, CRAWL_ENABLED)
+        await publish_crawl_addresses(session)
+
+
+async def publish_crawl_addresses(session) -> None:
+    """State the addresses /how-we-crawl lists, from the pool file, or that none are.
+
+    At startup and before each daily sweep, so a pool file changed by a
+    deploy (which need not recreate this container) reaches the page within a
+    day. A file that fails to read keeps what was last stated.
+    """
+    from worker.egress import configured_pool_config
+
+    try:
+        published = configured_pool_config().published()
+    except ValueError as exc:
+        log.error("crawl addresses not published: %s", exc)
+        return
+    await crawl.record_crawl_addresses(session, published)
 
 
 async def close_interrupted_runs(session) -> int:
@@ -411,6 +429,10 @@ async def refresh_all(ctx: dict) -> list[dict]:
     `CRAWL_ENABLED` (`worker.pause`): the crawl-wide one queues nothing, and a
     paused shop is left out, as if disabled, without touching sources.toml.
     """
+    # Before anything that can skip the sweep: a list taken down in the pool
+    # file must come down even while the crawl is off or paused.
+    async with SessionLocal() as session:
+        await publish_crawl_addresses(session)
     if not CRAWL_ENABLED:
         return [{"status": "skipped", "reason": "CRAWL_ENABLED is off"}]
     async with SessionLocal() as session:

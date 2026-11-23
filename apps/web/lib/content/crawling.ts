@@ -34,6 +34,9 @@ export const CONTACT_EMAIL = "crawler@makhzan.merope.dev";
 /** Where the Web Bot Auth public keys are published (served by the API). */
 export const KEY_DIRECTORY_PATH = "/.well-known/http-message-signatures-directory";
 
+/** The crawler's addresses as JSON, for firewalls (app/crawler-addresses.json). */
+export const ADDRESSES_JSON_PATH = "/crawler-addresses.json";
+
 /**
  * Placeholder for the site's own origin in the copy below. The page replaces
  * it with SITE_URL at request time, so the copy never hard-codes a host.
@@ -140,7 +143,7 @@ export const crawlingContent = {
 
   verify: {
     heading: "How to recognise us, and check it is really us",
-    lead: "Our crawler is called makhzanbot. We are moving shops to it one shop at a time.",
+    lead: "Our crawler is called makhzanbot. Every shop we read is on it.",
     requestLabel: "What a request from makhzanbot looks like",
     request: {
       start: `GET /shop/page/2 HTTP/1.1\nHost: your-shop.example`,
@@ -187,8 +190,32 @@ export const crawlingContent = {
         keyLead: "Our public key is published at:",
         snippet: `${SITE}${KEY_DIRECTORY_PATH}`,
       },
+      addresses: {
+        label: "Addresses",
+        lead: "Most of our requests come from a fixed set of IPv6 addresses that are used for crawling and nothing else. The set changes only as the crawler grows, and this list always shows it.",
+        jsonLead: "The same list, for firewalls and scripts:",
+        checkTitle: "To check an address is ours",
+        checkLead: "the way search engines' crawlers are checked:",
+        /** `{name}` is the reverse DNS name the addresses resolve back to. */
+        checkSteps: [
+          "Look up its reverse DNS name. It should be {name}.",
+          "Look that name up in turn. It should return the same address.",
+        ],
+        /** `{address}`: the server's own IPv4, which also carries other services. */
+        sharedIpv4:
+          "A shop that cannot be reached over IPv6 is read from our server's address, {address}. It also carries other services, so it has no crawler name: for it, the signature is the check.",
+        /** `{address}`: an IPv4 address used for crawling only. */
+        dedicatedIpv4:
+          "A shop that cannot be reached over IPv6 is read from {address}, which is used for crawling only and passes the same check.",
+      },
     },
+    /** Shown while no address list is published. */
     noAddresses: "We do not publish our IP addresses: the signature is the proof.",
+    /** Shown beside the published list. */
+    withAddresses: {
+      title: "The addresses help you allow us. The signature is the proof:",
+      body: "it holds from any address, and nobody else can make it.",
+    },
   },
 
   robots: {

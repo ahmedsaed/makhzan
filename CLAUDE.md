@@ -504,7 +504,10 @@ gate stays per host, never per address. A failed IPv6 *connection* falls back to
 IPv4 and is counted (`stats.egress`, EGRESS in `make status`); a 403 or 429
 never changes the address, and the set is never changed to get past a block
 (owner, 2026-11-23). Like the identity, the egress is a context variable the
-pipeline sets, read by `make_client` and robots.txt.
+pipeline sets, read by `make_client` and robots.txt. The pool file's `publish: true` puts
+the list on /how-we-crawl and `/crawler-addresses.json` (via `worker_state`
+and `GET /crawler/addresses`), and is set only once every address's reverse
+DNS exists.
 
 `python -m worker.probe` (wrapped by `./makhzan probe`, `scripts/probe-suppliers.sh` and `make probe`)
 answers "is it the headers or is it us?". For each source it requests the real

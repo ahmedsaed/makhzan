@@ -99,6 +99,48 @@ async def crawl_enabled_in(session) -> bool:
     return await crawl_pause(session) is None
 
 
+#: `WorkerState` key the worker publishes its crawl addresses under.
+ADDRESSES_STATE_KEY = "crawl_addresses"
+
+
+async def record_crawl_addresses(session, addresses: dict | None) -> None:
+    """The worker: state the addresses /how-we-crawl publishes, or that none are. Commits.
+
+    `addresses` is `{"reverse_dns": str | None, "ipv6": [str], "ipv4":
+    [{"address": str, "shared": bool}]}`, written only when the pool file says
+    `publish: true` (worker/egress.py). None removes the key, so the page
+    and the JSON list show nothing: a list must never outlive the decision to
+    publish it, or appear before its reverse DNS exists.
+    """
+    from sqlalchemy import delete, func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from makhzan_schemas.models import WorkerState
+
+    if addresses is None:
+        await session.execute(delete(WorkerState).where(WorkerState.key == ADDRESSES_STATE_KEY))
+    else:
+        await session.execute(
+            insert(WorkerState)
+            .values(key=ADDRESSES_STATE_KEY, value=addresses)
+            .on_conflict_do_update(
+                index_elements=[WorkerState.key],
+                set_={"value": addresses, "updated_at": func.now()},
+            )
+        )
+    await session.commit()
+
+
+async def crawl_addresses_in(session) -> tuple[dict, datetime] | None:
+    """The published crawl addresses and when the worker stated them, or None."""
+    from makhzan_schemas.models import WorkerState
+
+    state = await session.get(WorkerState, ADDRESSES_STATE_KEY)
+    if state is None or not isinstance(state.value, dict):
+        return None
+    return state.value, state.updated_at
+
+
 #: `WorkerState` key of the crawl-wide pause a person sets.
 PAUSE_STATE_KEY = "crawl_pause"
 

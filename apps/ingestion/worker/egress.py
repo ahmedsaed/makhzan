@@ -32,8 +32,16 @@ The egress in force is a context variable the pipeline sets for the run, like
 the identity, so every client the run makes (`worker.http.make_client`,
 robots.txt, the details stage, a bespoke adapter) takes it. Without a pool
 configured, clients are built exactly as before. With one, an "ipv4" source
-binds 0.0.0.0, so a server that now has IPv6 does not start sending its
-requests over IPv6 from an address that is not ours to publish.
+binds 0.0.0.0, or the crawler's own IPv4 address once the pool file lists a
+dedicated one (`ipv4: [{address, shared: false}]`), so a server that now has
+IPv6 does not start sending its requests over IPv6 from an address that is not
+ours to publish.
+
+**Publishing.** With `publish: true` in the pool file, the worker states the
+addresses in the database (`makhzan_schemas.crawl.record_crawl_addresses`) at
+startup and before each daily sweep. The API serves them, and /how-we-crawl
+lists them with `reverse_dns`, the name each dedicated address resolves back
+to. Turn it on only once that reverse DNS exists.
 """
 
 from __future__ import annotations
@@ -43,9 +51,11 @@ import ipaddress
 import logging
 import os
 import random
+import re
 import socket
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 import httpx
 
@@ -93,8 +103,74 @@ def parse_pool(value: object, *, where: str = POOL_ENV) -> tuple[str, ...]:
     return tuple(sorted(out, key=ipaddress.IPv6Address))
 
 
-def load_pool_file(path: str) -> tuple[str, ...]:
-    """The pool listed in the YAML file at `path`: `ipv6: [address, ...]`."""
+@dataclass(frozen=True)
+class PoolConfig:
+    """What `crawl-pool.yaml` says: the addresses, and whether to publish them.
+
+    - `ipv6`: the pool IPv6 sources send from, at random.
+    - `ipv4`: the IPv4 addresses requests leave from, each `shared` or not. A
+      shared one (the server's own, which carries other services) is only
+      published, with no crawler reverse DNS. A dedicated one (`shared:
+      false`) is used only by the crawler, which then binds it for every IPv4
+      connection instead of letting the system pick.
+    - `reverse_dns`: the name every dedicated address resolves back to.
+    - `publish`: whether /how-we-crawl and /crawler-addresses.json list them.
+      Off until the reverse DNS exists, so the check the page describes works.
+    """
+
+    ipv6: tuple[str, ...] = ()
+    ipv4: tuple[tuple[str, bool], ...] = ()
+    reverse_dns: str | None = None
+    publish: bool = False
+
+    @property
+    def ipv4_bind(self) -> str:
+        """The address IPv4 connections bind: the first dedicated one, else any."""
+        return next((address for address, shared in self.ipv4 if not shared), IPV4_ANY)
+
+    @property
+    def empty(self) -> bool:
+        """Nothing to send from: clients are built as they always were."""
+        return not self.ipv6 and self.ipv4_bind == IPV4_ANY
+
+    def published(self) -> dict | None:
+        """What the worker states for the API (`makhzan_schemas.crawl`), or None."""
+        if not self.publish:
+            return None
+        return {
+            "reverse_dns": self.reverse_dns,
+            "ipv6": list(self.ipv6),
+            "ipv4": [{"address": a, "shared": shared} for a, shared in self.ipv4],
+        }
+
+
+_HOSTNAME = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def _parse_ipv4(value: object, *, where: str) -> tuple[tuple[str, bool], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{where}: `ipv4` must be a list of {{address, shared}}")
+    out: list[tuple[str, bool]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) - {"address", "shared"} or "address" not in item:
+            raise ValueError(f"{where}: each `ipv4` entry is {{address: ..., shared: true|false}}")
+        try:
+            address = ipaddress.IPv4Address(str(item["address"]).strip())
+        except ValueError as exc:
+            raise ValueError(f"{where}: {item['address']!r} is not an IPv4 address") from exc
+        if not address.is_global:
+            raise ValueError(f"{where}: {address} is not a global address")
+        shared = item.get("shared", True)
+        if not isinstance(shared, bool):
+            raise ValueError(f"{where}: `shared` must be true or false")
+        out.append((str(address), shared))
+    return tuple(out)
+
+
+def load_pool_config(path: str) -> PoolConfig:
+    """`crawl-pool.yaml`: `ipv6`, and optionally `ipv4`, `reverse_dns`, `publish`."""
     import yaml
 
     with open(path, encoding="utf-8") as handle:
@@ -104,52 +180,81 @@ def load_pool_file(path: str) -> tuple[str, ...]:
             raise ValueError(f"{path}: not valid YAML: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a mapping with an `ipv6` list")
-    unknown = set(data) - {"ipv6"}
+    unknown = set(data) - {"ipv6", "ipv4", "reverse_dns", "publish"}
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
-    return parse_pool(data.get("ipv6"), where=path)
+    reverse_dns = data.get("reverse_dns")
+    if reverse_dns is not None:
+        reverse_dns = str(reverse_dns).strip().lower().rstrip(".")
+        if not _HOSTNAME.match(reverse_dns):
+            raise ValueError(f"{path}: `reverse_dns` {reverse_dns!r} is not a host name")
+    publish = data.get("publish", False)
+    if not isinstance(publish, bool):
+        raise ValueError(f"{path}: `publish` must be true or false")
+    if publish and reverse_dns is None:
+        raise ValueError(f"{path}: `publish: true` needs `reverse_dns`")
+    config = PoolConfig(
+        ipv6=parse_pool(data.get("ipv6"), where=path),
+        ipv4=_parse_ipv4(data.get("ipv4"), where=path),
+        reverse_dns=reverse_dns,
+        publish=publish,
+    )
+    if publish and not config.ipv6 and not config.ipv4:
+        raise ValueError(f"{path}: `publish: true` with no addresses to publish")
+    return config
 
 
-#: (path, mtime) -> pool: a client is built per request, the file read once.
-_POOL_CACHE: dict[tuple[str, float], tuple[str, ...]] = {}
+def load_pool_file(path: str) -> tuple[str, ...]:
+    """The IPv6 pool listed in the YAML file at `path`."""
+    return load_pool_config(path).ipv6
 
 
-#: The last pool read successfully, kept when a later read fails.
-_LAST_GOOD: dict[str, tuple[str, ...]] = {}
+#: (path, mtime) -> config: a client is built per request, the file read once.
+_POOL_CACHE: dict[tuple[str, float], PoolConfig] = {}
+
+
+#: The last config read successfully, kept when a later read fails.
+_LAST_GOOD: dict[str, PoolConfig] = {}
 
 log = logging.getLogger(__name__)
 
 
-def configured_pool() -> tuple[str, ...]:
-    """The crawl pool from the file `MAKHZAN_CRAWL_POOL` names; empty when unset.
+def configured_pool_config() -> PoolConfig:
+    """The pool file `MAKHZAN_CRAWL_POOL` names, read; empty when unset.
 
     Named but missing or invalid is an error, not an empty pool: a pool that
     vanished must not quietly turn every IPv6 source into an IPv4 one. That
-    error stops the worker at startup (`worker.main.startup`). Once a pool has
+    error stops the worker at startup (`worker.main.startup`). Once it has
     been read, a later failed read (a bad commit, or a read during `git pull`)
     keeps the last good one and logs why, so one bad file cannot make every
     client of every source raise.
     """
     path = os.environ.get(POOL_ENV, "").strip()
     if not path:
-        return ()
+        return PoolConfig()
     try:
         mtime = os.stat(path).st_mtime
         key = (path, mtime)
         if key not in _POOL_CACHE:
-            pool = load_pool_file(path)
+            config = load_pool_config(path)
             _POOL_CACHE.clear()
-            _POOL_CACHE[key] = pool
-            _LAST_GOOD[path] = pool
+            _POOL_CACHE[key] = config
+            _LAST_GOOD[path] = config
         return _POOL_CACHE[key]
     except (OSError, ValueError, ImportError) as exc:
         error = ValueError(f"{POOL_ENV}={path}: {exc}")
         if isinstance(exc, FileNotFoundError):
             error = ValueError(f"{POOL_ENV}={path}: no such file")
         if path in _LAST_GOOD:
-            log.error("%s; keeping the last good pool (%d addresses)", error, len(_LAST_GOOD[path]))
-            return _LAST_GOOD[path]
+            good = _LAST_GOOD[path]
+            log.error("%s; keeping the last good pool (%d addresses)", error, len(good.ipv6))
+            return good
         raise error from exc
+
+
+def configured_pool() -> tuple[str, ...]:
+    """The crawl's IPv6 pool (`configured_pool_config().ipv6`)."""
+    return configured_pool_config().ipv6
 
 
 _EGRESS: ContextVar[str] = ContextVar("crawler_egress", default=IPV4)
@@ -210,11 +315,12 @@ class EgressTransport(httpx.AsyncBaseTransport):
         *,
         choose: Callable[[list[str]], str] = random.choice,
         transport_for: Callable[[str], httpx.AsyncBaseTransport] | None = None,
+        ipv4: str = IPV4_ANY,
     ) -> None:
         self.egress = check_egress(egress)
         self._choose = choose
         self._transport_for = transport_for or (lambda address: http_transport(address))
-        self._ipv4 = self._transport_for(IPV4_ANY)
+        self._ipv4 = self._transport_for(ipv4)
         self._addresses = list(pool) if egress == IPV6 else []
         #: Built on first use: a client is made per request, and an SSL
         #: context per pool address would be spent on all but one.
@@ -256,15 +362,14 @@ class EgressTransport(httpx.AsyncBaseTransport):
 
 def transport_for_run() -> httpx.AsyncBaseTransport | None:
     """The transport a client of this run should use; None (httpx's own) without a pool."""
-    pool = configured_pool()
-    if not pool:
-        egress = current_egress()
-        if egress == IPV6:
+    config = configured_pool_config()
+    if config.empty:
+        if current_egress() == IPV6:
             # Switched to IPv6 with nothing to send from: IPv4, counted, so
             # `make status` says why rather than the shop seeming to refuse.
             return EgressTransport(IPV6, ())
         return None
-    return EgressTransport(current_egress(), pool)
+    return EgressTransport(current_egress(), config.ipv6, ipv4=config.ipv4_bind)
 
 
 # --------------------------------------------------------------------------- #

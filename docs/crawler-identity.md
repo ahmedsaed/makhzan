@@ -229,6 +229,35 @@ published and given reverse DNS.
   IPv6 address is never used for crawling. Without one, clients are built
   exactly as before.
 
+### Publishing the addresses
+
+/how-we-crawl has an **Addresses** tab, and `/crawler-addresses.json` lists
+the same addresses in the shape Google uses for Googlebot (`prefixes`, each an
+`ipv6Prefix` or `ipv4Prefix`). Both appear only once `crawl-pool.yaml` says
+so:
+
+```yaml
+ipv6: [ ... ]                 # the pool
+ipv4:                         # optional: where IPv4 requests leave from
+  - address: 203.0.113.7   # documentation example
+    shared: true              # the server's own: published, no crawler PTR, not bound
+reverse_dns: crawler.merope.dev
+publish: true                 # only once every address's PTR and AAAA exist
+```
+
+The worker states the list in `worker_state` (`crawl_addresses`) at startup
+and before each daily sweep, and the API serves it as `GET
+/crawler/addresses` (404 until published). Setting `publish: false`, or
+removing it, takes the list down at the next daily sweep (the crawl being
+off or paused doesn't delay it), plus up to 10 minutes of the page's and the
+JSON's caches. Restart the worker to start that at once. An `ipv4` entry with `shared: false` is an address used for
+crawling only: the worker then binds it for every IPv4 connection, and the
+page says it passes the same reverse DNS check.
+
+Before setting `publish: true`, check both directions for every address:
+`dig -x ADDR +short` gives `crawler.merope.dev.`, and `dig AAAA
+crawler.merope.dev +short` (or `A` for a dedicated IPv4) lists the address.
+
 ### Moving a shop to IPv6
 
 1. `./makhzan probe --source <id>`. The `ipv6` column checks for an AAAA
@@ -258,10 +287,6 @@ Blocked shops stay disabled whatever their egress.
 
 ## Not done yet
 
-- **Publishing the pool.** `/how-we-crawl` and a JSON list of the addresses,
-  with their reverse DNS name (`crawler.merope.dev`: an AAAA record per
-  address, DNS-only, and a PTR per address set by the host). Needs a mock-up
-  first; it ships with or before the first shop on IPv6.
 - **Cloudflare registration.** Submitted to Cloudflare's verified bots
   directory on 2026-11-10; on 2026-11-12 Cloudflare requested changes, asking
   for a registered business, which the operator does not have yet. Pending.
