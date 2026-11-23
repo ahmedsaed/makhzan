@@ -121,3 +121,21 @@ async def test_how_we_crawl_still_names_a_hidden_shop(client, db):
 
     shops = (await client.get("/crawler/activity")).json()["shops"]
     assert [s["name"] for s in shops] == ["Shop B"]
+
+
+async def test_a_hidden_shops_photo_is_not_shown_on_a_product(client, db):
+    """A product emptied when its only shop was hidden keeps that shop's photo
+    in the database; the page must neither show it nor name the shop."""
+    shown = await make_supplier(db, slug="shop-a", name="Shop A")
+    hidden = await make_supplier(db, slug="shop-b", name="Shop B")
+    await make_source(db, supplier=shown)
+    await make_source(db, supplier=hidden, listed=False)
+    product = await make_product(db, image="https://b.test/p.jpg", image_supplier=hidden)
+    body = (await client.get(f"/products/{product.id}")).json()
+    assert body["image"] is None and body["image_shop"] is None
+
+    other = await make_product(
+        db, group_key="other", image="https://a.test/p.jpg", image_supplier=shown
+    )
+    body = (await client.get(f"/products/{other.id}")).json()
+    assert body["image"] == "https://a.test/p.jpg" and body["image_shop"]["slug"] == "shop-a"
