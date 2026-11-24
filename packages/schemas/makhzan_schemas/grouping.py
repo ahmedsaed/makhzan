@@ -1147,7 +1147,9 @@ def assign_identifiers(listings: list[Listing]) -> int:
     one product by a published standard.
 
     A part number the adapter itself supplied (`attributes.adapter_part_number`)
-    is used as it is, ahead of every rule.
+    is used ahead of every rule, and family-checked like any model code: a shop
+    reusing one SKU under different titles makes it no identity, and the
+    listing then has none.
 
     This is the only writer of `part_number` on a stored listing (a sweep keeps
     the stored value), so on an unchanged catalogue it changes nothing.
@@ -1160,9 +1162,15 @@ def assign_identifiers(listings: list[Listing]) -> int:
         attributes = listing.attributes if isinstance(listing.attributes, dict) else {}
         given = attributes.get("adapter_part_number")
         if isinstance(given, str) and given.strip():
-            candidates[listing.id] = (domain, [Identifier(given.strip())])
-            continue
-        found = get_profile(domain).identifier_candidates(title, attributes)
+            # The adapter's own code, instead of every rule, but family-checked
+            # like a title's: a shop SKU reused under different titles (one
+            # bulb and a 10-pack) names no one product, and is dropped. The
+            # title's codes are not offered beside it: a shop whose SKU tells
+            # the B500 tool from its kit "Kit-B500-1" would otherwise make
+            # "B500" a family by the kit's title.
+            found = [Identifier(given.strip(), family_checked=True)]
+        else:
+            found = get_profile(domain).identifier_candidates(title, attributes)
         candidates[listing.id] = (domain, found)
         # Every listing naming the code is evidence, whichever rule read it;
         # only a family-checked identifier is ever refused on that evidence.

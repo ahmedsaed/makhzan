@@ -237,3 +237,39 @@ def test_a_price_veto_still_refuses_a_sku_match():
     a = _listing("shop-a", "Acme iC60N Circuit Breaker 1P 50A", 420, "A9F77150")
     b = _listing("shop-b", "Acme iC60N Circuit Breaker 1P 50A", 42000, "A9F77150")
     assert len(_groups([a, b])) == 2
+
+
+# --------------------------------------------------------------------------- #
+# The family guard: a SKU one shop reuses under different titles is no identity
+# --------------------------------------------------------------------------- #
+
+
+def test_a_sku_reused_under_different_titles_is_dropped():
+    """One shop files a single bulb and a 10-pack under one SKU: it names no
+    one product, so no shop may group on it (as for a title code)."""
+    single = _listing("shop-a", "Acme LED Bulb 9W E27 Warm White", 60, "929003616228")
+    pack = _listing("shop-a", "Acme LED Bulb 9W E27 Warm White 10 Pack Box", 550, "929003616228")
+    other = _listing("shop-b", "Acme LED Bulb 9W E27 Warm White", 62, "929003616228")
+    assert len(_groups([single, pack, other])) == 3
+    assert single.part_number is None and pack.part_number is None
+    assert other.part_number is None
+
+
+def test_a_sku_reused_for_sizes_of_one_product_is_kept():
+    """Values aside, as for any code: two sizes are not a family, and the value
+    veto keeps them apart."""
+    small = _listing("shop-a", "Acme Pipe Wrench 200mm", 300, "111.3500")
+    large = _listing("shop-a", "Acme Pipe Wrench 350mm", 450, "111.3500")
+    assign_identifiers([small, large])
+    assert small.part_number == large.part_number == "111.3500"
+
+
+def test_a_sku_used_once_still_groups_beside_a_reused_one():
+    reused = [
+        _listing("shop-a", "Acme LED Bulb 9W E27", 60, "929003616228"),
+        _listing("shop-a", "Acme LED Bulb 9W E27 10 Pack Box", 550, "929003616228"),
+    ]
+    a = _listing("shop-a", "Acme A9F77150 iC60N Circuit Breaker 1P 50A C-Curve", 420, "A9F77150")
+    b = _listing("shop-b", "Acme Circuit Breaker iC60N 1P 50A", 450, "A9F77150")
+    groups = _groups([*reused, a, b])
+    assert sorted(len(g) for g in groups) == [1, 1, 2]

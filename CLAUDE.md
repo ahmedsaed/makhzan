@@ -676,7 +676,8 @@ needs the whole catalogue (the family guard) and the product page's specs, so
 — re-reads every identifier, and a sweep keeps the stored value (a new listing
 starts with the title's reading). A rule change therefore needs no re-crawl, and
 on an unchanged catalogue the regroup changes nothing. An adapter's own
-`RawItem.part_number` is kept as `attributes.adapter_part_number` and wins.
+`RawItem.part_number` is kept as `attributes.adapter_part_number` and wins,
+unless the family guard drops it like any model code.
 
 **Sub-clustering reads the products listings already belong to (incumbency).**
 Greedy clustering in plain (source, external id) order let one contradicting
@@ -830,10 +831,13 @@ refuses the key). Some electrical shops' SKUs are the maker's own references
 (Schneider `A9F77150`, the same breaker in every shop), measured before opting in:
 coverage, exact matches with another shop, and a sample of them read as the same
 product (owner, 2026-11-24). An opted-in SKU becomes `RawItem.part_number`, so
-it is `attributes.adapter_part_number` and wins over the title rules, works in a
-department with none, and is keyed and folded like any identifier
-(`mpn:<domain>:ID`). It is still evidence, not proof: title agreement admits and
-every veto refuses. A Shopify product with several variants takes no SKU (its
+it is stored as `attributes.adapter_part_number`, which `assign_identifiers`
+uses instead of the title rules (so it works in a department with none), folded
+and keyed `mpn:<domain>:ID` like a title code. It is **family-checked**: a SKU
+one shop lists under titles that differ, values aside (one bulb and a 10-pack
+under one SKU), is dropped as an identity for every shop, and those listings
+then have no identifier (the title's rules are not consulted for them). It is still evidence, not proof: title
+agreement admits and every veto refuses. A Shopify product with several variants takes no SKU (its
 listing is the range, one SKU per variant); Odoo gives a template a reference
 only when it has one variant. Matching one shop's listing to one variant of
 another's range is not built (owner's call).
