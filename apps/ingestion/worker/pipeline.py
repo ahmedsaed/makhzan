@@ -175,10 +175,13 @@ async def _upsert_listing(
         recheck_requested_at=None,
     )
     fields = apply_details(fields)
-    if existing is not None and not (attributes or {}).get("adapter_part_number"):
+    if existing is not None:
         # The regroup owns a stored listing's identifier (family guard, specs
         # from the product page); re-reading the card here would flip it back
-        # on every sweep.
+        # on every sweep. That includes an adapter's own part number: a SKU the
+        # family guard dropped would be written back by each sweep. The card's
+        # value still reaches `attributes.adapter_part_number`, which the next
+        # regroup reads, so a SKU the shop changes is picked up there.
         fields.pop("part_number")
 
     if existing:

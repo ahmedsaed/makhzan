@@ -677,7 +677,10 @@ needs the whole catalogue (the family guard) and the product page's specs, so
 starts with the title's reading). A rule change therefore needs no re-crawl, and
 on an unchanged catalogue the regroup changes nothing. An adapter's own
 `RawItem.part_number` is kept as `attributes.adapter_part_number` and wins,
-unless the family guard drops it like any model code.
+unless the family guard drops it like any model code. A sweep refreshes that
+attribute from the card but never writes the stored `part_number`, adapter's
+or not: it once did for an adapter's, which wrote back every SKU the guard had
+dropped. A changed SKU reaches `part_number` at the next regroup.
 
 **Sub-clustering reads the products listings already belong to (incumbency).**
 Greedy clustering in plain (source, external id) order let one contradicting
