@@ -120,8 +120,14 @@ class OdooAdapter(SourceAdapter):
         sitemap_veto: bool = True,
         lang_prefix: str | None = None,
         stock_signal: bool = True,
+        sku_is_part_number: bool = False,
     ) -> None:
         self.source_id = source_id
+        #: This shop's internal reference is the manufacturer's part number,
+        #: verified against its catalogue (sources.toml says how), so a card's
+        #: reference becomes the listing's part number. Off by default: most
+        #: shops' references are private codes (see `_internal_reference`).
+        self.sku_is_part_number = sku_is_part_number
         #: The language path every URL is built under ("/en"), or "" for the
         #: shop's default language. A product's id is its own whatever the
         #: language, so switching it changes titles, not listings.
@@ -454,6 +460,10 @@ class OdooAdapter(SourceAdapter):
             availability_text=self._stock_hint(card) if self.stock_signal else None,
             category_hint=partition or None,
             images=images,
+            # A product with several variants has no reference of its own (Odoo
+            # gives a template one only when it has a single variant), so the
+            # card names none and a range never takes one variant's code.
+            part_number=sku if self.sku_is_part_number else None,
             raw=raw,
         )
 
@@ -542,8 +552,10 @@ def _is_product_page(response: httpx.Response, external_id: str | None) -> bool:
 def _internal_reference(img) -> str | None:
     """The shop's own product code, from the image alt "[CODE] Name".
 
-    A private catalogue code like every supplier SKU — kept for reference, never
-    for grouping (see CLAUDE.md: across suppliers they coincide by accident).
+    Usually a private catalogue code like most supplier SKUs — kept for
+    reference, never for grouping (see CLAUDE.md: across suppliers they coincide
+    by accident) — unless the source is verified and opted in with
+    `sku_is_part_number`, when it is the manufacturer's reference.
     """
     alt = (img.attributes.get("alt") or "") if img else ""
     match = _REFERENCE_RE.match(alt)

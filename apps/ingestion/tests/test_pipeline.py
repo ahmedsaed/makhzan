@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from makhzan_schemas.contracts import RawItem
 from makhzan_schemas.db import SessionLocal
+from makhzan_schemas.grouping import rebuild_products
 from makhzan_schemas.enums import IngestionStatus, ListingStatus, SourceType
 from makhzan_schemas.models import Listing, SourceCursor, Supplier
 from sqlalchemy import select
@@ -652,17 +653,79 @@ class StatedPartNumberAdapter(MarketplaceAdapter):
         return found
 
 
-async def test_an_adapters_own_part_number_overwrites_the_stored_one():
-    await run_source("marketplace", MarketplaceAdapter("zener-diodes", "1N4007 Diode 1A"))
+async def _regroup():
     async with SessionLocal() as s:
-        stored = await s.get(Listing, (await _marketplace_listing()).id)
-        stored.part_number = "SET-BY-REGROUP"
+        result = await rebuild_products(s, reidentify=True)
+        await s.commit()
+    return result
+
+
+async def test_a_sweep_keeps_the_stored_part_number_even_from_the_adapter():
+    """Only the regroup writes a stored listing's part number. A sweep that
+    rewrote an adapter's own value put back every SKU the family guard had
+    dropped, and the next regroup dropped it again."""
+    await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    listing = await _marketplace_listing()
+    assert listing.part_number == "1N4007-ADAPTER", "a new listing starts with the adapter's"
+    async with SessionLocal() as s:
+        stored = await s.get(Listing, listing.id)
+        stored.part_number = None  # as the family guard leaves it
         await s.commit()
 
     await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
     listing = await _marketplace_listing()
-    assert listing.part_number == "1N4007-ADAPTER"
+    assert listing.part_number is None
     assert listing.attributes["adapter_part_number"] == "1N4007-ADAPTER", "kept for the regroup"
+
+
+class ChangedPartNumberAdapter(MarketplaceAdapter):
+    async def fetch_page(self, partition, page):
+        found = await super().fetch_page(partition, page)
+        for item in found.items:
+            item.part_number = "1N4007-NEW"
+        return found
+
+
+async def test_a_changed_adapter_part_number_reaches_part_number_at_the_regroup():
+    await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    await _regroup()
+    await run_source("marketplace", ChangedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    listing = await _marketplace_listing()
+    assert listing.part_number == "1N4007-ADAPTER", "the sweep leaves it to the regroup"
+    assert listing.attributes["adapter_part_number"] == "1N4007-NEW"
+
+    await _regroup()
+    assert (await _marketplace_listing()).part_number == "1N4007-NEW"
+
+
+class ReusedSkuAdapter(MarketplaceAdapter):
+    """One SKU on a bulb and its 10-pack: the family guard drops it."""
+
+    async def fetch_page(self, partition, page):
+        found = await super().fetch_page(partition, page)
+        bulb = found.items[0].model_copy(update={"part_number": "929003616228"})
+        pack = bulb.model_copy(
+            update={"external_id": "x2", "title": f"{bulb.title} 10 Pieces Value Pack"}
+        )
+        return Page([bulb, pack], has_more=False)
+
+
+async def test_a_dropped_sku_stays_dropped_across_sweeps():
+    adapter = ReusedSkuAdapter("zener-diodes", "LED Bulb 14W E27")
+    await run_source("marketplace", adapter)
+    assert (await _regroup())["reidentified"] == 2, "the guard drops the reused SKU"
+    await run_source("marketplace", ReusedSkuAdapter("zener-diodes", "LED Bulb 14W E27"))
+    async with SessionLocal() as s:
+        rows = (await s.execute(select(Listing).where(Listing.source == "marketplace"))).scalars()
+        assert [r.part_number for r in rows] == [None, None], "the sweep does not write it back"
+    assert (await _regroup())["reidentified"] == 0
+
+
+async def test_a_regroup_of_an_unchanged_catalogue_rewrites_no_identifier():
+    await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    await _regroup()
+    await run_source("marketplace", StatedPartNumberAdapter("zener-diodes", "1N4007 Diode 1A"))
+    assert (await _regroup())["reidentified"] == 0
 
 
 async def test_unmapped_category_stays_uncategorized():
