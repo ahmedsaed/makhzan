@@ -396,7 +396,11 @@ class FakeBroker:
             return _invalid("scores")
         for s in scores:
             p = s.get("p")
-            if s.get("order") not in ("ab", "ba") or not isinstance(p, (int, float)):
+            if (
+                s.get("order") not in ("ab", "ba")
+                or isinstance(p, bool)
+                or not isinstance(p, (int, float))
+            ):
                 return _invalid("score")
             if not 0 <= p <= 1:
                 return _invalid("p outside [0, 1]")
