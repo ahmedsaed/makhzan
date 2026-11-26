@@ -180,7 +180,7 @@ Notes:
   - Scores within 0.038 of the 3060's Q4 (raw scale). Production rule: 205 merges, 0 wrong.
   - The cap limits the average: spikes still reached 90 W.
 - **Conclusion:** cleared for the nightly Kev window **at a 65 W cap**, applied at boot by
-  `ml/deploy/home-server/amdgpu-power-cap.service`. That is a stopgap: the fix is a power supply
+  `ml/deploy/home-server/99-amdgpu-power-cap.rules` (a udev rule). That is a stopgap: the fix is a power supply
   with a native PCIe cable, which this machine's non-standard case and board make harder. Traces
   are in `ml/out/gguf-kev/amd-monitor*.log` and `home-amd-65w-soak.jsonl`.
 
