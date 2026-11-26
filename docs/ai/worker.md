@@ -588,7 +588,8 @@ network with `internal: true`: no route out, no DNS beyond the stack's service n
 one way out is `broker-proxy`, which sits on that network and on an ordinary bridge and
 forwards one TCP port to the broker's Tailscale address (`BROKER_TARGET`), and nothing else.
 It is our own code, `python -m makhzan_ml.worker.proxy --listen 10.231.89.2:8100 --to <ip>:8100`
-(it listens on its fixed address on `broker-only` only, never on the bridge)
+(it listens on its fixed address on `broker-only` only, never on the bridge; the workers'
+addresses come from `ip_range` 10.231.89.128/25, so a worker attaching first cannot take it)
 (standard library asyncio), run from the Kev worker image with no model loaded, read-only,
 no capabilities, non-root, 128 MB. It reads no request, so nothing a worker sends can name
 another destination (a `CONNECT` or an absolute URL is only bytes delivered to the broker,

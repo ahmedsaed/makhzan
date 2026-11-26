@@ -117,6 +117,26 @@ def test_the_proxy_listens_only_on_its_internal_address_and_workers_are_capped()
     assert "    internal: true\n" in nets
     assert 'com.docker.network.bridge.inhibit_ipv4: "true"' in nets
     assert "subnet: ${BROKER_NET_SUBNET:-10.231.89.0/24}" in nets
+    # The workers' addresses come from a range that leaves the proxy's free: without it a
+    # worker that attached first took .2 and the proxy never started (2026-11-24).
+    assert "ip_range: ${BROKER_NET_DYNAMIC:-10.231.89.128/25}" in nets
+
+
+def test_the_proxy_address_is_in_the_subnet_and_outside_the_workers_range():
+    import ipaddress
+    import re
+
+    text = (DEPLOY / "compose.yml").read_text()
+
+    def default(var):
+        (value,) = set(re.findall(r"\$\{" + var + r":-([^}]+)\}", text))
+        return value
+
+    subnet = ipaddress.ip_network(default("BROKER_NET_SUBNET"))
+    dynamic = ipaddress.ip_network(default("BROKER_NET_DYNAMIC"))
+    proxy = ipaddress.ip_address(default("PROXY_ADDRESS"))
+    assert dynamic.subnet_of(subnet)
+    assert proxy in subnet and proxy not in dynamic
     worker = text[text.index("x-worker: &worker") : text.index("\nservices:")]
     assert "  pids_limit: 256\n" in worker and "  networks: [broker-only]\n" in worker
     for name in ("kev", "pplx"):
