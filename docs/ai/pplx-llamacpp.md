@@ -95,6 +95,15 @@ pairs scored by every variant):
 
 pplx's upward lean mostly recovers true matches that Kev's Q4 lowers below 0.8.
 
+To reproduce a row, combine a pplx file with a Kev file. For example, Q4 + Q4_K_S, where the
+llama.cpp Kev scores are calibrated, so undo 2.406:
+
+    python3 ml/models/pplx_gguf.py decisions ml/out/gguf-pplx/Q4_K_S.jsonl \
+        --kev ml/out/gguf-kev/q4km-vulkan-3060.jsonl --kev-temperature 2.406049966812134
+
+It prints the variant (217 merges, 216 "same", 1 "not") beside pplx bf16 with the same Kev file
+(206). Without `--kev`, Kev is the stored bf16.
+
 ## Speed and placement
 
 - **3060:** 2.3–2.6 requests/s, against 2.96 for Kev's own server.
@@ -114,9 +123,10 @@ pplx's upward lean mostly recovers true matches that Kev's Q4 lowers below 0.8.
   - Method: Kev Q4's measured ratio, i7-3770 / desktop at pp512 (17.1 / 67.5 tokens/s).
   - Result: about 55 s for a median request and about 193 s for the longest.
   - For comparison, today's torch pplx worker takes about 2 minutes a request.
-- **Timeouts.** A pplx request on the CPU therefore gets a 240 s timeout
-  (`judges.LLAMACPP_REQUEST_S`), and the pplx worker's compose `stop_grace_period` is 300 s, so a
-  stop still never cuts a request (`docs/ai/worker.md`, "A stop sets one deadline").
+- **Timeouts.** A pplx request on the CPU therefore gets a 225 s timeout
+  (`judges.LLAMACPP_REQUEST_S`). With its last posts and the join, a stop takes at most 265 s:
+  under the supervisor's 270 s window-end kill, and covered by the pplx worker's compose
+  `stop_grace_period` of 300 s (`docs/ai/worker.md`, "A stop sets one deadline").
 - **`llama-bench` misleads for pplx on CPU.** It ran far slower than a real request: the GGUF
   carries the readout as a full-vocabulary output matrix (4.84B parameters against Kev's 4.21B),
   which the benchmark evaluates. Trimming that matrix to its 255 used rows could also save about

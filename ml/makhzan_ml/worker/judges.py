@@ -425,12 +425,15 @@ LLAMACPP_READY_S = 120.0
 #: - pplx (non-causal, its K1 prompt with the full description, so longer): the longest Phase E
 #:   request, 3,574 tokens, took 48.9 s on the desktop's CPU (4 threads, 73 tokens/s); scaled by
 #:   Kev Q4's measured i7-3770/desktop ratio (17.1 / 67.5 tokens/s), about 193 s on the home
-#:   server. Not measured there yet. Its worker's stop_grace_period is 300 s accordingly.
+#:   server. Not measured there yet. Its timeout, 225 s, covers that with margin and keeps the
+#:   whole stop (request, 3 x 10 s of last posts, 10 s join: 265 s) under the supervisor's
+#:   window-end kill (supervisor.KILL_AFTER_S, 270 s) and the pplx worker's 300 s
+#:   stop_grace_period.
 LLAMACPP_REQUEST_S = {
     ("kev", "gpu"): 60.0,
     ("kev", "cpu"): 120.0,
     ("pplx", "gpu"): 60.0,
-    ("pplx", "cpu"): 240.0,
+    ("pplx", "cpu"): 225.0,
 }
 
 _GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",

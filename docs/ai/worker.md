@@ -203,7 +203,7 @@ the worker exits within:
 
 | Part | At most |
 |---|---|
-| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU; on a llama.cpp sidecar at most its timeout, 60 s on a GPU (measured 0.5 s on the 3060, 4.4–6.1 s on the AMD card), 120 s for Kev on a CPU, 240 s for pplx on a CPU (its longest request estimated at about 193 s on the home server) |
+| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU; on a llama.cpp sidecar at most its timeout, 60 s on a GPU (measured 0.5 s on the 3060, 4.4–6.1 s on the AMD card), 120 s for Kev on a CPU, 225 s for pplx on a CPU (its longest request estimated at about 193 s on the home server) |
 | or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU; on a llama.cpp sidecar the load (hashing the GGUF, waiting up to 120 s for the sidecar) checks the stop between steps, so it ends within about 2 s |
 | or, on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
 | retries (`STOP_GRACE_S`) | only within 60 s of the stop, so they overlap what is in flight |
@@ -219,9 +219,16 @@ for the heartbeat join:
 - a CPU model load: about 150 s, then only the lease's release (no results to post; that
   release ends the session, so no session release follows), then the join: about 170 s;
 - the GPU: the 60 s of retries outlast any request, then 3 × 10 s and the join: about 100 s;
-- a llama.cpp sidecar: a request's timeout (60 s on a GPU, 120 s for Kev on a CPU, 240 s for
-  pplx on a CPU), then 3 × 10 s and the join: at most about 100 s, 160 s or 280 s. The pplx
-  worker's compose service therefore has `stop_grace_period: 300s`; the others keep 240 s.
+- a llama.cpp sidecar: a request's timeout (60 s on a GPU, 120 s for Kev on a CPU, 225 s for
+  pplx on a CPU), then 3 × 10 s and the join: at most about 100 s, 160 s or 265 s. The pplx
+  worker's compose service therefore has `stop_grace_period: 300s` (240 s would kill it before
+  its last posts); the others keep 240 s.
+
+**The window's end has its own kill bound.** With `outside_window = "wait"`, a session's held jobs
+keep scoring up to the window's end, so a last request may start just before it. The supervisor
+kills a session still running `KILL_AFTER_S` (270 s) after the window's end, a bound that must stay
+under the 5-minute gap before the next window. Every bound above stays under it, the longest being
+pplx on a CPU at 265 s; a test checks every llama.cpp timeout plus 40 s against it.
 
 Anything still undelivered is logged before the process exits. Set the stop timeout above
 the bound: 240 s on the home server's CPU (`stop_grace_period: 240s` in its compose stack;
@@ -798,9 +805,10 @@ the same way as Kev above, with these differences.
     longest Phase E request is about 3,500 tokens.
   - The worker configuration is `llamacpp-pplx.toml`, today's 05:05–07:00 window unchanged. A
     wider window beside Kev is possible but the owner's call.
-- **Its request timeout is 240 s on a CPU.** The longest Phase E request took 48.9 s on the
+- **Its request timeout is 225 s on a CPU.** The longest Phase E request took 48.9 s on the
   desktop's CPU (4 threads) and is estimated at about 193 s on the i7-3770 (not measured there).
-  The pplx worker's `stop_grace_period` is 300 s to cover it.
+  With 3 × 10 s of last posts and the 10 s join, the stop bound is 265 s: under the supervisor's
+  270 s window-end kill, and covered by the pplx worker's `stop_grace_period` of 300 s.
 - **Parity tool:** `python -m makhzan_ml.worker.parity --model pplx --backend llamacpp --device
   cpu --llamacpp-url … --gguf-path /models/pplx-flash-v1.3-Q4_K_S.gguf --requests
   /req/pplx-K1-full.jsonl --stored ml/out/gguf-pplx/Q4_K_S.jsonl --stored-temperature 1`. The

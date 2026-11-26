@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import time
 import unicodedata
 from pathlib import Path
 
 from kev_gguf import ROOT, pair_min, post, spearman
+from kev_gguf import load as load_kev
 
 REQUESTS = ROOT / "ml/out/gguf-pplx/requests-K1-full.jsonl"
 REF = ROOT / "ml/out/prompt-grid/raw/pplx-K1-full.jsonl"
@@ -98,9 +98,10 @@ def cmd_compare(args) -> None:
 
 def cmd_decisions(args) -> None:
     """Production rule (Kev >= 0.8 and pplx >= 0.95, pair = min of both orders) on pairs the
-    vetoes pass; Kev is the stored bf16 score, pplx the reference or the variant."""
+    vetoes pass. Kev is the stored bf16 score, or `--kev` (a llama.cpp Kev file is calibrated:
+    pass `--kev-temperature 2.406` to read it raw); pplx the reference or the variant."""
     key = {r["pair_id"]: r for r in map(json.loads, KEY.open())}
-    kev = load(KEV)
+    kev = load_kev(args.kev, args.kev_temperature) if args.kev else load(KEV)
     runs = {"pplx bf16 (reference)": load(REF), args.scores.name: load(args.scores)}
     ok = [p for p, k in key.items() if not any(k["veto"].values())
           and all(pair_min(r, p) is not None for r in (*runs.values(), kev))]  # fmt: skip
@@ -126,12 +127,15 @@ def main() -> None:
     s.add_argument("--base", required=True)
     s.add_argument("--out", type=Path, required=True)
     s.add_argument("--n", type=int, help="first N pairs (both orders)")
-    for name in ("compare", "decisions"):
-        sub.add_parser(name).add_argument("scores", type=Path)
+    sub.add_parser("compare").add_argument("scores", type=Path)
+    d = sub.add_parser("decisions")
+    d.add_argument("scores", type=Path)
+    d.add_argument("--kev", type=Path, help="Kev scores to combine with (default: stored bf16)")
+    d.add_argument("--kev-temperature", type=float, default=1.0,
+                   help="undo this temperature on --kev (2.406 for llama.cpp Kev scores)")  # fmt: skip
     args = ap.parse_args()
     {"score": cmd_score, "compare": cmd_compare, "decisions": cmd_decisions}[args.cmd](args)
 
 
 if __name__ == "__main__":
-    _ = math  # stdlib only
     main()

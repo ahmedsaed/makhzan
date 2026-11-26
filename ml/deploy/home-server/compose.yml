@@ -87,8 +87,8 @@ services:
     <<: *worker
     image: ${PPLX_IMAGE:-ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu:latest}
     # Above the anchor's 240 s for the llama.cpp backend (llamacpp-pplx.toml): its longest request
-    # on this CPU is about 193 s (estimated) and may run to its 240 s timeout, then 3 x 10 s of
-    # last posts and a 10 s join. The torch backend's bound is far below either.
+    # on this CPU is about 193 s (estimated) and may run to its 225 s timeout, then 3 x 10 s of
+    # last posts and a 10 s join (265 s). The torch backend's bound is far below either.
     stop_grace_period: 300s
     volumes:
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}:/models:ro

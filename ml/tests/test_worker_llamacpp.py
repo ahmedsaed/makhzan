@@ -327,6 +327,16 @@ def test_the_request_timeout_is_per_device_and_inside_the_stop_bound(tmp_path, s
         assert timeout + 3 * 10 + 10 < grace, (key, timeout, grace)
 
 
+def test_every_llamacpp_request_fits_the_window_end_kill():
+    """With outside_window = "wait" a last request may start just before the window's end; the
+    supervisor kills the session KILL_AFTER_S after it. The request, 3 x 10 s of last posts and
+    the 10 s join must finish first, or a score is lost without its UNDELIVERED log."""
+    from makhzan_ml.worker import supervisor
+
+    for (key, device), timeout in judges.LLAMACPP_REQUEST_S.items():
+        assert timeout + 3 * 10 + 10 < supervisor.KILL_AFTER_S, (key, device, timeout)
+
+
 def test_a_stop_interrupts_the_hash_and_the_wait(tmp_path):
     gguf = kev_gguf(tmp_path)
     stop = threading.Event()
