@@ -129,7 +129,8 @@ class HeartbeatBody(BaseModel):
 class Score(BaseModel):
     order: Literal["ab", "ba"]
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    p: float = Field(ge=0.0, le=1.0)
+    # strict: a JSON true/false is not a probability (lax mode would store true as 1.0).
+    p: float = Field(ge=0.0, le=1.0, strict=True)
     seconds: float | None = Field(None, ge=0)
     extra: dict[str, Any] | None = None
 
