@@ -30,7 +30,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import select, text, tuple_
+from sqlalchemy import literal_column, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,9 +140,13 @@ async def enqueue(
 ) -> int:
     """Queue each pair at its pipeline's first stage (or `stage`, which is how
     the broker queues a later one). Idempotent: a pair already queued or
-    leased at that stage and judge is left alone, and so is one whose job
-    there is dead: a poison job is handled by hand (P6, `./makhzan ai jobs
-    retry`), not re-queued by every daily run. Flushed, not committed;
+    leased at that stage and judge gets no second job, and one whose job there
+    is dead is left alone: a poison job is handled by hand (P6, `./makhzan ai
+    jobs retry`), not re-queued by every daily run. One thing does change: a
+    **queued** job offered again at a higher priority is raised to it (only
+    its priority; reason and everything else stay), so a "same" queued at 35
+    for a new judge is lifted to 100 when its text then changes (P8 as amended
+    2026-11-26). A leased job is never touched. Flushed, not committed;
     returns how many jobs were created. Rows go in batches, so a backlog of
     many thousand pairs is a few statements rather than one per pair."""
     created = 0
@@ -166,6 +170,14 @@ async def enqueue(
                 "priority": request.priority,
             }
         )
+    # One row per job key, at the highest priority offered: ON CONFLICT DO UPDATE may not
+    # touch the same row twice in one statement.
+    unique: dict[tuple, dict] = {}
+    for r in rows:
+        k = (r["pipeline"], r["stage"], r["model_version_id"], r["listing_a"], r["listing_b"])
+        if k not in unique or r["priority"] > unique[k]["priority"]:
+            unique[k] = {**unique.get(k, r), "priority": r["priority"]}
+    rows = list(unique.values())
     for start in range(0, len(rows), _BATCH):
         batch = rows[start : start + _BATCH]
         keys = [
@@ -197,17 +209,21 @@ async def enqueue(
         batch = [r for r, key in zip(batch, keys, strict=True) if key not in dead]
         if not batch:
             continue
+        stmt = insert(AiJob).values(batch)
         result = await session.execute(
-            insert(AiJob)
-            .values(batch)
-            .on_conflict_do_nothing(
+            stmt.on_conflict_do_update(
                 index_elements=["pipeline", "stage", "model_version_id", "listing_a", "listing_b"],
                 # Literal, not bound: Postgres matches a partial index's
                 # predicate only against constants, and asyncpg's prepared
                 # statement goes generic after five runs.
                 index_where=text("status IN ('queued', 'leased')"),
+                set_={"priority": stmt.excluded.priority},
+                # Only a queued job, and only upwards: a leased one is a worker's.
+                where=text("ai_jobs.status = 'queued' AND ai_jobs.priority < excluded.priority"),
             )
+            # xmax = 0 on a row this statement inserted; an updated row has it set.
+            .returning(literal_column("(xmax = 0)"))
         )
-        created += result.rowcount or 0
+        created += sum(1 for (inserted,) in result if inserted)
     await session.flush()
     return created

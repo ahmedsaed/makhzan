@@ -71,11 +71,13 @@ class Sidecar:
     """llama-server's three endpoints. `calibrated(payload)` is the P(yes) it returns."""
 
     def __init__(self, *, model_path="/models/Kev-4B-Q4_K_M.gguf", build="b12767-a8ad690ca",
-                 not_ready=0, calibrated=None, status=200):  # fmt: skip
+                 not_ready=0, calibrated=None, status=200, answer=None):  # fmt: skip
         self.model_path, self.build, self.not_ready, self.status = (
             model_path, build, not_ready, status,
         )  # fmt: skip
         self.calibrated = calibrated or (lambda payload: 0.7)
+        #: The whole response body, when a test needs a malformed one.
+        self.answer = answer
         self.requests: list[dict] = []
         outer = self
 
@@ -107,6 +109,8 @@ class Sidecar:
                 outer.requests.append(body)
                 if outer.status != 200:
                     return self._send(outer.status, {"error": {"message": "bad request"}})
+                if outer.answer is not None:
+                    return self._send(200, outer.answer(body))
                 q = next(iter(body["questions"]))
                 p = outer.calibrated(body)
                 self._send(200, {"answers": {q: {"type": "noul", "noul": p}}})
@@ -134,8 +138,8 @@ def sidecar():
         s.close()
 
 
-def rt(url: str, gguf: Path) -> judges.Runtime:
-    return judges.Runtime("gpu", "q4_k_m", None, False, None, "llamacpp", url, gguf)
+def rt(url: str, gguf: Path, stop=None, device="gpu") -> judges.Runtime:
+    return judges.Runtime(device, "q4_k_m", None, False, None, "llamacpp", url, gguf, stop)
 
 
 PAYLOAD = {"state": "Listing A ...", "questions": {"same": {"type": "noul", "instructions": "?"}}}
@@ -180,6 +184,18 @@ def test_uncalibrate_keeps_order_and_bounds():
     calibrated = 1 / (1 + math.exp(-math.log(4) / T))
     assert calibrated == pytest.approx(0.640, abs=1e-3)
     assert judges.uncalibrate(calibrated, T) == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf, 1.5, -0.2, True, False, "0.5",
+                                 None])  # fmt: skip
+def test_uncalibrate_refuses_what_is_not_a_probability(bad):
+    with pytest.raises(ValueError, match="not a probability"):
+        judges.uncalibrate(bad, T)
+
+
+def test_uncalibrate_takes_exact_zero_and_one():
+    assert 0.0 <= judges.uncalibrate(0, T) < 1e-20
+    assert 1.0 - 1e-9 < judges.uncalibrate(1.0, T) <= 1.0
 
 
 # --- loading ------------------------------------------------------------------------------
@@ -244,6 +260,55 @@ def test_load_gives_up_on_a_sidecar_that_never_gets_ready(tmp_path, monkeypatch)
     monkeypatch.setattr(judges, "LLAMACPP_READY_S", 0.0)
     with pytest.raises(judges.LoadError, match="not ready"):
         judges._load_kev_llamacpp(rt("http://127.0.0.1:9", gguf), pin_of(gguf))
+
+
+@pytest.mark.parametrize(
+    "answer, match",
+    [
+        (lambda b: ["not", "a", "dict"], "no answers.same.noul"),
+        (lambda b: {"answers": {}}, "no answers.same.noul"),
+        (lambda b: {"answers": {"same": {"type": "noul"}}}, "no answers.same.noul"),
+        (lambda b: {"answers": {"same": {"noul": math.nan}}}, "not a probability"),
+        (lambda b: {"answers": {"same": {"noul": 1.5}}}, "not a probability"),
+        (lambda b: {"answers": {"same": {"noul": -0.2}}}, "not a probability"),
+        (lambda b: {"answers": {"same": {"noul": True}}}, "not a probability"),
+        (lambda b: {"answers": {"same": {"noul": "0.7"}}}, "not a probability"),
+    ],
+)
+def test_a_malformed_answer_is_an_error_never_a_score(tmp_path, sidecar, answer, match):
+    gguf = kev_gguf(tmp_path)
+    judge = judges._load_kev_llamacpp(rt(sidecar(answer=answer).url, gguf), pin_of(gguf))
+    with pytest.raises(RuntimeError, match=match):
+        judge.score(PAYLOAD)
+
+
+def test_the_request_timeout_is_per_device_and_inside_the_stop_bound(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    for device, want in (("gpu", 60.0), ("cpu", 120.0)):
+        judge = judges._load_kev_llamacpp(rt(sidecar().url, gguf, device=device), pin_of(gguf))
+        assert judge.info["request_timeout_s"] == want
+    # The home server's stop_grace_period (240 s) covers a request, 3 x 10 s of last posts
+    # and a 10 s join (docs/ai/worker.md, "A stop sets one deadline").
+    assert max(judges.LLAMACPP_REQUEST_S.values()) + 3 * 10 + 10 < 240
+
+
+def test_a_stop_interrupts_the_hash_and_the_wait(tmp_path):
+    gguf = kev_gguf(tmp_path)
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(judges.LoadInterrupted, match="hashing"):
+        judges._load_kev_llamacpp(rt("http://127.0.0.1:9", gguf, stop), pin_of(gguf))
+    with pytest.raises(judges.LoadInterrupted, match="waiting"):
+        judges._wait_ready("http://127.0.0.1:9", 120.0, stop)
+    # Not yet stopped, then stopped while waiting: it ends at the next check, not at 120 s.
+    late = threading.Event()
+    threading.Timer(0.3, late.set).start()
+    import time
+
+    t0 = time.monotonic()
+    with pytest.raises(judges.LoadInterrupted):
+        judges._wait_ready("http://127.0.0.1:9", 120.0, late)
+    assert time.monotonic() - t0 < 5
 
 
 def test_a_refused_request_is_an_error_not_a_score(tmp_path, sidecar):
@@ -407,3 +472,29 @@ def test_the_production_broker_version_refuses_the_alternative(tmp_path, sidecar
             "schedule": {"windows": "always", "on_empty": "exit"},
         })  # fmt: skip
         assert run.Worker(cfg).run() == run.EXIT_VERSION
+
+
+def test_a_stop_during_the_load_hands_the_lease_back_not_a_config_error(tmp_path):
+    with FakeBroker({"tok": ("amd-kev", ["kev"])},
+                    versions={"kev": pins.pin_for("kev", "llamacpp").model_version},
+                    weights={"kev": pins.KEV_GGUF_REVISION}) as broker:  # fmt: skip
+        job = broker.add_job("kev", {"ab": PAYLOAD})
+        cfg = parse({
+            "worker": {"name": "amd-kev", "broker_url": broker.url, "token": "tok",
+                       "model": "kev"},
+            "compute": {"backend": "llamacpp", "device": "gpu",
+                        "llamacpp_url": "http://127.0.0.1:9", "gguf_path": str(tmp_path / "g")},
+            "schedule": {"windows": "always", "on_empty": "exit"},
+        })  # fmt: skip
+        worker = None
+
+        def load(key, runtime):
+            assert runtime.stop is worker.stop
+            worker.request_stop("test: SIGTERM during the load")
+            raise judges.LoadInterrupted("stopped while hashing")
+
+        worker = run.Worker(cfg, load_judge=load)
+        code = worker.run()
+        held = broker.jobs[job.job_id]
+    assert code != run.EXIT_CONFIG
+    assert held.scores == {} and held.status == "queued"

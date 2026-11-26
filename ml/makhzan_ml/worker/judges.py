@@ -71,6 +71,10 @@ class LoadError(RuntimeError):
     """The model could not be loaded as pinned; nothing may be scored."""
 
 
+class LoadInterrupted(LoadError):
+    """A stop came during an interruptible load (the llama.cpp backend's hash and wait)."""
+
+
 @dataclass
 class Judge:
     """A loaded model: `score(payload) -> (p, extra)`, one request per call."""
@@ -261,6 +265,9 @@ class Runtime:
     backend: str = "torch"
     llamacpp_url: str | None = None
     gguf_path: Path | None = None
+    #: The worker's stop event (a threading.Event): the llama.cpp load checks it while it
+    #: hashes the GGUF and waits for the sidecar, so a stop never waits on either.
+    stop: object = None
 
 
 def prepare_environment(rt: Runtime) -> None:
@@ -405,11 +412,15 @@ _LOADERS = {"kev": _load_kev, "pplx": _load_pplx}
 
 # --- llama.cpp sidecar ------------------------------------------------------------------------
 
-#: How long a load waits for the sidecar to answer /health ok (it loads the GGUF at start; a
-#: 3 GB file from an HDD takes tens of seconds), and the timeout of one scoring request (the
-#: home server's AMD card takes about 5 s; a CPU sidecar up to about 100 s).
-LLAMACPP_READY_S = 300.0
-LLAMACPP_REQUEST_S = 600.0
+#: How long a load waits for the sidecar to answer /health ok (it loads the GGUF when it
+#: starts, normally long before a window opens; a 3 GB file from an HDD takes tens of
+#: seconds). Interruptible by a stop, as is the hash before it.
+LLAMACPP_READY_S = 120.0
+#: One scoring request's timeout, per device. Measured: about 0.5 s on the 3060, 4.4-6.1 s on
+#: the home server's AMD card; on CPU about 95 s for the longest request (1,625 tokens at
+#: ~17 tokens/s). Both stay inside the stop bound (docs/ai/worker.md, "A stop sets one
+#: deadline"): a request is the one part of a session a stop cannot interrupt.
+LLAMACPP_REQUEST_S = {"gpu": 60.0, "cpu": 120.0}
 
 _GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
                  10: "<Q", 11: "<q", 12: "<d"}  # fmt: skip
@@ -471,17 +482,36 @@ def gguf_metadata(path: Path, keys: set[str]) -> dict:
     return found
 
 
-def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
+def _stopped(stop) -> bool:
+    return stop is not None and stop.is_set()
+
+
+def sha256_file(path: Path, chunk: int = 1 << 20, stop=None) -> str:
+    """The file's sha256; a set `stop` event ends it between chunks (LoadInterrupted)."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while block := f.read(chunk):
+            if _stopped(stop):
+                raise LoadInterrupted(f"stopped while hashing {path.name}")
             h.update(block)
     return h.hexdigest()
 
 
 def uncalibrate(p: float, temperature: float) -> float:
-    """llama.cpp's calibrated P(yes) = sigmoid(logit / T) back to the raw sigmoid(logit)."""
-    p = min(max(float(p), 1e-12), 1.0 - 1e-12)
+    """llama.cpp's calibrated P(yes) = sigmoid(logit / T) back to the raw sigmoid(logit).
+
+    `p` must be a real probability: a bool, a string, NaN, an infinity or anything outside
+    [0, 1] is a ValueError, never clamped into a score. Only exactly 0 and 1 are nudged
+    inward, so their logit is finite."""
+    if isinstance(p, bool) or not isinstance(p, (int, float)):
+        raise ValueError(f"not a probability: {p!r}")
+    p = float(p)
+    if not math.isfinite(p) or not 0.0 <= p <= 1.0:
+        raise ValueError(f"not a probability: {p!r}")
+    if p == 0.0:
+        p = 1e-12
+    elif p == 1.0:
+        p = 1.0 - 1e-12
     z = temperature * math.log(p / (1.0 - p))
     return 1.0 / (1.0 + math.exp(-z)) if z >= 0 else math.exp(z) / (1.0 + math.exp(z))
 
@@ -493,10 +523,12 @@ def _http_json(url: str, body: dict | None = None, timeout: float = 30.0) -> dic
         return json.loads(r.read())
 
 
-def _wait_ready(base: str, budget_s: float, clock=time.monotonic, sleep=time.sleep) -> None:
+def _wait_ready(base: str, budget_s: float, stop=None, clock=time.monotonic) -> None:
     deadline = clock() + budget_s
     last = "no answer"
     while True:
+        if _stopped(stop):
+            raise LoadInterrupted("stopped while waiting for the llama.cpp sidecar")
         try:
             if _http_json(f"{base}/health", timeout=10).get("status") == "ok":
                 return
@@ -507,7 +539,10 @@ def _wait_ready(base: str, budget_s: float, clock=time.monotonic, sleep=time.sle
             last = f"{type(e).__name__}: {e}"
         if clock() >= deadline:
             raise LoadError(f"the llama.cpp sidecar at {base} is not ready ({last})")
-        sleep(2.0)
+        if stop is not None:
+            stop.wait(2.0)
+        else:
+            time.sleep(2.0)
 
 
 def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
@@ -527,11 +562,12 @@ def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
             f"kev (llamacpp): the GGUF's temperature is {temperature}, pinned "
             f"{pin.gguf_temperature}"
         )
-    digest = sha256_file(path)
+    digest = sha256_file(path, stop=rt.stop)
     if digest != pin.gguf_sha256:
         raise LoadError(f"kev (llamacpp): {path.name} sha256 {digest}, pinned {pin.gguf_sha256}")
     base = rt.llamacpp_url.rstrip("/")
-    _wait_ready(base, LLAMACPP_READY_S)
+    _wait_ready(base, LLAMACPP_READY_S, rt.stop)
+    request_timeout = LLAMACPP_REQUEST_S[rt.device]
     props = _http_json(f"{base}/props")
     served = Path(str(props.get("model_path") or "")).name
     if served != pin.gguf_file:
@@ -545,12 +581,20 @@ def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
         q = question_key(payload)
         try:
             body = _http_json(f"{base}/v1/systemone", {"model": "kev", **payload},
-                              timeout=LLAMACPP_REQUEST_S)  # fmt: skip
+                              timeout=request_timeout)  # fmt: skip
         except urllib.error.HTTPError as e:
             detail = e.read()[:300].decode("utf-8", "replace")
             raise RuntimeError(f"llama.cpp answered HTTP {e.code}: {detail}") from None
-        calibrated = body["answers"][q]["noul"]
-        return uncalibrate(calibrated, pin.gguf_temperature), {}
+        try:
+            calibrated = body["answers"][q]["noul"]
+        except (KeyError, TypeError):
+            raise RuntimeError(
+                f"llama.cpp's answer has no answers.{q}.noul: {str(body)[:300]}"
+            ) from None
+        try:
+            return uncalibrate(calibrated, pin.gguf_temperature), {}
+        except ValueError as e:
+            raise RuntimeError(f"llama.cpp answered {q}.noul = {calibrated!r}: {e}") from None
 
     info = {
         "backend": "llamacpp",
@@ -562,6 +606,7 @@ def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
         "temperature": pin.temperature,
         "llamacpp_build": build,
         "slots": props.get("total_slots"),
+        "request_timeout_s": request_timeout,
         "image": pin.code,
     }
     return Judge("kev", score, info)

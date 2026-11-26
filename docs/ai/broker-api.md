@@ -384,7 +384,13 @@ The next stage keeps the job's priority when that is higher than
 `NEXT_STAGE` (80), so a re-score of a standing "same" whose text changed (100)
 stays first through every stage (P8). A re-score owed only to a new judge version
 starts below new pairs and the backlog (a "same" at 35, a "not same" at 30; P8 as
-amended 2026-11-26) and, like any job, moves to 80 at its next stage. The same step, over many pairs at once, is what a
+amended 2026-11-26). Like any job, it moves to 80 at its next stage (`flow.on_scores`).
+That is above a new pair's first stage at 60: once a re-score has passed Kev, its pplx
+stage goes ahead of new pairs' Kev stage. The two stages are leased by different workers,
+so this orders only the pplx queue. On an unchanged text pplx's stored score is reused
+and no pplx job is queued at all. A "same" queued at 35 is raised to 100 if its text then
+changes (`triggers.enqueue` raises a queued job's priority, never lowers it, and leaves a
+leased one alone). The same step, over many pairs at once, is what a
 trigger's pairs go through (`flow.offer`): a pair whose requests are all
 scored already is decided (or recorded) there and then, with no job and no
 lease, and the rest are queued at the stage they still owe.

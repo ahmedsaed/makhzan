@@ -559,7 +559,7 @@ class Worker:
                 )
             if self._may_continue():
                 judge = self._ensure_loaded(key, lease_id)
-                for job in jobs:
+                for job in jobs if judge is not None else ():
                     # Checked again before each job, so right after the load too: a stop that
                     # came during a long load scores nothing.
                     if not self._may_continue():
@@ -590,7 +590,7 @@ class Worker:
                 self.held.leases.pop(lease_id, None)
                 self.held.progress = None
 
-    def _ensure_loaded(self, key: str, lease_id: str) -> judges.Judge:
+    def _ensure_loaded(self, key: str, lease_id: str) -> judges.Judge | None:
         """The session's model, loaded once, on the first lease that brings jobs."""
         if self.judge is not None:
             return self.judge
@@ -604,10 +604,16 @@ class Worker:
             cfg.backend,
             cfg.llamacpp_url,
             cfg.gguf_path,
+            self.stop,
         )
         log.info("loading %s (%s, %s) for lease %s", key, cfg.device, cfg.dtype, lease_id)
         try:
             self.judge = self.load_judge(key, rt)
+        except judges.LoadInterrupted:
+            # A stop came during an interruptible load: nothing is loaded, and the caller's
+            # next check sees the stop and hands the lease back gracefully.
+            log.info("load of %s interrupted by the stop", key)
+            return None
         except Exception as e:  # noqa: BLE001 - every load failure ends the session the same way
             # The jobs are not at fault: the lease goes back gracefully (once, in
             # _process_lease), so a misconfigured worker restarted by a timer cannot turn

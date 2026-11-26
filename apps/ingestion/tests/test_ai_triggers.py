@@ -16,7 +16,7 @@ from makhzan_schemas.ai import flow, triggers
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME
 from makhzan_schemas.ai.policy import MODELS
 from makhzan_schemas.ai.render import load_shown, render
-from makhzan_schemas.ai.triggers import PairRequest
+from makhzan_schemas.ai.triggers import PairRequest, enqueue
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import SourceType
 from makhzan_schemas.models import (
@@ -369,6 +369,41 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
     [leased] = await _jobs(status="leased")
     assert lease["jobs"][0]["job_id"] == leased.id
     assert (leased.listing_a, leased.listing_b) == pair(s1, s2)
+
+
+async def test_a_queued_job_offered_higher_is_raised_and_a_leased_one_is_not():
+    """A "same" queued at 35 for a new judge whose text then changes is re-offered at 100:
+    the queued job rises to 100 (P8 as amended 2026-11-26). Never lowered, never a second
+    job, and a leased job is a worker's: left alone."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    v = await _listing(b, "ceramic capacitor 100nf 50v")
+    same = triggers.RESCORE_SAME_VERSION
+    async with SessionLocal() as session:
+        assert await enqueue(session, [PairRequest(x, y, "match", same, "rescore")]) == 1
+        assert await enqueue(session, [PairRequest(x, y, "match", 100, "rescore")]) == 0
+        assert await enqueue(session, [PairRequest(x, y, "match", 30, "candidates")]) == 0
+        # Two offers of one pair in one call: one job, at the higher priority.
+        assert await enqueue(
+            session, [PairRequest(x, v, "match", 35, "rescore"), PairRequest(v, x, "match", 60,
+                                                                             "rescore")]
+        ) == 1  # fmt: skip
+        await session.commit()
+    jobs = {(j.listing_a, j.listing_b): j for j in await _jobs()}
+    assert len(jobs) == 2
+    assert (jobs[pair(x, y)].priority, jobs[pair(x, y)].reason) == (100, "rescore")
+    assert jobs[pair(x, v)].priority == 60
+
+    async with SessionLocal() as session:
+        await session.execute(
+            update(AiJob).values(status="leased", priority=same, lease_id=uuid.uuid4())
+        )
+        await session.commit()
+    async with SessionLocal() as session:
+        assert await enqueue(session, [PairRequest(x, y, "match", 100, "rescore")]) == 0
+        await session.commit()
+    assert {j.priority for j in await _jobs()} == {same}
 
 
 # --- audit ------------------------------------------------------------------------------------

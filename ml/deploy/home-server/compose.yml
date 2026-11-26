@@ -144,7 +144,9 @@ services:
     memswap_limit: 4g
     pids_limit: 128
     # Not published to the host, and on the workers' internal network only: the kev worker
-    # reaches it as http://kev-llamacpp:8080, and it reaches nothing.
+    # reaches it as http://kev-llamacpp:8080. From there it could reach broker-proxy:8100, as
+    # any worker can, which forwards only to the broker; without a token the broker refuses
+    # it. Nothing else.
     networks: [broker-only]
 
 networks:

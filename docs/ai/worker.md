@@ -203,8 +203,8 @@ the worker exits within:
 
 | Part | At most |
 |---|---|
-| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU |
-| or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU |
+| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU; on a llama.cpp sidecar at most its timeout, 60 s on a GPU (measured 0.5 s on the 3060, 4.4–6.1 s on the AMD card) or 120 s on a CPU |
+| or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU; on a llama.cpp sidecar the load (hashing the GGUF, waiting up to 120 s for the sidecar) checks the stop between steps, so it ends within about 2 s |
 | or, on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
 | retries (`STOP_GRACE_S`) | only within 60 s of the stop, so they overlap what is in flight |
 | one last attempt each for the calls still due: results, the lease release, the session release (`STOP_TIMEOUT_S`) | 10 s each, at most 3 × 10 s |
@@ -218,7 +218,9 @@ for the heartbeat join:
   release, 3 × 10 s, then the join: about 144 s;
 - a CPU model load: about 150 s, then only the lease's release (no results to post; that
   release ends the session, so no session release follows), then the join: about 170 s;
-- the GPU: the 60 s of retries outlast any request, then 3 × 10 s and the join: about 100 s.
+- the GPU: the 60 s of retries outlast any request, then 3 × 10 s and the join: about 100 s;
+- a llama.cpp sidecar: a request's timeout (60 s on a GPU, 120 s on a CPU), then 3 × 10 s
+  and the join: at most about 100 s or 160 s, inside the home server's 240 s.
 
 Anything still undelivered is logged before the process exits. Set the stop timeout above
 the bound: 240 s on the home server's CPU (`stop_grace_period: 240s` in its compose stack),
@@ -712,10 +714,17 @@ where it runs about 15-20x the CPU worker's speed per token.
   one request per call. The GGUF carries Kev's fitted temperature (2.406) and llama.cpp
   always applies it, so the worker undoes it (`judges.uncalibrate`). The score is then raw
   P(yes), the scale every validated Kev score and the policy's 0.8 are on.
+- **The answer is checked too.** A missing or malformed `answers.same.noul`, or a value
+  that is not a real number in [0, 1] (NaN, infinite, out of range, a bool or a string), is
+  an error on that job, never a score. Only exactly 0 and 1 are nudged inward so their
+  logit is finite.
+- **Timeouts:** 60 s for one request on a GPU sidecar and 120 s on a CPU one, both inside the
+  stop bound (above). The load's hash of the GGUF and its wait for `/health` (up to 120 s)
+  both check the stop, so a stop never waits on them.
 - **Checks before anything is scored** (a mismatch is a load error, exit 2):
   - the worker's own read-only copy of the GGUF: its name, its sha256, and its metadata
     (`qwen35.decision.type = kev`, the temperature), read with the standard library;
-  - the sidecar's `/health`, waited for up to 300 s;
+  - the sidecar's `/health`, waited for up to 120 s;
   - its `/props`: the file it serves, and llama.cpp build b12767.
 
   The worker cannot see the sidecar's file directly. Compose mounts the same host file into
@@ -728,8 +737,10 @@ where it runs about 15-20x the CPU worker's speed per token.
     video groups (`RENDER_GID`, `VIDEO_GID` in `.env`);
   - the 4 GB settings `-ngl 99 -np 1 -c 4096 -b 512 -ub 512`. Batch 2048 is 2.7x faster
     but needs about 5.3 GB;
-  - on `broker-only` only: no published port and no egress, so the worker reaches it as
-    `http://kev-llamacpp:8080` and it reaches nothing;
+  - on `broker-only` only: no published port and no route out. The worker reaches it as
+    `http://kev-llamacpp:8080`. The one other thing on that network is `broker-proxy:8100`,
+    which the sidecar could reach as any worker can. It forwards only to the broker, and
+    the sidecar holds no token, so the broker would refuse it (401). It reaches nothing else;
   - the stack's hardening: non-root, read-only filesystem, no capabilities. It started
     and scored that way on CPU.
 
