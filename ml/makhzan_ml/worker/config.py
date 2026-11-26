@@ -31,8 +31,8 @@ DEVICES = ("cpu", "gpu")
 #: pairing was never measured against the stored scores, so it is refused, not guessed.
 DTYPES = {"cpu": ("fp32",), "gpu": ("bf16",)}
 #: The llama.cpp backend's precision is the GGUF's, on either device (D20 as amended
-#: 2026-11-26 accepts Kev-4B Q4_K_M; docs/ai/kev-llamacpp.md).
-LLAMACPP_DTYPES = ("q4_k_m",)
+#: 2026-11-26 accepts Kev-4B Q4_K_M and pplx Q4_K_S; docs/ai/kev-llamacpp.md, pplx-llamacpp.md).
+LLAMACPP_DTYPES = {"kev": ("q4_k_m",), "pplx": ("q4_k_s",)}
 ON_EMPTY = ("exit", "wait")
 OUTSIDE_WINDOW = ("exit", "wait")
 #: Floors on the two intervals: a heartbeat or a poll every few milliseconds would only
@@ -464,7 +464,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     device = compute.get("device", "cpu")
     if device not in DEVICES:
         raise ConfigError(f"[compute] device {device!r}: one of {list(DEVICES)}")
-    dtypes = LLAMACPP_DTYPES if backend == "llamacpp" else DTYPES[device]
+    dtypes = LLAMACPP_DTYPES[model] if backend == "llamacpp" else DTYPES[device]
     dtype = compute.get("dtype", dtypes[0])
     if dtype not in dtypes:
         raise ConfigError(

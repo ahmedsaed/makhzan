@@ -86,6 +86,10 @@ services:
   pplx:
     <<: *worker
     image: ${PPLX_IMAGE:-ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu:latest}
+    # Above the anchor's 240 s for the llama.cpp backend (llamacpp-pplx.toml): its longest request
+    # on this CPU is about 193 s (estimated) and may run to its 225 s timeout, then 3 x 10 s of
+    # last posts and a 10 s join (265 s). The torch backend's bound is far below either.
+    stop_grace_period: 300s
     volumes:
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}:/models:ro
       - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.toml:/etc/makhzan-ai/worker.toml:ro
@@ -147,6 +151,55 @@ services:
     # reaches it as http://kev-llamacpp:8080. From there it could reach broker-proxy:8100, as
     # any worker can, which forwards only to the broker; without a token the broker refuses
     # it. Nothing else.
+    networks: [broker-only]
+
+  # pplx on the home server's CPU through llama.cpp (docs/ai/pplx-llamacpp.md): NOT ENABLED. It
+  # starts only with `docker compose --profile llamacpp-pplx up -d`, and the pplx worker must then
+  # run llamacpp-pplx.toml (backend = "llamacpp"). The broker refuses that worker's version until
+  # the policy names it (an owner step). On the CPU, not the card: the 4 GB card holds one model,
+  # and Kev's sidecar keeps its GGUF loaded there.
+  pplx-llamacpp:
+    <<: *hardening
+    profiles: [llamacpp-pplx]
+    # llama.cpp's official server-vulkan image, build b12767, by digest (pins.LLAMACPP_IMAGE);
+    # with no /dev/dri it computes on the CPU (the libggml-cpu-ivybridge backend on the i7-3770).
+    image: ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
+    # pplx's full-attention layers are non-causal, so a whole request must fit one batch: -b and
+    # -ub at least the longest request (3,511 tokens in Phase E), hence 4096, as -c. One slot.
+    command:
+      - -m
+      - /models/pplx-flash-v1.3-Q4_K_S.gguf
+      - -ngl
+      - "0"
+      - -t
+      - "4"
+      - -np
+      - "1"
+      - -c
+      - "4096"
+      - -b
+      - "4096"
+      - -ub
+      - "4096"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    volumes:
+      # The file in WEIGHTS_DIR, the pplx worker's own /models mount, so both read one file.
+      - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}/pplx-flash-v1.3-Q4_K_S.gguf:/models/pplx-flash-v1.3-Q4_K_S.gguf:ro
+    tmpfs:
+      - /tmp:size=64m
+    environment:
+      HOME: /tmp
+    # The GGUF is memory-mapped (2.9 GB) plus the 4096-token compute buffer.
+    cpus: 4
+    mem_limit: 6g
+    memswap_limit: 6g
+    pids_limit: 128
+    # As kev-llamacpp: not published, on the workers' internal network only (the pplx worker
+    # reaches it as http://pplx-llamacpp:8080); it could reach broker-proxy:8100, which the
+    # broker refuses without a token. Nothing else.
     networks: [broker-only]
 
 networks:

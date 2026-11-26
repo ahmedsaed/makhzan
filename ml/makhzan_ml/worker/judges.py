@@ -417,11 +417,24 @@ _LOADERS = {"kev": _load_kev, "pplx": _load_pplx}
 #: starts, normally long before a window opens; a 3 GB file from an HDD takes tens of
 #: seconds). Interruptible by a stop, as is the hash before it.
 LLAMACPP_READY_S = 120.0
-#: One scoring request's timeout, per device. Measured: about 0.5 s on the 3060, 4.4-6.1 s on
-#: the home server's AMD card; on CPU about 95 s for the longest request (1,625 tokens at
-#: ~17 tokens/s). Both stay inside the stop bound (docs/ai/worker.md, "A stop sets one
-#: deadline"): a request is the one part of a session a stop cannot interrupt.
-LLAMACPP_REQUEST_S = {"gpu": 60.0, "cpu": 120.0}
+#: One scoring request's timeout, per model and device. A request is the one part of a session
+#: a stop cannot interrupt, so each stays inside its worker's stop bound (docs/ai/worker.md, "A
+#: stop sets one deadline"; the compose stop_grace_period of the worker that runs it).
+#: - Kev: about 0.5 s on the 3060, 4.4-6.1 s on the home server's AMD card; on the i7-3770's CPU
+#:   about 95 s for its longest request (1,625 tokens at ~17 tokens/s).
+#: - pplx (non-causal, its K1 prompt with the full description, so longer): the longest Phase E
+#:   request, 3,574 tokens, took 48.9 s on the desktop's CPU (4 threads, 73 tokens/s); scaled by
+#:   Kev Q4's measured i7-3770/desktop ratio (17.1 / 67.5 tokens/s), about 193 s on the home
+#:   server. Not measured there yet. Its timeout, 225 s, covers that with margin and keeps the
+#:   whole stop (request, 3 x 10 s of last posts, 10 s join: 265 s) under the supervisor's
+#:   window-end kill (supervisor.KILL_AFTER_S, 270 s) and the pplx worker's 300 s
+#:   stop_grace_period.
+LLAMACPP_REQUEST_S = {
+    ("kev", "gpu"): 60.0,
+    ("kev", "cpu"): 120.0,
+    ("pplx", "gpu"): 60.0,
+    ("pplx", "cpu"): 225.0,
+}
 
 _GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
                  10: "<Q", 11: "<q", 12: "<d"}  # fmt: skip
@@ -563,42 +576,60 @@ def nfc(value):
     return value
 
 
-def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
+def rescale(p: float, served: float, wanted: float) -> float:
+    """A probability llama.cpp served at temperature `served` (its softmax(logit / served)) on
+    the scale of temperature `wanted`: sigmoid(logit · served / wanted).
+
+    Validated as `uncalibrate` does (a bool, a string, NaN, an infinity or anything outside
+    [0, 1] is a ValueError). When the two temperatures agree to 1e-3, as pplx's do (the GGUF
+    carries 1.3302961587905884, the scores and the pin 1.3303), `p` is returned unchanged."""
+    if abs(served - wanted) < 1e-3:
+        uncalibrate(p, 1.0)  # validation only
+        return float(p)
+    return uncalibrate(p, served / wanted)
+
+
+#: Per model: the GGUF's `qwen35.decision.type`, and the `model` name sent with a request.
+LLAMACPP_MODELS = {"kev": ("kev", "kev"), "pplx": ("pplx-decider", "pplx")}
+
+
+def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
+    who = f"{key} (llamacpp)"
+    decision_type, request_model = LLAMACPP_MODELS[key]
     if not rt.llamacpp_url or rt.gguf_path is None:
-        raise LoadError("kev (llamacpp): llamacpp_url and gguf_path are required")
+        raise LoadError(f"{who}: llamacpp_url and gguf_path are required")
     path = Path(rt.gguf_path)
     if not path.is_file():
-        raise LoadError(f"kev (llamacpp): gguf_path {path} is not a file")
+        raise LoadError(f"{who}: gguf_path {path} is not a file")
     if path.name != pin.gguf_file:
-        raise LoadError(f"kev (llamacpp): {path.name!r} is not the pinned {pin.gguf_file!r}")
+        raise LoadError(f"{who}: {path.name!r} is not the pinned {pin.gguf_file!r}")
     meta = gguf_metadata(path, {"qwen35.decision.type", "qwen35.decision.temperature.noul"})
-    if meta.get("qwen35.decision.type") != "kev":
-        raise LoadError(f"kev (llamacpp): {path.name} is not a Kev decision model: {meta}")
+    if meta.get("qwen35.decision.type") != decision_type:
+        raise LoadError(f"{who}: {path.name} is not a {decision_type} decision model: {meta}")
     temperature = meta.get("qwen35.decision.temperature.noul")
     if temperature is None or abs(float(temperature) - pin.gguf_temperature) > 1e-6:
         raise LoadError(
-            f"kev (llamacpp): the GGUF's temperature is {temperature}, pinned "
-            f"{pin.gguf_temperature}"
+            f"{who}: the GGUF's temperature is {temperature}, pinned {pin.gguf_temperature}"
         )
     digest = sha256_file(path, stop=rt.stop)
     if digest != pin.gguf_sha256:
-        raise LoadError(f"kev (llamacpp): {path.name} sha256 {digest}, pinned {pin.gguf_sha256}")
+        raise LoadError(f"{who}: {path.name} sha256 {digest}, pinned {pin.gguf_sha256}")
     base = rt.llamacpp_url.rstrip("/")
     _wait_ready(base, LLAMACPP_READY_S, rt.stop)
-    request_timeout = LLAMACPP_REQUEST_S[rt.device]
+    request_timeout = LLAMACPP_REQUEST_S[(key, rt.device)]
     props = _http_json(f"{base}/props")
     served = Path(str(props.get("model_path") or "")).name
     if served != pin.gguf_file:
-        raise LoadError(f"kev (llamacpp): the sidecar serves {served!r}, pinned {pin.gguf_file!r}")
+        raise LoadError(f"{who}: the sidecar serves {served!r}, pinned {pin.gguf_file!r}")
     build = str(props.get("build_info") or "")
     want_build = pin.model_version.split("+llama.cpp-", 1)[1].split("-", 1)[0]
     if not build.startswith(want_build + "-"):
-        raise LoadError(f"kev (llamacpp): the sidecar is llama.cpp {build!r}, pinned {want_build}")
+        raise LoadError(f"{who}: the sidecar is llama.cpp {build!r}, pinned {want_build}")
 
     def score(payload: dict) -> tuple[float, dict]:
         q = question_key(payload)
         try:
-            body = _http_json(f"{base}/v1/systemone", {"model": "kev", **nfc(payload)},
+            body = _http_json(f"{base}/v1/systemone", {"model": request_model, **nfc(payload)},
                               timeout=request_timeout)  # fmt: skip
         except urllib.error.HTTPError as e:
             detail = e.read()[:300].decode("utf-8", "replace")
@@ -610,7 +641,7 @@ def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
                 f"llama.cpp's answer has no answers.{q}.noul: {str(body)[:300]}"
             ) from None
         try:
-            return uncalibrate(calibrated, pin.gguf_temperature), {}
+            return rescale(calibrated, pin.gguf_temperature, pin.temperature), {}
         except ValueError as e:
             raise RuntimeError(f"llama.cpp answered {q}.noul = {calibrated!r}: {e}") from None
 
@@ -627,7 +658,15 @@ def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
         "request_timeout_s": request_timeout,
         "image": pin.code,
     }
-    return Judge("kev", score, info)
+    return Judge(key, score, info)
+
+
+def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
+    return _load_llamacpp("kev", rt, pin)
+
+
+def _load_pplx_llamacpp(rt: Runtime, pin: Pin) -> Judge:
+    return _load_llamacpp("pplx", rt, pin)
 
 
 def load(key: str, rt: Runtime) -> Judge:
@@ -636,7 +675,7 @@ def load(key: str, rt: Runtime) -> Judge:
     if rt.backend == "llamacpp":
         # The sidecar does the compute: no torch, no weights in this process.
         t0 = time.monotonic()
-        judge = _load_kev_llamacpp(rt, pin)
+        judge = _load_llamacpp(key, rt, pin)
         judge.info["load_seconds"] = round(time.monotonic() - t0, 1)
         judge.info["peak_rss_bytes"] = proc_status("VmHWM")
         return judge

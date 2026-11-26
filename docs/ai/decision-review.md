@@ -145,7 +145,7 @@ is the decision that should have come back to the owner.
 | D17 | Pre-filter | ~~Today's vetoes for rules; relaxed price/form vetoes only in front of the AI~~ Superseded by P13 (2026-11-17): today's vetoes for merges *and* for AI candidates; the relaxed set is parked | Owner | AI candidates | superseded |
 | D18 | Group check | Complete-link; one best match per other shop; Kev < 0.05 inside a group blocks it | Session, concept approved | gain (2,336 merges) | confirm thresholds |
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
-| D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M (llama.cpp) accepted on the label test (see "Kev quantisation" below) | Owner | serving | settled |
+| D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M and pplx-decider-flash-v1.3 Q4_K_S (llama.cpp) accepted on the label test (see "Kev quantisation" and "pplx quantisation" below) | Owner | serving | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
@@ -448,5 +448,24 @@ The 900 pairs can show "not worse", not "equal": a difference of 1–2% would no
 agreement rule, or the same label test plus the owner's sign-off. Q8_0 passes the agreement rule
 (99.3–99.6%, Spearman 0.9993).
 
-Measurements: `docs/ai/kev-llamacpp.md`. Not yet in production: the worker has no llama.cpp
-backend, and the AMD card needs servicing and a soak test first.
+Measurements: `docs/ai/kev-llamacpp.md`. Not yet in production: the worker's llama.cpp backend
+is built but not switched on (an owner step), and the AMD card needs a passing soak test first.
+
+### pplx quantisation (owner, 2026-11-26)
+
+pplx-decider-flash-v1.3 Q4_K_S (our own llama.cpp conversion, imatrix calibrated off the Phase E
+set) accepted (owner, 2026-11-26), despite failing the agreement rule (97.8–98.3%). Combined with
+Kev Q4 under the production rule it made 216 correct merges against bf16's 209, plus one labelled
+"not" that the owner judged grey-area (ATmega328-PU vs ATmega328P). The variant leans toward
+higher scores, so it merges more grey-area pairs.
+
+The other two 4-bit "not" merges seen in the experiment (IQ4_XS: the 47 kΩ resistor with no
+stated wattage vs 47 kΩ 1 W, and 18650 2800 mAh vs "2800 to 3200 mAh") were also judged
+grey-area; IQ4_XS was not chosen. Q8_0 passes the agreement rule (99.8–99.9%, Spearman 0.9998)
+but needs 5.4 GB, more than the home server's card.
+
+**Scope.** As for Kev: this one variant (pinned by its sha256 in `worker/pins.py`); any other
+needs the agreement rule, or the label test plus the owner's sign-off. Measurements:
+`docs/ai/pplx-llamacpp.md`. Not yet in production: the worker's llama.cpp backend for pplx is
+built but not switched on (an owner step), and its speed on the home server's CPU is estimated,
+not measured.

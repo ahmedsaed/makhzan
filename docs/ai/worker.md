@@ -203,7 +203,7 @@ the worker exits within:
 
 | Part | At most |
 |---|---|
-| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU; on a llama.cpp sidecar at most its timeout, 60 s on a GPU (measured 0.5 s on the 3060, 4.4–6.1 s on the AMD card) or 120 s on a CPU |
+| what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU; on a llama.cpp sidecar at most its timeout, 60 s on a GPU (measured 0.5 s on the 3060, 4.4–6.1 s on the AMD card), 120 s for Kev on a CPU, 225 s for pplx on a CPU (its longest request estimated at about 193 s on the home server) |
 | or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU; on a llama.cpp sidecar the load (hashing the GGUF, waiting up to 120 s for the sidecar) checks the stop between steps, so it ends within about 2 s |
 | or, on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
 | retries (`STOP_GRACE_S`) | only within 60 s of the stop, so they overlap what is in flight |
@@ -219,12 +219,20 @@ for the heartbeat join:
 - a CPU model load: about 150 s, then only the lease's release (no results to post; that
   release ends the session, so no session release follows), then the join: about 170 s;
 - the GPU: the 60 s of retries outlast any request, then 3 × 10 s and the join: about 100 s;
-- a llama.cpp sidecar: a request's timeout (60 s on a GPU, 120 s on a CPU), then 3 × 10 s
-  and the join: at most about 100 s or 160 s, inside the home server's 240 s.
+- a llama.cpp sidecar: a request's timeout (60 s on a GPU, 120 s for Kev on a CPU, 225 s for
+  pplx on a CPU), then 3 × 10 s and the join: at most about 100 s, 160 s or 265 s. The pplx
+  worker's compose service therefore has `stop_grace_period: 300s` (240 s would kill it before
+  its last posts); the others keep 240 s.
+
+**The window's end has its own kill bound.** With `outside_window = "wait"`, a session's held jobs
+keep scoring up to the window's end, so a last request may start just before it. The supervisor
+kills a session still running `KILL_AFTER_S` (270 s) after the window's end, a bound that must stay
+under the 5-minute gap before the next window. Every bound above stays under it, the longest being
+pplx on a CPU at 265 s; a test checks every llama.cpp timeout plus 40 s against it.
 
 Anything still undelivered is logged before the process exits. Set the stop timeout above
-the bound: 240 s on the home server's CPU (`stop_grace_period: 240s` in its compose stack),
-120 s on the GPU (`--stop-timeout 120`).
+the bound: 240 s on the home server's CPU (`stop_grace_period: 240s` in its compose stack;
+300 s for the pplx worker, for its llama.cpp backend), 120 s on the GPU (`--stop-timeout 120`).
 
 **Never drop a result silently.** A score is logged at ERROR as `UNDELIVERED`, with its job,
 order, request hash and score (never the payload), the moment it is known not to have
@@ -295,12 +303,13 @@ this image can load the model key, and exits.
 | `memory_gib` | unset | the expected peak resident memory. The worker refuses to start under a smaller container limit and warns if a load peaks above it. Measured on CPU fp32: Kev 17.5 GiB, pplx 18.4 GiB |
 | `mmap` | `false` on CPU, `true` on GPU | `false` reads every weight file with pread(2) and fails the load if any weight file is still mapped afterwards |
 | `weights_cache` | the image's `HF_HOME` | the Hugging Face home holding `hub/`, mounted read-only. The worker always runs offline |
-| `backend` | `"torch"` | `"torch"`: the model's own code in this process. `"llamacpp"`: Kev on a llama.cpp sidecar (Kev only; see "Kev on a llama.cpp sidecar") |
+| `backend` | `"torch"` | `"torch"`: the model's own code in this process. `"llamacpp"`: the model on a llama.cpp sidecar (see "Kev on a llama.cpp sidecar" and "pplx on a llama.cpp sidecar") |
 | `llamacpp_url` | none | `backend = "llamacpp"` only, and required there: the sidecar's base URL, plain `http://` to a compose service name or a loopback address |
 | `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
 
-With `backend = "llamacpp"`, `dtype` is `"q4_k_m"` (the only accepted value), and `mmap` and
-`weights_cache` are refused (the worker holds no weights).
+With `backend = "llamacpp"`, `dtype` is the pinned GGUF's: `"q4_k_m"` for Kev, `"q4_k_s"` for
+pplx (the only accepted values), and `mmap` and `weights_cache` are refused (the worker holds no
+weights).
 
 ### `[schedule]`
 
@@ -772,6 +781,48 @@ where it runs about 15-20x the CPU worker's speed per token.
 - **The sidecar runs whenever its profile is up** and holds the model in the card's memory
   between windows. That is harmless for the card, but it is not stopped with the window as
   the torch worker's model is.
+
+## pplx on a llama.cpp sidecar (built, not in use)
+
+pplx-decider-flash-v1.3 **Q4_K_S**, accepted by the owner under D20's label test
+(`decision-review.md`, "pplx quantisation"; measurements in `docs/ai/pplx-llamacpp.md`), served
+the same way as Kev above, with these differences.
+
+- **What is pinned** (`pins.ALTERNATIVES[("pplx", "llamacpp")]`):
+  - **The GGUF:** our own conversion of the pinned checkpoint (`ml/models/convert_pplx_v13.py`),
+    `pplx-flash-v1.3-Q4_K_S.gguf`, sha256 `819a9ad0f8f4…`, decision type `pplx-decider`,
+    temperature 1.3302961587905884.
+  - **The image:** the same llama.cpp image digest as Kev's.
+  - **The model version:** `pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303`.
+    The broker refuses it until the policy names it.
+- **No uncalibration.** llama.cpp applies pplx's own temperature, the scale of every validated
+  pplx score and of the policy's 0.95, so the answer is taken as served (`judges.rescale`
+  returns it unchanged when the two temperatures agree), after the same strict validation.
+- **Text is sent in NFC**, as for Kev: pplx's tokenizer is the same family.
+- **On the CPU** (`pplx-llamacpp`, compose profile `llamacpp-pplx`, `-ngl 0 -t 4`, 4 CPUs,
+  6 GB). The 4 GB card holds one model, and Kev's sidecar keeps its GGUF there.
+  - pplx is non-causal, so a whole request must fit one batch: `-b`/`-ub`/`-c` 4096. The
+    longest Phase E request is about 3,500 tokens.
+  - The worker configuration is `llamacpp-pplx.toml`, today's 05:05–07:00 window unchanged. A
+    wider window beside Kev is possible but the owner's call.
+- **Its request timeout is 225 s on a CPU.** The longest Phase E request took 48.9 s on the
+  desktop's CPU (4 threads) and is estimated at about 193 s on the i7-3770 (not measured there).
+  With 3 × 10 s of last posts and the 10 s join, the stop bound is 265 s: under the supervisor's
+  270 s window-end kill, and covered by the pplx worker's `stop_grace_period` of 300 s.
+- **Parity tool:** `python -m makhzan_ml.worker.parity --model pplx --backend llamacpp --device
+  cpu --llamacpp-url … --gguf-path /models/pplx-flash-v1.3-Q4_K_S.gguf --requests
+  /req/pplx-K1-full.jsonl --stored ml/out/gguf-pplx/Q4_K_S.jsonl --stored-temperature 1`. The
+  stored llama.cpp pplx scores are already on the right scale, hence temperature 1.
+  - **Run 2026-11-26:** a CPU sidecar on the desktop (4 threads), 6 requests (3 pairs) through
+    the whole fake-broker protocol, against the 3060's Q4_K_S scores. Max |Δp| 0.019, mean
+    0.007, no flips at 0.95, exit 0, about 15 s a request.
+  - Report: `ml/out/gguf-pplx/parity-llamacpp-cpu.json`.
+
+**Not done:**
+- the switch (policy and `PINS`, owner-gated);
+- a run on the i7-3770 itself;
+- the wider window;
+- pplx on the card (whether Q4_K_S fits there at `-ub 4096` is untested).
 
 ## Parity with the validated scores
 
