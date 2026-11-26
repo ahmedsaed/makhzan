@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         from makhzan_ml.worker.judges import importable
 
-        if not importable(cfg.model):
+        if cfg.backend == "torch" and not importable(cfg.model):
             logging.error(
                 "configuration: this image cannot load %r (each model image holds one "
                 "model's code)",

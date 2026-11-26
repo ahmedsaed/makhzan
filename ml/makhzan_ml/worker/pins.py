@@ -9,6 +9,13 @@ After loading, the worker checks the model it actually holds against these pins 
 snapshot's revision, the temperature it scores at, the serving code's commit where the
 image records it) and refuses to score on any difference (P8). The broker then checks
 the version string at hello and at every lease (broker-api.md §3.1, §3.2).
+
+`PINS` is what production serves, one pin per model key, equal to the policy. A key may
+also have an **alternative backend** (`ALTERNATIVES`): Kev-4B Q4_K_M served by a llama.cpp
+sidecar, accepted by the owner on 2026-11-26 (D20 amended; docs/ai/kev-llamacpp.md). A
+worker selects it with `[compute] backend = "llamacpp"`; it carries its own model version,
+so the broker refuses it (hello `ok: false`) until the policy's `MODELS` names that version.
+Switching production is that one change to the policy and to `PINS`, owner-gated.
 """
 
 from __future__ import annotations
@@ -26,6 +33,15 @@ class Pin:
     #: checkpoint itself (pplx's package is copied from the pinned Hub revision, sha256-checked).
     code: str | None
     model_version: str
+    #: "torch" (the model's own Python code, in the worker's process) or "llamacpp" (a
+    #: llama.cpp server beside the worker, `/v1/systemone`).
+    backend: str = "torch"
+    #: llama.cpp only: the GGUF file in `repo`@`weights_revision`, its sha256, and the
+    #: decision temperature its metadata carries, which llama.cpp always applies and the
+    #: worker undoes, so the score is the raw P(yes) at `temperature`.
+    gguf_file: str | None = None
+    gguf_sha256: str | None = None
+    gguf_temperature: float | None = None
 
 
 KEV_REVISION = "6cfce5c2fa4b4bd64026336ab649c5ca78857d52"
@@ -53,3 +69,47 @@ PINS: dict[str, Pin] = {
         model_version=f"pplx-decider-flash-v1.3@{PPLX_REVISION[:12]}+T{PPLX_TEMPERATURE}",
     ),
 }
+
+
+#: The llama.cpp alternative for Kev (docs/ai/kev-llamacpp.md, measured 2026-11-26).
+KEV_GGUF_REPO = "ggml-org/Kev-4B-GGUF"
+KEV_GGUF_REVISION = "f4624b6bb7072f1bab726a622c1cad3f96030b9e"
+KEV_GGUF_FILE = "Kev-4B-Q4_K_M.gguf"
+KEV_GGUF_SHA256 = "33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9"
+#: `qwen35.decision.temperature.noul` in that file (Kev-4B's fitted temperature, 2.406).
+KEV_GGUF_TEMPERATURE = 2.406049966812134
+#: llama.cpp's official server-vulkan image, build 12767, by digest: the "code" of this pin.
+LLAMACPP_IMAGE = (
+    "ghcr.io/ggml-org/llama.cpp@sha256:"
+    "87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
+)
+LLAMACPP_BUILD = "b12767"
+
+BACKENDS = ("torch", "llamacpp")
+
+ALTERNATIVES: dict[tuple[str, str], Pin] = {
+    ("kev", "llamacpp"): Pin(
+        key="kev",
+        repo=KEV_GGUF_REPO,
+        weights_revision=KEV_GGUF_REVISION,
+        # Raw P(yes), as every validated Kev score: the GGUF's temperature is undone.
+        temperature=1.0,
+        code=LLAMACPP_IMAGE,
+        model_version=(
+            f"kev-4b-Q4_K_M@{KEV_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
+            f"-{LLAMACPP_IMAGE.rsplit(':', 1)[1][:12]}+T1.0"
+        ),
+        backend="llamacpp",
+        gguf_file=KEV_GGUF_FILE,
+        gguf_sha256=KEV_GGUF_SHA256,
+        gguf_temperature=KEV_GGUF_TEMPERATURE,
+    ),
+}
+
+
+def pin_for(key: str, backend: str = "torch") -> Pin:
+    """The pin a worker serving `key` on `backend` loads and reports. KeyError when that
+    model has no such backend."""
+    if backend == "torch":
+        return PINS[key]
+    return ALTERNATIVES[(key, backend)]

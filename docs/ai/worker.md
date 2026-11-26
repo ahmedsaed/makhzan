@@ -293,6 +293,12 @@ this image can load the model key, and exits.
 | `memory_gib` | unset | the expected peak resident memory. The worker refuses to start under a smaller container limit and warns if a load peaks above it. Measured on CPU fp32: Kev 17.5 GiB, pplx 18.4 GiB |
 | `mmap` | `false` on CPU, `true` on GPU | `false` reads every weight file with pread(2) and fails the load if any weight file is still mapped afterwards |
 | `weights_cache` | the image's `HF_HOME` | the Hugging Face home holding `hub/`, mounted read-only. The worker always runs offline |
+| `backend` | `"torch"` | `"torch"`: the model's own code in this process. `"llamacpp"`: Kev on a llama.cpp sidecar (Kev only; see "Kev on a llama.cpp sidecar") |
+| `llamacpp_url` | none | `backend = "llamacpp"` only, and required there: the sidecar's base URL, plain `http://` to a compose service name or a loopback address |
+| `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
+
+With `backend = "llamacpp"`, `dtype` is `"q4_k_m"` (the only accepted value), and `mmap` and
+`weights_cache` are refused (the worker holds no weights).
 
 ### `[schedule]`
 
@@ -686,6 +692,71 @@ workers never get the same job (P16).
 For a backlog scored against a local copy (P4), the broker runs on the desktop too. Add
 `--network host` and set `broker_url = "http://127.0.0.1:<port>/ai/v1"`. Plain HTTP is
 accepted for a loopback address only.
+
+## Kev on a llama.cpp sidecar (built, not in use)
+
+Kev-4B Q4_K_M served by llama.cpp, accepted by the owner on 2026-11-26 (D20 amended;
+measurements in `docs/ai/kev-llamacpp.md`). It is meant for the home server's 4 GB AMD card,
+where it runs about 15-20x the CPU worker's speed per token.
+
+- **The pin** is `pins.ALTERNATIVES[("kev", "llamacpp")]`, not `PINS`:
+  - the GGUF `ggml-org/Kev-4B-GGUF@f4624b6…`, file `Kev-4B-Q4_K_M.gguf`, sha256 `33ae6b18…`;
+  - llama.cpp's `server-vulkan` image, build b12767, by digest (`pins.LLAMACPP_IMAGE`);
+  - model version `kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0`.
+
+  The policy still names the torch version, so the broker answers this worker's hello with
+  `ok: false` and it exits 4. Switching production is one owner-gated change: the policy's
+  `MODELS["kev"]` and `PINS["kev"]` to this pin. Then every standing decision is re-scored,
+  at the low priorities of P8 as amended 2026-11-26 (35 for a "same", 30 for a "not same").
+- **Scoring.** The worker posts the approved payload to the sidecar's `POST /v1/systemone`,
+  one request per call. The GGUF carries Kev's fitted temperature (2.406) and llama.cpp
+  always applies it, so the worker undoes it (`judges.uncalibrate`). The score is then raw
+  P(yes), the scale every validated Kev score and the policy's 0.8 are on.
+- **Checks before anything is scored** (a mismatch is a load error, exit 2):
+  - the worker's own read-only copy of the GGUF: its name, its sha256, and its metadata
+    (`qwen35.decision.type = kev`, the temperature), read with the standard library;
+  - the sidecar's `/health`, waited for up to 300 s;
+  - its `/props`: the file it serves, and llama.cpp build b12767.
+
+  The worker cannot see the sidecar's file directly. Compose mounts the same host file into
+  both (`WEIGHTS_DIR/Kev-4B-Q4_K_M.gguf`), and the name and build are what `/props` reports.
+- **No torch on this path.** The load imports nothing beyond the standard library, so a lean
+  image without torch could run it. Today it would run in the existing Kev worker image.
+- **The compose stack** (`ml/deploy/home-server/compose.yml`, service `kev-llamacpp`):
+  - behind the `llamacpp` profile, so `docker compose up -d` does not start it;
+  - the image pinned by digest, the GGUF mounted read-only, `/dev/dri` with the render and
+    video groups (`RENDER_GID`, `VIDEO_GID` in `.env`);
+  - the 4 GB settings `-ngl 99 -np 1 -c 4096 -b 512 -ub 512`. Batch 2048 is 2.7x faster
+    but needs about 5.3 GB;
+  - on `broker-only` only: no published port and no egress, so the worker reaches it as
+    `http://kev-llamacpp:8080` and it reaches nothing;
+  - the stack's hardening: non-root, read-only filesystem, no capabilities. It started
+    and scored that way on CPU.
+
+  `llamacpp-kev.toml` beside it is the worker configuration. It has the same name and window
+  as `home-kev.toml`, which it replaces.
+- **Parity:** `python -m makhzan_ml.worker.parity --backend llamacpp --llamacpp-url ...
+  --gguf-path ... --stored <llama.cpp scores> --stored-temperature 2.406`. On 2026-11-26,
+  against a live sidecar on the desktop's 3060 (Vulkan, the 4 GB settings), 40 requests
+  through the whole protocol matched the stored Q4 scores within 0.016 (mean 0.002).
+  - One request changed side of 0.8: E0251 ab, 0.806 stored against 0.790.
+  - The stored scores were read from a server with 4 slots and an 8k context, which is
+    enough to move a score by that much.
+  - Report: `ml/out/gguf-kev/parity-llamacpp-3060.json`.
+
+**Not done** for this backend:
+
+- **The AMD card.** It hard-reset the server once at stock fan settings
+  (`kev-llamacpp.md`). It needs servicing, its fan and power settings applied at boot (a
+  systemd unit; not written), then a monitored soak test of a whole window. The sidecar
+  has not yet run on that card under compose: `/dev/dri` with the stack's non-root user and
+  dropped capabilities is untested.
+- **The policy switch** (above): owner-gated, not made.
+- **No image** carries only the worker without torch. The existing Kev worker image is
+  enough.
+- **The sidecar runs whenever its profile is up** and holds the model in the card's memory
+  between windows. That is harmless for the card, but it is not stopped with the window as
+  the torch worker's model is.
 
 ## Parity with the validated scores
 

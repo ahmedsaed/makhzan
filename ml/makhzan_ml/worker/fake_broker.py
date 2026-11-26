@@ -86,6 +86,7 @@ class FakeBroker:
         tokens: dict[str, tuple[str, list[str]]],
         *,
         versions: dict[str, str] | None = None,
+        weights: dict[str, str] | None = None,
         max_attempts: int = 3,
         clock=time.monotonic,
         host: str = "127.0.0.1",
@@ -93,6 +94,9 @@ class FakeBroker:
     ):
         self.tokens = tokens  # token -> (worker name, model keys)
         self.versions = versions or {k: p.model_version for k, p in PINS.items()}
+        #: The weights revision hello must name per key (an alternative backend's pin has
+        #: its own; parity passes it with that pin's version).
+        self.weights = weights or {k: p.weights_revision for k, p in PINS.items()}
         self.max_attempts = max_attempts
         self.clock = clock
         #: Where it listens: loopback by default. Another address only for a stand-in in a
@@ -270,9 +274,9 @@ class FakeBroker:
         answer = {}
         for key, m in models.items():
             current = self.versions.get(key)
-            ok = m.get("model_version") == current and m.get("weights_revision") == (
-                PINS[key].weights_revision if key in PINS else None
-            )
+            ok = m.get("model_version") == current and m.get(
+                "weights_revision"
+            ) == self.weights.get(key)
             answer[key] = {"model_version": current, "ok": ok,
                            "queued_requests": self._queued_requests(key),
                            "stages": [dict(st) for st in self.stages.get(key, [])]}  # fmt: skip

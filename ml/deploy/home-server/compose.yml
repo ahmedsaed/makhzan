@@ -91,6 +91,62 @@ services:
       - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.toml:/etc/makhzan-ai/worker.toml:ro
       - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.token:/run/secrets/makhzan-ai-token:ro
 
+  # Kev on the AMD card through llama.cpp (docs/ai/kev-llamacpp.md): NOT ENABLED. It starts
+  # only with `docker compose --profile llamacpp up -d`, and the kev worker must then run
+  # llamacpp-kev.toml (backend = "llamacpp"). The broker refuses that worker's version until
+  # the policy names it (an owner step). Before enabling: the card serviced, the soak test,
+  # and the fan/power settings applied at boot (none of which is done yet).
+  kev-llamacpp:
+    <<: *hardening
+    profiles: [llamacpp]
+    # llama.cpp's official server-vulkan image, build b12767, by digest (pins.LLAMACPP_IMAGE).
+    image: ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
+    # The validated 4 GB settings: every layer on the card, one slot, 4k context, 512-token
+    # batches (2048 needs ~5.3 GB). The image runs as root by default; the hardening's user
+    # applies, with the render and video groups so it can open the card.
+    command:
+      - -m
+      - /models/Kev-4B-Q4_K_M.gguf
+      - -ngl
+      - "99"
+      - -np
+      - "1"
+      - -c
+      - "4096"
+      - -b
+      - "512"
+      - -ub
+      - "512"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    # The host's render and video group ids (`getent group render video`), set in .env. Not
+    # required (no `?` form): compose interpolates every service, profile or not, so that would break
+    # `docker compose up` for the workers. Unset, they default to two unused ids (compose
+    # refuses a repeated one), so the sidecar cannot open the card: it fails at start,
+    # loudly, and the workers are unaffected.
+    group_add:
+      - "${RENDER_GID:-65533}"
+      - "${VIDEO_GID:-65534}"
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      # The file in WEIGHTS_DIR, the kev worker's own /models mount, so both read one file.
+      - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}/Kev-4B-Q4_K_M.gguf:/models/Kev-4B-Q4_K_M.gguf:ro
+    tmpfs:
+      - /tmp:size=64m
+    environment:
+      HOME: /tmp
+    # The GGUF is memory-mapped (3 GB, page cache the cgroup counts but can reclaim).
+    cpus: 2
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 128
+    # Not published to the host, and on the workers' internal network only: the kev worker
+    # reaches it as http://kev-llamacpp:8080, and it reaches nothing.
+    networks: [broker-only]
+
 networks:
   # No egress: Docker drops anything leaving an internal network. It still gives the host an
   # address on the bridge, though, so a container could reach host services listening on all
