@@ -1,5 +1,6 @@
-"""Kev on a llama.cpp sidecar (`backend = "llamacpp"`): the GGUF checks, the uncalibration,
-the sidecar protocol, the configuration, and a whole session through the fake broker.
+"""Kev and pplx on a llama.cpp sidecar (`backend = "llamacpp"`): the GGUF checks, the
+uncalibration (Kev) or the score as served (pplx), the sidecar protocol, the configuration, and
+a whole session through the fake broker.
 
 No model and no llama.cpp here: a small GGUF written by `write_gguf`, and a stdlib HTTP
 server standing in for llama-server's /health, /props and /v1/systemone."""
@@ -60,10 +61,16 @@ def kev_gguf(tmp_path: Path, **override) -> Path:
     return write_gguf(tmp_path / pins.KEV_GGUF_FILE, kv)
 
 
-def pin_of(path: Path, **override) -> pins.Pin:
+def pplx_gguf(tmp_path: Path, **override) -> Path:
+    kv = {"qwen35.decision.type": "pplx-decider",
+          "qwen35.decision.temperature.noul": pins.PPLX_GGUF_TEMPERATURE, **override}  # fmt: skip
+    return write_gguf(tmp_path / pins.PPLX_GGUF_FILE, kv)
+
+
+def pin_of(path: Path, key: str = "kev", **override) -> pins.Pin:
     """The real llama.cpp pin, with the sha256 of the test's GGUF."""
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
-    base = pins.ALTERNATIVES[("kev", "llamacpp")]
+    base = pins.ALTERNATIVES[(key, "llamacpp")]
     return dataclasses.replace(base, **{"gguf_sha256": sha, **override})
 
 
@@ -138,8 +145,8 @@ def sidecar():
         s.close()
 
 
-def rt(url: str, gguf: Path, stop=None, device="gpu") -> judges.Runtime:
-    return judges.Runtime(device, "q4_k_m", None, False, None, "llamacpp", url, gguf, stop)
+def rt(url: str, gguf: Path, stop=None, device="gpu", dtype="q4_k_m") -> judges.Runtime:
+    return judges.Runtime(device, dtype, None, False, None, "llamacpp", url, gguf, stop)
 
 
 PAYLOAD = {"state": "Listing A ...", "questions": {"same": {"type": "noul", "instructions": "?"}}}
@@ -231,7 +238,7 @@ def test_load_through_the_registry_needs_no_torch(tmp_path, sidecar, monkeypatch
     "override, sidecar_kw, match",
     [
         ({"qwen35.decision.temperature.noul": 1.0}, {}, "temperature is 1.0"),
-        ({"qwen35.decision.type": "laya"}, {}, "not a Kev decision model"),
+        ({"qwen35.decision.type": "laya"}, {}, "not a kev decision model"),
         ({}, {"model_path": "/models/Kev-4B-Q8_0.gguf"}, "serves 'Kev-4B-Q8_0.gguf'"),
         ({}, {"build": "b12800-0000000"}, "pinned b12767"),
     ],
@@ -306,9 +313,18 @@ def test_the_request_timeout_is_per_device_and_inside_the_stop_bound(tmp_path, s
     for device, want in (("gpu", 60.0), ("cpu", 120.0)):
         judge = judges._load_kev_llamacpp(rt(sidecar().url, gguf, device=device), pin_of(gguf))
         assert judge.info["request_timeout_s"] == want
-    # The home server's stop_grace_period (240 s) covers a request, 3 x 10 s of last posts
-    # and a 10 s join (docs/ai/worker.md, "A stop sets one deadline").
-    assert max(judges.LLAMACPP_REQUEST_S.values()) + 3 * 10 + 10 < 240
+    # The compose stop_grace_period of the worker that runs each one covers a request, 3 x 10 s
+    # of last posts and a 10 s join (docs/ai/worker.md, "A stop sets one deadline").
+    text = (DEPLOY / "compose.yml").read_text()
+    for (key, _device), timeout in judges.LLAMACPP_REQUEST_S.items():
+        block = text[text.index(f"\n  {key}:\n") :]
+        block = block[: block.index("\n\n")]
+        grace = (
+            int(block.split("stop_grace_period: ", 1)[1].split("s", 1)[0])
+            if ("stop_grace_period" in block)
+            else 240
+        )  # the worker anchor's
+        assert timeout + 3 * 10 + 10 < grace, (key, timeout, grace)
 
 
 def test_a_stop_interrupts_the_hash_and_the_wait(tmp_path):
@@ -353,7 +369,20 @@ def test_the_alternative_is_not_what_production_serves():
     assert alt.model_version.startswith(f"kev-4b-Q4_K_M@{pins.KEV_GGUF_SHA256[:12]}+")
     assert pins.pin_for("kev") is pins.PINS["kev"]
     with pytest.raises(KeyError):
-        pins.pin_for("pplx", "llamacpp")
+        pins.pin_for("kev", "onnx")
+
+
+def test_the_pplx_alternative_reads_scores_as_served():
+    alt = pins.pin_for("pplx", "llamacpp")
+    assert alt.backend == "llamacpp" and alt.model_version != policy.MODELS["pplx"].model_version
+    # The scale of every validated pplx score: the checkpoint's own temperature, which the GGUF
+    # carries in full and llama.cpp applies, so nothing is undone.
+    assert alt.temperature == policy.MODELS["pplx"].scoring["temperature"] == 1.3303
+    assert abs(alt.gguf_temperature - alt.temperature) < 1e-3
+    assert alt.model_version.startswith(
+        f"pplx-decider-flash-v1.3-Q4_K_S@{pins.PPLX_GGUF_SHA256[:12]}+llama.cpp-b12767-"
+    )
+    assert pins.pin_for("pplx") is pins.PINS["pplx"]
 
 
 def llamacpp_cfg(**compute) -> dict:
@@ -402,9 +431,9 @@ def test_llamacpp_keys_need_the_backend_and_the_backend_needs_them():
     torch["compute"] = {"llamacpp_url": "http://kev-llamacpp:8080"}
     with pytest.raises(ConfigError, match="only read with backend"):
         parse(torch)
-    pplx = llamacpp_cfg()
+    pplx = llamacpp_cfg(dtype="q4_k_m")  # Kev's precision, for pplx
     pplx["worker"]["model"] = "pplx"
-    with pytest.raises(ConfigError, match="cannot serve 'pplx'"):
+    with pytest.raises(ConfigError, match="only \\['q4_k_s'\\]"):
         parse(pplx)
 
 
@@ -433,7 +462,7 @@ def test_the_compose_example_parses():
 
 def test_the_sidecar_is_off_by_default_pinned_and_unreachable():
     text = (DEPLOY / "compose.yml").read_text()
-    block = text[text.index("\n  kev-llamacpp:\n") : text.index("\nnetworks:")]
+    block = text[text.index("\n  kev-llamacpp:\n") : text.index("\n  # pplx on the home")]
     assert "    profiles: [llamacpp]\n" in block
     assert f"    image: {pins.LLAMACPP_IMAGE}\n" in block
     assert "ports" not in block and "0.0.0.0:" not in block
@@ -517,3 +546,103 @@ def test_a_stop_during_the_load_hands_the_lease_back_not_a_config_error(tmp_path
         held = broker.jobs[job.job_id]
     assert code != run.EXIT_CONFIG
     assert held.scores == {} and held.status == "queued"
+
+
+# --- pplx -----------------------------------------------------------------------------------
+
+
+def test_pplx_scores_are_taken_as_served_and_kevs_gguf_is_refused(tmp_path, sidecar):
+    gguf = pplx_gguf(tmp_path)
+    side = sidecar(model_path=f"/models/{pins.PPLX_GGUF_FILE}", calibrated=lambda _p: 0.9612)
+    judge = judges._load_pplx_llamacpp(rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
+    p, _ = judge.score(PAYLOAD)
+    # llama.cpp applies pplx's own temperature, the scale of its validated scores: unchanged.
+    assert p == 0.9612
+    assert side.requests == [{"model": "pplx", **PAYLOAD}]
+    assert judge.key == "pplx" and judge.info["temperature"] == 1.3303
+    # A Kev GGUF under pplx's name is not a pplx-decider model.
+    other = tmp_path / "kev"
+    other.mkdir()
+    wrong = write_gguf(other / pins.PPLX_GGUF_FILE, {
+        "qwen35.decision.type": "kev",
+        "qwen35.decision.temperature.noul": pins.PPLX_GGUF_TEMPERATURE})  # fmt: skip
+    with pytest.raises(judges.LoadError, match="not a pplx-decider decision model"):
+        judges._load_pplx_llamacpp(rt(side.url, wrong, dtype="q4_k_s"), pin_of(wrong, "pplx"))
+
+
+@pytest.mark.parametrize("bad", [math.nan, 1.5, -0.1, True, "0.9"])
+def test_a_bad_pplx_answer_is_an_error_never_a_score(tmp_path, sidecar, bad):
+    gguf = pplx_gguf(tmp_path)
+    side = sidecar(model_path=f"/models/{pins.PPLX_GGUF_FILE}", calibrated=lambda _p: bad)
+    judge = judges._load_pplx_llamacpp(rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
+    with pytest.raises(RuntimeError, match="noul"):
+        judge.score(PAYLOAD)
+
+
+def test_rescale_is_kevs_uncalibrate_and_pplxs_identity():
+    assert judges.rescale(0.7, T, 1.0) == pytest.approx(judges.uncalibrate(0.7, T))
+    assert judges.rescale(0.7, pins.PPLX_GGUF_TEMPERATURE, 1.3303) == 0.7
+    with pytest.raises(ValueError):
+        judges.rescale(math.nan, pins.PPLX_GGUF_TEMPERATURE, 1.3303)
+
+
+def test_the_pplx_compose_example_parses_and_the_sidecar_is_off_by_default():
+    data = tomllib.loads((DEPLOY / "llamacpp-pplx.toml").read_text())
+    data["worker"].pop("token_file")
+    data["worker"]["token"] = "example"
+    cfg = parse(data)
+    assert (cfg.model, cfg.backend, cfg.device, cfg.dtype, cfg.llamacpp_url) == (
+        "pplx", "llamacpp", "cpu", "q4_k_s", "http://pplx-llamacpp:8080",
+    )  # fmt: skip
+    assert cfg.expect_versions == {"pplx": pins.pin_for("pplx", "llamacpp").model_version}
+    text = (DEPLOY / "compose.yml").read_text()
+    block = text[text.index("\n  pplx-llamacpp:\n") : text.index("\nnetworks:")]
+    assert "    profiles: [llamacpp-pplx]\n" in block
+    assert f"    image: {pins.LLAMACPP_IMAGE}\n" in block
+    assert "ports" not in block and "0.0.0.0:" not in block and "devices" not in block
+    assert "    networks: [broker-only]\n" in block and "egress" not in block
+    assert f":/models/{pins.PPLX_GGUF_FILE}:ro" in block
+    # Non-causal: the whole request in one batch.
+    for flag in ('- -b\n      - "4096"', '- -ub\n      - "4096"', '- -ngl\n      - "0"'):
+        assert flag in block
+    assert ":?" not in block.replace("${WEIGHTS_DIR:?", "")
+
+
+def test_the_production_broker_version_refuses_the_pplx_alternative(tmp_path, sidecar,
+                                                                     monkeypatch):  # fmt: skip
+    gguf = pplx_gguf(tmp_path)
+    monkeypatch.setitem(pins.ALTERNATIVES, ("pplx", "llamacpp"), pin_of(gguf, "pplx"))
+    with FakeBroker({"tok": ("cpu-pplx", ["pplx"])}) as broker:  # the policy's versions
+        broker.add_job("pplx", {"ab": PAYLOAD})
+        cfg = parse({
+            "worker": {"name": "cpu-pplx", "broker_url": broker.url, "token": "tok",
+                       "model": "pplx"},
+            "compute": {"backend": "llamacpp", "device": "cpu", "dtype": "q4_k_s",
+                        "llamacpp_url": sidecar(model_path=f"/models/{pins.PPLX_GGUF_FILE}").url,
+                        "gguf_path": str(gguf)},
+            "schedule": {"windows": "always", "on_empty": "exit"},
+        })  # fmt: skip
+        assert run.Worker(cfg).run() == run.EXIT_VERSION
+
+
+def test_a_pplx_session_posts_scores_as_served_under_its_version(tmp_path, sidecar, monkeypatch):
+    gguf = pplx_gguf(tmp_path)
+    pin = pin_of(gguf, "pplx")
+    monkeypatch.setitem(pins.ALTERNATIVES, ("pplx", "llamacpp"), pin)
+    side = sidecar(model_path=f"/models/{pins.PPLX_GGUF_FILE}", calibrated=lambda _p: 0.97)
+    with FakeBroker({"tok": ("cpu-pplx", ["pplx"])}, versions={"pplx": pin.model_version},
+                    weights={"pplx": pin.weights_revision}) as broker:  # fmt: skip
+        job = broker.add_job("pplx", {"ab": PAYLOAD, "ba": PAYLOAD})
+        cfg = parse({
+            "worker": {"name": "cpu-pplx", "broker_url": broker.url, "token": "tok",
+                       "model": "pplx"},
+            "compute": {"backend": "llamacpp", "device": "cpu", "dtype": "q4_k_s",
+                        "llamacpp_url": side.url, "gguf_path": str(gguf)},
+            "schedule": {"windows": "always", "on_empty": "exit"},
+        })  # fmt: skip
+        code = run.Worker(cfg, importable=lambda _k: False).run()
+        scores = broker.jobs[job.job_id].scores
+    assert code == run.EXIT_OK
+    assert {o: (s["p"], s["device"], s["dtype"]) for o, s in scores.items()} == {
+        "ab": (0.97, "cpu", "q4_k_s"), "ba": (0.97, "cpu", "q4_k_s"),
+    }  # fmt: skip

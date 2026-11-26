@@ -42,6 +42,13 @@ whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 `docker compose up -d` does not start it. Enabling it waits on the card's servicing, a soak
 test and the owner's policy switch: docs/ai/worker.md, "Kev on a llama.cpp sidecar".
 
+`pplx-llamacpp` (profile `llamacpp-pplx`) is pplx-decider-flash-v1.3 Q4_K_S on the CPU through
+llama.cpp, with `llamacpp-pplx.toml` as its worker configuration and the GGUF
+`pplx-flash-v1.3-Q4_K_S.gguf` in `WEIGHTS_DIR`. Also built and **not in use**: it waits on the
+owner's policy switch, and its speed on this CPU is estimated, not measured
+(docs/ai/worker.md, "pplx on a llama.cpp sidecar"). The pplx worker's `stop_grace_period` is
+300 s, for this backend's longer requests.
+
 ## How it behaves
 
 - **Each worker waits for its own window** (`outside_window = "wait"`). Outside it, the
