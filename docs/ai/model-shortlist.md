@@ -19,7 +19,9 @@ Hardware target: RTX 3060 12 GB, 30 GB RAM, CPU-only servers. Licence must allow
 3. **"Laya" and "THX-01" are real** (cards found, Apache-2.0), but **Laya zero-shot is below the
    majority-class baseline** (own card) and both are meant to be fine-tuned. THX-01's card gives no
    release date and its test sets were partly written/labelled by its teacher LLMs.
-4. **Kev needs more than 12 GB as shipped** (no GGUF, no quantisation documented). Kev-4B: 8.4 GB
+4. **Kev needs more than 12 GB as shipped** (no GGUF, no quantisation documented). *Superseded
+   2026-11-26: llama.cpp serves Kev, and ggml-org publishes Q4_K_M/Q8_0/BF16 GGUFs; bf16 also
+   fits a 3060 once CUDA graphs and the prefix cache are off. See `docs/ai/kev-llamacpp.md`.* Kev-4B: 8.4 GB
    weights, but card says 14.3 GB resident when serving on CUDA. Fits a 3060 only if you drop the
    serving buffers (UNVERIFIED) or run fp32/bf16 on CPU RAM (slow).
 5. **Licence traps:** jina-reranker-v3, jina-embeddings-v5 = CC BY-NC 4.0 (excluded). EmbeddingGemma 1
