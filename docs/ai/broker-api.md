@@ -381,8 +381,10 @@ def on_scores(session, job):
 ```
 
 The next stage keeps the job's priority when that is higher than
-`NEXT_STAGE` (80), so a re-score of a standing "same" (100) stays first
-through every stage (P8). The same step, over many pairs at once, is what a
+`NEXT_STAGE` (80), so a re-score of a standing "same" whose text changed (100)
+stays first through every stage (P8). A re-score owed only to a new judge version
+starts below new pairs and the backlog (a "same" at 35, a "not same" at 30; P8 as
+amended 2026-11-26) and, like any job, moves to 80 at its next stage. The same step, over many pairs at once, is what a
 trigger's pairs go through (`flow.offer`): a pair whose requests are all
 scored already is decided (or recorded) there and then, with no job and no
 lease, and the rest are queued at the stage they still owe.

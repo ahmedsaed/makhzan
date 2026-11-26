@@ -12,7 +12,7 @@ from decimal import Decimal
 from makhzan_schemas import overrides as rulings
 from makhzan_schemas.ai import broker as core
 from makhzan_schemas.ai import candidates as producers
-from makhzan_schemas.ai import flow
+from makhzan_schemas.ai import flow, triggers
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME
 from makhzan_schemas.ai.policy import MODELS
 from makhzan_schemas.ai.render import load_shown, render
@@ -281,7 +281,7 @@ async def test_a_change_no_judge_can_see_rewrites_the_decision_in_place():
     assert again.get("text", 0) == 0  # settled: not offered again
 
 
-async def test_a_version_bump_rescores_standing_same_decisions_first():
+async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
     a, b = await _shop("shop-a"), await _shop("shop-b")
     s1 = await _listing(a, "carbon film resistor 10k ohm")
     s2 = await _listing(b, "carbon film resistor 10k ohm quarter watt")
@@ -314,8 +314,10 @@ async def test_a_version_bump_rescores_standing_same_decisions_first():
     # The scores are byte-identical, so no job is needed at all: both settle.
     assert jobs == {} and result["decided"] == 2
 
-    # With the requests changed too (a new prompt would do it), jobs are owed:
-    # the standing "same" first.
+    # With the requests changed too (a new prompt would do it), jobs are owed: below new
+    # pairs and the backlog (owner, 2026-11-26), the standing "same" before the "not same".
+    assert triggers.CANDIDATE > triggers.BACKLOG > triggers.RESCORE_SAME_VERSION
+    assert triggers.RESCORE_SAME_VERSION > triggers.RESCORE_VERSION
     async with SessionLocal() as session:
         await session.execute(
             update(AiScore).values(request_sha256=func.sha256(AiScore.request_sha256))
@@ -330,7 +332,7 @@ async def test_a_version_bump_rescores_standing_same_decisions_first():
         await producers.run(session, producers.RescoreTrigger())
         await session.commit()
     jobs = {(j.listing_a, j.listing_b): j.priority for j in await _jobs()}
-    assert jobs == {pair(s1, s2): 100, pair(n1, n2): 30}
+    assert jobs == {pair(s1, s2): 35, pair(n1, n2): 30}
 
     token = core.new_token()
     async with SessionLocal() as session:

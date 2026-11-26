@@ -40,13 +40,17 @@ from makhzan_schemas.models import AiJob, AiModelVersion
 from makhzan_schemas.overrides import pair
 
 #: The priority ladder, higher first: the design's, with the owner's rule that
-#: standing "same" decisions are re-scored first (P8).
+#: standing "same" decisions whose text changed are re-scored first (P8).
 RESCORE_SAME = 100
 NEXT_STAGE = 80
 CANDIDATE = 60
 #: A standing "not same" whose text changed: as urgent as a new candidate.
 RESCORE_CHANGED = 60
 BACKLOG = 40
+#: A standing "same" whose judge changed and whose text did not: after new pairs and the
+#: backlog, ahead of the "not same" ones (owner, 2026-11-26, amending P8). A new judge
+#: version re-scores every standing decision; new pairs must not wait behind that.
+RESCORE_SAME_VERSION = 35
 #: A standing "not same" whose judge changed and whose text did not.
 RESCORE_VERSION = 30
 AUDIT = 10

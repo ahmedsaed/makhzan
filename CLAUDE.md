@@ -803,7 +803,8 @@ or `write_decision`), which triggers use too, so an already-scored pair
 settles with no lease. After each rebuild `ai_candidates` runs the producers
 (`ai/candidates.py`): new or changed electronics listings' top 10 by title
 Jaccard, filtered by today's vetoes; re-scores of standing decisions whose
-text or judge changed ("same" first); the rules-merged audit. The first run
+text or judge changed (a "same" whose text changed first; a new judge version's
+re-scores after new pairs and the backlog); the rules-merged audit. The first run
 records a baseline and queues nothing: the existing catalogue is
 `./makhzan ai backlog`. A dead job is never re-queued by a trigger; a person
 retries it (`./makhzan ai jobs retry`). `ON CONFLICT` on a partial index
