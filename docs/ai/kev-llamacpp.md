@@ -161,9 +161,28 @@ Notes:
   75 °C (peak 79 °C), no errors.
   - The clock was about 500 MHz, limited by power this time.
   - The owner has since removed both settings.
-- **Conclusion:** the card works. Its cooling, and possibly its power delivery, need attention
-  before sustained use: clean it, re-paste it, check the fan and its power cable. Traces are in
-  `ml/out/gguf-kev/amd-monitor*.log`.
+- **Serviced (owner, 2026-11-26):** heatsink cleaned, chip re-pasted, the pads reused. Idle fell
+  from 41–53 °C to 29–34 °C. Under load at stock settings the card now climbs gradually and holds
+  66–71 °C (it used to reach 86 °C in 5 s).
+- **Second reset, at normal temperatures.**
+  - At the stock 85 W the serviced card ran 1,067 requests (about 77 minutes), then the server
+    hard-reset again.
+  - The guard's last line read 85 W, 69 °C, normal clocks. The log ends in empty bytes (power lost
+    before the disk write), and the journal shows no error.
+  - So the cause is power, not heat. The card is fed from the original 320 W HP supply through a
+    **SATA-to-PCIe adapter**. A SATA connector carries about 54 W, and the card draws up to about
+    100 W in spikes.
+- **65 W soak: passed.**
+  - All 1,800 Phase E requests, 2 h 54 min continuous: no errors, no reset, peak 72 °C, the guard
+    never fired, no GPU errors in the kernel log.
+  - 5.8 s per request (0.17/s, about 150 tokens/s, about 16× the CPU worker), against 4.3 s at
+    85 W.
+  - Scores within 0.038 of the 3060's Q4 (raw scale). Production rule: 205 merges, 0 wrong.
+  - The cap limits the average: spikes still reached 90 W.
+- **Conclusion:** cleared for the nightly Kev window **at a 65 W cap**, applied at boot by
+  `ml/deploy/home-server/amdgpu-power-cap.service`. That is a stopgap: the fix is a power supply
+  with a native PCIe cable, which this machine's non-standard case and board make harder. Traces
+  are in `ml/out/gguf-kev/amd-monitor*.log` and `home-amd-65w-soak.jsonl`.
 
 ## Not done
 
@@ -177,9 +196,8 @@ Notes:
   - Its parity: against a live sidecar on the 3060, 40 requests through the whole protocol came
     within 0.016 of the stored Q4 scores.
   - Not done: the production switch (owner-gated), and a run on the AMD card under compose.
-- **No soak test.** The AMD card has done at most 11 minutes of sustained load. Before a
-  4-hour window it needs a full monitored 1,800-request run, after the cooling work and with the
-  fan and power settings made persistent (e.g. a systemd unit).
+- **Stopgap power.** The card runs at a 65 W cap (about 35% slower than stock), because the
+  original 320 W supply feeds it through a SATA adapter. A proper supply would allow 85 W.
 - **No crash logging on the home server.** No `kernel.panic` timeout, kdump or pstore. These
   would not catch a power-level reset, but they would turn a freeze into a reboot with a dump.
 - **CPU options not tried:** F32 (about 17 GB; likely close to F16), and Q4_0 (128-bit integer

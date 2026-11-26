@@ -1,0 +1,26 @@
+# Caps the home server's AMD card (RX 470/570 4 GB) at 65 W at every boot.
+#
+# Why: the card is fed from the original 320 W power supply through a SATA-to-PCIe adapter. At the
+# stock 85 W cap a sustained Kev run hard-reset the whole server (twice, 2026-11-26, no log, at
+# normal temperatures); at 65 W it ran all 1,800 Phase E requests (2 h 54 min) cleanly
+# (docs/ai/kev-llamacpp.md). The cap limits average power; brief spikes still reach ~90 W, so this
+# is a stopgap until the card has a supply with a native PCIe cable. The fan stays on automatic.
+#
+# Install (root):
+#   sudo cp amdgpu-power-cap.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now amdgpu-power-cap.service
+# Check:  cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_cap   # 65000000
+# Undo:   sudo systemctl disable --now amdgpu-power-cap.service (the cap stays until a reboot)
+
+[Unit]
+Description=Cap the AMD GPU at 65 W (power-supply limit; see makhzan docs/ai/kev-llamacpp.md)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The hwmon index can change between boots, so find the amdgpu one by name; fail if none was set.
+ExecStart=/bin/sh -c 'set=0; for h in /sys/class/drm/card*/device/hwmon/hwmon*; do [ "$(cat "$h/name" 2>/dev/null)" = amdgpu ] || continue; echo 65000000 > "$h/power1_cap" && set=1; done; [ "$set" = 1 ]'
+
+[Install]
+WantedBy=multi-user.target
