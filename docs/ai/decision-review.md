@@ -145,7 +145,7 @@ is the decision that should have come back to the owner.
 | D17 | Pre-filter | ~~Today's vetoes for rules; relaxed price/form vetoes only in front of the AI~~ Superseded by P13 (2026-11-17): today's vetoes for merges *and* for AI candidates; the relaxed set is parked | Owner | AI candidates | superseded |
 | D18 | Group check | Complete-link; one best match per other shop; Kev < 0.05 inside a group blocks it | Session, concept approved | gain (2,336 merges) | confirm thresholds |
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
-| D20 | Quantisation | Rejected unless proven harmless | Owner | serving | settled |
+| D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M (llama.cpp) accepted on the label test (see "Kev quantisation" below) | Owner | serving | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
@@ -430,3 +430,23 @@ Answers: `ai-groups-review/answers.json` under the labels (then `ml/out/labels/`
 - **Production preview** (`worker.regroup --dry-run --ai`): 3,413 products merged, 0 split, 0 new ids; 4,491 of 5,104 "same" pairs in effect (the regroup reads only each listing's mutual best match per shop, hence 5,104 of 6,249; the rest of the gap is the vetoes against other members of the two products); multi-shop products 1,048 → 3,130.
 - **Owner OK: `ai_matching` switched to `live`** and the regroup applied, matching the preview exactly (56,255 products, 3,130 multi-shop). Absorbed product ids redirect (308) to the product they merged into.
 - **Workers:** the home server runs `home-kev` (01:00–05:00) and `home-pplx` (05:05–07:00, Africa/Cairo) as a compose stack that waits for its own windows, egress through a broker-only proxy (#72). First window: Kev scored 12 requests at about 123 s each, stopped and unloaded cleanly; pplx found its queue empty. The owner approved draining the backlog once on the desktop GPU (`desk-kev`, `desk-pplx`).
+
+### Kev quantisation (owner, 2026-11-26)
+
+**Kev-4B Q4_K_M, served by llama.cpp, is accepted, although it fails D20's agreement rule.**
+The agreement rule asks for at least 99% at 0.5 and 0.9 and Spearman 0.99; Q4_K_M got
+97.3–97.6% and 0.9955. The test that passed it is a label test, on the labelled Phase E set
+under the production rule (p1: Kev ≥ 0.8 and pplx ≥ 0.95, pairs that pass the vetoes):
+
+- no wrong merges;
+- a net 3 of 209 correct merges lost;
+- Kev-only precision 0.965 / recall 0.725, against bf16's 0.962 / 0.717.
+
+The 900 pairs can show "not worse", not "equal": a difference of 1–2% would not be visible.
+
+**Scope.** The acceptance covers this one variant. Any other variant still needs either the
+agreement rule, or the same label test plus the owner's sign-off. Q8_0 passes the agreement rule
+(99.3–99.6%, Spearman 0.9993).
+
+Measurements: `docs/ai/kev-llamacpp.md`. Not yet in production: the worker has no llama.cpp
+backend, and the AMD card needs servicing and a soak test first.

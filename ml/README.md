@@ -176,8 +176,11 @@ the same pairs. The faster one was kept only if it gave the same answers (see th
   (#59299) prompts a generic generation model and reads label logprobs, which the PR itself
   calls "uncalibrated". The image adds flash-linear-attention 0.5.2, the version that Kev's
   fused Qwen3.5 kernels pin.
-- **llama.cpp: not used.** Its niche is GGUF-quantised models, and nothing here needed
-  quantisation to fit (see the verdicts below).
+- **llama.cpp: measured, not used in production.** Since PR #29818 (2026-10-02) llama.cpp
+  serves Kev natively through `/v1/systemone`, and ggml-org publishes Kev-4B GGUFs (Q4_K_M,
+  Q8_0, BF16) with Kev's temperature built in. The 2026-11-26 measurements are in
+  `docs/ai/kev-llamacpp.md`: the port matches Kev's own server, Q8_0 passes D20 and Q4_K_M
+  fails it. No worker backend uses it yet.
 
 ## Results
 
@@ -308,18 +311,33 @@ Verdicts for the other models:
 
 - **Kev-4B:** quantisation is not needed. Its bf16 weights fit (10,328 MiB, about 10.1 GiB, resident) once CUDA
   graphs and the prefix cache are switched off. With graphs on, start-up runs out of memory.
-  Kev documents no quantised path. bf16 is Kev's own serving default, and its card reports
+  bf16 is Kev's own serving default, and its card reports
   served probabilities within 0.017 of the fp32 path with no changed answers. That bf16
-  comparison was not re-measured here.
+  comparison was not re-measured here. Kev's own README documents no quantised path, but
+  llama.cpp's GGUFs are one. Measured 2026-11-26 against these bf16 scores
+  (`docs/ai/kev-llamacpp.md`):
+  - Q8_0 passes: 99.3–99.6% pair agreement, Spearman 0.9993.
+  - Q4_K_M fails: 97.3–97.6% pair agreement, Spearman 0.9955. Under the production rule it
+    makes no wrong merge and loses a net 3 of 209 correct ones.
 - **Embedders and bge:** quantisation is not tried. They use about 2 GB each, and they are not
   the slow part. fp16 vs fp32 was checked for free, because TEI's CPU build runs fp32:
   - Qwen3-Embedding: max |Δ| 0.001 and 100% agreement.
   - bge: max |Δ| 0.002 and 100% agreement.
 
   fp16/bf16 is therefore the served precision.
-- **Not done: int8 for the CPU path.** Examples are ONNX/OpenVINO int8, or GGUF via llama.cpp.
-  This is the one place quantisation might pay, because CPU throughput is 6–29 pairs/s. It was
-  not measured, so CPU serving stays bf16 until it is.
+- **The CPU path.** GGUF through llama.cpp was measured on the home server's i7-3770 on
+  2026-11-26 (`docs/ai/kev-llamacpp.md`):
+
+  | Runtime | Tokens/s (prompt processing) |
+  |---|---|
+  | PyTorch fp32 worker (today's setup) | 10.3 (94 s for 968 tokens) |
+  | llama.cpp Q8_0, 4 threads | 11.1 |
+  | llama.cpp F16, 8 threads | 15.4–15.7 (2 requests only) |
+
+  The gain is small: 1.08× for Q8_0, about 1.5× for F16. F16 is the fastest because the CPU
+  has no AVX2, so quantised integer maths runs at half width. The CPU still serves PyTorch
+  fp32. **Not done:** ONNX/OpenVINO int8, and the
+  rerankers' CPU path.
 
 ## CPU serving of the merge judges (2026-11-14)
 
@@ -479,6 +497,9 @@ parameters, not merge rules.
   - `combos.py`: offline analysis of the grid's scores, with two-judge combinations, a two-stage
     cascade, and held-out checks. It runs no model. Its analysis led to the chosen setup.
   - `bench_cpu.py`: the CPU benchmark of the chosen setup ("Lean CPU images" above).
+  - `kev_gguf.py`: Kev-4B through a llama.cpp server. It scores the Phase E requests, then
+    compares them with the bf16 scores (D20's numbers, and the production rule against the
+    labels). Results are in `docs/ai/kev-llamacpp.md`.
 - `models/`, superseded (an archive of what was run; each file's header names the ruling it
   predates): `judge.py`, the Phase E bake-off (Kev with session-written rules, pplx at 32
   requests per call, Qwen3.5-4B); `context.py`, the full-context test (price in the payload,
