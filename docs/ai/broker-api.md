@@ -358,7 +358,7 @@ with the job's lease-time `content_sha256_a` / `_b`, device, dtype and threads:
   (`ai_jobs.request_sha256`) is refused with `422 {"error": "request_mismatch"}`
   for the leaseholder (anyone else gets `lease_lost`), and nothing from that
   POST is stored;
-- `p` outside [0, 1] is `422`.
+- `p` must be a JSON number in [0, 1]; anything else (out of range, `true`/`false`, a string, `null`) is `422`.
 
 A job is `done` when both of its requests have a score under its judge,
 whoever submitted them.

@@ -293,9 +293,11 @@ async def test_a_hash_the_broker_did_not_render_is_refused_and_nothing_stored(br
     r = await _post(broker, kev, hello["session"], lease, job, [ab, ba])
     assert r.status_code == 422
     assert r.json() == {"error": "request_mismatch"}
-    bad_p = await _post(broker, kev, hello["session"], lease, job, [{**ab, "p": 1.5}])
-    assert bad_p.status_code == 422
-    assert bad_p.json()["error"] == "invalid"
+    # Out of range, not a number, or a boolean (lax pydantic would store true as 1.0).
+    for bad in (1.5, -0.1, True, False, "0.5", None):
+        bad_p = await _post(broker, kev, hello["session"], lease, job, [{**ab, "p": bad}])
+        assert bad_p.status_code == 422, bad
+        assert bad_p.json()["error"] == "invalid"
     async with SessionLocal() as session:
         assert await session.scalar(select(func.count()).select_from(AiScore)) == 0
 
