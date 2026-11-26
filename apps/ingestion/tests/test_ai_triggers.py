@@ -31,7 +31,7 @@ from makhzan_schemas.models import (
     Supplier,
 )
 from makhzan_schemas.overrides import pair
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 
 
 async def _shop(slug: str) -> Supplier:
@@ -404,6 +404,49 @@ async def test_a_queued_job_offered_higher_is_raised_and_a_leased_one_is_not():
         assert await enqueue(session, [PairRequest(x, y, "match", 100, "rescore")]) == 0
         await session.commit()
     assert {j.priority for j in await _jobs()} == {same}
+
+
+async def test_enqueue_never_waits_on_a_job_the_broker_holds_locked():
+    """A heartbeat or a submit holds its jobs FOR UPDATE. A re-offer must neither wait for
+    them nor lock a leased one: a leased job is left alone, and a locked queued one is
+    raised at the next offer, after the lock is gone."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    v = await _listing(b, "ceramic capacitor 100nf 50v")
+    async with SessionLocal() as session:
+        await enqueue(session, [PairRequest(x, y, "match", 35, "rescore"),
+                                PairRequest(x, v, "match", 35, "rescore")])  # fmt: skip
+        await session.commit()
+    jobs = {(j.listing_a, j.listing_b): j for j in await _jobs()}
+    leased, queued = jobs[pair(x, y)], jobs[pair(x, v)]
+    async with SessionLocal() as session:
+        await session.execute(
+            update(AiJob).where(AiJob.id == leased.id).values(status="leased",
+                                                             lease_id=uuid.uuid4())
+        )  # fmt: skip
+        await session.commit()
+
+    async with SessionLocal() as holder, SessionLocal() as producer:
+        # The broker's side: both rows locked, as a heartbeat or a submit holds them.
+        await holder.execute(
+            select(AiJob.id).where(AiJob.id.in_([leased.id, queued.id])).with_for_update()
+        )
+        await producer.execute(text("SET LOCAL lock_timeout = '2s'"))
+        await producer.execute(text("SET LOCAL statement_timeout = '5s'"))
+        offer = [PairRequest(x, y, "match", 100, "rescore"),
+                 PairRequest(x, v, "match", 100, "rescore")]  # fmt: skip
+        assert await enqueue(producer, offer) == 0  # neither waits nor fails
+        await producer.commit()
+        await holder.rollback()
+    jobs = {(j.listing_a, j.listing_b): j.priority for j in await _jobs()}
+    assert jobs == {pair(x, y): 35, pair(x, v): 35}  # the locked queued one: not yet
+
+    async with SessionLocal() as producer:
+        assert await enqueue(producer, [PairRequest(x, v, "match", 100, "rescore")]) == 0
+        await producer.commit()
+    jobs = {(j.listing_a, j.listing_b): j.priority for j in await _jobs()}
+    assert jobs == {pair(x, y): 35, pair(x, v): 100}  # raised at the next offer
 
 
 # --- audit ------------------------------------------------------------------------------------

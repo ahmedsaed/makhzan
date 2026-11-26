@@ -390,7 +390,8 @@ stage goes ahead of new pairs' Kev stage. The two stages are leased by different
 so this orders only the pplx queue. On an unchanged text pplx's stored score is reused
 and no pplx job is queued at all. A "same" queued at 35 is raised to 100 if its text then
 changes (`triggers.enqueue` raises a queued job's priority, never lowers it, and leaves a
-leased one alone). The same step, over many pairs at once, is what a
+leased one alone; the raise skips rows the broker holds locked, so a job locked by a
+heartbeat or a submit is raised at its next offer and the producer never waits on it). The same step, over many pairs at once, is what a
 trigger's pairs go through (`flow.offer`): a pair whose requests are all
 scored already is decided (or recorded) there and then, with no job and no
 lease, and the rest are queued at the stage they still owe.
