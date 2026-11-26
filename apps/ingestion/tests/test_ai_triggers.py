@@ -12,11 +12,11 @@ from decimal import Decimal
 from makhzan_schemas import overrides as rulings
 from makhzan_schemas.ai import broker as core
 from makhzan_schemas.ai import candidates as producers
-from makhzan_schemas.ai import flow
+from makhzan_schemas.ai import flow, triggers
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME
 from makhzan_schemas.ai.policy import MODELS
 from makhzan_schemas.ai.render import load_shown, render
-from makhzan_schemas.ai.triggers import PairRequest
+from makhzan_schemas.ai.triggers import PairRequest, enqueue
 from makhzan_schemas.db import SessionLocal
 from makhzan_schemas.enums import SourceType
 from makhzan_schemas.models import (
@@ -31,7 +31,7 @@ from makhzan_schemas.models import (
     Supplier,
 )
 from makhzan_schemas.overrides import pair
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 
 
 async def _shop(slug: str) -> Supplier:
@@ -281,7 +281,7 @@ async def test_a_change_no_judge_can_see_rewrites_the_decision_in_place():
     assert again.get("text", 0) == 0  # settled: not offered again
 
 
-async def test_a_version_bump_rescores_standing_same_decisions_first():
+async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
     a, b = await _shop("shop-a"), await _shop("shop-b")
     s1 = await _listing(a, "carbon film resistor 10k ohm")
     s2 = await _listing(b, "carbon film resistor 10k ohm quarter watt")
@@ -314,8 +314,10 @@ async def test_a_version_bump_rescores_standing_same_decisions_first():
     # The scores are byte-identical, so no job is needed at all: both settle.
     assert jobs == {} and result["decided"] == 2
 
-    # With the requests changed too (a new prompt would do it), jobs are owed:
-    # the standing "same" first.
+    # With the requests changed too (a new prompt would do it), jobs are owed: below new
+    # pairs and the backlog (owner, 2026-11-26), the standing "same" before the "not same".
+    assert triggers.CANDIDATE > triggers.BACKLOG > triggers.RESCORE_SAME_VERSION
+    assert triggers.RESCORE_SAME_VERSION > triggers.RESCORE_VERSION
     async with SessionLocal() as session:
         await session.execute(
             update(AiScore).values(request_sha256=func.sha256(AiScore.request_sha256))
@@ -330,7 +332,7 @@ async def test_a_version_bump_rescores_standing_same_decisions_first():
         await producers.run(session, producers.RescoreTrigger())
         await session.commit()
     jobs = {(j.listing_a, j.listing_b): j.priority for j in await _jobs()}
-    assert jobs == {pair(s1, s2): 100, pair(n1, n2): 30}
+    assert jobs == {pair(s1, s2): 35, pair(n1, n2): 30}
 
     token = core.new_token()
     async with SessionLocal() as session:
@@ -367,6 +369,84 @@ async def test_a_version_bump_rescores_standing_same_decisions_first():
     [leased] = await _jobs(status="leased")
     assert lease["jobs"][0]["job_id"] == leased.id
     assert (leased.listing_a, leased.listing_b) == pair(s1, s2)
+
+
+async def test_a_queued_job_offered_higher_is_raised_and_a_leased_one_is_not():
+    """A "same" queued at 35 for a new judge whose text then changes is re-offered at 100:
+    the queued job rises to 100 (P8 as amended 2026-11-26). Never lowered, never a second
+    job, and a leased job is a worker's: left alone."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    v = await _listing(b, "ceramic capacitor 100nf 50v")
+    same = triggers.RESCORE_SAME_VERSION
+    async with SessionLocal() as session:
+        assert await enqueue(session, [PairRequest(x, y, "match", same, "rescore")]) == 1
+        assert await enqueue(session, [PairRequest(x, y, "match", 100, "rescore")]) == 0
+        assert await enqueue(session, [PairRequest(x, y, "match", 30, "candidates")]) == 0
+        # Two offers of one pair in one call: one job, at the higher priority.
+        assert await enqueue(
+            session, [PairRequest(x, v, "match", 35, "rescore"), PairRequest(v, x, "match", 60,
+                                                                             "rescore")]
+        ) == 1  # fmt: skip
+        await session.commit()
+    jobs = {(j.listing_a, j.listing_b): j for j in await _jobs()}
+    assert len(jobs) == 2
+    assert (jobs[pair(x, y)].priority, jobs[pair(x, y)].reason) == (100, "rescore")
+    assert jobs[pair(x, v)].priority == 60
+
+    async with SessionLocal() as session:
+        await session.execute(
+            update(AiJob).values(status="leased", priority=same, lease_id=uuid.uuid4())
+        )
+        await session.commit()
+    async with SessionLocal() as session:
+        assert await enqueue(session, [PairRequest(x, y, "match", 100, "rescore")]) == 0
+        await session.commit()
+    assert {j.priority for j in await _jobs()} == {same}
+
+
+async def test_enqueue_never_waits_on_a_job_the_broker_holds_locked():
+    """A heartbeat or a submit holds its jobs FOR UPDATE. A re-offer must neither wait for
+    them nor lock a leased one: a leased job is left alone, and a locked queued one is
+    raised at the next offer, after the lock is gone."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x = await _listing(a, "carbon film resistor 10k ohm")
+    y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    v = await _listing(b, "ceramic capacitor 100nf 50v")
+    async with SessionLocal() as session:
+        await enqueue(session, [PairRequest(x, y, "match", 35, "rescore"),
+                                PairRequest(x, v, "match", 35, "rescore")])  # fmt: skip
+        await session.commit()
+    jobs = {(j.listing_a, j.listing_b): j for j in await _jobs()}
+    leased, queued = jobs[pair(x, y)], jobs[pair(x, v)]
+    async with SessionLocal() as session:
+        await session.execute(
+            update(AiJob).where(AiJob.id == leased.id).values(status="leased",
+                                                             lease_id=uuid.uuid4())
+        )  # fmt: skip
+        await session.commit()
+
+    async with SessionLocal() as holder, SessionLocal() as producer:
+        # The broker's side: both rows locked, as a heartbeat or a submit holds them.
+        await holder.execute(
+            select(AiJob.id).where(AiJob.id.in_([leased.id, queued.id])).with_for_update()
+        )
+        await producer.execute(text("SET LOCAL lock_timeout = '2s'"))
+        await producer.execute(text("SET LOCAL statement_timeout = '5s'"))
+        offer = [PairRequest(x, y, "match", 100, "rescore"),
+                 PairRequest(x, v, "match", 100, "rescore")]  # fmt: skip
+        assert await enqueue(producer, offer) == 0  # neither waits nor fails
+        await producer.commit()
+        await holder.rollback()
+    jobs = {(j.listing_a, j.listing_b): j.priority for j in await _jobs()}
+    assert jobs == {pair(x, y): 35, pair(x, v): 35}  # the locked queued one: not yet
+
+    async with SessionLocal() as producer:
+        assert await enqueue(producer, [PairRequest(x, v, "match", 100, "rescore")]) == 0
+        await producer.commit()
+    jobs = {(j.listing_a, j.listing_b): j.priority for j in await _jobs()}
+    assert jobs == {pair(x, y): 35, pair(x, v): 100}  # raised at the next offer
 
 
 # --- audit ------------------------------------------------------------------------------------

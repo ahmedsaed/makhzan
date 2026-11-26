@@ -37,6 +37,11 @@ Update to the latest tested images with `docker compose pull && docker compose u
 roll back, set `KEV_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
 whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 
+`kev-llamacpp` (profile `llamacpp`) is Kev-4B Q4_K_M on the AMD card through llama.cpp, with
+`llamacpp-kev.toml` as its worker configuration. It is built but **not in use**, and plain
+`docker compose up -d` does not start it. Enabling it waits on the card's servicing, a soak
+test and the owner's policy switch: docs/ai/worker.md, "Kev on a llama.cpp sidecar".
+
 ## How it behaves
 
 - **Each worker waits for its own window** (`outside_window = "wait"`). Outside it, the

@@ -24,12 +24,15 @@ from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from makhzan_ml.worker.pins import PINS
+from makhzan_ml.worker.pins import BACKENDS, PINS, pin_for
 
 DEVICES = ("cpu", "gpu")
 #: The validated setups (decision-review §4, P8): fp32 on CPU, bf16 on the GPU. Any other
 #: pairing was never measured against the stored scores, so it is refused, not guessed.
 DTYPES = {"cpu": ("fp32",), "gpu": ("bf16",)}
+#: The llama.cpp backend's precision is the GGUF's, on either device (D20 as amended
+#: 2026-11-26 accepts Kev-4B Q4_K_M; docs/ai/kev-llamacpp.md).
+LLAMACPP_DTYPES = ("q4_k_m",)
 ON_EMPTY = ("exit", "wait")
 OUTSIDE_WINDOW = ("exit", "wait")
 #: Floors on the two intervals: a heartbeat or a poll every few milliseconds would only
@@ -169,7 +172,18 @@ class Config:
     broker_via_proxy: bool = False
     #: With broker_via_proxy: the host names plain http may go to (the proxy's service name).
     broker_proxy_hosts: tuple[str, ...] = ("broker-proxy",)
+    #: "torch" (the model's own code, in this process) or "llamacpp" (a sidecar server).
+    backend: str = "torch"
+    #: llamacpp only: the sidecar's base URL, and the GGUF it serves, mounted read-only here
+    #: too so the worker can check it is the pinned file.
+    llamacpp_url: str | None = None
+    gguf_path: Path | None = None
     source: Path | None = None
+
+    @property
+    def pin(self):
+        """The pin this worker serves: the model key's, on the configured backend."""
+        return pin_for(self.model, self.backend)
 
     def hello_config(self) -> dict:
         """What hello reports of this configuration (broker-api.md §3.1)."""
@@ -196,7 +210,18 @@ _SCHEMA: dict[str, set[str]] = {
         "model",
         "models",
     },
-    "compute": {"device", "dtype", "threads", "nice", "memory_gib", "mmap", "weights_cache"},
+    "compute": {
+        "device",
+        "dtype",
+        "threads",
+        "nice",
+        "memory_gib",
+        "mmap",
+        "weights_cache",
+        "backend",
+        "llamacpp_url",
+        "gguf_path",
+    },
     "schedule": {"windows", "timezone", "on_empty", "poll_s", "outside_window", "no_new_lease_s"},
     "leases": {"max_jobs", "lease_s", "heartbeat_s", "retry_max_s"},
 }
@@ -320,6 +345,32 @@ def _broker_url(
     return url
 
 
+def _llamacpp_url(url: Any) -> str:
+    """The sidecar's URL: plain http:// to a compose service name (the sidecar on the
+    worker's internal network) or a loopback address (tests, parity). Nothing else: the
+    worker sends catalogue text there."""
+    url = _nonempty("compute", "llamacpp_url", url).rstrip("/")
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    try:
+        parts.port
+    except ValueError as e:
+        raise ConfigError(f"[compute] llamacpp_url {url!r}: {e}") from None
+    loopback = False
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+    if parts.scheme != "http" or not (loopback or _service_name(host)):
+        raise ConfigError(
+            f"[compute] llamacpp_url {url!r}: http:// to a compose service name (the sidecar) "
+            "or a loopback address"
+        )
+    if parts.username or parts.password or parts.query or parts.fragment or parts.path:
+        raise ConfigError("[compute] llamacpp_url is a base URL: no path, query or credentials")
+    return url
+
+
 def _token(worker: dict, base: Path) -> tuple[str, Path | None]:
     has_token, has_file = "token" in worker, "token_file" in worker
     if has_token == has_file:
@@ -384,6 +435,13 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         model = models[0]
     if model not in PINS:
         raise ConfigError(f"[worker] model: unknown model key {model!r} (known: {sorted(PINS)})")
+    backend = compute.get("backend", "torch")
+    if backend not in BACKENDS:
+        raise ConfigError(f"[compute] backend {backend!r}: one of {list(BACKENDS)}")
+    try:
+        pin = pin_for(model, backend)
+    except KeyError:
+        raise ConfigError(f"[compute] backend {backend!r} cannot serve {model!r}") from None
 
     if not isinstance(model_tables, dict):
         raise ConfigError("[model.<key>] must be tables")
@@ -396,22 +454,39 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         _unknown(f"model.{key}", table, _MODEL_KEYS)
         if "expect_version" in table:
             want = _typed(f"model.{key}", "expect_version", table["expect_version"], str)
-            if want != PINS[key].model_version:
+            if want != pin.model_version:
                 raise ConfigError(
                     f"[model.{key}] expect_version {want!r} is not what this worker serves "
-                    f"({PINS[key].model_version!r}); the image or the configuration is stale"
+                    f"({pin.model_version!r}); the image or the configuration is stale"
                 )
             expect[key] = want
 
     device = compute.get("device", "cpu")
     if device not in DEVICES:
         raise ConfigError(f"[compute] device {device!r}: one of {list(DEVICES)}")
-    dtype = compute.get("dtype", DTYPES[device][0])
-    if dtype not in DTYPES[device]:
+    dtypes = LLAMACPP_DTYPES if backend == "llamacpp" else DTYPES[device]
+    dtype = compute.get("dtype", dtypes[0])
+    if dtype not in dtypes:
         raise ConfigError(
-            f"[compute] dtype {dtype!r} on {device}: only {list(DTYPES[device])} is validated "
-            "against the stored scores"
+            f"[compute] dtype {dtype!r} on {device} ({backend}): only {list(dtypes)} is "
+            "validated against the stored scores"
         )
+    llamacpp_url = gguf_path = None
+    if backend == "llamacpp":
+        if "llamacpp_url" not in compute or "gguf_path" not in compute:
+            raise ConfigError(
+                '[compute] backend = "llamacpp" needs llamacpp_url (the sidecar) and gguf_path '
+                "(the GGUF it serves, mounted read-only into the worker too)"
+            )
+        llamacpp_url = _llamacpp_url(compute["llamacpp_url"])
+        gguf_path = base / _nonempty("compute", "gguf_path", compute["gguf_path"])
+        for key in ("mmap", "weights_cache"):
+            if key in compute:
+                raise ConfigError(f'[compute] {key} is not read with backend = "llamacpp"')
+    else:
+        for key in ("llamacpp_url", "gguf_path"):
+            if key in compute:
+                raise ConfigError(f'[compute] {key} is only read with backend = "llamacpp"')
     threads = compute.get("threads")
     if threads is not None:
         threads = int(_positive("compute", "threads", threads, integer=True))
@@ -510,6 +585,9 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         lease_s=lease_s,
         heartbeat_s=heartbeat_s,
         retry_max_s=retry_max_s,
+        backend=backend,
+        llamacpp_url=llamacpp_url,
+        gguf_path=gguf_path,
         source=source,
     )
 

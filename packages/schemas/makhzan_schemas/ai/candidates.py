@@ -584,7 +584,7 @@ class RescoreTrigger:
             if not (changed or judged):
                 continue
             if decision.outcome == SAME:
-                priority = triggers.RESCORE_SAME
+                priority = triggers.RESCORE_SAME if changed else triggers.RESCORE_SAME_VERSION
             elif changed:
                 priority = triggers.RESCORE_CHANGED
             else:
@@ -595,7 +595,7 @@ class RescoreTrigger:
                     decision.listing_a, decision.listing_b, decision.pipeline, priority, self.name
                 )
             )
-        # Standing "same" first (P8): offered, and so queued, in priority order.
+        # Offered, and so queued, in priority order (P8 as amended 2026-11-26).
         requests.sort(key=lambda r: -r.priority)
         return requests
 

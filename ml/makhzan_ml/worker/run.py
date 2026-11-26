@@ -69,7 +69,6 @@ from makhzan_ml.worker.broker import (
     VersionDrift,
 )
 from makhzan_ml.worker.config import Config
-from makhzan_ml.worker.pins import PINS
 
 log = logging.getLogger("makhzan_ml.worker")
 
@@ -186,6 +185,7 @@ class Worker:
         self.judge: judges.Judge | None = None
         self.held = _Held()
         self.key = cfg.model  # the one model this worker serves
+        self.pin = cfg.pin  # what it serves it as: the key's pin on the configured backend
         self.judge_info: dict[str, dict] = {}  # what each load reported, kept after unloading
         self.undelivered: list[dict] = []
         self.session_closed = False  # the broker has recorded the session's end (P16)
@@ -359,7 +359,8 @@ class Worker:
 
     def _preflight(self) -> None:
         cfg = self.cfg
-        if not self.importable(self.key):
+        # A llama.cpp backend needs no model code here: the sidecar holds the model.
+        if cfg.backend == "torch" and not self.importable(self.key):
             raise _Fatal(
                 EXIT_CONFIG,
                 f"this image cannot load {self.key!r}: each model image holds one model's code "
@@ -396,8 +397,8 @@ class Worker:
             "worker": cfg.name,
             "models": {  # exactly one: the broker takes one model per session
                 key: {
-                    "model_version": PINS[key].model_version,
-                    "weights_revision": PINS[key].weights_revision,
+                    "model_version": self.pin.model_version,
+                    "weights_revision": self.pin.weights_revision,
                 }
             },
             "image": self.image,
@@ -439,13 +440,13 @@ class Worker:
         if not answer.get("ok"):
             raise _Fatal(
                 EXIT_VERSION,
-                f"hello: {key} is not ok: this worker serves {PINS[key].model_version}, the "
+                f"hello: {key} is not ok: this worker serves {self.pin.model_version}, the "
                 f"broker's registry {answer.get('model_version')}; nothing will be leased",
             )
         log.info(
             "hello: %s %s ok, %s requests queued",
             key,
-            PINS[key].model_version,
+            self.pin.model_version,
             answer.get("queued_requests"),
         )
 
@@ -480,7 +481,7 @@ class Worker:
             body = {
                 "session": self.session,
                 "model": key,
-                "model_version": PINS[key].model_version,
+                "model_version": self.pin.model_version,
                 "max_jobs": self.cfg.max_jobs,
                 # One id per lease attempt, the same on the client's retries of it: a lease
                 # whose answer was lost comes back as the same lease, not orphaned.
@@ -492,7 +493,7 @@ class Worker:
                 raise _Fatal(
                     EXIT_VERSION,
                     f"lease {key}: the broker's version is {e.body.get('current')!r}, this "
-                    f"worker serves {PINS[key].model_version!r}",
+                    f"worker serves {self.pin.model_version!r}",
                 ) from None
             jobs = lease.get("jobs") or []
             if not lease.get("lease_id") or not jobs:
@@ -558,7 +559,7 @@ class Worker:
                 )
             if self._may_continue():
                 judge = self._ensure_loaded(key, lease_id)
-                for job in jobs:
+                for job in jobs if judge is not None else ():
                     # Checked again before each job, so right after the load too: a stop that
                     # came during a long load scores nothing.
                     if not self._may_continue():
@@ -589,15 +590,30 @@ class Worker:
                 self.held.leases.pop(lease_id, None)
                 self.held.progress = None
 
-    def _ensure_loaded(self, key: str, lease_id: str) -> judges.Judge:
+    def _ensure_loaded(self, key: str, lease_id: str) -> judges.Judge | None:
         """The session's model, loaded once, on the first lease that brings jobs."""
         if self.judge is not None:
             return self.judge
         cfg = self.cfg
-        rt = judges.Runtime(cfg.device, cfg.dtype, self.threads, cfg.mmap, cfg.weights_cache)
+        rt = judges.Runtime(
+            cfg.device,
+            cfg.dtype,
+            self.threads,
+            cfg.mmap,
+            cfg.weights_cache,
+            cfg.backend,
+            cfg.llamacpp_url,
+            cfg.gguf_path,
+            self.stop,
+        )
         log.info("loading %s (%s, %s) for lease %s", key, cfg.device, cfg.dtype, lease_id)
         try:
             self.judge = self.load_judge(key, rt)
+        except judges.LoadInterrupted:
+            # A stop came during an interruptible load: nothing is loaded, and the caller's
+            # next check sees the stop and hands the lease back gracefully.
+            log.info("load of %s interrupted by the stop", key)
+            return None
         except Exception as e:  # noqa: BLE001 - every load failure ends the session the same way
             # The jobs are not at fault: the lease goes back gracefully (once, in
             # _process_lease), so a misconfigured worker restarted by a timer cannot turn

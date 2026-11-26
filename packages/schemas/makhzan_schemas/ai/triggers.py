@@ -30,7 +30,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import select, text, tuple_
+from sqlalchemy import SmallInteger, String, and_, column, select, text, tuple_, update
+from sqlalchemy import values as sql_values
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,13 +42,17 @@ from makhzan_schemas.models import AiJob, AiModelVersion
 from makhzan_schemas.overrides import pair
 
 #: The priority ladder, higher first: the design's, with the owner's rule that
-#: standing "same" decisions are re-scored first (P8).
+#: standing "same" decisions whose text changed are re-scored first (P8).
 RESCORE_SAME = 100
 NEXT_STAGE = 80
 CANDIDATE = 60
 #: A standing "not same" whose text changed: as urgent as a new candidate.
 RESCORE_CHANGED = 60
 BACKLOG = 40
+#: A standing "same" whose judge changed and whose text did not: after new pairs and the
+#: backlog, ahead of the "not same" ones (owner, 2026-11-26, amending P8). A new judge
+#: version re-scores every standing decision; new pairs must not wait behind that.
+RESCORE_SAME_VERSION = 35
 #: A standing "not same" whose judge changed and whose text did not.
 RESCORE_VERSION = 30
 AUDIT = 10
@@ -131,14 +137,72 @@ async def model_version_id(session: AsyncSession, stage: Stage) -> int:
 _BATCH = 2000
 
 
+async def _raise_queued(session: AsyncSession, batch: list[dict]) -> None:
+    """Raise each pair's **queued** job to the priority just offered, when that is higher.
+
+    Separate from the insert, and skipping locked rows: an `ON CONFLICT DO UPDATE` locks
+    every conflicting row, leased ones included, until the producer's transaction commits
+    (minutes, for the daily run), which would block the broker's heartbeats, submits and
+    releases on those jobs. Here only queued rows below the offer are locked, `SKIP LOCKED`:
+    a job the broker holds right now is raised at its next offer instead."""
+    v = sql_values(
+        column("pipeline", String),
+        column("stage", String),
+        column("model_version_id", SmallInteger),
+        column("listing_a", UUID(as_uuid=True)),
+        column("listing_b", UUID(as_uuid=True)),
+        column("p", SmallInteger),
+        name="offered",
+    ).data(
+        [
+            (
+                r["pipeline"],
+                r["stage"],
+                r["model_version_id"],
+                r["listing_a"],
+                r["listing_b"],
+                r["priority"],
+            )
+            for r in batch
+        ]  # fmt: skip
+    )
+    due = (
+        select(AiJob.id, v.c.p)
+        .join(
+            v,
+            and_(
+                AiJob.pipeline == v.c.pipeline,
+                AiJob.stage == v.c.stage,
+                AiJob.model_version_id == v.c.model_version_id,
+                AiJob.listing_a == v.c.listing_a,
+                AiJob.listing_b == v.c.listing_b,
+            ),
+        )
+        .where(text("ai_jobs.status = 'queued'"), AiJob.priority < v.c.p)
+        .with_for_update(of=AiJob, skip_locked=True)
+        .cte("due")
+    )
+    await session.execute(
+        update(AiJob)
+        .where(AiJob.id == due.c.id)
+        .values(priority=due.c.p)
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def enqueue(
     session: AsyncSession, requests: Iterable[PairRequest], *, stage: str | None = None
 ) -> int:
     """Queue each pair at its pipeline's first stage (or `stage`, which is how
     the broker queues a later one). Idempotent: a pair already queued or
-    leased at that stage and judge is left alone, and so is one whose job
-    there is dead: a poison job is handled by hand (P6, `./makhzan ai jobs
-    retry`), not re-queued by every daily run. Flushed, not committed;
+    leased at that stage and judge gets no second job, and one whose job there
+    is dead is left alone: a poison job is handled by hand (P6, `./makhzan ai
+    jobs retry`), not re-queued by every daily run. One thing does change: a
+    **queued** job offered again at a higher priority is raised to it (only
+    its priority; reason and everything else stay), so a "same" queued at 35
+    for a new judge is lifted to 100 when its text then changes (P8 as amended
+    2026-11-26). A leased job is never touched or locked, and a queued one the
+    broker holds locked right then is raised at its next offer (`_raise_queued`). Flushed, not committed;
     returns how many jobs were created. Rows go in batches, so a backlog of
     many thousand pairs is a few statements rather than one per pair."""
     created = 0
@@ -162,6 +226,14 @@ async def enqueue(
                 "priority": request.priority,
             }
         )
+    # One row per job key, at the highest priority offered: ON CONFLICT DO UPDATE may not
+    # touch the same row twice in one statement.
+    unique: dict[tuple, dict] = {}
+    for r in rows:
+        k = (r["pipeline"], r["stage"], r["model_version_id"], r["listing_a"], r["listing_b"])
+        if k not in unique or r["priority"] > unique[k]["priority"]:
+            unique[k] = {**unique.get(k, r), "priority": r["priority"]}
+    rows = list(unique.values())
     for start in range(0, len(rows), _BATCH):
         batch = rows[start : start + _BATCH]
         keys = [
@@ -205,5 +277,6 @@ async def enqueue(
             )
         )
         created += result.rowcount or 0
+        await _raise_queued(session, batch)
     await session.flush()
     return created

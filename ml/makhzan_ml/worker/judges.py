@@ -19,6 +19,14 @@ The scoring paths are the ones every validated score went through
 batches whatever is queued at once; the worker calls it from one thread, one request at
 a time, so every batch is that one request.
 
+- **Kev on llama.cpp** (`backend = "llamacpp"`, `pins.ALTERNATIVES`): a llama.cpp server
+  beside the worker (a compose sidecar) does the compute; the worker posts the same payload
+  to its `POST /v1/systemone`, one request per call, and undoes the GGUF's built-in
+  decision temperature, so the score is raw P(yes) like every validated Kev score. Before
+  anything is scored it checks the GGUF it was given (mounted read-only into the worker
+  too) by sha256 and by its own metadata (decision type, temperature), and the sidecar's
+  `/props` (that file's name, the pinned llama.cpp build). No torch on this path.
+
 **No mmap on CPU** (`no_mmap`): every safetensors file is read with pread(2), tensor by
 tensor, and after loading the process's mappings are checked (`mapped_weights`, which
 `selfcheck` first proves can see a file mapped through a Hub-cache symlink). A weight
@@ -35,14 +43,20 @@ import atexit
 import gc
 import logging
 import math
+import hashlib
+import json
 import os
+import struct
 import sys
 import time
+import unicodedata
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from makhzan_ml.worker.pins import PINS, Pin
+from makhzan_ml.worker.pins import Pin, pin_for
 
 log = logging.getLogger("makhzan_ml.worker.judges")
 
@@ -56,6 +70,10 @@ PPLX_BATCH_TOKENS = 8192
 
 class LoadError(RuntimeError):
     """The model could not be loaded as pinned; nothing may be scored."""
+
+
+class LoadInterrupted(LoadError):
+    """A stop came during an interruptible load (the llama.cpp backend's hash and wait)."""
 
 
 @dataclass
@@ -245,6 +263,12 @@ class Runtime:
     threads: int | None
     mmap: bool
     weights_cache: Path | None
+    backend: str = "torch"
+    llamacpp_url: str | None = None
+    gguf_path: Path | None = None
+    #: The worker's stop event (a threading.Event): the llama.cpp load checks it while it
+    #: hashes the GGUF and waits for the sidecar, so a stop never waits on either.
+    stop: object = None
 
 
 def prepare_environment(rt: Runtime) -> None:
@@ -387,9 +411,235 @@ def _load_pplx(rt: Runtime, pin: Pin) -> Judge:
 _LOADERS = {"kev": _load_kev, "pplx": _load_pplx}
 
 
+# --- llama.cpp sidecar ------------------------------------------------------------------------
+
+#: How long a load waits for the sidecar to answer /health ok (it loads the GGUF when it
+#: starts, normally long before a window opens; a 3 GB file from an HDD takes tens of
+#: seconds). Interruptible by a stop, as is the hash before it.
+LLAMACPP_READY_S = 120.0
+#: One scoring request's timeout, per device. Measured: about 0.5 s on the 3060, 4.4-6.1 s on
+#: the home server's AMD card; on CPU about 95 s for the longest request (1,625 tokens at
+#: ~17 tokens/s). Both stay inside the stop bound (docs/ai/worker.md, "A stop sets one
+#: deadline"): a request is the one part of a session a stop cannot interrupt.
+LLAMACPP_REQUEST_S = {"gpu": 60.0, "cpu": 120.0}
+
+_GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
+                 10: "<Q", 11: "<q", 12: "<d"}  # fmt: skip
+_GGUF_STRING, _GGUF_ARRAY = 8, 9
+
+
+def gguf_metadata(path: Path, keys: set[str]) -> dict:
+    """The values of `keys` in a GGUF file's key-value header (format v2/v3), read with the
+    standard library. Arrays (the tokenizer's) are skipped, never loaded."""
+
+    def read(f, fmt):
+        size = struct.calcsize(fmt)
+        data = f.read(size)
+        if len(data) != size:
+            raise LoadError(f"{path}: the GGUF header ends early")
+        return struct.unpack(fmt, data)[0]
+
+    def string(f) -> bytes:
+        n = read(f, "<Q")
+        data = f.read(n)
+        if len(data) != n:
+            raise LoadError(f"{path}: the GGUF header ends early")
+        return data
+
+    def skip(f, kind):
+        if kind in _GGUF_SCALARS:
+            f.seek(struct.calcsize(_GGUF_SCALARS[kind]), 1)
+        elif kind == _GGUF_STRING:
+            f.seek(read(f, "<Q"), 1)
+        elif kind == _GGUF_ARRAY:
+            inner, n = read(f, "<I"), read(f, "<Q")
+            if inner in _GGUF_SCALARS:
+                f.seek(struct.calcsize(_GGUF_SCALARS[inner]) * n, 1)
+            else:
+                for _ in range(n):
+                    skip(f, inner)
+        else:
+            raise LoadError(f"{path}: unknown GGUF value type {kind}")
+
+    found: dict = {}
+    with open(path, "rb") as f:
+        if f.read(4) != b"GGUF":
+            raise LoadError(f"{path} is not a GGUF file")
+        version = read(f, "<I")
+        if version not in (2, 3):
+            raise LoadError(f"{path}: GGUF version {version} is not read here")
+        read(f, "<Q")  # tensor count
+        for _ in range(read(f, "<Q")):
+            name = string(f).decode("utf-8", "replace")
+            kind = read(f, "<I")
+            if name in keys and kind in _GGUF_SCALARS:
+                found[name] = read(f, _GGUF_SCALARS[kind])
+            elif name in keys and kind == _GGUF_STRING:
+                found[name] = string(f).decode("utf-8")
+            else:
+                skip(f, kind)
+            if len(found) == len(keys):
+                break
+    return found
+
+
+def _stopped(stop) -> bool:
+    return stop is not None and stop.is_set()
+
+
+def sha256_file(path: Path, chunk: int = 1 << 20, stop=None) -> str:
+    """The file's sha256; a set `stop` event ends it between chunks (LoadInterrupted)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while block := f.read(chunk):
+            if _stopped(stop):
+                raise LoadInterrupted(f"stopped while hashing {path.name}")
+            h.update(block)
+    return h.hexdigest()
+
+
+def uncalibrate(p: float, temperature: float) -> float:
+    """llama.cpp's calibrated P(yes) = sigmoid(logit / T) back to the raw sigmoid(logit).
+
+    `p` must be a real probability: a bool, a string, NaN, an infinity or anything outside
+    [0, 1] is a ValueError, never clamped into a score. Only exactly 0 and 1 are nudged
+    inward, so their logit is finite."""
+    if isinstance(p, bool) or not isinstance(p, (int, float)):
+        raise ValueError(f"not a probability: {p!r}")
+    p = float(p)
+    if not math.isfinite(p) or not 0.0 <= p <= 1.0:
+        raise ValueError(f"not a probability: {p!r}")
+    if p == 0.0:
+        p = 1e-12
+    elif p == 1.0:
+        p = 1.0 - 1e-12
+    z = temperature * math.log(p / (1.0 - p))
+    return 1.0 / (1.0 + math.exp(-z)) if z >= 0 else math.exp(z) / (1.0 + math.exp(z))
+
+
+def _http_json(url: str, body: dict | None = None, timeout: float = 30.0) -> dict:
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data, {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - checked URL
+        return json.loads(r.read())
+
+
+def _wait_ready(base: str, budget_s: float, stop=None, clock=time.monotonic) -> None:
+    deadline = clock() + budget_s
+    last = "no answer"
+    while True:
+        if _stopped(stop):
+            raise LoadInterrupted("stopped while waiting for the llama.cpp sidecar")
+        try:
+            if _http_json(f"{base}/health", timeout=10).get("status") == "ok":
+                return
+            last = "not ok"
+        except urllib.error.HTTPError as e:
+            last = f"HTTP {e.code}"  # 503 while the model is loading
+        except (OSError, ValueError) as e:
+            last = f"{type(e).__name__}: {e}"
+        if clock() >= deadline:
+            raise LoadError(f"the llama.cpp sidecar at {base} is not ready ({last})")
+        if stop is not None:
+            stop.wait(2.0)
+        else:
+            time.sleep(2.0)
+
+
+def nfc(value):
+    """Every string in a payload in Unicode NFC, as Kev's own tokenizer normalises it.
+
+    The Qwen tokenizer Kev's server uses applies NFC before tokenising; llama.cpp's does not,
+    although the GGUF records it (`tokenizer.ggml.normalizer`). Without this, text such as the
+    ohm sign U+2126 tokenises differently from the validated scores (10 of the 1,800 Phase E
+    requests did, for pplx's identical tokenizer). Only what is sent changes: the broker's
+    request hashes are computed on the payload as rendered."""
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, dict):
+        return {k: nfc(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [nfc(v) for v in value]
+    return value
+
+
+def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
+    if not rt.llamacpp_url or rt.gguf_path is None:
+        raise LoadError("kev (llamacpp): llamacpp_url and gguf_path are required")
+    path = Path(rt.gguf_path)
+    if not path.is_file():
+        raise LoadError(f"kev (llamacpp): gguf_path {path} is not a file")
+    if path.name != pin.gguf_file:
+        raise LoadError(f"kev (llamacpp): {path.name!r} is not the pinned {pin.gguf_file!r}")
+    meta = gguf_metadata(path, {"qwen35.decision.type", "qwen35.decision.temperature.noul"})
+    if meta.get("qwen35.decision.type") != "kev":
+        raise LoadError(f"kev (llamacpp): {path.name} is not a Kev decision model: {meta}")
+    temperature = meta.get("qwen35.decision.temperature.noul")
+    if temperature is None or abs(float(temperature) - pin.gguf_temperature) > 1e-6:
+        raise LoadError(
+            f"kev (llamacpp): the GGUF's temperature is {temperature}, pinned "
+            f"{pin.gguf_temperature}"
+        )
+    digest = sha256_file(path, stop=rt.stop)
+    if digest != pin.gguf_sha256:
+        raise LoadError(f"kev (llamacpp): {path.name} sha256 {digest}, pinned {pin.gguf_sha256}")
+    base = rt.llamacpp_url.rstrip("/")
+    _wait_ready(base, LLAMACPP_READY_S, rt.stop)
+    request_timeout = LLAMACPP_REQUEST_S[rt.device]
+    props = _http_json(f"{base}/props")
+    served = Path(str(props.get("model_path") or "")).name
+    if served != pin.gguf_file:
+        raise LoadError(f"kev (llamacpp): the sidecar serves {served!r}, pinned {pin.gguf_file!r}")
+    build = str(props.get("build_info") or "")
+    want_build = pin.model_version.split("+llama.cpp-", 1)[1].split("-", 1)[0]
+    if not build.startswith(want_build + "-"):
+        raise LoadError(f"kev (llamacpp): the sidecar is llama.cpp {build!r}, pinned {want_build}")
+
+    def score(payload: dict) -> tuple[float, dict]:
+        q = question_key(payload)
+        try:
+            body = _http_json(f"{base}/v1/systemone", {"model": "kev", **nfc(payload)},
+                              timeout=request_timeout)  # fmt: skip
+        except urllib.error.HTTPError as e:
+            detail = e.read()[:300].decode("utf-8", "replace")
+            raise RuntimeError(f"llama.cpp answered HTTP {e.code}: {detail}") from None
+        try:
+            calibrated = body["answers"][q]["noul"]
+        except (KeyError, TypeError):
+            raise RuntimeError(
+                f"llama.cpp's answer has no answers.{q}.noul: {str(body)[:300]}"
+            ) from None
+        try:
+            return uncalibrate(calibrated, pin.gguf_temperature), {}
+        except ValueError as e:
+            raise RuntimeError(f"llama.cpp answered {q}.noul = {calibrated!r}: {e}") from None
+
+    info = {
+        "backend": "llamacpp",
+        "device": rt.device,
+        "dtype": rt.dtype,
+        "gguf": pin.gguf_file,
+        "gguf_sha256": digest,
+        "gguf_temperature": float(temperature),
+        "temperature": pin.temperature,
+        "llamacpp_build": build,
+        "slots": props.get("total_slots"),
+        "request_timeout_s": request_timeout,
+        "image": pin.code,
+    }
+    return Judge("kev", score, info)
+
+
 def load(key: str, rt: Runtime) -> Judge:
     """Load `key`'s model once, as pinned, and check it before anything is scored."""
-    pin = PINS[key]
+    pin = pin_for(key, rt.backend)
+    if rt.backend == "llamacpp":
+        # The sidecar does the compute: no torch, no weights in this process.
+        t0 = time.monotonic()
+        judge = _load_kev_llamacpp(rt, pin)
+        judge.info["load_seconds"] = round(time.monotonic() - t0, 1)
+        judge.info["peak_rss_bytes"] = proc_status("VmHWM")
+        return judge
     prepare_environment(rt)
     if not rt.mmap:
         selfcheck()
@@ -427,7 +677,7 @@ def unload(judge: Judge, device: str) -> None:
     judge.close()
     judge.score_fn = judge.close_fn = lambda *a: None  # drop the model's references
     gc.collect()
-    if device == "gpu":
+    if device == "gpu" and judge.info.get("backend") != "llamacpp":
         import torch
 
         torch.cuda.empty_cache()

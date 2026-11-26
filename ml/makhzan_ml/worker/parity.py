@@ -12,6 +12,17 @@ check, results, release) with the real model loaded by `judges.load`. So this ch
 what production will run, not a shortcut around it, and it needs no network
 (`docker run --network none` keeps loopback).
 
+**llama.cpp** (`--backend llamacpp`): the worker talks to a running llama.cpp server
+(`--llamacpp-url`, a loopback address) serving `--gguf-path`, which must be the pinned GGUF.
+`--stored` replaces the file's `gpu_score` with scores from another file (one JSON object per
+line: `pair_id`, `order`, `score`), e.g. a llama.cpp run of the same GGUF, read through
+`--stored-temperature` (2.406 for scores as llama.cpp returned them, calibrated; 1 for raw):
+
+    python -m makhzan_ml.worker.parity --model kev --backend llamacpp --device gpu \
+        --llamacpp-url http://127.0.0.1:8130 --gguf-path /models/Kev-4B-Q4_K_M.gguf \
+        --requests ml/out/bench-cpu/requests/kev-K2-150.jsonl --n 20 \
+        --stored ml/out/gguf-kev/q4km-vulkan-3060.jsonl --stored-temperature 2.406
+
 The report holds pair ids, orders, scores and timings, never catalogue text. Agreement
 is `--tolerance` on the absolute difference (0.05, the CPU benchmark's session-chosen
 value) and the count of decisions that change side of the setup's threshold.
@@ -27,8 +38,9 @@ import time
 from pathlib import Path
 
 from makhzan_ml.worker import config as config_mod
-from makhzan_ml.worker import run
+from makhzan_ml.worker import judges, run
 from makhzan_ml.worker.fake_broker import FakeBroker
+from makhzan_ml.worker.pins import pin_for
 
 TOKEN = "parity-token"
 
@@ -74,12 +86,35 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--tolerance", type=float, default=0.05)
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--backend", default="torch", choices=["torch", "llamacpp"])
+    ap.add_argument("--llamacpp-url")
+    ap.add_argument("--gguf-path")
+    ap.add_argument("--stored", type=Path, help="stored scores to compare with, by pair/order")
+    ap.add_argument("--stored-temperature", type=float, default=1.0)
     args = ap.parse_args(argv)
     logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     lines = [json.loads(line) for line in args.requests.open()]
+    if args.stored:
+        stored = {}
+        for line in args.stored.open():
+            r = json.loads(line)
+            if r.get("score") is not None:
+                stored[(r["pair_id"], r["order"])] = judges.uncalibrate(
+                    r["score"], args.stored_temperature
+                )
+        lines = [{**r, "gpu_score": stored.get((r["pair_id"], r["order"]))} for r in lines]
     pairs = pick(lines, args.n)
-    with FakeBroker({TOKEN: ("parity", [args.model])}) as broker:
+    compute = {"device": args.device, **({"threads": args.threads} if args.threads else {})}
+    if args.backend == "llamacpp":
+        compute.update(backend="llamacpp", llamacpp_url=args.llamacpp_url,
+                       gguf_path=args.gguf_path)  # fmt: skip
+    pin = pin_for(args.model, args.backend)
+    with FakeBroker(
+        {TOKEN: ("parity", [args.model])},
+        versions={args.model: pin.model_version},
+        weights={args.model: pin.weights_revision},
+    ) as broker:
         jobs = {}
         for rows in pairs:
             job = broker.add_job(args.model, {r["order"]: r["request"] for r in rows})
@@ -88,8 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "worker": {"name": f"parity-{args.model}", "broker_url": broker.url,
                            "token": TOKEN, "model": args.model},
-                "compute": {"device": args.device,
-                            **({"threads": args.threads} if args.threads else {})},
+                "compute": compute,
                 "schedule": {"windows": "always", "on_empty": "exit"},
                 "leases": {"max_jobs": 4, "lease_s": 900, "heartbeat_s": 60},
             }
@@ -119,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     summary = compare(rows_out, args.tolerance)
     report = {
         "model": args.model,
+        "backend": args.backend,
+        "model_version": pin.model_version,
+        "stored": str(args.stored.name) if args.stored else "gpu_score",
         "device": args.device,
         "requests_file": args.requests.name,
         "exit_code": code,
