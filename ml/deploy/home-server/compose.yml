@@ -101,8 +101,13 @@ networks:
     driver_opts:
       com.docker.network.bridge.inhibit_ipv4: "true"
     # A fixed subnet, so the proxy can listen on a fixed address in it (.env can move both).
+    # `ip_range` keeps every address Docker hands out itself in the upper half, away from the
+    # proxy's: inhibit_ipv4 leaves no gateway, so without it the first worker to attach took
+    # .1 and the second .2, and the proxy then failed with "Address already in use" and
+    # stayed down (2026-11-24, two nights unscored). PROXY_ADDRESS must stay outside it.
     ipam:
       config:
         - subnet: ${BROKER_NET_SUBNET:-10.231.89.0/24}
+          ip_range: ${BROKER_NET_DYNAMIC:-10.231.89.128/25}
   # An ordinary bridge, for the proxy alone.
   egress: {}

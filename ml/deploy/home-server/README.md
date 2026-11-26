@@ -69,7 +69,8 @@ whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 
 The workers are on `broker-only`, a Docker network with `internal: true`: no route out, no
 DNS beyond the stack's own service names. `broker-proxy` is on that network, at a fixed
-address (`PROXY_ADDRESS`, 10.231.89.2 by default), and on an ordinary bridge (`egress`). It
+address (`PROXY_ADDRESS`, 10.231.89.2 by default) that the workers' own addresses can never
+take (they are drawn from `BROKER_NET_DYNAMIC`, 10.231.89.128/25), and on an ordinary bridge (`egress`). It
 listens on its `broker-only` address only, never on the bridge, and forwards one TCP port to
 `BROKER_TARGET`, byte for byte, and to nothing else: it reads no request, so nothing a worker
 sends can name another destination. The host's Tailscale client carries the proxy's traffic to the broker, as it did
