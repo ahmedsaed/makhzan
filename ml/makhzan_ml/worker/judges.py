@@ -49,6 +49,7 @@ import os
 import struct
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -545,6 +546,23 @@ def _wait_ready(base: str, budget_s: float, stop=None, clock=time.monotonic) -> 
             time.sleep(2.0)
 
 
+def nfc(value):
+    """Every string in a payload in Unicode NFC, as Kev's own tokenizer normalises it.
+
+    The Qwen tokenizer Kev's server uses applies NFC before tokenising; llama.cpp's does not,
+    although the GGUF records it (`tokenizer.ggml.normalizer`). Without this, text such as the
+    ohm sign U+2126 tokenises differently from the validated scores (10 of the 1,800 Phase E
+    requests did, for pplx's identical tokenizer). Only what is sent changes: the broker's
+    request hashes are computed on the payload as rendered."""
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, dict):
+        return {k: nfc(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [nfc(v) for v in value]
+    return value
+
+
 def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
     if not rt.llamacpp_url or rt.gguf_path is None:
         raise LoadError("kev (llamacpp): llamacpp_url and gguf_path are required")
@@ -580,7 +598,7 @@ def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
     def score(payload: dict) -> tuple[float, dict]:
         q = question_key(payload)
         try:
-            body = _http_json(f"{base}/v1/systemone", {"model": "kev", **payload},
+            body = _http_json(f"{base}/v1/systemone", {"model": "kev", **nfc(payload)},
                               timeout=request_timeout)  # fmt: skip
         except urllib.error.HTTPError as e:
             detail = e.read()[:300].decode("utf-8", "replace")

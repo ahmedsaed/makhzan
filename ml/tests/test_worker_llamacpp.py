@@ -255,6 +255,25 @@ def test_load_refuses_another_file(tmp_path, sidecar):
         judges._load_kev_llamacpp(rt(sidecar().url, tmp_path / "none.gguf"), pin_of(gguf))
 
 
+def test_what_is_sent_is_nfc_like_kevs_own_tokenizer_sees_it(tmp_path, sidecar):
+    """llama.cpp does not NFC-normalise; Kev's Qwen tokenizer does (the ohm sign U+2126 and a
+    decomposed é tokenised differently for 10 of 1,800 Phase E requests on pplx's twin)."""
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(calibrated=lambda _p: 0.5)
+    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    raw = {
+        "state": "47K\u2126 resistor, cafe\u0301",
+        "questions": {"same": {"type": "noul", "instructions": "Ohm \u2126?",
+                               "criteria": {"true": "e\u0301", "false": "no"}}},
+    }  # fmt: skip
+    judge.score(raw)
+    [sent] = side.requests
+    assert sent["state"] == "47K\u03a9 resistor, caf\u00e9"
+    assert sent["questions"]["same"]["instructions"] == "Ohm \u03a9?"
+    assert sent["questions"]["same"]["criteria"] == {"true": "\u00e9", "false": "no"}
+    assert raw["state"] == "47K\u2126 resistor, cafe\u0301"  # the caller's payload is untouched
+
+
 def test_load_gives_up_on_a_sidecar_that_never_gets_ready(tmp_path, monkeypatch):
     gguf = kev_gguf(tmp_path)
     monkeypatch.setattr(judges, "LLAMACPP_READY_S", 0.0)

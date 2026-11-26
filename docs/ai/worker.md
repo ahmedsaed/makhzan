@@ -714,6 +714,10 @@ where it runs about 15-20x the CPU worker's speed per token.
   one request per call. The GGUF carries Kev's fitted temperature (2.406) and llama.cpp
   always applies it, so the worker undoes it (`judges.uncalibrate`). The score is then raw
   P(yes), the scale every validated Kev score and the policy's 0.8 are on.
+- **Text is sent in Unicode NFC** (`judges.nfc`). Kev's own Qwen tokenizer normalises to NFC
+  and llama.cpp's does not, so without it text such as the ohm sign (U+2126) tokenises
+  differently: 10 of the 1,800 Phase E requests did, measured on pplx's identical tokenizer.
+  Only what is sent changes; the broker's request hashes are of the payload as rendered.
 - **The answer is checked too.** A missing or malformed `answers.same.noul`, or a value
   that is not a real number in [0, 1] (NaN, infinite, out of range, a bool or a string), is
   an error on that job, never a score. Only exactly 0 and 1 are nudged inward so their
