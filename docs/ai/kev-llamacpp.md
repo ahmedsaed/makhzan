@@ -15,7 +15,9 @@ These experiments asked whether a quantised Kev-4B could do two things:
   per token, and F16 about 1.5× (from 2 requests only).
 - On the AMD card, Q4 is about 14–19× faster per token, but the card needs better cooling first. It reset
   the server once at stock fan settings.
-- **Nothing here is in production.** No worker backend calls llama.cpp yet (see "Not done").
+- **Nothing here is in production.** A worker backend for a llama.cpp sidecar is built and
+  parity-checked but not in use (`docs/ai/worker.md`, "Kev on a llama.cpp sidecar"; see "Not
+  done").
 
 ## What changed from earlier notes
 
@@ -168,10 +170,13 @@ Notes:
 - **D20 (decided 2026-11-26):** the owner accepted Q4_K_M on the label test
   (`decision-review.md`, "Kev quantisation"). Any other variant still needs the agreement rule,
   or the same label test plus sign-off.
-- **No worker backend.** `makhzan_ml.worker` scores through Kev's own Python code only. Using
-  llama.cpp means a judge that calls `/v1/systemone`, uncalibrates by the GGUF's temperature, and
-  pins the GGUF file by hash and the llama.cpp image by digest. It would also need its own parity
-  check against stored scores.
+- **The worker backend is built, not in use** (`docs/ai/worker.md`, "Kev on a llama.cpp
+  sidecar").
+  - What it does: it calls `/v1/systemone`, undoes the GGUF's temperature, and pins the GGUF by
+    hash and the image by digest.
+  - Its parity: against a live sidecar on the 3060, 40 requests through the whole protocol came
+    within 0.016 of the stored Q4 scores.
+  - Not done: the production switch (owner-gated), and a run on the AMD card under compose.
 - **No soak test.** The AMD card has done at most 11 minutes of sustained load. Before a
   4-hour window it needs a full monitored 1,800-request run, after the cooling work and with the
   fan and power settings made persistent (e.g. a systemd unit).
