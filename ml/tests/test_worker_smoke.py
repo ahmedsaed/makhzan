@@ -35,3 +35,30 @@ def test_the_revision_check(monkeypatch):
     smoke.check_revision("abc")
     with pytest.raises(AssertionError):
         smoke.check_revision("def")
+
+
+# --- the slim llama.cpp image's checks (production since 2026-11-27) ---------------------
+
+
+@pytest.mark.parametrize("model", ["kev", "pplx"])
+def test_a_llamacpp_session_against_the_fake_broker_passes(model):
+    smoke.check_session(model, importable=lambda key: False, backend="llamacpp")
+
+
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
+def test_a_supervised_llamacpp_window_runs_in_a_child():
+    smoke.check_supervisor("pplx", importable=lambda key: False, backend="llamacpp")
+
+
+@pytest.mark.parametrize("model", ["kev", "pplx"])
+def test_the_llamacpp_entrypoint_check_passes(model):
+    smoke.check_entrypoint(model, backend="llamacpp")
+
+
+@pytest.mark.parametrize("model", ["kev", "pplx"])
+def test_the_llamacpp_loader_refuses_a_bad_gguf_without_torch(model):
+    import sys
+
+    if "torch" in sys.modules:  # another test in this process imported it: not this check's case
+        pytest.skip("torch already imported in this process")
+    smoke.check_llamacpp_loader(model)

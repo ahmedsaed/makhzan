@@ -500,9 +500,24 @@ heartbeat_s = 60
 `.dockerignore` sends only the worker's code, never the weights cache or `ml/out/`. No image
 holds model weights: they are mounted from the host at run time.
 
-**The CPU workers come from GHCR.** `.github/workflows/ai-worker-images.yml` builds
-`kev-worker-cpu` and `pplx-worker-cpu` on every push to `main` that touches `ml/` (and on
-demand); the steps are in `ai-worker-image-build.yml`. Each is one chain, from
+**The production worker is `worker-llamacpp`** (since 2026-11-27): `ml/worker-llamacpp.Dockerfile`,
+the worker alone on the same pinned python-slim base, about 180 MB, with no torch and no model
+code, since the llama.cpp sidecar does the compute. It runs both home-server workers and the
+broker proxy. Its smoke test is `python -m makhzan_ml.worker.smoke --backend llamacpp --model
+kev` (and `pplx`):
+- torch, transformers, fla and the model code are absent;
+- the llama.cpp loader refuses a file that is not a GGUF without importing torch;
+- then the same weight scan, `--check`, session, supervisor, proxy and revision checks as below,
+  under the llama.cpp configuration and version.
+
+Verified locally on 2026-11-27: both models' smoke tests passed in the image. Its parity tool
+against a real sidecar on the 3060 scored 10 requests within 0.013 of the stored Q4 scores, with
+no flips.
+
+**The torch CPU workers come from GHCR too, kept for a rollback.** `.github/workflows/ai-worker-images.yml`
+builds `worker-llamacpp`, `kev-worker-cpu` and `pplx-worker-cpu` on every push to `main` that
+touches `ml/` (and on pull requests, without pushing); the steps are in
+`ai-worker-image-build.yml`. Each torch worker is one chain, from
 `ml/docker-bake.hcl`: the lean model image (`ml/kev/Dockerfile.cpu-lean`,
 `ml/pplx/Dockerfile.cpu-lean`), then the worker layer on exactly that build, through a named
 context, so no registry tag or local image comes between them.

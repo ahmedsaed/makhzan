@@ -114,7 +114,7 @@ the new policy (exit 4, a `version_drift` flag): harmless, nothing is scored.
 deleted and the old test containers removed. The AI workers are stopped.
 
 1. **Merge** PR #94 (the udev rule), then this PR. CI then publishes the llama.cpp worker image
-   from `main` (`worker-llamacpp`, below); the server can only pull it after that.
+   from `main` (`worker-llamacpp`, smoke-tested first); the server can only pull it after that.
 2. **Production:** `./makhzan deploy`. The broker and API take the new policy (`MODELS` names the
    llama.cpp versions). Queued jobs move to the new judge at the next hello; standing decisions
    are re-queued by the next re-score run at the low P8 priorities (after new pairs and the
@@ -123,8 +123,11 @@ deleted and the old test containers removed. The AI workers are stopped.
    1. Copy the new `compose.yml`, `home-kev.toml`, `home-pplx.toml`, `sidecar-window.sh`,
       `install-sidecar-timers.sh` from the repository (`ml/deploy/home-server/`), keeping `.env`
       and the tokens. Add `RENDER_GID` and `VIDEO_GID` to `.env` (`getent group render video`).
-   2. `docker compose pull`, then each worker's `--check` (Set up, step 3): it must print the
-      llama.cpp version, `kev-4b-Q4_K_M@33ae6b189265+…` / `pplx-…-Q4_K_S@819a9ad0f8f4+…`.
+   2. `docker compose pull` (both workers and the proxy now run
+      `ghcr.io/ahmedsaed/makhzan/worker-llamacpp:latest`, the slim image, about 180 MB, no torch),
+      then each worker's `--check` (Set up, step 3): it must print the llama.cpp version,
+      `kev-4b-Q4_K_M@33ae6b189265+…` / `pplx-…-Q4_K_S@819a9ad0f8f4+…`. The old torch images can
+      then be removed (`docker image rm` of the `kev-` and `pplx-worker-cpu` tags).
    3. `sudo sh install-sidecar-timers.sh`, then `systemctl list-timers 'makhzan-sidecar-*'`.
    4. `docker compose up -d` (the workers and the proxy; they wait for their windows).
    5. A dry check outside the windows: `./sidecar-window.sh start kev`, wait for
@@ -138,7 +141,8 @@ deleted and the old test containers removed. The AI workers are stopped.
 2026-11-27, so first re-download them into `WEIGHTS_DIR` as real files (`rsync -L`; Kev-4B with its
 Qwen3.5-4B-Base, and pplx-decider-flash-v1.3, at the revisions in `worker/pins.py`; about 20 GB).
 Then copy `torch-kev.toml` / `torch-pplx.toml` over `home-*.toml`, set `KEV_IMAGE` / `PPLX_IMAGE`
-to the torch worker images, `sudo sh install-sidecar-timers.sh remove`, stop the sidecars, and
+to the torch worker images (`kev-worker-cpu`, `pplx-worker-cpu`: CI still builds and publishes
+them), `sudo sh install-sidecar-timers.sh remove`, stop the sidecars, and
 `docker compose up -d`.
 
 ## How it behaves

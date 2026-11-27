@@ -1,7 +1,9 @@
 name: AI worker image build
 
 # Called by ai-worker-images.yml, which grants the permissions: packages: write only for
-# push: true, on main. One job per CPU worker image (docs/ai/worker.md, "Images"):
+# push: true, on main. One job per worker image (docs/ai/worker.md, "Images"): worker-llamacpp,
+# production since 2026-11-27 (the worker alone on python-slim, no torch, no base chain), and the
+# torch CPU workers, kept for a rollback:
 #
 #   1. one bake of the lean base, then the worker on it (ml/docker-bake.hcl), loaded into the
 #      runner's Docker and, when pushing, also pushed to GHCR by digest, untagged, from the same
@@ -34,13 +36,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # No base image (python-slim is pinned in its Dockerfile) and no model code, so no
+          # upstream licence to carry; smoke-tested for both models it serves.
+          - image: worker-llamacpp
+            base: ""
+            models: kev pplx
+            backend: llamacpp
+            licence: ""
           - image: kev-worker-cpu
             base: kev-cpu-lean
-            model: kev
+            models: kev
+            backend: torch
             licence: /opt/kev/LICENSE
           - image: pplx-worker-cpu
             base: pplx-cpu-lean
-            model: pplx
+            models: pplx
+            backend: torch
             licence: /opt/pplx/LICENSE /opt/pplx/NOTICE
     env:
       PUSH: ${{ inputs.push }}
@@ -96,7 +107,8 @@ jobs:
         run: |
           {
             echo "set<<EOF"
-            echo "$BASE.cache-from=type=gha,scope=$BASE"
+            # An image with no base chain (worker-llamacpp) has no base target to cache.
+            [ -z "$BASE" ] || echo "$BASE.cache-from=type=gha,scope=$BASE"
             echo "$TARGET.cache-from=type=gha,scope=$TARGET"
             echo "$TARGET.tags="
             echo "$TARGET.output=type=docker,name=$LOCAL"
@@ -105,7 +117,7 @@ jobs:
             echo "$TARGET.args.IMAGE_REPO=$REPO"
             echo "$TARGET.args.REVISION=$GITHUB_SHA"
             if [ "$PUSH" = "true" ]; then
-              echo "$BASE.cache-to=type=gha,mode=max,scope=$BASE"
+              [ -z "$BASE" ] || echo "$BASE.cache-to=type=gha,mode=max,scope=$BASE"
               echo "$TARGET.cache-to=type=gha,mode=max,scope=$TARGET"
               echo "$TARGET.output=type=image,name=$REPO,push-by-digest=true,name-canonical=true,push=true"
             fi
@@ -142,18 +154,23 @@ jobs:
       # supervised first run on the home server.
       - name: Smoke test (no weights, no network)
         env:
-          MODEL: ${{ matrix.model }}
+          MODELS: ${{ matrix.models }}
+          BACKEND: ${{ matrix.backend }}
           LICENCE: ${{ matrix.licence }}
         run: |
-          docker run --rm --network none --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
-            --cap-drop ALL --security-opt no-new-privileges --init \
-            --entrypoint python "$LOCAL" -m makhzan_ml.worker.smoke --model "$MODEL" \
-            --expect-revision "$GITHUB_SHA"
-          # The upstream licence travels with the image.
-          read -ra files <<<"$LICENCE"
-          docker run --rm --network none --entrypoint sh "$LOCAL" -c \
-            'for f in "$@"; do test -s "$f" || { echo "missing $f"; exit 1; }; done
-             grep -q "Apache License" "$1"' sh "${files[@]}"
+          for model in $MODELS; do
+            docker run --rm --network none --read-only --tmpfs /tmp:size=256m -e HOME=/tmp \
+              --cap-drop ALL --security-opt no-new-privileges --init \
+              --entrypoint python "$LOCAL" -m makhzan_ml.worker.smoke --model "$model" \
+              --backend "$BACKEND" --expect-revision "$GITHUB_SHA"
+          done
+          # The upstream licence travels with an image that carries the model's code.
+          if [ -n "$LICENCE" ]; then
+            read -ra files <<<"$LICENCE"
+            docker run --rm --network none --entrypoint sh "$LOCAL" -c \
+              'for f in "$@"; do test -s "$f" || { echo "missing $f"; exit 1; }; done
+               grep -q "Apache License" "$1"' sh "${files[@]}"
+          fi
           size=$(docker image inspect -f '{{.Size}}' "$LOCAL")
           echo "IMAGE_MB=$(( size / 1000000 ))" >> "$GITHUB_ENV"
 

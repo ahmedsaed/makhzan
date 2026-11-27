@@ -1,4 +1,11 @@
-"""`python -m makhzan_ml.worker.smoke --model kev|pplx`: check a built worker image, no weights.
+"""`python -m makhzan_ml.worker.smoke --model kev|pplx [--backend torch|llamacpp]`: check a built
+worker image, no weights.
+
+`--backend llamacpp` checks the slim llama.cpp worker image (ml/worker-llamacpp.Dockerfile), the
+one production runs since 2026-11-27: there is no torch and no model code in it (the sidecar does
+the compute), so steps 1 and 2 become "torch is not installed" and "the llama.cpp loader runs
+without it", and the session and supervisor steps run under the llama.cpp configuration and
+version (`pins.production_pin`). The torch images keep the steps below, on the torch pins.
 
 What CI runs on each CPU worker image before it is pushed (.github/workflows/ai-worker-images.yml),
 and what can be run on the home server before a first real session. It loads no model and needs
@@ -37,7 +44,8 @@ from makhzan_ml.worker import judges, run
 from makhzan_ml.worker.broker import Broker
 from makhzan_ml.worker.config import parse
 from makhzan_ml.worker.fake_broker import FakeBroker
-from makhzan_ml.worker.pins import PINS
+from makhzan_ml.worker.config import LLAMACPP_DTYPES
+from makhzan_ml.worker.pins import PINS, pin_for
 
 log = logging.getLogger("makhzan_ml.worker.smoke")
 
@@ -60,8 +68,9 @@ def check_cpu_only() -> None:
 def check_model_code(model: str) -> None:
     assert judges.importable(model), f"this image cannot load {model!r}"
     if model == "kev":
+        want = pin_for("kev", "torch").code
         got = os.environ.get("MAKHZAN_KEV_COMMIT")
-        assert got == PINS["kev"].code, f"MAKHZAN_KEV_COMMIT {got!r}, pinned {PINS['kev'].code}"
+        assert got == want, f"MAKHZAN_KEV_COMMIT {got!r}, pinned {want}"
         log.info("model code: kev importable, Kev commit %s recorded", got)
     else:
         log.info("model code: %s importable", model)
@@ -95,16 +104,57 @@ def check_no_weights() -> None:
     log.info("no weights: Hub cache empty, no weight-sized file on disk")
 
 
-def config(model: str, url: str) -> dict:
+def check_no_torch() -> None:
+    """The slim llama.cpp image: no torch, no model code, the worker alone."""
+    for module in ("torch", "transformers", "fla", "kev", "pplx_decider"):
+        assert importlib.util.find_spec(module) is None, f"{module} is installed"
+    log.info("slim: no torch, transformers, fla or model code")
+
+
+def check_llamacpp_loader(model: str) -> None:
+    """The llama.cpp loader runs without torch: a GGUF that is not one is a load error, raised
+    after no torch import (the sidecar does the compute; nothing heavy loads in this process)."""
+    import sys as _sys
+
+    with tempfile.TemporaryDirectory() as tmp:
+        gguf = Path(tmp) / pin_for(model, "llamacpp").gguf_file
+        gguf.write_bytes(b"not a gguf")
+        rt = judges.Runtime("gpu", LLAMACPP_DTYPES[model][0], None, True, None,
+                            backend="llamacpp", llamacpp_url="http://127.0.0.1:9",
+                            gguf_path=gguf)  # fmt: skip
+        try:
+            judges.load(model, rt)
+        except judges.LoadError as e:
+            log.info("llama.cpp loader: refuses a bad GGUF (%s)", str(e)[:80])
+        else:
+            raise AssertionError("the llama.cpp loader accepted a file that is not a GGUF")
+    assert "torch" not in _sys.modules, "the llama.cpp path imported torch"
+
+
+def config(model: str, url: str, backend: str = "torch") -> dict:
+    compute = {"threads": 1, "nice": 0}
+    if backend == "llamacpp":
+        compute = {"backend": "llamacpp", "device": "gpu", "dtype": LLAMACPP_DTYPES[model][0],
+                   "llamacpp_url": "http://127.0.0.1:9",
+                   "gguf_path": f"/models/{pin_for(model, 'llamacpp').gguf_file}", "nice": 0}  # fmt: skip
     return {
         "worker": {"name": f"smoke-{model}", "broker_url": url, "token": TOKEN, "model": model},
-        "compute": {"threads": 1, "nice": 0},
+        "compute": compute,
         "schedule": {"windows": "always", "timezone": "UTC", "on_empty": "exit"},
         "leases": {"max_jobs": 2, "lease_s": 900, "heartbeat_s": 60},
     }
 
 
-def check_entrypoint(model: str) -> None:
+def fake_broker(model: str, backend: str) -> FakeBroker:
+    """The fake broker naming the version this backend serves (as production's names the
+    llama.cpp ones since 2026-11-27)."""
+    pin = pin_for(model, backend)
+    return FakeBroker({TOKEN: (f"smoke-{model}", [model])},
+                      versions={model: pin.model_version},
+                      weights={model: pin.weights_revision})  # fmt: skip
+
+
+def check_entrypoint(model: str, backend: str = "torch") -> None:
     """`python -m makhzan_ml.worker --config ... --check`, the image's ENTRYPOINT plus --check."""
     text = (
         "[worker]\n"
@@ -112,11 +162,21 @@ def check_entrypoint(model: str) -> None:
         f'token = "{TOKEN}"\nmodel = "{model}"\n'
         '[schedule]\nwindows = "always"\ntimezone = "UTC"\n'
     )
+    if backend == "llamacpp":
+        text += (
+            f'[compute]\nbackend = "llamacpp"\ndevice = "gpu"\ndtype = "{LLAMACPP_DTYPES[model][0]}"\n'
+            f'llamacpp_url = "http://127.0.0.1:9"\n'
+            f'gguf_path = "/models/{pin_for(model, "llamacpp").gguf_file}"\n'
+        )
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "worker.toml"
         path.write_text(text)
         cmd = [sys.executable, "-m", "makhzan_ml.worker", "--config", str(path), "--check"]
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        # The package's root on the path, as the image's PYTHONPATH has it (and a test has not).
+        root = str(Path(__file__).resolve().parents[2])
+        env = {**os.environ,
+               "PYTHONPATH": os.pathsep.join(filter(None, [root, os.environ.get("PYTHONPATH")]))}  # fmt: skip
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
     assert done.returncode == run.EXIT_OK, f"--check exited {done.returncode}: {done.stderr}"
     log.info("entrypoint --check: %s", done.stderr.strip().splitlines()[-1])
 
@@ -146,15 +206,15 @@ def payload(text: str) -> dict:
     }
 
 
-def check_session(model: str, importable=judges.importable) -> None:
+def check_session(model: str, importable=judges.importable, backend: str = "torch") -> None:
     """A whole session; `importable` is the worker's own check (a test outside an image stubs
     it, since the host holds neither model's code)."""
-    with FakeBroker({TOKEN: (f"smoke-{model}", [model])}) as broker:
+    with fake_broker(model, backend) as broker:
         jobs = [
             broker.add_job(model, {"ab": payload(f"part {n} ab"), "ba": payload(f"part {n} ba")})
             for n in range(3)
         ]
-        cfg = parse(config(model, broker.url))
+        cfg = parse(config(model, broker.url, backend))
         fake = FakeJudge()
         client = Broker(cfg.broker_url, cfg.token, retry_max_s=5.0)
         worker = run.Worker(cfg, client, load_judge=fake, importable=importable, image="smoke")
@@ -169,13 +229,13 @@ def check_session(model: str, importable=judges.importable) -> None:
     log.info("session: %d jobs scored against the fake broker, ended once", len(jobs))
 
 
-def check_supervisor(model: str, importable=judges.importable) -> None:
+def check_supervisor(model: str, importable=judges.importable, backend: str = "torch") -> None:
     """One window through the supervisor: a forked child runs the session and exits."""
     from makhzan_ml.worker import supervisor
 
-    with FakeBroker({TOKEN: (f"smoke-{model}", [model])}) as broker:
+    with fake_broker(model, backend) as broker:
         jobs = [broker.add_job(model, {"ab": payload(f"sup {n} ab")}) for n in range(2)]
-        data = config(model, broker.url)
+        data = config(model, broker.url, backend)
         data["schedule"]["outside_window"] = "wait"
         cfg = parse(data)
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,25 +354,34 @@ def check_revision(expected: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m makhzan_ml.worker.smoke", description=__doc__)
     ap.add_argument("--model", required=True, choices=sorted(PINS))
+    ap.add_argument("--backend", choices=("torch", "llamacpp"), default="torch",
+                    help="llamacpp: the slim llama.cpp worker image (no torch)")  # fmt: skip
     ap.add_argument("--expect-revision", help="the commit the image must record")
     args = ap.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s", stream=sys.stderr
     )
     try:
-        check_cpu_only()
-        check_model_code(args.model)
+        if args.backend == "llamacpp":
+            check_no_torch()
+            check_llamacpp_loader(args.model)
+            # The sidecar does the compute: the worker loads no model code of its own.
+            importable = lambda _key: False  # noqa: E731
+        else:
+            check_cpu_only()
+            check_model_code(args.model)
+            importable = judges.importable
         check_no_weights()
-        check_entrypoint(args.model)
-        check_session(args.model)
-        check_supervisor(args.model)
+        check_entrypoint(args.model, args.backend)
+        check_session(args.model, importable, args.backend)
+        check_supervisor(args.model, importable, args.backend)
         check_proxy()
         if args.expect_revision:
             check_revision(args.expect_revision)
     except AssertionError as e:
         log.error("smoke test failed: %s", e)
         return 1
-    log.info("smoke test passed for %s", args.model)
+    log.info("smoke test passed for %s (%s)", args.model, args.backend)
     return 0
 
 

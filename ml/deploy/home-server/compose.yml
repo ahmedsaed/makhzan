@@ -62,8 +62,8 @@ x-worker: &worker
 services:
   broker-proxy:
     <<: *hardening
-    # The Kev worker image, for the proxy module only: no model is loaded, nothing else runs.
-    image: ${KEV_IMAGE:-ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest}
+    # The worker image, for the proxy module only: no model is loaded, nothing else runs.
+    image: ${KEV_IMAGE:-ghcr.io/ahmedsaed/makhzan/worker-llamacpp:latest}
     entrypoint: ["python", "-m", "makhzan_ml.worker.proxy"]
     # Listens on its address on the workers' internal network only, never on the egress
     # bridge, so nothing outside the stack can use it.
@@ -85,7 +85,9 @@ services:
 
   kev:
     <<: *worker
-    image: ${KEV_IMAGE:-ghcr.io/ahmedsaed/makhzan/kev-worker-cpu:latest}
+    # The slim llama.cpp worker (no torch, ~180 MB; ml/worker-llamacpp.Dockerfile). A rollback to
+    # torch sets KEV_IMAGE / PPLX_IMAGE in .env to the kev-/pplx-worker-cpu images (README.md).
+    image: ${KEV_IMAGE:-ghcr.io/ahmedsaed/makhzan/worker-llamacpp:latest}
     volumes:
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}:/models:ro
       - ${WORKER_DIR:?set WORKER_DIR in .env}/home-kev.toml:/etc/makhzan-ai/worker.toml:ro
@@ -93,7 +95,7 @@ services:
 
   pplx:
     <<: *worker
-    image: ${PPLX_IMAGE:-ghcr.io/ahmedsaed/makhzan/pplx-worker-cpu:latest}
+    image: ${PPLX_IMAGE:-ghcr.io/ahmedsaed/makhzan/worker-llamacpp:latest}
     # Above the anchor's 240 s for the llama.cpp backend's CPU fallback (home-pplx.toml): its
     # longest request on this CPU is about 193 s (estimated) and may run to its 225 s timeout, then
     # 3 x 10 s of last posts and a 10 s join (265 s). On the card (production) a request is at
