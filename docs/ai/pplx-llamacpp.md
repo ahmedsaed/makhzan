@@ -110,11 +110,11 @@ It prints the variant (217 merges, 216 "same", 1 "not") beside pplx bf16 with th
 - **3060:** 2.3–2.6 requests/s, against 2.96 for Kev's own server.
 - **The home server's card (production).** Q4_K_S at `-ub 4096 -fa on` loads in 3,273 MiB of
   the card's 4 GB. At clock states 0–2 (`kev-llamacpp.md`) it ran 1,800 requests with no
-  reset: 4.6 s each (242 tokens/s), within 0.038 of the 3060's scores. Kev's sidecar is stopped
-  first: the host's timers swap them at 05:03 (`docs/ai/worker.md`, "Running on the home
-  server"). At stock clocks its first large job reset the server (the card's power feed), which
+  reset: 4.6 s each (242 tokens/s), within 0.038 of the 3060's scores. Kev's model is unloaded
+  first: the stack's llama.cpp router holds one at a time and loads pplx when its worker asks at
+  05:05 (`docs/ai/worker.md`, "The llama.cpp router"). At stock clocks its first large job reset the server (the card's power feed), which
   is what the clock limit prevents.
-- **The CPU fallback** (compose `-ngl 0 -t 4`, `device = "cpu"`), the same model version:
+- **The CPU fallback** (not set up in the home stack: it would need its own llama.cpp server without `-dev Vulkan0`, `n-gpu-layers = 0`, `device = "cpu"`), the same model version:
 - **CPU, measured on the desktop** (4 threads, Q4_K_S):
 
   | Request | Tokens | Time | Tokens/s | Score vs the 3060's |

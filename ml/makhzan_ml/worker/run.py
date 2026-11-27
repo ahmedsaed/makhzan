@@ -605,6 +605,7 @@ class Worker:
             cfg.llamacpp_url,
             cfg.gguf_path,
             self.stop,
+            cfg.require_clock_limit,
         )
         log.info("loading %s (%s, %s) for lease %s", key, cfg.device, cfg.dtype, lease_id)
         try:

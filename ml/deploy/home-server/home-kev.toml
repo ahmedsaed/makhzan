@@ -1,8 +1,9 @@
 # home-kev: Kev-4B Q4_K_M on the home server's AMD card through llama.cpp, 01:00-05:00 Cairo time,
 # waiting between windows. Production since 2026-11-27 (docs/ai/decision-review.md, "Production
-# switch"). Its sidecar, kev-llamacpp (compose.yml, profile "llamacpp"), is started before the
-# window and stopped after it by the host's timers (sidecar-window.sh, README.md): the 4 GB card
-# holds one model, and pplx's sidecar takes it from 05:03.
+# switch"). Its judge is the "kev" model of the stack's llama.cpp router (compose.yml, service
+# "llamacpp"), which this worker loads on its window's first lease with jobs: the 4 GB card holds
+# one model, and
+# pplx's worker swaps it out at 05:05.
 [worker]
 name = "home-kev"
 broker_url = "http://broker-proxy:8100/ai/v1"
@@ -17,10 +18,12 @@ expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
 backend = "llamacpp"
 device = "gpu"
 dtype = "q4_k_m"
-llamacpp_url = "http://kev-llamacpp:8080"
-# The same file the sidecar serves, mounted read-only into the worker too: it is checked
+llamacpp_url = "http://llamacpp:8080"
+# The same file the router serves, mounted read-only into the worker too: it is checked
 # against the pin (sha256, decision type, temperature) before anything is scored.
 gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+# Refuse to load unless the card's clock limit is applied (re-read at every load).
+require_clock_limit = true
 nice = 10
 
 [schedule]

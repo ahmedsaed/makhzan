@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backend", default="torch", choices=["torch", "llamacpp"])
     ap.add_argument("--llamacpp-url")
     ap.add_argument("--gguf-path")
+    ap.add_argument("--require-clock-limit", action="store_true",
+                    help="llamacpp: refuse unless the AMD card's clock limit is applied")  # fmt: skip
     ap.add_argument("--stored", type=Path, help="stored scores to compare with, by pair/order")
     ap.add_argument("--stored-temperature", type=float, default=1.0)
     args = ap.parse_args(argv)
@@ -107,8 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     pairs = pick(lines, args.n)
     compute = {"device": args.device, **({"threads": args.threads} if args.threads else {})}
     if args.backend == "llamacpp":
+        # The desktop's GPU is not the home server's clock-limited card: the check is opt-in here.
         compute.update(backend="llamacpp", llamacpp_url=args.llamacpp_url,
-                       gguf_path=args.gguf_path)  # fmt: skip
+                       gguf_path=args.gguf_path,
+                       require_clock_limit=args.require_clock_limit)  # fmt: skip
     pin = pin_for(args.model, args.backend)
     with FakeBroker(
         {TOKEN: ("parity", [args.model])},

@@ -13,6 +13,7 @@ import json
 import math
 import struct
 import threading
+import time
 import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -75,13 +76,27 @@ def pin_of(path: Path, key: str = "kev", **override) -> pins.Pin:
 
 
 class Sidecar:
-    """llama-server's three endpoints. `calibrated(payload)` is the P(yes) it returns."""
+    """llama-server's endpoints. `calibrated(payload)` is the P(yes) it returns.
+
+    `router` (a {name: model path} preset) makes it a router sidecar: /models lists each with a
+    status, POST /models/load loads one after `load_polls` listings (swapping the other out),
+    /props?model=<name> answers for that model and /props alone for the router itself."""
 
     def __init__(self, *, model_path="/models/Kev-4B-Q4_K_M.gguf", build="b12767-a8ad690ca",
-                 not_ready=0, calibrated=None, status=200, answer=None):  # fmt: skip
+                 not_ready=0, calibrated=None, status=200, answer=None, router=None,
+                 load_polls=1, initial="unloaded", busy_loads=0, models_errors=0,
+                 load_fails=False):  # fmt: skip
         self.model_path, self.build, self.not_ready, self.status = (
             model_path, build, not_ready, status,
         )  # fmt: skip
+        self.router = router
+        self.states = {name: initial for name in (router or {})}
+        self.load_polls, self.polls = load_polls, 0
+        self.loads: list[str] = []
+        #: Router: answer this many loads with 500 "model limit reached" (the other one busy),
+        #: this many /models with 503 (restarting), and fail the load (the child exits).
+        self.busy_loads, self.models_errors, self.load_fails = busy_loads, models_errors, load_fails
+        self.failed: set[str] = set()
         self.calibrated = calibrated or (lambda payload: 0.7)
         #: The whole response body, when a test needs a malformed one.
         self.answer = answer
@@ -106,13 +121,61 @@ class Sidecar:
                         outer.not_ready -= 1
                         return self._send(503, {"error": {"message": "Loading model"}})
                     return self._send(200, {"status": "ok"})
+                if self.path == "/models" and outer.router is not None:
+                    if outer.models_errors > 0:
+                        outer.models_errors -= 1
+                        return self._send(503, {"error": {"message": "restarting"}})
+                    for name, state in outer.states.items():
+                        if state == "loading":
+                            outer.polls += 1
+                            if outer.load_fails:
+                                outer.states[name] = "unloaded"
+                                outer.failed.add(name)
+                            elif outer.polls >= outer.load_polls:
+                                outer.states[name] = "loaded"
+
+                    def status(name, path):
+                        st = {
+                            "value": outer.states[name],
+                            "args": ["/app/llama-server", "--model", path, "--port", "0"],
+                        }
+                        if name in outer.failed:
+                            st.update(failed=True, exit_code=1)
+                        return st
+
+                    return self._send(200, {"data": [
+                        {"id": name, "object": "model", "status": status(name, path)}
+                        for name, path in outer.router.items()]})  # fmt: skip
+                if self.path == "/models":
+                    return self._send(200, {"data": [{"id": outer.model_path, "object": "model"}]})
+                if self.path.startswith("/props?model=") and outer.router is not None:
+                    name = self.path.split("=", 1)[1]
+                    return self._send(200, {"model_path": outer.router[name],
+                                            "build_info": outer.build, "total_slots": 1})  # fmt: skip
                 if self.path == "/props":
-                    return self._send(200, {"model_path": outer.model_path,
+                    path = "none" if outer.router is not None else outer.model_path
+                    return self._send(200, {"model_path": path,
                                             "build_info": outer.build, "total_slots": 1})  # fmt: skip
                 self._send(404, {})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.path == "/models/load" and outer.router is not None:
+                    name = body.get("model")
+                    if name not in outer.states:
+                        return self._send(404, {"error": {"message": "File Not Found"}})
+                    if outer.states[name] in ("loaded", "loading", "sleeping"):
+                        return self._send(400, {"error": {"message": "model is already running"}})
+                    if outer.busy_loads > 0:
+                        outer.busy_loads -= 1
+                        return self._send(500, {"error": {
+                            "message": "model limit reached, try again later"}})  # fmt: skip
+                    outer.loads.append(name)
+                    for other in outer.states:  # --models-max 1: swap the other out
+                        outer.states[other] = "unloaded"
+                    outer.states[name] = "loading"
+                    outer.polls = 0
+                    return self._send(200, {"success": True})
                 outer.requests.append(body)
                 if outer.status != 200:
                     return self._send(outer.status, {"error": {"message": "bad request"}})
@@ -463,7 +526,7 @@ def test_the_compose_example_parses():
     data["worker"]["token"] = "example"
     cfg = parse(data)
     assert (cfg.backend, cfg.device, cfg.llamacpp_url) == (
-        "llamacpp", "gpu", "http://kev-llamacpp:8080",
+        "llamacpp", "gpu", "http://llamacpp:8080",
     )  # fmt: skip
     assert cfg.expect_versions == {"kev": pins.pin_for("kev", "llamacpp").model_version}
     # Its window is the torch Kev worker's (the rollback config): one replaces the other.
@@ -472,19 +535,145 @@ def test_the_compose_example_parses():
     assert cfg.schedule.windows == cpu.schedule.windows
 
 
-def test_the_sidecar_is_off_by_default_pinned_and_unreachable():
+def test_the_router_is_on_by_default_pinned_guarded_and_unreachable():
+    """One llama.cpp router for both judges, started by a plain `docker compose up -d` (it sleeps
+    when idle), refusing to start without the card's clock limit."""
     text = (DEPLOY / "compose.yml").read_text()
-    block = text[text.index("\n  kev-llamacpp:\n") : text.index("\n  # pplx on the AMD card")]
-    assert "    profiles: [llamacpp]\n" in block
+    block = text[text.index("\n  llamacpp:\n") : text.index("\nnetworks:")]
+    # No profile (plain `up -d` starts it) and no restart override (the anchor's unless-stopped).
+    assert "\n    profiles:" not in block and "\n    restart:" not in block
     assert f"    image: {pins.LLAMACPP_IMAGE}\n" in block
+    assert '    entrypoint: ["/bin/sh", "/cfg/llamacpp-guard.sh"]\n' in block
     assert "ports" not in block and "0.0.0.0:" not in block
     assert "    networks: [broker-only]\n" in block and "egress" not in block
-    assert ":/models/Kev-4B-Q4_K_M.gguf:ro" in block
-    for flag in ('- "512"', '- "4096"', '- "99"'):
-        assert flag in block
-    # Compose interpolates every service, profile or not: a required `${X:?}` here would stop
-    # `docker compose up` for the running workers whenever X is unset.
-    assert ":?" not in block.replace("${WEIGHTS_DIR:?", "")
+    assert "      - /dev/dri:/dev/dri\n" in block
+    # Required now that the service always starts: an unset id fails `docker compose up` loudly.
+    assert "${RENDER_GID:?" in block and "${VIDEO_GID:?" in block
+    for mount in (
+        "${WORKER_DIR:?set WORKER_DIR in .env}/models.ini:/cfg/models.ini:ro",
+        "${WORKER_DIR:?set WORKER_DIR in .env}/llamacpp-guard.sh:/cfg/llamacpp-guard.sh:ro",
+        f":/models/{pins.KEV_GGUF_FILE}:ro",
+        f":/models/{pins.PPLX_GGUF_FILE}:ro",
+    ):
+        assert mount in block, mount
+    for flag in (
+        '- --models-max\n      - "1"',
+        "- --models-preset\n      - /cfg/models.ini",
+        "- -dev\n      - Vulkan0",
+        '- --sleep-idle-seconds\n      - "600"',
+    ):
+        assert flag in block, flag
+    # No host timers or scripts any more: the stack is containers only.
+    assert not (DEPLOY / "sidecar-window.sh").exists()
+    assert not (DEPLOY / "install-sidecar-timers.sh").exists()
+
+
+def test_the_router_preset_holds_the_soaked_settings():
+    import configparser
+
+    ini = configparser.ConfigParser(inline_comment_prefixes=None)
+    # llama.cpp's preset allows global keys before the first section (version = 1).
+    ini.read_string("[_top]\n" + (DEPLOY / "models.ini").read_text())
+    assert ini["_top"]["version"] == "1"
+    assert ini["*"]["n-gpu-layers"] == "99" and ini["*"]["parallel"] == "1"
+    kev, pplx = ini["kev"], ini["pplx"]
+    assert kev["model"] == f"/models/{pins.KEV_GGUF_FILE}"
+    assert (kev["c"], kev["b"], kev["ub"]) == ("4096", "512", "512")
+    assert pplx["model"] == f"/models/{pins.PPLX_GGUF_FILE}"
+    # Non-causal: the whole request in one batch (the longest Phase E request: 3,574 tokens).
+    assert (pplx["c"], pplx["b"], pplx["ub"], pplx["flash-attn"]) == ("4096", "4096", "4096", "on")
+    # The names the workers ask for.
+    assert {"kev", "pplx"} == {judges.LLAMACPP_MODELS[k][1] for k in ("kev", "pplx")}
+
+
+def _guard(tmp_path, modes):
+    sysfs = tmp_path / "sys"
+    for card, mode in modes.items():
+        d = sysfs / "class" / "drm" / card / "device"
+        d.mkdir(parents=True)
+        (d / "power_dpm_force_performance_level").write_text(mode + "\n")
+    server = tmp_path / "server.sh"
+    server.write_text('#!/bin/sh\necho "served $*"\n')
+    server.chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin", "GUARD_SYSFS": str(sysfs), "LLAMA_SERVER": str(server)}
+    import subprocess
+
+    return subprocess.run(["sh", str(DEPLOY / "llamacpp-guard.sh"), "--models-max", "1"],
+                          env=env, capture_output=True, text=True)  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "modes, ok",
+    [
+        ({"card1": "manual"}, True),
+        ({"card1": "auto"}, False),  # the udev rule is not applied
+        ({"card0": "manual", "card1": "auto"}, False),
+        ({}, False),  # no AMD card at all
+    ],
+)
+def test_the_guard_runs_the_server_only_with_the_clock_limit(tmp_path, modes, ok):
+    r = _guard(tmp_path, modes)
+    if ok:
+        assert r.returncode == 0 and r.stdout.strip() == "served --models-max 1"
+    else:
+        assert r.returncode == 1 and "Refusing to start" in r.stderr and not r.stdout
+
+
+# --- a router sidecar -----------------------------------------------------------------------
+
+ROUTER = {"kev": f"/models/{pins.KEV_GGUF_FILE}", "pplx": f"/models/{pins.PPLX_GGUF_FILE}"}
+
+
+def test_on_a_router_the_load_swaps_its_own_model_in_and_checks_its_file(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, load_polls=3)
+    side.states["pplx"] = "loaded"  # pplx held the card
+    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    assert side.loads == ["kev"] and side.states == {"kev": "loaded", "pplx": "unloaded"}
+    assert judge.info["router"] is True and judge.info["llamacpp_build"] == "b12767-a8ad690ca"
+    judge.score(PAYLOAD)
+    assert side.requests[-1]["model"] == "kev"
+
+
+@pytest.mark.parametrize("state", ["loaded", "sleeping"])
+def test_on_a_router_a_ready_model_is_not_reloaded(tmp_path, sidecar, state):
+    gguf = pplx_gguf(tmp_path)
+    side = sidecar(router=ROUTER, initial=state)
+    judges._load_pplx_llamacpp(rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
+    assert side.loads == []
+
+
+def test_on_a_router_another_file_under_the_name_is_refused(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router={**ROUTER, "kev": "/models/other.gguf"})
+    with pytest.raises(judges.LoadError, match="other.gguf"):
+        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+
+
+def test_on_a_router_without_the_model_the_load_fails(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router={"pplx": ROUTER["pplx"]})
+    with pytest.raises(judges.LoadError, match="no model 'kev'"):
+        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+
+
+def test_on_a_router_a_load_that_never_finishes_gives_up(tmp_path, sidecar, monkeypatch):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, load_polls=10**9)
+    monkeypatch.setattr(judges, "LLAMACPP_READY_S", 2.5)
+    with pytest.raises(judges.LoadError, match="did not load 'kev' \\(loading\\)"):
+        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+
+
+def test_on_a_router_a_stop_interrupts_the_load(tmp_path, sidecar):
+    import threading as _t
+
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, load_polls=10**9)
+    stop = _t.Event()
+    _t.Timer(1.5, stop.set).start()
+    with pytest.raises(judges.LoadInterrupted):
+        judges._load_kev_llamacpp(rt(side.url, gguf, stop=stop), pin_of(gguf))
 
 
 # --- a whole session ----------------------------------------------------------------------
@@ -496,6 +685,9 @@ def test_a_session_on_the_sidecar_posts_raw_scores_under_the_alternative_version
     gguf = kev_gguf(tmp_path)
     pin = pin_of(gguf)
     monkeypatch.setitem(pins.ALTERNATIVES, ("kev", "llamacpp"), pin)
+    # On a GPU the config's require_clock_limit defaults on: the session's load reads it (here a
+    # fake sysfs whose card is held to its clock states).
+    monkeypatch.setattr(judges, "SYSFS", _sysfs(tmp_path, {"card1": "manual"}))
     side = sidecar(calibrated=lambda _p: 1 / (1 + math.exp(-1.0 / T)))
     with FakeBroker(
         {"tok": ("amd-kev", ["kev"])},
@@ -600,30 +792,15 @@ def test_rescale_is_kevs_uncalibrate_and_pplxs_identity():
         judges.rescale(math.nan, pins.PPLX_GGUF_TEMPERATURE, 1.3303)
 
 
-def test_the_pplx_compose_example_parses_and_the_sidecar_is_off_by_default():
+def test_the_pplx_compose_example_parses():
     data = tomllib.loads((DEPLOY / "home-pplx.toml").read_text())
     data["worker"].pop("token_file")
     data["worker"]["token"] = "example"
     cfg = parse(data)
     assert (cfg.model, cfg.backend, cfg.device, cfg.dtype, cfg.llamacpp_url) == (
-        "pplx", "llamacpp", "gpu", "q4_k_s", "http://pplx-llamacpp:8080",
+        "pplx", "llamacpp", "gpu", "q4_k_s", "http://llamacpp:8080",
     )  # fmt: skip
     assert cfg.expect_versions == {"pplx": pins.pin_for("pplx", "llamacpp").model_version}
-    text = (DEPLOY / "compose.yml").read_text()
-    block = text[text.index("\n  pplx-llamacpp:\n") : text.index("\nnetworks:")]
-    assert "    profiles: [llamacpp-pplx]\n" in block
-    assert f"    image: {pins.LLAMACPP_IMAGE}\n" in block
-    assert "ports" not in block and "0.0.0.0:" not in block
-    # On the card since 2026-11-27, like kev-llamacpp (the timers keep one sidecar up at a time).
-    assert "      - /dev/dri:/dev/dri\n" in block and '"${RENDER_GID:-65533}"' in block
-    assert "    networks: [broker-only]\n" in block and "egress" not in block
-    assert f":/models/{pins.PPLX_GGUF_FILE}:ro" in block
-    # Non-causal: the whole request in one batch; every layer on the card, flash attention on
-    # (the settings soaked on the card).
-    for flag in ('- -b\n      - "4096"', '- -ub\n      - "4096"', '- -ngl\n      - "99"',
-                 '- -fa\n      - "on"'):  # fmt: skip
-        assert flag in block
-    assert ":?" not in block.replace("${WEIGHTS_DIR:?", "")
 
 
 def test_a_broker_on_the_torch_versions_refuses_the_pplx_llamacpp_worker(tmp_path, sidecar,
@@ -664,3 +841,81 @@ def test_a_pplx_session_posts_scores_as_served_under_its_version(tmp_path, sidec
     assert {o: (s["p"], s["device"], s["dtype"]) for o, s in scores.items()} == {
         "ab": (0.97, "cpu", "q4_k_s"), "ba": (0.97, "cpu", "q4_k_s"),
     }  # fmt: skip
+
+
+def test_on_a_router_a_busy_other_model_is_waited_for(tmp_path, sidecar):
+    """While the model the router holds is busy it answers a load with 500 "model limit
+    reached": retried until it gives way, never a load error that loses the night."""
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, busy_loads=2)
+    side.states["pplx"] = "loaded"
+    judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    assert side.loads == ["kev"] and side.states["kev"] == "loaded"
+
+
+def test_on_a_router_a_restarting_router_is_retried_not_read_as_single_model(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, models_errors=2)
+    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    assert judge.info["router"] is True and side.loads == ["kev"]
+
+
+def test_a_failing_models_endpoint_is_never_a_single_model_server(tmp_path, sidecar, monkeypatch):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, models_errors=10**9)
+    monkeypatch.setattr(judges, "LLAMACPP_READY_S", 1.0)
+    with pytest.raises(judges.LoadError, match="did not list its models"):
+        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+
+
+def test_on_a_router_a_load_whose_child_exits_fails_at_once(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(router=ROUTER, load_fails=True)
+    t0 = time.monotonic()
+    with pytest.raises(judges.LoadError, match="failed to load 'kev'"):
+        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    assert time.monotonic() - t0 < 10  # not the 180 s budget
+
+
+def _sysfs(tmp_path, modes):
+    root = tmp_path / "sysroot"
+    for card, mode in modes.items():
+        d = root / "class" / "drm" / card / "device"
+        d.mkdir(parents=True)
+        (d / "power_dpm_force_performance_level").write_text(mode + "\n")
+    root.mkdir(exist_ok=True)
+    return root
+
+
+@pytest.mark.parametrize(
+    "modes, ok",
+    [({"card1": "manual"}, True), ({"card1": "auto"}, False),
+     ({"card0": "manual", "card1": "auto"}, False), ({}, False)],
+)  # fmt: skip
+def test_the_worker_rechecks_the_clock_limit_at_every_load(tmp_path, sidecar, monkeypatch,
+                                                         modes, ok):  # fmt: skip
+    gguf = kev_gguf(tmp_path)
+    monkeypatch.setattr(judges, "SYSFS", _sysfs(tmp_path, modes))
+    side = sidecar(router=ROUTER)
+    runtime = dataclasses.replace(rt(side.url, gguf), require_clock_limit=True)
+    if ok:
+        judges._load_kev_llamacpp(runtime, pin_of(gguf))
+    else:
+        with pytest.raises(judges.LoadError, match="manual|clock mode"):
+            judges._load_kev_llamacpp(runtime, pin_of(gguf))
+        assert side.loads == []  # refused before the card is touched
+
+
+def test_require_clock_limit_defaults_on_for_a_gpu_and_is_llamacpp_only():
+    gpu = parse(llamacpp_cfg())
+    assert gpu.require_clock_limit is True
+    off = llamacpp_cfg()
+    off["compute"] = {**off["compute"], "require_clock_limit": False}
+    assert parse(off).require_clock_limit is False
+    torch = llamacpp_cfg()
+    torch["compute"] = {"device": "cpu", "require_clock_limit": True}
+    with pytest.raises(ConfigError, match="only read with"):
+        parse(torch)
+    for name in ("home-kev", "home-pplx"):
+        data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
+        assert data["compute"]["require_clock_limit"] is True

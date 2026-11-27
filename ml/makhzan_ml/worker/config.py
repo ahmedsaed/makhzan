@@ -178,6 +178,10 @@ class Config:
     #: too so the worker can check it is the pinned file.
     llamacpp_url: str | None = None
     gguf_path: Path | None = None
+    #: llamacpp on a GPU: refuse to load unless the AMD card's clock limit is applied (every
+    #: card's power_dpm_force_performance_level reads "manual"). On by default there; off for a
+    #: machine whose GPU is not the limited card (the desktop's NVIDIA card).
+    require_clock_limit: bool = False
     source: Path | None = None
 
     @property
@@ -221,6 +225,7 @@ _SCHEMA: dict[str, set[str]] = {
         "backend",
         "llamacpp_url",
         "gguf_path",
+        "require_clock_limit",
     },
     "schedule": {"windows", "timezone", "on_empty", "poll_s", "outside_window", "no_new_lease_s"},
     "leases": {"max_jobs", "lease_s", "heartbeat_s", "retry_max_s"},
@@ -472,7 +477,12 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             "validated against the stored scores"
         )
     llamacpp_url = gguf_path = None
+    require_clock_limit = False
     if backend == "llamacpp":
+        require_clock_limit = _typed(
+            "compute", "require_clock_limit", compute.get("require_clock_limit", device == "gpu"),
+            bool,
+        )  # fmt: skip
         if "llamacpp_url" not in compute or "gguf_path" not in compute:
             raise ConfigError(
                 '[compute] backend = "llamacpp" needs llamacpp_url (the sidecar) and gguf_path '
@@ -484,7 +494,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             if key in compute:
                 raise ConfigError(f'[compute] {key} is not read with backend = "llamacpp"')
     else:
-        for key in ("llamacpp_url", "gguf_path"):
+        for key in ("llamacpp_url", "gguf_path", "require_clock_limit"):
             if key in compute:
                 raise ConfigError(f'[compute] {key} is only read with backend = "llamacpp"')
     threads = compute.get("threads")
@@ -588,6 +598,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         backend=backend,
         llamacpp_url=llamacpp_url,
         gguf_path=gguf_path,
+        require_clock_limit=require_clock_limit,
         source=source,
     )
 

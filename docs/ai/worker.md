@@ -204,7 +204,7 @@ the worker exits within:
 | Part | At most |
 |---|---|
 | what is in flight at the stop, which cannot be interrupted: a request | 86 to 104 s on the home server's CPU, under 1 s on the GPU; on a llama.cpp sidecar at most its timeout, 60 s on a GPU (measured 0.5 s on the 3060, 4.4–6.1 s on the AMD card), 120 s for Kev on a CPU, 225 s for pplx on a CPU (its longest request estimated at about 193 s on the home server) |
-| or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU; on a llama.cpp sidecar the load (hashing the GGUF, waiting up to 120 s for the sidecar) checks the stop between steps, so it ends within about 2 s |
+| or a model load | about 150 s on the home server's CPU (Kev 130 s, pplx 73 to 95 s measured), under 10 s on the GPU; on a llama.cpp sidecar the load (hashing the GGUF, then up to 180 s waiting for the sidecar and, on a router, for its model to load) checks the stop between steps, so it ends within about 2 s |
 | or, on the GPU, a first request that compiles Kev's Triton kernels | about 60 s, unless the Triton cache is mounted (it must be, see below) |
 | retries (`STOP_GRACE_S`) | only within 60 s of the stop, so they overlap what is in flight |
 | one last attempt each for the calls still due: results, the lease release, the session release (`STOP_TIMEOUT_S`) | 10 s each, at most 3 × 10 s |
@@ -306,6 +306,7 @@ this image can load the model key, and exits.
 | `backend` | `"torch"` | `"torch"`: the model's own code in this process. `"llamacpp"`: the model on a llama.cpp sidecar (see "Kev on a llama.cpp sidecar" and "pplx on a llama.cpp sidecar") |
 | `llamacpp_url` | none | `backend = "llamacpp"` only, and required there: the sidecar's base URL, plain `http://` to a compose service name or a loopback address |
 | `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
+| `require_clock_limit` | `true` on a GPU | `backend = "llamacpp"` only: refuse to load unless every AMD card's `power_dpm_force_performance_level` reads `manual` (the home server's udev clock limit), re-read at every load. Set `false` on a machine whose GPU is not that card (the desktop's NVIDIA card) |
 
 With `backend = "llamacpp"`, `dtype` is the pinned GGUF's: `"q4_k_m"` for Kev, `"q4_k_s"` for
 pplx (the only accepted values), and `mmap` and `weights_cache` are refused (the worker holds no
@@ -334,7 +335,7 @@ weights).
 ## Example configurations
 
 These four are examples, as production runs them since the owner's switch of 2026-11-27: both
-judges through llama.cpp sidecars (Kev-4B Q4_K_M, pplx Q4_K_S; "Kev on a llama.cpp sidecar",
+judges through llama.cpp (Kev-4B Q4_K_M, pplx Q4_K_S; "Kev on a llama.cpp sidecar",
 "pplx on a llama.cpp sidecar" below). The home server's windows are the owner's (Kev
 01:00–05:00, pplx 05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts
 and tokens are placeholders. The worker's tests parse every block below, and the compose stack's
@@ -343,8 +344,9 @@ files. The torch configurations production ran until then are kept as
 them while the policy names the llama.cpp versions).
 
 The home server's Kev worker, as `ml/deploy/home-server/home-kev.toml` has it: through the
-compose stack's broker proxy, waiting for its window, its judge the `kev-llamacpp` sidecar on
-the AMD card (started at 00:55 and stopped at 05:03 by the host's timers):
+compose stack's broker proxy, waiting for its window, its judge the `kev` model of the stack's
+llama.cpp router on the AMD card (service `llamacpp`; the worker loads its model on its window's
+first lease with jobs, "The llama.cpp router" below):
 
 ```toml
 # home-kev.toml
@@ -362,8 +364,9 @@ expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
 backend = "llamacpp"
 device = "gpu"
 dtype = "q4_k_m"
-llamacpp_url = "http://kev-llamacpp:8080"
+llamacpp_url = "http://llamacpp:8080"
 gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+require_clock_limit = true
 nice = 10
 
 [schedule]
@@ -378,9 +381,9 @@ lease_s = 900
 heartbeat_s = 60
 ```
 
-The home server's pplx worker. Its window follows Kev's: the 4 GB card holds one model, so the
-timers stop Kev's sidecar at 05:03 (two minutes after a window's last possible request) and
-start pplx's at 05:03:30:
+The home server's pplx worker. Its window follows Kev's: the 4 GB card holds one model, and on its
+window's first lease with jobs its worker asks the same router for `pplx`, which unloads Kev's
+first:
 
 ```toml
 # home-pplx.toml
@@ -398,8 +401,9 @@ expect_version = "pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-8
 backend = "llamacpp"
 device = "gpu"
 dtype = "q4_k_s"
-llamacpp_url = "http://pplx-llamacpp:8080"
+llamacpp_url = "http://llamacpp:8080"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+require_clock_limit = true
 nice = 10
 
 [schedule]
@@ -455,6 +459,8 @@ device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://127.0.0.1:8130"
 gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+# The desktop's NVIDIA card is not the home server's clock-limited AMD card.
+require_clock_limit = false
 
 [schedule]
 windows = "always"
@@ -483,6 +489,8 @@ device = "gpu"
 dtype = "q4_k_s"
 llamacpp_url = "http://127.0.0.1:8130"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+# The desktop's NVIDIA card is not the home server's clock-limited AMD card.
+require_clock_limit = false
 
 [schedule]
 windows = "always"
@@ -609,29 +617,25 @@ base built before that change records none, and the worker only logs that.
 ## Running on the home server
 
 The home server runs both workers as one compose stack, `ml/deploy/home-server/`: a folder with
-`compose.yml`, a `.env` (from `.env.example`), the two worker TOMLs and their token files. No
-host firewall rules. Its README says how to set it up.
+`compose.yml`, a `.env` (from `.env.example`), the two worker TOMLs and their token files, and the
+llama.cpp router's `models.ini` and `llamacpp-guard.sh`. Everything runs in containers: no host
+timers, scripts or firewall rules (owner's rule). The host's one setting is the udev rule
+`99-amdgpu-clock-limit.rules`, kernel settings for the AMD card only the host can make. Its README
+says how to set it up.
 
 **Since the owner's production switch (2026-11-27)** both judges run on the server's AMD card
-through llama.cpp sidecars ("Kev on a llama.cpp sidecar" and "pplx on a llama.cpp sidecar"
-below), taking turns because the 4 GB card holds one model:
+through one llama.cpp router (service `llamacpp`; "The llama.cpp router" below), which serves both
+models and holds one at a time, because the 4 GB card fits one:
 
-| Time (Africa/Cairo) | Host timer (`sidecar-window.sh`) | Worker |
+| Time (Africa/Cairo) | Worker | The router |
 |---|---|---|
-| 00:55 | start `kev-llamacpp` (stops `pplx-llamacpp` first) | |
-| 01:00–05:00 | | home-kev scores on the card |
-| 05:03 | stop `kev-llamacpp` | Kev's last request ended by about 05:01:40 |
-| 05:03:30 | start `pplx-llamacpp` (stops Kev's again, to be sure) | |
-| 05:05–07:00 | | home-pplx scores on the card |
-| 07:03 | stop `pplx-llamacpp` | the card is free for Plex/Jellyfin |
+| 01:00–05:00 | home-kev scores | loads `kev` when home-kev's session asks (unloading `pplx`) |
+| 05:05–07:00 | home-pplx scores | loads `pplx` when home-pplx's session asks (unloading `kev`) |
+| otherwise | waiting | the last model sleeps after 10 idle minutes; the card is free |
 
-The timers are systemd system units running as the owner (`install-sidecar-timers.sh`), with
-the time zone in each `OnCalendar`, so the server's UTC clock does not matter.
-`sidecar-window.sh` refuses to start a sidecar unless the card is in `manual` performance
-mode, which the udev rule `99-amdgpu-clock-limit.rules` sets together with its clock-state
-limit (states 0–2). Without that limit a job on this card resets the whole server
-(`kev-llamacpp.md`). `ml/tests/test_worker_sidecar_window.py` holds the script's behaviour and
-the timers against the windows and the GPU stop bound. The CPU caps and the torch notes below
+The router's entrypoint refuses to start unless the card is in `manual` performance mode, which
+the udev rule sets together with its clock-state limit (states 0–2). Without that limit a job on
+this card resets the whole server (`kev-llamacpp.md`). The CPU caps and the torch notes below
 describe the rollback configurations (`torch-kev.toml`, `torch-pplx.toml`).
 
 ```bash
@@ -778,6 +782,43 @@ For a backlog scored against a local copy (P4), the broker runs on the desktop t
 `--network host` and set `broker_url = "http://127.0.0.1:<port>/ai/v1"`. Plain HTTP is
 accepted for a loopback address only.
 
+## The llama.cpp router (home server, since 2026-11-27)
+
+The home server's 4 GB AMD card holds one model, and both judges run on it. One llama.cpp server
+in router mode (compose service `llamacpp`) serves both, from the preset
+`ml/deploy/home-server/models.ini` (one section per model, named as the workers ask for it):
+
+- **`--models-max 1`:** at most one model loaded; loading the other unloads it first.
+- **On demand:** each worker's session loads its own model on its window's first lease with jobs,
+  before scoring it (`POST /models/load`, then waits on `GET /models`), so no request pays the
+  load. While the other model is busy the router refuses with HTTP 500 "model limit reached"; the
+  worker retries until its 180 s budget. A load whose child exits is an error at once.
+- **Never point anything else at the router during a window.** A parity run or any request for
+  the other model evicts the window's model and the two then swap back and forth, each swap
+  re-reading about 3 GB from the server's disk under the container's memory limit. Run parity on
+  the desktop.
+- **The clock limit at every load:** besides the router's entrypoint guard, each worker re-reads
+  the card's mode at every load (`require_clock_limit`, on by default for a GPU), since the router
+  may run for weeks after its own check.
+- **`--sleep-idle-seconds 600`:** idle for 10 minutes, the model sleeps (its memory released,
+  ~190 MB kept); the next request wakes it in about 6 s. The card is free for Plex, Jellyfin and
+  Pitlane by day.
+- **The guard:** the router's entrypoint (`llamacpp-guard.sh`) refuses to start unless every AMD
+  card reads `manual` performance mode (the udev clock limit), read from the host's `/sys`, which
+  containers see read-only. A refusal repeats under `restart: unless-stopped`: a restart loop with
+  the reason in its log, never an unlimited card.
+- **`-dev Vulkan0`:** a missing card is a startup error, never a silent CPU run.
+- On `broker-only` only, no published port, the stack's hardening (non-root with the render and
+  video groups, read-only, no capabilities). Both workers use `llamacpp_url =
+  "http://llamacpp:8080"`. The worker also supports a single-model server (the desktop's), which
+  it recognises by a `/models` without per-model status.
+
+Tested on the desktop's 3060 under the production compose file with a test-only override (the
+NVIDIA card and a fake sysfs reading `manual`): Kev parity within 0.016 (40 requests; the one flip
+is E0251, the near-threshold pair below), pplx bit-identical (40 requests), the worker's own load
+swapping models in 5.7 s (pplx to Kev) and 8.5 s (Kev to pplx). With the desktop's real sysfs
+(`auto`) the guard refused, as intended.
+
 ## Kev on a llama.cpp sidecar (production since 2026-11-27)
 
 Kev-4B Q4_K_M served by llama.cpp, accepted by the owner on 2026-11-26 (D20 amended;
@@ -809,34 +850,29 @@ clock states 0–2: 4.4 s a request, about 20–27x the CPU worker.
   an error on that job, never a score. Only exactly 0 and 1 are nudged inward so their
   logit is finite.
 - **Timeouts:** 60 s for one request on a GPU sidecar and 120 s on a CPU one, both inside the
-  stop bound (above). The load's hash of the GGUF and its wait for `/health` (up to 120 s)
-  both check the stop, so a stop never waits on them.
+  stop bound (above). The load's hash of the GGUF and its wait for the model (up to 180 s:
+  `/health`, then, on a router, the model loaded) both check the stop, so a stop never waits on
+  them, and no request pays a load.
 - **Checks before anything is scored** (a mismatch is a load error, exit 2):
   - the worker's own read-only copy of the GGUF: its name, its sha256, and its metadata
     (`qwen35.decision.type = kev`, the temperature), read with the standard library;
-  - the sidecar's `/health`, waited for up to 120 s;
-  - its `/props`: the file it serves, and llama.cpp build b12767.
+  - the sidecar's `/health`;
+  - on a router (the home server's): its `GET /models` lists `kev` with the pinned file in its
+    preset args, and the worker loads it (`POST /models/load`, retried while the router answers
+    "model limit reached") and waits until it is loaded or asleep (all within 180 s; a load whose
+    child exits fails at once); then `/props?model=kev` for the build. On a single-model server:
+    `/props`, the file it serves and the build;
+  - llama.cpp build b12767.
 
-  The worker cannot see the sidecar's file directly. Compose mounts the same host file into
-  both (`WEIGHTS_DIR/Kev-4B-Q4_K_M.gguf`), and the name and build are what `/props` reports.
-- **No torch on this path.** The load imports nothing beyond the standard library, so a lean
-  image without torch could run it. Today it would run in the existing Kev worker image.
-- **The compose stack** (`ml/deploy/home-server/compose.yml`, service `kev-llamacpp`):
-  - behind the `llamacpp` profile, so `docker compose up -d` does not start it;
-  - the image pinned by digest, the GGUF mounted read-only, `/dev/dri` with the render and
-    video groups (`RENDER_GID`, `VIDEO_GID` in `.env`);
-  - the 4 GB settings `-ngl 99 -np 1 -c 4096 -b 512 -ub 512`. Batch 2048 is 2.7x faster
-    but needs about 5.3 GB;
-  - on `broker-only` only: no published port and no route out. The worker reaches it as
-    `http://kev-llamacpp:8080`. The one other thing on that network is `broker-proxy:8100`,
-    which the sidecar could reach as any worker can. It forwards only to the broker, and
-    the sidecar holds no token, so the broker would refuse it (401). It reaches nothing else;
-  - the stack's hardening: non-root, read-only filesystem, no capabilities. It started
-    and scored that way on CPU.
-
-  `home-kev.toml` beside it is the worker configuration (the torch one it replaced is
-  `torch-kev.toml`, the rollback). The host's timers start the sidecar at 00:55 and stop it at
-  05:03 (`sidecar-window.sh`, "Running on the home server").
+  The worker cannot see the server's file directly. Compose mounts the same host file into
+  both (`WEIGHTS_DIR/Kev-4B-Q4_K_M.gguf`), and the name and build are what the server reports.
+- **No torch on this path.** The load imports nothing beyond the standard library; production
+  runs it in the slim `worker-llamacpp` image (no torch, about 120 MB).
+- **The compose stack** (`ml/deploy/home-server/compose.yml`, service `llamacpp`, "The llama.cpp
+  router" below): one router serving Kev and pplx, `models.ini`'s `[kev]` section with the 4 GB
+  settings (`n-gpu-layers = 99`, one slot, `c = 4096`, `b = ub = 512`; batch 2048 is 2.7x faster but
+  needs about 5.3 GB). `home-kev.toml` beside it is the worker configuration (the torch one it
+  replaced is `torch-kev.toml`, the rollback).
 - **Parity:** `python -m makhzan_ml.worker.parity --backend llamacpp --llamacpp-url ...
   --gguf-path ... --stored <llama.cpp scores> --stored-temperature 2.406`. On 2026-11-26,
   against a live sidecar on the desktop's 3060 (Vulkan, the 4 GB settings), 40 requests
@@ -851,10 +887,11 @@ clock states 0–2: 4.4 s a request, about 20–27x the CPU worker.
 - **The card's power feed is a workaround.** The original 320 W supply has no PCIe cable and
   feeds the card through a SATA adapter; the udev clock-state limit keeps the card's load step
   small enough (`kev-llamacpp.md`). A proper supply is the fix.
-- **No image** carries only the worker without torch. The existing Kev worker image is enough.
-- **The sidecar has not run under the compose stack's hardening on the card in production yet**
-  (non-root with the render/video groups, read-only, no capabilities): the soaks ran the same
-  image and settings with `docker run`. The first night's logs are the check.
+- **The router has not run on the card in production yet.** It ran under the stack's full
+  hardening (non-root, read-only, no capabilities) on the desktop's 3060 (2026-11-27: parity
+  within 0.016 for Kev and bit-identical for pplx, swaps in 6–9 s), and the card soaks ran the
+  same image and settings with `docker run`. The first night's logs are the check, and the card's
+  memory during Kev's window (on the 3060 Kev grew to about 4.1 GB while scoring).
 
 ## pplx on a llama.cpp sidecar (production since 2026-11-27)
 
@@ -873,18 +910,19 @@ the same way as Kev above, with these differences.
   pplx score and of the policy's 0.95, so the answer is taken as served (`judges.rescale`
   returns it unchanged when the two temperatures agree), after the same strict validation.
 - **Text is sent in NFC**, as for Kev: pplx's tokenizer is the same family.
-- **On the card** (`pplx-llamacpp`, compose profile `llamacpp-pplx`, `-ngl 99 -fa on`,
-  2 CPUs, 4 GB), taking turns with Kev's sidecar: the host's timers start it at 05:03:30, after
-  stopping Kev's, and stop it at 07:03. Soaked on the card at clock states 0–2: 1,800 requests,
-  4.6 s each, about 33x the torch CPU worker, within 0.038 of the 3060's scores
-  (`kev-llamacpp.md`).
+- **On the card**, the router's `[pplx]` section (`n-gpu-layers = 99`, `flash-attn = on`), loaded
+  when home-pplx's session asks at 05:05, which unloads Kev's model. Soaked on the card at clock
+  states 0–2: 1,800 requests, 4.6 s each, about 33x the torch CPU worker, within 0.038 of the
+  3060's scores (`kev-llamacpp.md`).
   - pplx is non-causal, so a whole request must fit one batch: `-b`/`-ub`/`-c` 4096. The
     longest Phase E request is 3,574 tokens; about 1 pair in 3,000 of the real backlog exceeds
     4,096 (`pplx-llamacpp.md`), and fails its job, never scores wrongly.
   - The worker configuration is `home-pplx.toml` (device `gpu`; the torch one is
     `torch-pplx.toml`, the rollback), window 05:05–07:00.
-  - **CPU fallback**: the same GGUF on the CPU is the same model version (P8). `-ngl 0 -t 4`, no
-    devices, and `device = "cpu"` in `home-pplx.toml`.
+  - **No CPU fallback is set up.** The same GGUF on the CPU would be the same model version (P8),
+    but the router runs only on the card (`-dev Vulkan0`, and its guard needs the clock limit): a
+    CPU run needs its own llama.cpp server (no `-dev`, `n-gpu-layers = 0`) and `device = "cpu"`
+    in `home-pplx.toml`. Not built.
 - **Its request timeout is 60 s on the card, 225 s on a CPU (the fallback).** The longest Phase E request took 48.9 s on the
   desktop's CPU (4 threads) and is estimated at about 193 s on the i7-3770 (not measured there).
   With 3 × 10 s of last posts and the 10 s join, the stop bound is 265 s: under the supervisor's
