@@ -288,6 +288,26 @@ def test_a_half_scored_job_submits_its_finished_order_then_releases(broker, slee
     assert with_jobs[-1]["reason"] == "graceful"
 
 
+def test_a_stop_while_shortening_a_request_hands_the_job_back_unscored(broker, sleeps):
+    """judges.ScoreInterrupted (a stop between the retries of an over-long llama.cpp request)
+    is a graceful hand-back like a stop between orders, never a failed job."""
+    job = broker.add_job("kev", pair(1))
+    worker, fake, _ = make_worker(broker, sleeps)
+
+    def on_score(i):
+        if i == 1:
+            worker.request_stop("SIGTERM")
+            raise judges.ScoreInterrupted("stopped while shortening an over-long request")
+
+    fake.on_score = on_score
+    assert worker.run() == run.EXIT_OK
+    assert set(job.scores) == {"ab"}
+    assert job.status == "queued" and job.attempts == 0 and job.last_error is None
+    assert not worker.failed_jobs
+    with_jobs = [b for b in broker.bodies("/release") if b.get("job_ids")]
+    assert with_jobs[-1]["job_ids"] == [job.job_id] and with_jobs[-1]["reason"] == "graceful"
+
+
 def test_sigterm_stops_after_the_request_in_flight(broker, sleeps):
     jobs = [broker.add_job("kev", pair(n)) for n in range(2)]
     worker, fake, _ = make_worker(broker, sleeps)

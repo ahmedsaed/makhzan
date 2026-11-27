@@ -959,7 +959,8 @@ the same way as Kev above, with these differences.
   3060's scores (`kev-llamacpp.md`).
   - pplx is non-causal, so a whole request must fit one batch: `-b`/`-ub`/`-c` 4096. The
     longest Phase E request is 3,574 tokens; about 1 pair in 3,000 of the real backlog exceeds
-    4,096 (`pplx-llamacpp.md`), and fails its job, never scores wrongly.
+    4,096 (`pplx-llamacpp.md`). Those have their descriptions cut to fit ("Requests too long
+    for the context" below).
   - The worker configuration is `home-pplx.toml` (device `gpu`; the torch one is
     `torch-pplx.toml`, the rollback), window 05:05–07:00.
   - **No CPU fallback is set up.** The same GGUF on the CPU would be the same model version (P8),
@@ -980,9 +981,72 @@ the same way as Kev above, with these differences.
   - Report: `ml/out/gguf-pplx/parity-llamacpp-cpu.json`.
 
 **Not done:**
-- a run of the CPU fallback on the i7-3770 itself (its 225 s timeout rests on an estimate);
-- requests over 4,096 tokens (about 1 pair in 3,000) fail on the card; a CPU route for them at
-  8,192 is possible but not built.
+- a run of the CPU fallback on the i7-3770 itself (its 225 s timeout rests on an estimate).
+
+## Requests too long for the context (owner, 2026-11-27)
+
+A request longer than the llama.cpp server's batch or context (pplx: 4,096 tokens) is **cut to
+fit, not failed**. The owner judges the tail of a very long description irrelevant. This is the
+worker's llama.cpp path (`judges._load_llamacpp`), the same for every llama.cpp judge; the broker's
+renderer is untouched, so request hashes and prompt versions do not change.
+
+- **Detected** from llama.cpp b12767's refusal (`judges.too_long`):
+  - HTTP 500 "input (N tokens) is too large to process. increase the physical batch size
+    (current batch size: 4096)";
+  - HTTP 400 "request (N tokens) exceeds the available context size (L tokens) …", read with
+    or without its counts.
+  - Any other error fails the job as before.
+- **What is cut:** only each listing's own description, words from the end, the longest
+  description first.
+  - It is found from the renderer's structure (`makhzan_schemas.ai.prompt.block`), not by
+    searching for "Description:". A title or spec value may hold a newline, since only
+    descriptions have their whitespace collapsed, so a free search would cut title text. Each
+    block's description is its fixed last line: listing B's is the state's last line, listing
+    A's the line before the one `[LISTING B]` separator.
+  - A state not in that shape (no single separator, or a block not ending in `Description:`) is
+    not cut, and the job fails as before.
+  - The descriptions are levelled down: the longest is cut to the next one's length, then both
+    alike.
+  - Each cut description ends in the renderer's marker `[…]` (one marker, even where the renderer
+    had already capped it).
+  - Titles, category, brand, part number, pack size, specifications, the rules and the question
+    are never touched.
+  - Text is NFC first, as always.
+- **How much** (`judges.words_to_cut`): the excess plus a 64-token margin, turned into words.
+  - The first cut uses the refused state's own tokens per word.
+  - A later cut uses what the last cut actually saved: Δtokens / Δwords between the last two
+    refusals.
+  - Only a refusal without counts (a bare HTTP 400) cuts by a fixed step, 15% of the longest
+    description.
+  - Two descriptions of equal length are cut in the order of their own text, never by which is
+    listing A. A pair's "ab" and "ba" orders therefore cut the same listing's words.
+  - A state not in the renderer's shape is never cut: the job fails with "not in the expected
+    shape; nothing cut".
+  - It retries up to 8 times. If even empty descriptions do not fit, the job fails: "too long
+    even with its descriptions cut".
+  - A stop between retries gives the job back unscored (`judges.ScoreInterrupted`), as a stop
+    between orders does.
+- **Deterministic:** the cut depends only on the request and the server's answers, so the same
+  request on the same server is cut the same way.
+- **Recorded** in the score's `extra`:
+  `{"truncated": {"words_cut": {"LISTING A": n, …}, "tokens_before": N, "tokens": M, "limit": L, "attempts": k}}`.
+  - `tokens` is the cut request's `usage.input_tokens`.
+  - `limit` is the batch or context size it was cut to fit, as the server stated it (null after
+    only bare HTTP 400s). It makes queryable which scores a larger context would change.
+  - A score with no `truncated` key was scored on the whole request.
+- **The score is of the cut request** under the same model version and request hash. A
+  re-score on a server with a larger context would see more text. That is accepted: the cut
+  text is the part the owner judges irrelevant.
+- **Real check (2026-11-27):**
+  - Setup: pplx Q4_K_S with the real pins, on the pinned llama.cpp image (b12767),
+    `-c 4096 -b 4096 -ub 4096 -fa on`. It ran on the desktop's **CPU** (`-ngl 0 -t 8`), because the
+    3060 was busy with another experiment.
+  - The request: the first K1-full request, listing A's description replaced by filler text.
+  - 6,000 words: refused at 8,026 tokens. The first cut fell short: the rules cost more tokens
+    a word than the filler. The second, sized from what the first saved, landed at 4,030 tokens
+    (3,445 words cut, 2 retries).
+  - 3,000 words: refused at 4,546 tokens; one cut of 408 words landed at 4,074.
+  - Not checked: the card's own behaviour, which is the same server code.
 
 ## Parity with the validated scores
 

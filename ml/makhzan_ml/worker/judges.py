@@ -46,6 +46,7 @@ import math
 import hashlib
 import json
 import os
+import re
 import struct
 import sys
 import time
@@ -74,6 +75,10 @@ class LoadError(RuntimeError):
 
 class LoadInterrupted(LoadError):
     """A stop came during an interruptible load (the llama.cpp backend's hash and wait)."""
+
+
+class ScoreInterrupted(RuntimeError):
+    """A stop came between the attempts of an over-long request: the job goes back unscored."""
 
 
 @dataclass
@@ -732,6 +737,126 @@ def check_clock_limit(root: Path | None = None) -> None:
             )
 
 
+# --- over-long requests (owner, 2026-11-27) -------------------------------------------------------
+#: llama.cpp b12767's answers to a prompt larger than it can take: larger than the physical batch
+#: (HTTP 500; a non-causal model such as pplx needs the whole prompt in one ubatch), or larger
+#: than the context (HTTP 400). Both carry the prompt's token count where we read it.
+_TOO_LONG = re.compile(r"too large to process|exceeds? the available context size", re.I)
+_TOKENS = re.compile(r"input \((\d+) tokens\)|request \((\d+) tokens\)", re.I)
+_LIMIT = re.compile(r"batch size: (\d+)|context size \((\d+) tokens\)|n_ctx[^0-9]*(\d+)", re.I)
+#: How many times a request is shortened and sent again before the job fails.
+TRUNCATE_ATTEMPTS = 8
+#: The marker the renderer's own word cap appends (makhzan_schemas.ai.prompt.words).
+TRUNCATION_MARK = "[…]"
+
+
+def too_long(code: int, detail: str) -> tuple[int | None, int | None] | None:
+    """(prompt tokens, limit) when llama.cpp refused the request for its length, else None."""
+    if code not in (400, 500) or not _TOO_LONG.search(detail):
+        return None
+    t, lim = _TOKENS.search(detail), _LIMIT.search(detail)
+    tokens = next((int(g) for g in t.groups() if g), None) if t else None
+    limit = next((int(g) for g in lim.groups() if g), None) if lim else None
+    return tokens, limit
+
+
+#: How listing blocks begin and are separated (makhzan_schemas.ai.prompt.block and .listings):
+#: "[LISTING A]\n…\n\n[LISTING B]\n…", each block ending in its `Description:` line.
+_HEAD_A, _SEP_B, _DESC = "[LISTING A]\n", "\n\n[LISTING B]\n", "Description: "
+
+
+def _descriptions(state: str) -> dict[str, tuple[int, int, list[str]]] | None:
+    """{listing: (start, end, words)}: where each listing's description text sits in `state`.
+
+    Read from the renderer's structure, never by searching for "Description:": a title or a
+    spec value may hold a newline (only descriptions have their whitespace collapsed), and the
+    text after it is not a description. Each block's description is its fixed last line, which
+    holds no newline: listing B's is the state's last line, listing A's the line before the one
+    separator. None when the state is not in that shape (nothing is cut then). A description the
+    renderer already capped keeps its words, its trailing marker dropped here and put back by
+    the truncation; "not stated" has none."""
+    a, sep = state.find(_HEAD_A), state.find(_SEP_B)
+    if a < 0 or (a > 0 and state[a - 1] != "\n") or sep < a or state.count(_SEP_B) != 1:
+        return None
+    out = {}
+    for name, block_start, block_end in (("LISTING A", a, sep), ("LISTING B", sep, len(state))):
+        line_start = state.rfind("\n", block_start, block_end) + 1
+        if line_start <= block_start or not state.startswith(_DESC, line_start):
+            return None
+        text_start = line_start + len(_DESC)
+        text = state[text_start:block_end]
+        w = [] if text == "not stated" else text.split()
+        if w and w[-1] == TRUNCATION_MARK:
+            w = w[:-1]
+        out[name] = (text_start, block_end, w)
+    return out
+
+
+def truncate_descriptions(payload: dict, cut: dict[str, int]) -> dict:
+    """`payload` with `cut[listing]` words removed from the end of that listing's description,
+    the renderer's marker appended. Only the two description lines change: titles, specs, the
+    rules and the question are untouched. Deterministic."""
+    state = payload["state"]
+    spans = _descriptions(state) or {}
+    # Listing B first: it comes later in the state, so A's offsets still hold.
+    for name in ("LISTING B", "LISTING A"):
+        n = cut.get(name, 0)
+        if n <= 0 or name not in spans:
+            continue
+        start, end, w = spans[name]
+        state = state[:start] + " ".join([*w[: max(0, len(w) - n)], TRUNCATION_MARK]) + state[end:]
+    return {**payload, "state": state}
+
+
+#: Tokens over the limit that the first cut aims below (the estimate is per word, not exact).
+TRUNCATE_MARGIN = 64
+
+
+def plan_cut(payload: dict, cut: dict[str, int], need: int | None) -> dict[str, int] | None:
+    """The next, larger cut: `need` more words, taken from the longest remaining description
+    first (down to the next longest, then from both). `need` None (the server gave no counts):
+    15% of the longest remaining description. None when there is nothing left to cut.
+    Deterministic, and the same whichever listing is A: a tie between equal lengths goes by the
+    description's own text, so a pair's "ab" and "ba" orders cut the same listing's words."""
+    spans = _descriptions(payload["state"])
+    if not spans:
+        return None
+    remaining = {name: len(w) - cut.get(name, 0) for name, (_, _, w) in spans.items()}
+    text = {name: " ".join(w) for name, (_, _, w) in spans.items()}
+    if sum(max(0, r) for r in remaining.values()) <= 0:
+        return None
+    need = max(need or math.ceil(0.15 * max(remaining.values())), 1)
+    new = dict(cut)
+    while need > 0 and any(r > 0 for r in remaining.values()):
+        order = sorted(remaining.items(), key=lambda kv: (-kv[1], text[kv[0]], kv[0]))
+        name, r = order[0]
+        second = order[1][1] if len(order) > 1 else 0
+        take = min(need, r - second) if r > second else min(need, max(1, math.ceil(r / 2)))
+        new[name] = new.get(name, 0) + take
+        remaining[name] -= take
+        need -= take
+    return new
+
+
+def words_to_cut(
+    tokens: int | None, limit: int | None, words: int, history: list[tuple[int, int]]
+) -> int | None:
+    """How many more words to cut, from the server's counts. `words`: the whitespace words of
+    the state just refused; `history`: (tokens, words cut so far) of every refusal, this one
+    last.
+
+    The rate is tokens per word: from the last two refusals' Δtokens / Δwords when there are
+    two, else the whole state's tokens / words. None when the server gave no counts."""
+    if not tokens or not limit or tokens < limit:
+        return None
+    rate = tokens / max(words, 1)
+    if len(history) >= 2:
+        (t0, c0), (t1, c1) = history[-2], history[-1]
+        if t0 > t1 and c1 > c0:
+            rate = (t0 - t1) / (c1 - c0)
+    return math.ceil((tokens - limit + TRUNCATE_MARGIN) / rate)
+
+
 def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
     who = f"{key} (llamacpp)"
     decision_type, request_model = LLAMACPP_MODELS[key]
@@ -785,12 +910,48 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
 
     def score(payload: dict) -> tuple[float, dict]:
         q = question_key(payload)
-        try:
-            body = _http_json(f"{base}/v1/systemone", {"model": request_model, **nfc(payload)},
-                              timeout=request_timeout)  # fmt: skip
-        except urllib.error.HTTPError as e:
-            detail = e.read()[:300].decode("utf-8", "replace")
-            raise RuntimeError(f"llama.cpp answered HTTP {e.code}: {detail}") from None
+        original = nfc(payload)
+        sent, cut, extra, first_tokens, last_limit = original, {}, {}, None, None
+        history: list[tuple[int, int]] = []  # (tokens, words cut) of each refusal
+        for attempt in range(TRUNCATE_ATTEMPTS + 1):
+            if attempt and _stopped(rt.stop):
+                raise ScoreInterrupted("stopped while shortening an over-long request")
+            try:
+                body = _http_json(f"{base}/v1/systemone", {"model": request_model, **sent},
+                                  timeout=request_timeout)  # fmt: skip
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read()[:300].decode("utf-8", "replace")
+                long = too_long(e.code, detail)
+                if long is None:
+                    raise RuntimeError(f"llama.cpp answered HTTP {e.code}: {detail}") from None
+                # Too long for the model's context or batch: cut description words from the
+                # end, longest description first (owner, 2026-11-27), and send again.
+                tokens, limit = long
+                first_tokens = first_tokens or tokens
+                last_limit = limit or last_limit
+                if _descriptions(original["state"]) is None:
+                    raise RuntimeError(
+                        f"llama.cpp: the request is too long ({tokens} tokens, limit {limit}) and "
+                        f"its state is not in the expected shape; nothing cut: {detail}"
+                    ) from None
+                if tokens:
+                    history.append((tokens, sum(cut.values())))
+                need = words_to_cut(tokens, limit, len(sent["state"].split()), history)
+                nxt = plan_cut(original, cut, need) if attempt < TRUNCATE_ATTEMPTS else None
+                if nxt is None:
+                    raise RuntimeError(
+                        f"llama.cpp: the request is too long even with its descriptions cut "
+                        f"({tokens} tokens, limit {limit}): {detail}"
+                    ) from None
+                cut = nxt
+                sent = truncate_descriptions(original, cut)
+        if cut:
+            extra = {"truncated": {"words_cut": dict(sorted(cut.items())),
+                                   "tokens_before": first_tokens,
+                                   "tokens": (body.get("usage") or {}).get("input_tokens"),
+                                   "limit": last_limit,
+                                   "attempts": attempt}}  # fmt: skip
         try:
             calibrated = body["answers"][q]["noul"]
         except (KeyError, TypeError):
@@ -798,7 +959,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
                 f"llama.cpp's answer has no answers.{q}.noul: {str(body)[:300]}"
             ) from None
         try:
-            return rescale(calibrated, pin.gguf_temperature, pin.temperature), {}
+            return rescale(calibrated, pin.gguf_temperature, pin.temperature), extra
         except ValueError as e:
             raise RuntimeError(f"llama.cpp answered {q}.noul = {calibrated!r}: {e}") from None
 

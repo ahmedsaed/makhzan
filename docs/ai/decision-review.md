@@ -512,7 +512,8 @@ below).*
   llama.cpp backend with the same image digest; `worker.md`).
 - **Not done:**
   - **A proper power supply** for the card (the clock limit is the workaround).
-  - **A CPU route for pplx requests over 4,096 tokens,** about 1 pair in 3,000.
+  - ~~A CPU route for pplx requests over 4,096 tokens~~, about 1 pair in 3,000: superseded the
+    same day by cutting their descriptions to fit ("Over-long requests are cut, not failed").
 
 ### H2O first (owner, 2026-11-27, D25)
 
@@ -565,3 +566,17 @@ one-line change to `JUDGE_FLOORS`.
   with new rules merges. Re-auditing them all is an owner call: one producer run with the audit
   filter keyed on the judge.
 
+### Over-long requests are cut, not failed (owner, 2026-11-27)
+
+**A request too long for the llama.cpp context is truncated to fit rather than failed.** About 1
+pair in 3,000 of the backlog exceeds pplx's 4,096 tokens. The owner judges the tail of a very
+long description irrelevant, so:
+
+- the worker, not the broker's renderer, cuts words from the end of the longest `Description:`
+  first and appends `[…]`;
+- titles, specifications, the rules and the question are never touched;
+- the cut is recorded in the score's `extra.truncated`;
+- the job fails only if even empty descriptions do not fit.
+
+Request hashes and prompt versions are unchanged. Details: `worker.md`, "Requests too long for
+the context".

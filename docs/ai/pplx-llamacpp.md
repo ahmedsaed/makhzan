@@ -138,8 +138,9 @@ It prints the variant (217 merges, 216 "same", 1 "not") beside pplx bf16 with th
 ## Not done
 
 - **The CPU fallback's speed on the i7-3770 itself:** the 55 s and 193 s above are estimates.
-- **Requests over 4,096 tokens** (about 1 pair in 3,000 of the real backlog) fail their job on
-  the card; a CPU route for them at 8,192 is not built.
+- ~~Requests over 4,096 tokens~~ (about 1 pair in 3,000 of the real backlog): **resolved
+  2026-11-27** by the owner's decision to cut their descriptions to fit, in the worker, rather
+  than fail the job (`worker.md`, "Requests too long for the context"). No CPU route at 8,192.
 - **Trimming the output matrix.**
 - **The judge-version catch-up** (every standing decision re-scored after the switch) is the
   owner's to drain, with wider windows and the desktop.
