@@ -634,7 +634,7 @@ class Worker:
     def _unload(self) -> None:
         if self.judge is not None:
             log.info("unloading %s", self.judge.key)
-            judges.unload(self.judge, self.cfg.device)
+            judges.unload(self.judge, self.cfg.device, self.cfg.backend)
             self.judge = None
 
     def _lost(self, lease_id: str, job_id: int) -> bool:

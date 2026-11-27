@@ -1,5 +1,13 @@
-# home-pplx: pplx on the home server's CPU, 05:05-07:00 Cairo time, 5 minutes after Kev's window,
-# waiting between windows. The broker is reached through the compose stack's broker proxy.
+# home-pplx: pplx-decider-flash-v1.3 Q4_K_S on the home server's AMD card through llama.cpp,
+# 05:05-07:00 Cairo time, waiting between windows. Production since 2026-11-27
+# (docs/ai/decision-review.md, "Production switch"). Its sidecar, pplx-llamacpp (compose.yml,
+# profile "llamacpp-pplx"), is started at 05:03, after Kev's is stopped, and stopped after the
+# window, by the host's timers (sidecar-window.sh, README.md).
+#
+# CPU fallback (the card unavailable): the same GGUF on the CPU is the same model version (P8:
+# device and dtype are recorded per score, not part of the version). Set device = "cpu" here and
+# give the sidecar -ngl 0 -t 4 and no /dev/dri; requests then take ~55 s (up to the 225 s CPU
+# timeout, inside this worker's 300 s stop_grace_period).
 [worker]
 name = "home-pplx"
 broker_url = "http://broker-proxy:8100/ai/v1"
@@ -8,26 +16,23 @@ token_file = "/run/secrets/makhzan-ai-token"
 model = "pplx"
 
 [model.pplx]
-expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
+expect_version = "pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303"
 
 [compute]
-device = "cpu"
-dtype = "fp32"
-threads = 6
+backend = "llamacpp"
+device = "gpu"
+dtype = "q4_k_s"
+llamacpp_url = "http://pplx-llamacpp:8080"
+# The same file the sidecar serves, mounted read-only into the worker too: it is checked
+# against the pin (sha256, decision type, temperature) before anything is scored.
+gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
 nice = 10
-memory_gib = 20
-mmap = false
-weights_cache = "/models"
 
 [schedule]
-# One model at a time on this machine: at least 5 minutes after home-kev's window ends, since
-# Kev's graceful stop (a request in flight, or a model load, then its last posts) can run
-# about 4 minutes past 05:00.
+# After Kev's window: the card holds one model, and the timers swap the sidecars at 05:03.
 windows = ["05:05-07:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
-# An empty queue ends this window's session and frees the model until the next window;
-# "wait" would keep the model loaded and poll every poll_s until the window's end.
 on_empty = "exit"
 
 [leases]

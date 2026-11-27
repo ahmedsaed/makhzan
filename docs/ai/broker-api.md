@@ -137,15 +137,15 @@ writes decisions, so the backlog can be scored while the mode is off.
 
 ```json
 {"worker": "cpu-kev",
- "models": {"kev": {"model_version": "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0",
-                    "weights_revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52"}},
- "image": "<digest>", "device": "cpu", "dtype": "fp32", "threads": 6,
+ "models": {"kev": {"model_version": "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0",
+                    "weights_revision": "f4624b6bb7072f1bab726a622c1cad3f96030b9e"}},
+ "image": "<digest>", "device": "gpu", "dtype": "q4_k_m",
  "config": {"window": "00:30-04:30", "max_jobs": 2, "lease_s": 900, "on_empty": "exit"}}
 ```
 
 ```json
 200 {"session": "6f1c…",
-     "models": {"kev": {"model_version": "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0",
+     "models": {"kev": {"model_version": "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0",
                         "ok": true, "queued_requests": 824,
                         "stages": [{"pipeline": "match", "stage": "kev",
                                     "prompt_version": "K2-150@6aef2c6c"},
@@ -195,7 +195,7 @@ writes decisions, so the backlog can be scored while the mode is off.
 
 ```json
 {"session": "6f1c…", "model": "kev",
- "model_version": "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0",
+ "model_version": "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0",
  "max_jobs": 2, "lease_request_id": "3f2a…"}
 ```
 
@@ -652,7 +652,7 @@ broker_url = "https://<broker host>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
 
 [model.kev]
-expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
+expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
 device = "cpu"
 dtype  = "fp32"
 threads = 6

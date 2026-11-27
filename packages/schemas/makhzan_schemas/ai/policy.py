@@ -21,6 +21,13 @@ code and the scoring parameters; the prompt version belongs to the stage's
 prompt variant (`prompt.PROMPT_VERSIONS`). GPU and CPU runs count as one
 version; each score records its device and dtype. A new model is an entry in
 `MODELS`: no migration.
+
+**Production switch (owner, 2026-11-27):** `MODELS` names Kev-4B Q4_K_M and pplx-decider Q4_K_S
+served by llama.cpp (D20 amended 2026-11-26; docs/ai/kev-llamacpp.md, pplx-llamacpp.md), on the
+home server's AMD card taking turns. The torch versions stay in `TORCH_MODELS`, the rollback:
+moving `MODELS` back to them (and the worker's `pins.ACTIVE_BACKEND`) is one commit. A version
+change makes every standing decision's judge stale, so the re-score producer re-queues them at the
+amended P8 priorities (after new pairs and the backlog; decision-review.md).
 """
 
 from __future__ import annotations
@@ -54,6 +61,18 @@ PPLX_REVISION = "d06fb3f2d97e0a52325a0d463c450cf0338f44fe"
 PPLX_TEMPERATURE = 1.3303
 
 
+#: The llama.cpp versions (worker `pins.ALTERNATIVES`): GGUF files pinned by sha256, served by
+#: llama.cpp's server-vulkan image, build b12767, by digest. The digest is part of the version:
+#: any machine serving these must run that same image (it runs on NVIDIA cards too).
+LLAMACPP_BUILD = "b12767"
+LLAMACPP_IMAGE_DIGEST = "87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
+KEV_GGUF_REPO = "ggml-org/Kev-4B-GGUF"
+KEV_GGUF_REVISION = "f4624b6bb7072f1bab726a622c1cad3f96030b9e"
+KEV_GGUF_SHA256 = "33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9"
+#: pplx Q4_K_S: our own conversion of PPLX_REPO@PPLX_REVISION (ml/models/convert_pplx_v13.py).
+PPLX_GGUF_SHA256 = "819a9ad0f8f4aacb055f6d1783a155e3bd0bf33afb9c2f33749ef25350c61ab3"
+
+
 @dataclass(frozen=True)
 class Model:
     """One model, as `ai_model_versions` records it with a prompt version."""
@@ -65,7 +84,44 @@ class Model:
     scoring: dict = field(default_factory=dict)
 
 
+#: What production serves (owner, 2026-11-27): the llama.cpp versions.
 MODELS: dict[str, Model] = {
+    "kev": Model(
+        key="kev",
+        repo=KEV_GGUF_REPO,
+        weights_revision=KEV_GGUF_REVISION,
+        model_version=(
+            f"kev-4b-Q4_K_M@{KEV_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
+            f"-{LLAMACPP_IMAGE_DIGEST[:12]}+T1.0"
+        ),
+        # Raw P(yes) at temperature 1: the worker undoes the GGUF's built-in 2.406.
+        scoring={
+            "score": "p_yes",
+            "temperature": 1.0,
+            "backend": "llamacpp",
+            "gguf_sha256": KEV_GGUF_SHA256,
+        },  # fmt: skip
+    ),
+    "pplx": Model(
+        key="pplx",
+        repo=PPLX_REPO,
+        weights_revision=PPLX_REVISION,
+        model_version=(
+            f"pplx-decider-flash-v1.3-Q4_K_S@{PPLX_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
+            f"-{LLAMACPP_IMAGE_DIGEST[:12]}+T{PPLX_TEMPERATURE}"
+        ),
+        # P(true) at the checkpoint's temperature, which llama.cpp applies as served.
+        scoring={
+            "score": "p_true",
+            "temperature": PPLX_TEMPERATURE,
+            "backend": "llamacpp",
+            "gguf_sha256": PPLX_GGUF_SHA256,
+        },  # fmt: skip
+    ),
+}
+
+#: The torch versions production served until 2026-11-27: the rollback (see the module doc).
+TORCH_MODELS: dict[str, Model] = {
     "kev": Model(
         key="kev",
         repo=KEV_REPO,

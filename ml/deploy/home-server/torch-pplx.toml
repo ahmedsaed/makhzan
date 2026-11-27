@@ -1,0 +1,40 @@
+# ROLLBACK ONLY: pplx on the home server's CPU through torch, the production setup until
+# 2026-11-27. The broker refuses it (version) unless the policy is moved back to the torch
+# versions (policy.TORCH_MODELS, pins.ACTIVE_BACKEND; docs/ai/decision-review.md). To use it,
+# mount it as the pplx service's worker.toml.
+# home-pplx: pplx on the home server's CPU, 05:05-07:00 Cairo time, 5 minutes after Kev's window,
+# waiting between windows. The broker is reached through the compose stack's broker proxy.
+[worker]
+name = "home-pplx"
+broker_url = "http://broker-proxy:8100/ai/v1"
+broker_via_proxy = true
+token_file = "/run/secrets/makhzan-ai-token"
+model = "pplx"
+
+[model.pplx]
+expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
+
+[compute]
+device = "cpu"
+dtype = "fp32"
+threads = 6
+nice = 10
+memory_gib = 20
+mmap = false
+weights_cache = "/models"
+
+[schedule]
+# One model at a time on this machine: at least 5 minutes after home-kev's window ends, since
+# Kev's graceful stop (a request in flight, or a model load, then its last posts) can run
+# about 4 minutes past 05:00.
+windows = ["05:05-07:00"]
+timezone = "Africa/Cairo"
+outside_window = "wait"
+# An empty queue ends this window's session and frees the model until the next window;
+# "wait" would keep the model loaded and poll every poll_s until the window's end.
+on_empty = "exit"
+
+[leases]
+max_jobs = 2
+lease_s = 900
+heartbeat_s = 60

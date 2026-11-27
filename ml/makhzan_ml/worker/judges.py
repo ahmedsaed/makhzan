@@ -710,13 +710,15 @@ def load(key: str, rt: Runtime) -> Judge:
     return judge
 
 
-def unload(judge: Judge, device: str) -> None:
+def unload(judge: Judge, device: str, backend: str = "torch") -> None:
     """Free a judge at the end of a session, so its memory goes back before the process
-    exits (and before another worker's window on the same machine)."""
+    exits (and before another worker's window on the same machine). Only a torch judge on the
+    GPU has a CUDA cache to empty: the llama.cpp backend's memory is the sidecar's, and its image
+    has no torch at all."""
     judge.close()
     judge.score_fn = judge.close_fn = lambda *a: None  # drop the model's references
     gc.collect()
-    if device == "gpu" and judge.info.get("backend") != "llamacpp":
+    if device == "gpu" and backend == "torch" and judge.info.get("backend") != "llamacpp":
         import torch
 
         torch.cuda.empty_cache()

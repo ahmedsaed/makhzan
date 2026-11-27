@@ -13,11 +13,10 @@ These experiments asked whether a quantised Kev-4B could do two things:
   loses a net 3 of 209 correct ones.
 - On the home server's CPU, llama.cpp gains little: Q8_0 is 1.08× the PyTorch worker's speed
   per token, and F16 about 1.5× (from 2 requests only).
-- On the AMD card, Q4 is about 14–19× faster per token, but the card needs better cooling first. It reset
-  the server once at stock fan settings.
-- **Nothing here is in production.** A worker backend for a llama.cpp sidecar is built and
-  parity-checked but not in use (`docs/ai/worker.md`, "Kev on a llama.cpp sidecar"; see "Not
-  done").
+- On the AMD card, Q4 is about 14–19× faster per token. After servicing, and held to clock states
+  0–2 (its power feed resets the server at higher states), it runs 4.4 s a request.
+- **In production since 2026-11-27** (`decision-review.md`, "Production switch"): Kev and pplx on
+  the home server's card, taking turns (`docs/ai/worker.md`, "Kev on a llama.cpp sidecar").
 
 ## What changed from earlier notes
 
@@ -228,19 +227,18 @@ Notes:
 - **D20 (decided 2026-11-26):** the owner accepted Q4_K_M on the label test
   (`decision-review.md`, "Kev quantisation"). Any other variant still needs the agreement rule,
   or the same label test plus sign-off.
-- **The worker backend is built, not in use** (`docs/ai/worker.md`, "Kev on a llama.cpp
-  sidecar").
-  - What it does: it calls `/v1/systemone`, undoes the GGUF's temperature, and pins the GGUF by
-    hash and the image by digest.
-  - Its parity: against a live sidecar on the 3060, 40 requests through the whole protocol came
-    within 0.016 of the stored Q4 scores.
-  - Not done: the production switch (owner-gated), and a run on the AMD card under compose.
+- **The worker backend is production since 2026-11-27** (`docs/ai/worker.md`, "Kev on a
+  llama.cpp sidecar"). Its parity: against a live sidecar on the 3060, 40 requests through the
+  whole protocol came within 0.016 of the stored Q4 scores. Not yet run: the sidecar under the
+  compose stack's hardening on the card (the soaks used `docker run` with the same image and
+  settings); the first night's logs are the check.
 - **Workaround for power.** The card is held to clock states 0–2 because the original 320 W
   supply, which has no PCIe cable, feeds it through a SATA adapter. A proper supply would allow the
   top states. That is worth little at the card's 85 W maximum, but it would remove the dependency
   on the rule being installed.
-- **No crash logging on the home server.** No `kernel.panic` timeout, kdump or pstore. These
-  would not catch a power-level reset, but they would turn a freeze into a reboot with a dump.
+- **Crash logging on the home server is temporary.** The investigation's capture (netconsole to
+  the desktop, `kernel.panic=10`, journald syncing every second) is a session-only setup
+  (`ml/out/server-capture/`, not in the repository) and goes away at a reboot.
 - **CPU options not tried:** F32 (about 17 GB; likely close to F16), and Q4_0 (128-bit integer
   maths, not measured). Neither is likely to beat F16 by much (see the ceiling above).
 - **Kev-0.8B was skipped.** Its own card reports a large accuracy drop: 0.697 against 0.838 on

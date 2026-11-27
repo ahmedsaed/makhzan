@@ -9,21 +9,34 @@ from pathlib import Path
 
 import pytest
 from makhzan_ml.worker.config import parse
-from makhzan_ml.worker.pins import PINS
+from makhzan_ml.worker.pins import PINS, production_pin
 
 DEPLOY = Path(__file__).resolve().parents[1] / "deploy" / "home-server"
 
 
 @pytest.mark.parametrize("name, model", [("home-kev", "kev"), ("home-pplx", "pplx")])
 def test_the_compose_examples_parse_and_wait_for_their_windows(tmp_path, name, model):
+    # Production since 2026-11-27: both on the card through their llama.cpp sidecars.
+    data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
+    data["worker"].pop("token_file")
+    data["worker"]["token"] = "example"
+    cfg = parse(data)
+    assert (cfg.name, cfg.model) == (name, model)
+    assert cfg.broker_url == "http://broker-proxy:8100/ai/v1" and cfg.broker_via_proxy
+    assert cfg.schedule.outside_window == "wait"
+    assert cfg.expect_versions == {model: production_pin(model).model_version}
+    assert (cfg.backend, cfg.device) == ("llamacpp", "gpu")
+    assert cfg.llamacpp_url == f"http://{model}-llamacpp:8080"
+
+
+@pytest.mark.parametrize("name, model", [("torch-kev", "kev"), ("torch-pplx", "pplx")])
+def test_the_rollback_configs_parse_on_the_torch_pins(tmp_path, name, model):
     data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
     data["worker"].pop("token_file")
     data["worker"]["token"] = "example"
     data["compute"].pop("weights_cache")
     cfg = parse(data)
-    assert (cfg.name, cfg.model) == (name, model)
-    assert cfg.broker_url == "http://broker-proxy:8100/ai/v1" and cfg.broker_via_proxy
-    assert cfg.schedule.outside_window == "wait"
+    assert (cfg.name, cfg.model, cfg.backend) == (name.replace("torch", "home"), model, "torch")
     assert cfg.expect_versions == {model: PINS[model].model_version}
     assert (cfg.device, cfg.threads, cfg.mmap, cfg.memory_gib) == ("cpu", 6, False, 20)
 

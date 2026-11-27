@@ -10,13 +10,16 @@ snapshot's revision, the temperature it scores at, the serving code's commit whe
 image records it) and refuses to score on any difference (P8). The broker then checks
 the version string at hello and at every lease (broker-api.md §3.1, §3.2).
 
-`PINS` is what production serves, one pin per model key, equal to the policy. A key may
-also have an **alternative backend** (`ALTERNATIVES`): Kev-4B Q4_K_M and pplx Q4_K_S served by
-a llama.cpp sidecar, accepted by the owner on 2026-11-26 (D20 amended; docs/ai/kev-llamacpp.md,
-docs/ai/pplx-llamacpp.md). A
-worker selects it with `[compute] backend = "llamacpp"`; it carries its own model version,
-so the broker refuses it (hello `ok: false`) until the policy's `MODELS` names that version.
-Switching production is that one change to the policy and to `PINS`, owner-gated.
+Each model key has a pin per backend: `PINS` (torch: the model's own Python code in the
+worker's process) and `ALTERNATIVES` (llama.cpp: Kev-4B Q4_K_M and pplx Q4_K_S served by a
+sidecar, accepted by the owner on 2026-11-26, D20 amended; docs/ai/kev-llamacpp.md,
+docs/ai/pplx-llamacpp.md). A worker selects one with `[compute] backend`.
+
+**Production** is `ACTIVE_BACKEND`: since the owner's switch of 2026-11-27, both keys serve
+the llama.cpp pins, and `production_pin(key)` is the one equal to the policy's `MODELS`
+(decision-review.md, "Production switch"). The torch pins stay, unchanged, as the rollback: a
+worker on them is refused at hello (`ok: false`) while the policy names the llama.cpp versions.
+Rolling back is the reverse change to `ACTIVE_BACKEND` and the policy, in one commit.
 """
 
 from __future__ import annotations
@@ -133,6 +136,15 @@ ALTERNATIVES: dict[tuple[str, str], Pin] = {
         gguf_temperature=PPLX_GGUF_TEMPERATURE,
     ),
 }
+
+
+#: What production serves per model key (owner, 2026-11-27): the policy's MODELS equal these.
+ACTIVE_BACKEND: dict[str, str] = {"kev": "llamacpp", "pplx": "llamacpp"}
+
+
+def production_pin(key: str) -> Pin:
+    """The pin production serves for `key`: the one the policy's `MODELS` names."""
+    return pin_for(key, ACTIVE_BACKEND[key])
 
 
 def pin_for(key: str, backend: str = "torch") -> Pin:
