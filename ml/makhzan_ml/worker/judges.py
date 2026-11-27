@@ -816,17 +816,19 @@ def plan_cut(payload: dict, cut: dict[str, int], need: int | None) -> dict[str, 
     """The next, larger cut: `need` more words, taken from the longest remaining description
     first (down to the next longest, then from both). `need` None (the server gave no counts):
     15% of the longest remaining description. None when there is nothing left to cut.
-    Deterministic: ties go by listing name."""
+    Deterministic, and the same whichever listing is A: a tie between equal lengths goes by the
+    description's own text, so a pair's "ab" and "ba" orders cut the same listing's words."""
     spans = _descriptions(payload["state"])
     if not spans:
         return None
     remaining = {name: len(w) - cut.get(name, 0) for name, (_, _, w) in spans.items()}
+    text = {name: " ".join(w) for name, (_, _, w) in spans.items()}
     if sum(max(0, r) for r in remaining.values()) <= 0:
         return None
     need = max(need or math.ceil(0.15 * max(remaining.values())), 1)
     new = dict(cut)
     while need > 0 and any(r > 0 for r in remaining.values()):
-        order = sorted(remaining.items(), key=lambda kv: (-kv[1], kv[0]))
+        order = sorted(remaining.items(), key=lambda kv: (-kv[1], text[kv[0]], kv[0]))
         name, r = order[0]
         second = order[1][1] if len(order) > 1 else 0
         take = min(need, r - second) if r > second else min(need, max(1, math.ceil(r / 2)))
@@ -845,7 +847,7 @@ def words_to_cut(
 
     The rate is tokens per word: from the last two refusals' Δtokens / Δwords when there are
     two, else the whole state's tokens / words. None when the server gave no counts."""
-    if not tokens or not limit or tokens <= limit:
+    if not tokens or not limit or tokens < limit:
         return None
     rate = tokens / max(words, 1)
     if len(history) >= 2:
@@ -909,7 +911,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
     def score(payload: dict) -> tuple[float, dict]:
         q = question_key(payload)
         original = nfc(payload)
-        sent, cut, extra, first_tokens = original, {}, {}, None
+        sent, cut, extra, first_tokens, last_limit = original, {}, {}, None, None
         history: list[tuple[int, int]] = []  # (tokens, words cut) of each refusal
         for attempt in range(TRUNCATE_ATTEMPTS + 1):
             if attempt and _stopped(rt.stop):
@@ -927,6 +929,12 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
                 # end, longest description first (owner, 2026-11-27), and send again.
                 tokens, limit = long
                 first_tokens = first_tokens or tokens
+                last_limit = limit or last_limit
+                if _descriptions(original["state"]) is None:
+                    raise RuntimeError(
+                        f"llama.cpp: the request is too long ({tokens} tokens, limit {limit}) and "
+                        f"its state is not in the expected shape; nothing cut: {detail}"
+                    ) from None
                 if tokens:
                     history.append((tokens, sum(cut.values())))
                 need = words_to_cut(tokens, limit, len(sent["state"].split()), history)
@@ -942,6 +950,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
             extra = {"truncated": {"words_cut": dict(sorted(cut.items())),
                                    "tokens_before": first_tokens,
                                    "tokens": (body.get("usage") or {}).get("input_tokens"),
+                                   "limit": last_limit,
                                    "attempts": attempt}}  # fmt: skip
         try:
             calibrated = body["answers"][q]["noul"]

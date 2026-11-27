@@ -1187,3 +1187,46 @@ def test_a_stop_between_attempts_gives_the_job_back(tmp_path, sidecar):
     with pytest.raises(judges.ScoreInterrupted):
         judge.score(long_payload())
     assert len(side.requests) == 1
+
+
+def test_equal_descriptions_are_cut_the_same_in_both_orders():
+    from makhzan_schemas.ai import prompt
+
+    a = {"title": "Relay 5V", "specs": {}, "description": " ".join(f"a{i}" for i in range(100))}
+    b = {
+        "title": "Relay module 5V",
+        "specs": {},
+        "description": " ".join(f"b{i}" for i in range(100)),
+    }
+    cut = {}
+    for order, req in prompt.requests("K1-full", a, b).items():
+        c = judges.plan_cut(req, {}, 30)
+        cut[order] = {("a" if n == ("LISTING A" if order == "ab" else "LISTING B") else "b"): k
+                      for n, k in c.items()}  # fmt: skip
+    assert cut["ab"] == cut["ba"]
+
+
+def test_a_refusal_at_exactly_the_limit_is_sized_from_its_counts():
+    assert judges.words_to_cut(4096, 4096, 4000, [(4096, 0)]) == math.ceil(
+        judges.TRUNCATE_MARGIN / (4096 / 4000)
+    )
+    assert judges.words_to_cut(4000, 4096, 4000, [(4000, 0)]) is None
+
+
+def test_the_limit_is_recorded(tmp_path, sidecar):
+    payload = long_payload()
+    n = len(payload["state"].split())
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=n - 30)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    assert extra["truncated"]["limit"] == n - 30
+
+
+def test_a_state_not_in_the_renderers_shape_fails_saying_so(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=1)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    with pytest.raises(RuntimeError, match="not in the expected shape; nothing cut"):
+        judge.score(PAYLOAD | {"state": "Listing A " + "x " * 50})
+    assert len(side.requests) == 1

@@ -1018,6 +1018,10 @@ renderer is untouched, so request hashes and prompt versions do not change.
     refusals.
   - Only a refusal without counts (a bare HTTP 400) cuts by a fixed step, 15% of the longest
     description.
+  - Two descriptions of equal length are cut in the order of their own text, never by which is
+    listing A. A pair's "ab" and "ba" orders therefore cut the same listing's words.
+  - A state not in the renderer's shape is never cut: the job fails with "not in the expected
+    shape; nothing cut".
   - It retries up to 8 times. If even empty descriptions do not fit, the job fails: "too long
     even with its descriptions cut".
   - A stop between retries gives the job back unscored (`judges.ScoreInterrupted`), as a stop
@@ -1025,8 +1029,10 @@ renderer is untouched, so request hashes and prompt versions do not change.
 - **Deterministic:** the cut depends only on the request and the server's answers, so the same
   request on the same server is cut the same way.
 - **Recorded** in the score's `extra`:
-  `{"truncated": {"words_cut": {"LISTING A": n, …}, "tokens_before": N, "tokens": M, "attempts": k}}`.
+  `{"truncated": {"words_cut": {"LISTING A": n, …}, "tokens_before": N, "tokens": M, "limit": L, "attempts": k}}`.
   - `tokens` is the cut request's `usage.input_tokens`.
+  - `limit` is the batch or context size it was cut to fit, as the server stated it (null after
+    only bare HTTP 400s). It makes queryable which scores a larger context would change.
   - A score with no `truncated` key was scored on the whole request.
 - **The score is of the cut request** under the same model version and request hash. A
   re-score on a server with a larger context would see more text. That is accepted: the cut
