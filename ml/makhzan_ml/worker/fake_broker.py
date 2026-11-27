@@ -46,7 +46,7 @@ import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from makhzan_ml.worker.pins import PINS
+from makhzan_ml.worker.pins import ALTERNATIVES, MODEL_KEYS, PINS
 
 BODY_LIMIT = 256 * 1024
 
@@ -96,10 +96,12 @@ class FakeBroker:
         # Default: the torch pins, which the tests' fake judges serve. Production's broker names
         # the llama.cpp versions since 2026-11-27 (pins.production_pin); pass `versions` (and
         # `weights`) to stand in for it, as parity does.
-        self.versions = versions or {k: p.model_version for k, p in PINS.items()}
+        # A key with no torch pin (h2o) defaults to its llama.cpp one.
+        defaults = {**{k: p for (k, _), p in ALTERNATIVES.items()}, **PINS}
+        self.versions = versions or {k: p.model_version for k, p in defaults.items()}
         #: The weights revision hello must name per key (an alternative backend's pin has
         #: its own; parity passes it with that pin's version).
-        self.weights = weights or {k: p.weights_revision for k, p in PINS.items()}
+        self.weights = weights or {k: p.weights_revision for k, p in defaults.items()}
         self.max_attempts = max_attempts
         self.clock = clock
         #: Where it listens: loopback by default. Another address only for a stand-in in a
@@ -118,6 +120,12 @@ class FakeBroker:
                     {"pipeline": "audit", "stage": "kev", "prompt_version": "K2-150@test"}],
             "pplx": [{"pipeline": "match", "stage": "pplx", "prompt_version": "K1-full@test"}],
         }  # fmt: skip
+        # Any other key (a first judge after Kev, such as h2o): a match and an audit stage of
+        # its own name, as the registry gives the first judge.
+        for key in MODEL_KEYS:
+            self.stages.setdefault(key, [
+                {"pipeline": "match", "stage": key, "prompt_version": "K2-150@test"},
+                {"pipeline": "audit", "stage": key, "prompt_version": "K2-150@test"}])  # fmt: skip
 
     # -- set-up ----------------------------------------------------------------------------
 

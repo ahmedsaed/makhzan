@@ -10,6 +10,7 @@ from makhzan_schemas.ai.hashing import listing_hash
 from makhzan_schemas.ai.policy import (
     ACTIVE,
     KEV_REVISION,
+    LLAMACPP_KEV,
     MODELS,
     POLICIES,
     TORCH_MODELS,
@@ -102,12 +103,21 @@ def test_it_moves_exactly_when_what_the_judge_is_shown_moves():
         assert listing_hash(listing, "Relays") != listing_hash(base, "Relays")
 
 
-def test_policy_p1_is_the_owners_safest_operating_point():
-    assert POLICIES == {"p1": {"kev": 0.80, "pplx": 0.95}}
-    assert ACTIVE == "p1" and thresholds() == {"kev": 0.80, "pplx": 0.95}
+def test_policy_p2_puts_h2o_first_and_keeps_p1_as_history():
+    # p1 (Kev >= 0.80, pplx >= 0.95) is kept, never edited; p2 is D25's (owner, 2026-11-27).
+    assert POLICIES == {
+        "p1": {"kev": 0.80, "pplx": 0.95},
+        "p2": {"h2o": 0.578, "pplx": 0.95},
+    }
+    assert ACTIVE == "p2" and thresholds() == {"h2o": 0.578, "pplx": 0.95}
+    assert set(MODELS) == {"h2o", "pplx"}
+    assert MODELS["h2o"].model_version == (
+        "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0"
+    )
+    assert MODELS["h2o"].weights_revision == "61f8d8b7a8c2d84426d0d143ca187f65d235934b"
+    # Kev's llama.cpp judge is D25's rollback; its torch one the rollback before that.
     assert KEV_REVISION == "6cfce5c2fa4b4bd64026336ab649c5ca78857d52"
-    # Production serves the llama.cpp versions (owner, 2026-11-27); the torch ones are the rollback.
-    assert MODELS["kev"].model_version == (
+    assert LLAMACPP_KEV.model_version == (
         "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
     )
     assert MODELS["pplx"].model_version == (
@@ -116,3 +126,10 @@ def test_policy_p1_is_the_owners_safest_operating_point():
     assert MODELS["pplx"].weights_revision.startswith("d06fb3f2d97e")
     assert TORCH_MODELS["kev"].model_version.startswith("kev-4b@6cfce5c2fa4b")
     assert TORCH_MODELS["pplx"].model_version == "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
+
+
+def test_the_audit_bands_come_from_the_policy_registry():
+    from makhzan_schemas.ai.status import AUDIT_BELOW
+
+    # Each first-stage judge at its own threshold (Kev's from p1, which it left) and floor.
+    assert AUDIT_BELOW == {"h2o": (0.578, 0.19), "kev": (0.80, 0.05)}

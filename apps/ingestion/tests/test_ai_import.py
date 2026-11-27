@@ -33,7 +33,7 @@ from worker import ai_import
 from worker.ai_import import ImportRefused, import_scores, verify
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
-KEV, PPLX = pipeline("match").stages
+H2O, PPLX = pipeline("match").stages
 
 
 async def _shop(slug: str) -> Supplier:
@@ -104,8 +104,8 @@ async def _lines(x, y, stage, ab: float, ba: float, *, drop=(), **override) -> l
     return out
 
 
-def _write(directory, kev: list, pplx: list):
-    for name, rows in (("kev", kev), ("pplx", pplx)):
+def _write(directory, h2o: list, pplx: list):
+    for name, rows in (("h2o", h2o), ("pplx", pplx)):
         with (directory / f"scores-{name}.jsonl").open("w") as handle:
             handle.writelines((r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows)
     return directory
@@ -126,18 +126,18 @@ def _of_pair(x, y):
 
 
 async def _scenario(tmp_path):
-    """Three pairs: one same, one not same by Kev, one not same by pplx."""
+    """Three pairs: one same, one not same by H2O, one not same by pplx."""
     shops = [await _shop(f"shop-{c}") for c in "abc"]
     one = await _listing(shops[0], "Example sensor module XY-1")
     two = await _listing(shops[1], "XY-1 example sensor module")
     three = await _listing(shops[2], "Example relay board RB-2")
-    kev = (
-        await _lines(one, two, KEV, 0.9, 0.85)
-        + await _lines(one, three, KEV, 0.01, 0.3)
-        + await _lines(two, three, KEV, 0.95, 0.9)
+    h2o = (
+        await _lines(one, two, H2O, 0.9, 0.85)
+        + await _lines(one, three, H2O, 0.01, 0.3)
+        + await _lines(two, three, H2O, 0.95, 0.9)
     )
     pplx = await _lines(one, two, PPLX, 0.99, 0.96) + await _lines(two, three, PPLX, 0.97, 0.5)
-    return _write(tmp_path, kev, pplx), (one, two, three)
+    return _write(tmp_path, h2o, pplx), (one, two, three)
 
 
 async def test_import_stores_scores_and_decides_through_the_pipeline(tmp_path):
@@ -145,7 +145,7 @@ async def test_import_stores_scores_and_decides_through_the_pipeline(tmp_path):
     report = await import_scores(directory, log=_quiet)
     assert report.inserted == 10 and report.already_stored == 0
     assert dict(report.planned) == dict(report.written) == {"same": 1, "not_same": 2}
-    assert dict(report.written_by) == {"kev": 1, "pplx": 2}
+    assert dict(report.written_by) == {"h2o": 1, "pplx": 2}
     assert report.recommendation is None
     async with SessionLocal() as session:
         judges = (await session.scalars(select(AiModelVersion))).all()
@@ -153,7 +153,7 @@ async def test_import_stores_scores_and_decides_through_the_pipeline(tmp_path):
             (j.model, j.model_version, j.prompt_version, j.weights_revision) for j in judges
         } == {
             (s.model, s.model_version, s.prompt_version, MODELS[s.model].weights_revision)
-            for s in (KEV, PPLX)
+            for s in (H2O, PPLX)
         }
         decisions = {
             (d.listing_a, d.listing_b): d for d in (await session.scalars(select(AiDecision)))
@@ -163,13 +163,13 @@ async def test_import_stores_scores_and_decides_through_the_pipeline(tmp_path):
         "same",
         "pplx",
         "standing",
-        "p1",
+        "p2",
     )
-    assert same.scores["kev"]["min"] == 0.85 and same.scores["pplx"]["min"] == 0.96
+    assert same.scores["h2o"]["min"] == 0.85 and same.scores["pplx"]["min"] == 0.96
     # The evidence carries both orders' request hashes, as the broker writes them.
     assert set(same.scores["pplx"]["requests"]) == {"ab", "ba"}
     no = decisions[pair(one, three)]
-    assert (no.outcome, no.decided_by, no.scores["kev"]["min"]) == ("not_same", "kev", 0.01)
+    assert (no.outcome, no.decided_by, no.scores["h2o"]["min"]) == ("not_same", "h2o", 0.01)
     assert decisions[pair(two, three)].outcome == "not_same"
     checked = await verify(directory)
     assert checked.mismatches == [] and dict(checked.written) == {"same": 1, "not_same": 2}
@@ -213,8 +213,8 @@ async def test_a_listing_whose_text_changed_is_skipped_and_counted(tmp_path):
         listing.title_en = "Example sensor module XY-1 v2"
         await session.commit()
     report = await import_scores(directory, log=_quiet)
-    # Every line of the two pairs that show `one` is stale: 4 Kev, 2 pplx.
-    assert dict(report.stale) == {"kev": 4, "pplx": 2}
+    # Every line of the two pairs that show `one` is stale: 4 H2O, 2 pplx.
+    assert dict(report.stale) == {"h2o": 4, "pplx": 2}
     assert report.stale_pairs == 2 and report.stale_listings == [str(one)]
     # No trigger state at all: its first run records the new text and offers nothing.
     assert report.stranded_listings == 1
@@ -232,7 +232,7 @@ async def test_a_listing_that_is_gone_is_skipped_and_counted(tmp_path):
         await session.delete(await session.get(Listing, three))
         await session.commit()
     report = await import_scores(directory, log=_quiet)
-    # one-three and two-three by Kev, two-three by pplx.
+    # one-three and two-three by H2O, two-three by pplx.
     assert report.missing_listing == 6
     assert report.stale_listings == [str(three)]
     assert dict(report.written) == {"same": 1}
@@ -259,8 +259,8 @@ async def test_a_change_no_judge_sees_keeps_the_scores(tmp_path):
 
 async def test_a_request_two_lines_share_is_stored_once(tmp_path):
     directory, _ = await _scenario(tmp_path)
-    kev = (directory / "scores-kev.jsonl").read_text().splitlines()
-    (directory / "scores-kev.jsonl").write_text("\n".join(kev + kev[:1]) + "\n")
+    h2o = (directory / "scores-h2o.jsonl").read_text().splitlines()
+    (directory / "scores-h2o.jsonl").write_text("\n".join(h2o + h2o[:1]) + "\n")
     report = await import_scores(directory, log=_quiet)
     assert report.repeated_in_files == 1 and report.inserted == 10
 
@@ -343,7 +343,7 @@ async def test_a_pair_a_person_ruled_on_is_not_decided(tmp_path):
 @pytest.mark.parametrize(
     "change",
     [
-        {"model_version": "kev-4b@000000000000+kev-0000000+T1.0"},
+        {"model_version": "h2o-4b@000000000000+h2o-0000000+T1.0"},
         {"weights_revision": "0" * 40},
         {"drop": ("weights_revision",)},
         {"drop": ("scored_at",)},
@@ -364,8 +364,8 @@ async def test_a_bad_line_refuses_the_whole_import(tmp_path, change):
     shops = [await _shop(f"shop-{c}") for c in "ab"]
     one = await _listing(shops[0], "Example part P-1")
     two = await _listing(shops[1], "Example part P-1 module")
-    _write(tmp_path, await _lines(one, two, KEV, 0.9, 0.9, **change), [])
-    with pytest.raises(ImportRefused, match=r"scores-kev\.jsonl:1"):
+    _write(tmp_path, await _lines(one, two, H2O, 0.9, 0.9, **change), [])
+    with pytest.raises(ImportRefused, match=r"scores-h2o\.jsonl:1"):
         await import_scores(tmp_path, log=_quiet)
     assert await _count(AiScore) == 0
 
@@ -373,9 +373,9 @@ async def test_a_bad_line_refuses_the_whole_import(tmp_path, change):
 @pytest.mark.parametrize("text", ["[1, 2]", '"a string"', "{not json"])
 async def test_a_line_that_is_not_a_json_object_is_refused_with_its_number(tmp_path, text):
     directory, _ = await _scenario(tmp_path)
-    kev = (directory / "scores-kev.jsonl").read_text().splitlines()
-    (directory / "scores-kev.jsonl").write_text("\n".join([kev[0], text, *kev[1:]]) + "\n")
-    with pytest.raises(ImportRefused, match=r"scores-kev\.jsonl:2"):
+    h2o = (directory / "scores-h2o.jsonl").read_text().splitlines()
+    (directory / "scores-h2o.jsonl").write_text("\n".join([h2o[0], text, *h2o[1:]]) + "\n")
+    with pytest.raises(ImportRefused, match=r"scores-h2o\.jsonl:2"):
         await import_scores(directory, log=_quiet)
 
 
@@ -431,7 +431,7 @@ async def test_a_pair_owing_a_stage_is_counted_by_stage_and_recommended(tmp_path
     shops = [await _shop(f"shop-{c}") for c in "ab"]
     one = await _listing(shops[0], "Example part P-1")
     two = await _listing(shops[1], "Example part P-1 module")
-    _write(tmp_path, await _lines(one, two, KEV, 0.9, 0.9), [])  # Kev passes, no pplx line
+    _write(tmp_path, await _lines(one, two, H2O, 0.9, 0.9), [])  # H2O passes, no pplx line
     report = await import_scores(tmp_path, log=_quiet)
     assert dict(report.owes) == {"pplx": 1} and report.unsettled == 0
     assert not report.stale_listings and not report.written

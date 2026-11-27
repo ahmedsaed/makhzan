@@ -34,7 +34,8 @@ applying between them unless the ruling is forced. See `_Rulings`.
 AI "same" decisions (`makhzan_schemas.ai`) are read only in `live` mode (or a
 dry run's preview). They act last: once the rules and the rulings have formed
 every cluster, an AI pair may join two whole clusters, every one of today's
-vetoes checked between every member, and a Kev confident no between any two
+vetoes checked between every member, and a first judge's confident no (below its floor,
+`policy.JUDGE_FLOORS`) between any two
 of them blocks it (P14, `_ai_phase`). So the outcome does not depend on
 placement order, and a rules merge is never split. With none read, grouping is
 exactly what it was. Each listing's `matched_via` says which put it in its
@@ -743,11 +744,11 @@ def _ai_phase(
 
     Run last and against whole clusters, so the outcome does not depend on the
     order listings were placed in, nor on whether the product existed before:
-    a Kev no blocks the join whichever side sorts first, and arriving after an
+    a first judge's no blocks the join whichever side sorts first, and arriving after an
     AI merge it undoes that merge at the next regroup. The rules' own clusters
     are never split here: the phase only joins. When two pairs compete for one
     listing (X same as M, and as N, M and N apart), the stronger wins; a late
-    Kev no that blocks the winner can let the losing pair merge instead.
+    first judge's no that blocks the winner can let the losing pair merge instead.
 
     `refused`, when given, receives each pair the phase declined and the veto
     that declined it (`_ai_veto`), for `ai_decisions.effect`; it changes nothing
@@ -780,7 +781,7 @@ def _ai_phase(
 #: The vetoes `_ai_veto` names, in the order it checks them. "clusters share a
 #: shop" is a shop with a listing on both sides, distinct from `load_ai_same`'s
 #: "same shop" (the pair's own two listings are one shop's).
-AI_SHARED_SHOP, AI_NEVER_MERGE, AI_KEV_FLOOR = "clusters share a shop", "never merge", "Kev floor"
+AI_SHARED_SHOP, AI_NEVER_MERGE, AI_FLOOR = "clusters share a shop", "never merge", "judge floor"
 AI_VALUES, AI_FORM, AI_PRICE = "values", "form", "price"
 
 
@@ -796,7 +797,7 @@ def _ai_veto(
             return AI_NEVER_MERGE
         for my, ey in zip(y.members, y.evidence, strict=True):
             if pair(mx.id, my.id) in rulings.ai_no:
-                return AI_KEV_FLOOR
+                return AI_FLOOR
             if rulings.forced(mx.id, my.id):
                 continue
             if values_conflict(ex.values, ey.values):

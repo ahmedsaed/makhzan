@@ -43,8 +43,12 @@ triggers (producers)           broker (generic)                 workers (generic
 - **Pipelines** (`makhzan_schemas/ai/pipelines.py`) are a registry of named,
   ordered stages. A stage is a model key (`policy.MODELS`), a prompt variant
   (`prompt.VARIANTS`) and a threshold key (into `policy.POLICIES`). Today:
-  `match` = Kev (K2-150) then pplx (K1-full); `audit` = Kev only, recording
-  (P12), no decision.
+  `match` = H2O-Lightning (K2-150) then pplx (K1-full); `audit` = H2O only,
+  recording (P12), no decision. (Kev was the first stage until D25,
+  2026-11-27. A stage that leaves the registry is not an error: the judge
+  sweep re-offers its queued jobs to the pipeline, which queues the stage the
+  pair now owes at the same reason and priority, and the re-score trigger
+  re-queues every standing decision carrying its score.)
 - **One transition rule** (`pipelines.transition`): a stage below its
   threshold decides `not_same`; a pass moves to the next stage; passing the
   last decides `same`; a non-deciding pipeline only records. The broker never
@@ -136,20 +140,20 @@ writes decisions, so the backlog can be scored while the mode is off.
 ### 3.1 `POST /hello`
 
 ```json
-{"worker": "cpu-kev",
- "models": {"kev": {"model_version": "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0",
-                    "weights_revision": "f4624b6bb7072f1bab726a622c1cad3f96030b9e"}},
+{"worker": "home-h2o",
+ "models": {"h2o": {"model_version": "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0",
+                    "weights_revision": "61f8d8b7a8c2d84426d0d143ca187f65d235934b"}},
  "image": "<digest>", "device": "gpu", "dtype": "q4_k_m",
  "config": {"window": "00:30-04:30", "max_jobs": 2, "lease_s": 900, "on_empty": "exit"}}
 ```
 
 ```json
 200 {"session": "6f1c…",
-     "models": {"kev": {"model_version": "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0",
+     "models": {"h2o": {"model_version": "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0",
                         "ok": true, "queued_requests": 824,
-                        "stages": [{"pipeline": "match", "stage": "kev",
+                        "stages": [{"pipeline": "match", "stage": "h2o",
                                     "prompt_version": "K2-150@6aef2c6c"},
-                                   {"pipeline": "audit", "stage": "kev",
+                                   {"pipeline": "audit", "stage": "h2o",
                                     "prompt_version": "K2-150@6aef2c6c"}]}},
      "lease_s": 900, "heartbeat_s": 60}
 ```
@@ -194,8 +198,8 @@ writes decisions, so the backlog can be scored while the mode is off.
 ### 3.2 `POST /lease`
 
 ```json
-{"session": "6f1c…", "model": "kev",
- "model_version": "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0",
+{"session": "6f1c…", "model": "h2o",
+ "model_version": "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0",
  "max_jobs": 2, "lease_request_id": "3f2a…"}
 ```
 
@@ -214,7 +218,7 @@ writes decisions, so the backlog can be scored while the mode is off.
   "session_model": "…"}` (a session serves one model; open another).
 - **Version drift is enforced here**: `model_version` must equal the
   registry's for `model`, and the session must have reported it at hello;
-  otherwise `409 {"error": "version", "model": "kev", "current": "…"}` and no
+  otherwise `409 {"error": "version", "model": "h2o", "current": "…"}` and no
   job is leased. The worker exits and logs it.
 - The worker must serve `model` (`ai_workers.models`), else `403`.
 - One model per lease. The broker selects queued jobs whose
@@ -385,8 +389,8 @@ The next stage keeps the job's priority when that is higher than
 stays first through every stage (P8). A re-score owed only to a new judge version
 starts below new pairs and the backlog (a "same" at 35, a "not same" at 30; P8 as
 amended 2026-11-26). Like any job, it moves to 80 at its next stage (`flow.on_scores`).
-That is above a new pair's first stage at 60: once a re-score has passed Kev, its pplx
-stage goes ahead of new pairs' Kev stage. The two stages are leased by different workers,
+That is above a new pair's first stage at 60: once a re-score has passed the first judge, its
+pplx stage goes ahead of new pairs' first stage. The two stages are leased by different workers,
 so this orders only the pplx queue. On an unchanged text pplx's stored score is reused
 and no pplx job is queued at all. A "same" queued at 35 is raised to 100 if its text then
 changes (`triggers.enqueue` raises a queued job's priority, never lowers it, and leaves a
@@ -442,7 +446,7 @@ same model and prompt version share it.
 **Competing pairs.** When two standing "same" decisions compete for one
 listing (X same as M and as N, M and N kept apart by a veto), the regroup
 lets the stronger win (`AiSame.rank`: the stages' lower scores, last stage
-first; ties by the pair's listing ids, never by decision id). A late Kev "no"
+first; ties by the pair's listing ids, never by decision id). A late first-judge "no"
 that blocks the winning pair can therefore let the losing pair merge instead.
 
 The regroup reads standing "same" decisions (`decisions.load_ai_same`) at the
@@ -465,8 +469,8 @@ this order:
 
 A pair read and acted on is `blocked` with the AI phase's veto
 (`grouping._ai_veto`, the first it meets): `clusters share a shop` (a shop has
-a listing on both sides), `never merge`, `Kev floor` (a group-check score
-below `KEV_BLOCK` between two members), `values`, `form`, `price`. Then any
+a listing on both sides), `never merge`, `judge floor` (a first-judge score
+below its model's floor in `policy.JUDGE_FLOORS` between two members), `values`, `form`, `price`. Then any
 `blocked` decision whose two listings are in one product, by an AI join or
 already by the rules, is `in_effect`. Stale and revoked "same" decisions are
 marked `inactive` once.
@@ -541,7 +545,7 @@ broker already ended it with `empty`, which keeps that end. P16 is considered at
 | 401 | `{"error": "unauthorized"}` | missing, unknown or revoked token |
 | 403 | `{"error": "model_not_allowed", "model": "…"}` | not in `ai_workers.models` |
 | 409 | `{"error": "wrong_model", "model": "…", "session_model": "…"}` | a lease for a model the session did not say hello for (one model per session) |
-| 409 | `{"error": "version", "model": "kev", "current": "…"}` | the worker's model version is not the registry's |
+| 409 | `{"error": "version", "model": "h2o", "current": "…"}` | the worker's model version is not the registry's |
 | 409 | `{"error": "lease_lost", "job_ids": […]}` | the caller does not hold the lease (expired, moved on, or never its own) |
 | 422 | `{"error": "request_mismatch"}` / `{"error": "invalid", "detail": …}` | integrity or validation |
 
@@ -646,16 +650,15 @@ lease, never batched inference.
 
 ```toml
 [worker]
-name       = "cpu-kev"            # = ai_workers.name
-models     = ["kev"]              # model keys from policy.MODELS
+name       = "cpu-h2o"            # = ai_workers.name
+models     = ["h2o"]              # model keys from policy.MODELS
 broker_url = "https://<broker host>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
 
-[model.kev]
-expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
-device = "cpu"
-dtype  = "fp32"
-threads = 6
+[model.h2o]
+expect_version = "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0"
+device = "gpu"
+dtype  = "q4_k_m"                 # served by llama.cpp; the real file's keys: worker.md
 
 [window]
 start = "00:30"

@@ -91,7 +91,7 @@ def _pairs(jobs) -> set[tuple]:
     return {(j.listing_a, j.listing_b) for j in jobs}
 
 
-async def _score_all(a, b, *, kev=0.9, pplx=0.97) -> None:
+async def _score_all(a, b, *, h2o=0.9, pplx=0.97) -> None:
     """Both stages' scores for the pair's current requests, as workers would
     post; a request already scored keeps its score (idempotent, as /results)."""
     from sqlalchemy.dialects.postgresql import insert
@@ -100,7 +100,7 @@ async def _score_all(a, b, *, kev=0.9, pplx=0.97) -> None:
     async with SessionLocal() as session:
         shown = await load_shown(session, (a, b))
         judges = await flow.current_judges(session)
-        for name, p in (("kev", kev), ("pplx", pplx)):
+        for name, p in (("h2o", h2o), ("pplx", pplx)):
             stage = PIPELINES["match"].stage(name)
             for order, digest in render(stage, shown[a], shown[b]).sha256.items():
                 await session.execute(
@@ -171,7 +171,7 @@ async def test_new_listings_get_their_top_k_filtered_by_todays_vetoes():
     _, candidates, *_ = await _daily()
     jobs = await _jobs(pipeline="match")
     assert _pairs(jobs) == {pair(a1, b1), pair(a2, b1)}
-    assert {(j.stage, j.priority, j.reason) for j in jobs} == {("kev", 60, "candidates")}
+    assert {(j.stage, j.priority, j.reason) for j in jobs} == {("h2o", 60, "candidates")}
     assert candidates["veto_values"] >= 1
     assert candidates["veto_price"] >= 1
     assert candidates["rules_merged"] == 1
@@ -249,7 +249,7 @@ async def test_a_changed_text_requeues_a_standing_same_first():
     _, _, rescore, _ = await _daily()
     assert rescore["text"] == 1
     [job] = await _jobs()
-    assert (job.pipeline, job.stage, job.priority, job.reason) == ("match", "kev", 100, "rescore")
+    assert (job.pipeline, job.stage, job.priority, job.reason) == ("match", "h2o", 100, "rescore")
     # The old decision stays in force until the new one is written (P6).
     async with SessionLocal() as session:
         standing = await session.get(AiDecision, decision.id)
@@ -289,14 +289,14 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
     n2 = await _listing(b, "ceramic capacitor 100nf 50v disc")
     await _daily()
     await _score_all(s1, s2)
-    await _score_all(n1, n2, kev=0.3)
+    await _score_all(n1, n2, h2o=0.3)
     assert (await _decide(s1, s2)).outcome == SAME
     assert (await _decide(n1, n2)).outcome == "not_same"
-    # A new Kev version: the stored decisions now name an old judge.
+    # A new H2O version: the stored decisions now name an old judge.
     async with SessionLocal() as session:
         old = AiModelVersion(
-            model="kev",
-            model_version="kev-4b@older",
+            model="h2o",
+            model_version="h2o-4b@older",
             prompt_version="K2-150@older",
             weights_revision="0" * 40,
             scoring={},
@@ -304,7 +304,7 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
         session.add(old)
         await session.flush()
         for d in await session.scalars(select(AiDecision)):
-            d.scores = {**d.scores, "kev": {**d.scores["kev"], "model_version_id": old.id}}
+            d.scores = {**d.scores, "h2o": {**d.scores["h2o"], "model_version_id": old.id}}
         await session.commit()
     async with SessionLocal() as session:
         result = await producers.run(session, producers.RescoreTrigger())
@@ -323,10 +323,10 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
             update(AiScore).values(request_sha256=func.sha256(AiScore.request_sha256))
         )
         old_id = await session.scalar(
-            select(AiModelVersion.id).where(AiModelVersion.model_version == "kev-4b@older")
+            select(AiModelVersion.id).where(AiModelVersion.model_version == "h2o-4b@older")
         )
         for d in await session.scalars(select(AiDecision)):
-            d.scores = {**d.scores, "kev": {**d.scores["kev"], "model_version_id": old_id}}
+            d.scores = {**d.scores, "h2o": {**d.scores["h2o"], "model_version_id": old_id}}
         await session.commit()
     async with SessionLocal() as session:
         await producers.run(session, producers.RescoreTrigger())
@@ -336,19 +336,19 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
 
     token = core.new_token()
     async with SessionLocal() as session:
-        worker = AiWorker(name="cpu-kev", token_sha256=core.token_sha256(token), models=["kev"])
+        worker = AiWorker(name="cpu-h2o", token_sha256=core.token_sha256(token), models=["h2o"])
         session.add(worker)
         await session.flush()
         now = await core.db_now(session)
-        kev = MODELS["kev"]
+        h2o = MODELS["h2o"]
         hello = await core.hello(
             session,
             worker,
             {
                 "models": {
-                    "kev": {
-                        "model_version": kev.model_version,
-                        "weights_revision": kev.weights_revision,
+                    "h2o": {
+                        "model_version": h2o.model_version,
+                        "weights_revision": h2o.weights_revision,
                     }
                 }
             },
@@ -359,8 +359,8 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
             worker,
             {
                 "session": hello["session"],
-                "model": "kev",
-                "model_version": kev.model_version,
+                "model": "h2o",
+                "model_version": h2o.model_version,
                 "max_jobs": 1,
             },
             now,
@@ -369,6 +369,77 @@ async def test_a_version_bump_rescores_after_new_pairs_same_before_not_same():
     [leased] = await _jobs(status="leased")
     assert lease["jobs"][0]["job_id"] == leased.id
     assert (leased.listing_a, leased.listing_b) == pair(s1, s2)
+
+
+async def test_the_first_judge_leaving_the_registry_moves_its_work_to_the_new_one():
+    """D25: Kev's stage left `match` when H2O replaced it. A queued Kev job is
+    re-offered to the pipeline (queued at H2O, same reason and priority), and
+    a standing decision carrying a Kev score is re-scored at the version-bump
+    priorities, "same" before "not same"."""
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    s1 = await _listing(a, "carbon film resistor 10k ohm")
+    s2 = await _listing(b, "carbon film resistor 10k ohm quarter watt")
+    n1 = await _listing(a, "ceramic capacitor 100nf 50v")
+    n2 = await _listing(b, "ceramic capacitor 100nf 50v disc")
+    q1 = await _listing(a, "electrolytic capacitor 100uf 25v")
+    q2 = await _listing(b, "electrolytic capacitor 100uf 25v radial")
+    await _daily()
+    await _score_all(s1, s2)
+    await _score_all(n1, n2, h2o=0.3)
+    assert (await _decide(s1, s2)).outcome == SAME
+    assert (await _decide(n1, n2)).outcome == "not_same"
+    async with SessionLocal() as session:
+        await session.execute(text("DELETE FROM ai_jobs"))
+        kev = AiModelVersion(
+            model="kev",
+            model_version="kev-4b-Q4_K_M@older",
+            prompt_version="K2-150@older",
+            weights_revision="0" * 40,
+            scoring={},
+        )
+        session.add(kev)
+        await session.flush()
+        # The decisions as p1 left them: a Kev score, no H2O score stored.
+        for d in await session.scalars(select(AiDecision)):
+            old = d.scores.pop("h2o")
+            d.scores = {**d.scores, "kev": {**old, "model": "kev", "model_version_id": kev.id}}
+            d.policy_version = "p1"
+            if d.decided_by == "h2o":
+                d.decided_by = "kev"
+        h2o_judge = (await flow.current_judges(session))[("match", "h2o")]
+        await session.execute(
+            AiScore.__table__.delete().where(AiScore.model_version_id == h2o_judge)
+        )
+        x, y = pair(q1, q2)
+        session.add(
+            AiJob(
+                pipeline="match",
+                stage="kev",
+                listing_a=x,
+                listing_b=y,
+                model_version_id=kev.id,
+                priority=60,
+                reason="candidates",
+            )
+        )
+        await session.commit()
+
+    async with SessionLocal() as session:
+        assert await core.sweep_judges(session) == 1
+        await session.commit()
+    queued = await _jobs(status="queued")
+    assert [(j.stage, j.priority, j.reason) for j in queued] == [("h2o", 60, "candidates")]
+    assert _pairs(queued) == {pair(q1, q2)}
+
+    async with SessionLocal() as session:
+        await producers.run(session, producers.RescoreTrigger())
+        await session.commit()
+    jobs = {(j.listing_a, j.listing_b): (j.stage, j.priority) for j in await _jobs(status="queued")}
+    assert jobs == {
+        pair(q1, q2): ("h2o", 60),
+        pair(s1, s2): ("h2o", 35),
+        pair(n1, n2): ("h2o", 30),
+    }
 
 
 async def test_a_queued_job_offered_higher_is_raised_and_a_leased_one_is_not():
@@ -462,7 +533,7 @@ async def test_the_audit_offers_rules_merged_pairs_once_and_never_ai_joined_ones
     *_, audit = await _daily()
     jobs = await _jobs(pipeline="audit")
     assert {(j.listing_a, j.listing_b) for j in jobs} >= {pair(x, y)}
-    assert all(j.priority == 10 and j.reason == "audit" and j.stage == "kev" for j in jobs)
+    assert all(j.priority == 10 and j.reason == "audit" and j.stage == "h2o" for j in jobs)
     count = len(jobs)
     *_, again = await _daily()
     assert again["offered"] == 0
@@ -585,7 +656,7 @@ async def test_a_not_same_decision_also_queues_the_rebuild_after_a_window():
     a, b = await _shop("shop-a"), await _shop("shop-b")
     x = await _listing(a, "carbon film resistor 10k ohm")
     y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
-    await _score_all(x, y, kev=0.2)
+    await _score_all(x, y, h2o=0.2)
     assert (await _decide(x, y)).outcome == "not_same"
     queued: list[int] = []
 
@@ -657,7 +728,7 @@ async def test_a_visible_change_reoffers_with_fresh_scoring_and_a_second_revocat
     _, candidates, *_ = await _daily()
     assert candidates["revoked_reoffered"] == 1
     [job] = await _jobs()
-    assert (job.stage, job.status) == ("kev", "queued")  # the models are asked again
+    assert (job.stage, job.status) == ("h2o", "queued")  # the models are asked again
     assert await _standing() == []
     # Scored on the new text, decided, revoked again: out until the next change.
     await _score_all(x, y)
@@ -673,14 +744,14 @@ async def test_a_visible_change_reoffers_with_fresh_scoring_and_a_second_revocat
 
 
 async def test_a_reoffered_pair_is_never_settled_from_scores_the_revocation_saw():
-    """An edit past Kev's 150-word cap changes pplx's view only. If Kev's old
+    """An edit past H2O's 150-word cap changes pplx's view only. If H2O's old
     score alone would decide the pair, it is not offered: no model would look."""
     description = " ".join(f"word{i}" for i in range(200))
     x, y = await _revoked_pair(description_en=description)
     async with SessionLocal() as session:
         await session.execute(update(AiDecision).values(outcome="not_same"))
         await session.commit()
-    # Kev said no on the old text (its view is unchanged by the edit below).
+    # H2O said no on the old text (its view is unchanged by the edit below).
     async with SessionLocal() as session:
         await session.execute(update(AiScore).values(p=0.1))
         await session.commit()
@@ -694,14 +765,14 @@ async def test_a_reoffered_pair_is_never_settled_from_scores_the_revocation_saw(
     assert await _jobs() == [] and await _standing() == []
 
 
-async def test_a_kev_confident_no_blocks_whatever_the_department():
+async def test_an_h2o_confident_no_blocks_whatever_the_department():
     from makhzan_schemas.ai.decisions import load_ai_same
     from makhzan_schemas.overrides import load_overrides
 
     a, b = await _shop("shop-a"), await _shop("shop-b")
     x = await _listing(a, "carbon film resistor 10k ohm")
     y = await _listing(b, "carbon film resistor 10k ohm quarter watt")
-    await _score_all(x, y, kev=0.01)
+    await _score_all(x, y, h2o=0.01)
     assert (await _decide(x, y)).outcome == "not_same"
     async with SessionLocal() as session:
         await session.execute(update(Listing).where(Listing.id == y).values(domain="tools"))
@@ -784,7 +855,7 @@ async def test_a_new_model_version_on_the_revoked_text_does_not_stand(monkeypatc
     await _score_all(x, y)
     await _revoke((await _decide(x, y)).id)
     monkeypatch.setitem(
-        policy.MODELS, "kev", replace(policy.MODELS["kev"], model_version="kev-4b@newer")
+        policy.MODELS, "h2o", replace(policy.MODELS["h2o"], model_version="h2o-4b@newer")
     )
     await _score_all(x, y)  # the new judge scores the same text, after the revocation
     async with SessionLocal() as session:
@@ -794,8 +865,8 @@ async def test_a_new_model_version_on_the_revoked_text_does_not_stand(monkeypatc
     assert await _standing() == []
 
 
-async def test_a_pplx_only_change_after_a_kev_yes_is_offered_and_can_stand():
-    """An edit past Kev's cap: Kev's view is unchanged (its old yes stands),
+async def test_a_pplx_only_change_after_an_h2o_yes_is_offered_and_can_stand():
+    """An edit past H2O's cap: H2O's view is unchanged (its old yes stands),
     pplx is asked again, and its fresh score on new text may decide."""
     description = " ".join(f"word{i}" for i in range(200))
     a, b = await _shop("shop-a"), await _shop("shop-b")

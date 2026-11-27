@@ -9,33 +9,33 @@ kernel settings only the host can make. The reference is `docs/ai/worker.md`.
 
 | Service | What it is |
 |---|---|
-| `kev` | `home-kev`: Kev-4B Q4_K_M, window 01:00–05:00 (Africa/Cairo), judge: the router's `kev` |
+| `h2o` | `home-h2o`: H2O-Lightning-4B Q4_K_M, the first judge since D25 (2026-11-27; Kev before), window 01:00–05:00 (Africa/Cairo), judge: the router's `h2o` |
 | `pplx` | `home-pplx`: pplx-decider Q4_K_S, window 05:05–07:00 (Africa/Cairo), judge: the router's `pplx` |
-| `llamacpp` | llama.cpp's router on the AMD card: both GGUFs, one loaded at a time, asleep when idle |
+| `llamacpp` | llama.cpp's router on the AMD card: the judges' GGUFs (and Kev's, for the rollback), one loaded at a time, asleep when idle |
 | `broker-proxy` | our own TCP forwarder (`makhzan_ml.worker.proxy`), the workers' only way out |
 
 The 4 GB card holds one model. The router (`--models-max 1`) loads whichever a worker asks for,
-swapping the other out: Kev's worker loads `kev` on its window's first lease with jobs (from
+swapping the other out: H2O's worker loads `h2o` on its window's first lease with jobs (from
 01:00), pplx's loads `pplx` the same way (from 05:05). Idle for 10 minutes, the model sleeps and the card is free for Plex, Jellyfin and
 Pitlane. Plain `docker compose up -d` starts all four services. The torch configurations
-production ran until 2026-11-27 are kept as `torch-kev.toml` and `torch-pplx.toml` (the rollback,
-below).
+production ran until 2026-11-27 are kept as `torch-kev.toml` and `torch-pplx.toml`, and Kev's
+llama.cpp worker, first judge until D25, is the rollback of D25 (below).
 
 ## Set up
 
-1. Make the folder and copy in `compose.yml`, `home-kev.toml`, `home-pplx.toml`, `models.ini`,
+1. Make the folder and copy in `compose.yml`, `home-h2o.toml`, `home-pplx.toml`, `models.ini`,
    `llamacpp-guard.sh`, and `.env.example` as `.env`. Fill in `.env`: the folder itself
-   (`WORKER_DIR`), the weights (`WEIGHTS_DIR`, holding the two GGUFs below), the user to run as
+   (`WORKER_DIR`), the weights (`WEIGHTS_DIR`, holding the GGUFs below), the user to run as
    (`UID`, `GID`: `id -u`, `id -g`), the card's groups (`RENDER_GID`, `VIDEO_GID`: `getent group
    render video`), and the broker's Tailscale address and port (`BROKER_TARGET`, an IP, never a
    name). Install the udev rule first (below).
-2. Put each worker's broker token in `home-kev.token` and `home-pplx.token` (`chmod 600`,
-   owned by that user). The broker issues them: `./makhzan ai worker add home-kev --models kev`.
+2. Put each worker's broker token in `home-h2o.token` and `home-pplx.token` (`chmod 600`,
+   owned by that user). The broker issues them: `./makhzan ai worker add home-h2o --models h2o`.
 3. Check each worker's configuration first. A configuration error makes the worker exit 2,
    and `restart: unless-stopped` would restart it in a loop:
 
    ```bash
-   docker compose run --rm --no-deps kev --config /etc/makhzan-ai/worker.toml --check
+   docker compose run --rm --no-deps h2o --config /etc/makhzan-ai/worker.toml --check
    docker compose run --rm --no-deps pplx --config /etc/makhzan-ai/worker.toml --check
    ```
 
@@ -46,7 +46,7 @@ Docker Engine 26 or newer is needed (the internal network's `inhibit_ipv4` optio
 the check prints the engine's version.
 
 Update to the latest tested images with `docker compose pull && docker compose up -d`. To
-roll back, set `KEV_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
+roll back, set `H2O_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
 whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 
 ## The llama.cpp router on the AMD card
@@ -67,12 +67,17 @@ worker hashes its own against the pin before scoring):
 
 | File | sha256 |
 |---|---|
-| `Kev-4B-Q4_K_M.gguf` (`ggml-org/Kev-4B-GGUF@f4624b6…`) | `33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9` |
+| `h2o-lightning-4b-Q4_K_M.gguf` (`h2oai/h2o-lightning-4b-gguf@61f8d8b…`) | `5ec969c6edbad5f1750141742f635cc7f01576bf9432151f730f0a6c30042768` |
+| `Kev-4B-Q4_K_M.gguf` (`ggml-org/Kev-4B-GGUF@f4624b6…`; the rollback of D25 only) | `33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9` |
 | `pplx-flash-v1.3-Q4_K_S.gguf` (our conversion, `ml/models/convert_pplx_v13.py`) | `819a9ad0f8f4aacb055f6d1783a155e3bd0bf33afb9c2f33749ef25350c61ab3` |
 
 **`models.ini`** is the router's preset: one section per model, named as the workers ask for it
-(`kev`, `pplx`), with the settings soaked on the card (Kev: 512-token batches; pplx: one 4,096
-batch, flash attention, as its non-causal attention needs). The router runs with
+(`h2o`, `pplx`, and `kev` for the rollback), with the settings soaked on the card (Kev: 512-token
+batches; pplx: one 4,096 batch, flash attention, as its non-causal attention needs). `h2o` takes
+Kev's settings (the same architecture and size, causal, so the batch changes speed, not
+scores). A 2,048-token batch was about 3x faster on the 3060 (Q8: 1.06 to 3.05 requests/s; Q4 at
+2,048: 3.12), using about 3.8 GB there, but is untested on this card (the optional test in the
+runbook below). The router runs with
 `--models-max 1 --sleep-idle-seconds 600 -dev Vulkan0`. `-dev Vulkan0` makes a missing card a
 startup error ("invalid device: Vulkan0") instead of a silent CPU fallback; `RENDER_GID` and
 `VIDEO_GID` (required in `.env`) let it, running as `UID`, open `/dev/dri`.
@@ -104,7 +109,83 @@ needs the clock limit). Scoring pplx on the CPU with the same GGUF (the same mod
 need its own llama.cpp server without `-dev`, `n-gpu-layers = 0`, and `device = "cpu"` in
 `home-pplx.toml`, which also turns off its clock-limit check; it is not built.
 
-## Runbook: the production switch (2026-11-27)
+## Runbook: H2O as the first judge (D25, 2026-11-27)
+
+The order matters: once production runs policy p2, the broker refuses `home-kev` at hello (its
+model is no longer in `policy.MODELS`), so the H2O worker should be ready to start right after
+the deploy. Nothing breaks in between; that night's first window is simply lost.
+
+1. **Before the merge, on the home server** (nothing changes for the running stack):
+   1. Fetch the GGUF into `WEIGHTS_DIR` as a real file (from the desktop's
+      `ml/out/models-compare/h2o-q4/`, or from the Hub at the pinned revision), then check it:
+
+      ```bash
+      scp <desktop>:<repo>/ml/out/models-compare/h2o-q4/h2o-lightning-4b-Q4_K_M.gguf "$WEIGHTS_DIR/"
+      # or: curl -L -o "$WEIGHTS_DIR/h2o-lightning-4b-Q4_K_M.gguf"       #   https://huggingface.co/h2oai/h2o-lightning-4b-gguf/resolve/61f8d8b7a8c2d84426d0d143ca187f65d235934b/h2o-lightning-4b-Q4_K_M.gguf
+      sha256sum "$WEIGHTS_DIR/h2o-lightning-4b-Q4_K_M.gguf"
+      # must print 5ec969c6edbad5f1750141742f635cc7f01576bf9432151f730f0a6c30042768
+      ```
+
+      Readable by the stack's `UID`. Keep `Kev-4B-Q4_K_M.gguf` there: it is the rollback, and
+      the router mounts it.
+2. **Merge** the PR. CI republishes `worker-llamacpp` from `main`; the smoke builds an `h2o`
+   worker too.
+3. **Deploy production** (`./makhzan deploy`, the owner's step). No migration. At the first
+   hello and at the next daily producers run, the queued Kev jobs are moved to the `h2o`
+   stage at their own reason and priority, and every standing decision carrying a Kev score is
+   queued for re-scoring at 35 ("same") / 30 ("not same"), behind new pairs and the backlog.
+4. **The worker record**, in production:
+
+   ```bash
+   ./makhzan ai worker add home-h2o --models h2o   # prints the token once
+   ```
+
+   Put the token in `home-h2o.token` in the stack folder (`chmod 600`, owned by `UID`).
+5. **The home server**, in its stack folder (`/mnt/disk3/makhzan-ml/worker`):
+   1. Copy the new `compose.yml`, `home-h2o.toml` and `models.ini` from the repository
+      (`ml/deploy/home-server/`), keeping `.env` and the tokens. If `.env` sets `KEV_IMAGE`,
+      rename it `H2O_IMAGE`.
+   2. `docker compose pull`, then the new worker's check:
+      `docker compose run --rm --no-deps h2o --config /etc/makhzan-ai/worker.toml --check`
+      prints `configuration ok: ...` with `gpu q4_k_m`.
+   3. `docker compose up -d --remove-orphans`: starts `h2o`, recreates the router with the
+      `[h2o]` preset, and removes the old `kev` container (its service is gone).
+      `home-kev.toml` and `home-kev.token` can then be deleted from the folder.
+   4. A dry check outside the windows: `docker compose logs llamacpp` shows the router
+      listening (and no guard refusal); `docker compose exec -T h2o python -c "import
+      urllib.request as u; print(u.urlopen('http://llamacpp:8080/models').read()[:400])"` lists
+      `h2o`, `kev` and `pplx`.
+6. **Revoke the old worker**, in production: `./makhzan ai worker revoke home-kev`.
+7. **The first night:** `docker compose logs -f h2o` from 01:00 (the router loads `h2o`; requests
+   at about Kev's 4–5 s on this card), then pplx from 05:05; `./makhzan ai status` the next
+   morning (the queue at `match.h2o`, and the audit per model). Check the card's memory during
+   H2O's window once (`cat /sys/class/drm/card1/device/mem_info_vram_used`): on the 3060 H2O Q4
+   used about 3.8–3.9 GB.
+8. **The catch-up** is the owner's, as at the production switch: the re-scores of every standing
+   decision, through H2O and then pplx where H2O passes (`desk-h2o` / `desk-pplx` on the desktop,
+   `docs/ai/worker.md`).
+
+**Optional: batch 2048 on the card.** H2O was about 3x faster at a 2,048-token batch on the 3060
+(the scores do not depend on it: causal). Outside the windows, set `b = 2048` and `ub = 2048` in
+`models.ini`'s `[h2o]`, `docker compose up -d llamacpp`, then score a few requests through the
+router (the worker's `parity` tool, run with `--network container:` the router's, or one night's
+window) while watching `mem_info_vram_used` and the clock. Keep it only if memory stays inside the
+card with Plex's headroom and nothing resets; otherwise put 512 back.
+
+**Rollback of D25** (to Kev on llama.cpp, one commit and the old stack files):
+
+1. One forward commit: in `policy.py`, `ACTIVE = "p1"` and `MODELS["kev"] = LLAMACPP_KEV` in
+   place of `MODELS["h2o"]`; in `pipelines.py`, the `match` and `audit` stages back to `kev`; in
+   the worker, `pins.ACTIVE_BACKEND` names `kev` again. Not a `git revert` of D25: that would also
+   take out the sweep's re-offer, and the queued `h2o` jobs would be cancelled. Deploy: the sweep
+   moves queued `h2o` jobs back to `kev`, and decisions carrying H2O scores are re-scored (the
+   group check still reads them at H2O's floor meanwhile).
+2. `./makhzan ai worker add home-kev --models kev` (a new token; the old record was revoked).
+3. On the server: the previous `compose.yml`, `home-kev.toml` and `models.ini` from git,
+   the new token in `home-kev.token`, `docker compose up -d --remove-orphans`. Kev's GGUF is still
+   in `WEIGHTS_DIR`.
+
+## Runbook: the production switch (2026-11-27, done)
 
 Production already runs the new policy (deployed 2026-11-27 with #95), so the home server's old
 workers would be refused at hello; they are stopped. **Already done on the server:** the udev rule
@@ -133,7 +214,7 @@ No host timers were installed.
    (`cat /sys/class/drm/card1/device/mem_info_vram_used`): on the 3060 Kev grew to about 4.1 GB
    while scoring (NVIDIA's driver); on this card the soak at the same settings stayed inside 4 GB.
 
-**Rollback:** move `policy.MODELS` back to `policy.TORCH_MODELS` and `pins.ACTIVE_BACKEND` to
+**Rollback to torch** (before D25; after it, roll D25 back first, above): move `policy.MODELS` back to `policy.TORCH_MODELS` and `pins.ACTIVE_BACKEND` to
 `torch` (one commit) and deploy. On the home server, **the torch weights were deleted** on
 2026-11-27, so first re-download them into `WEIGHTS_DIR` as real files (`rsync -L`; Kev-4B with its
 Qwen3.5-4B-Base, and pplx-decider-flash-v1.3, at the revisions in `worker/pins.py`; about 20 GB).
@@ -186,7 +267,7 @@ only the proxy should connect.
 
 ```bash
 docker version --format '{{.Server.Version}}'   # 26 or newer
-docker compose exec -T kev python - <<'EOF'
+docker compose exec -T h2o python - <<'EOF'
 import socket
 for host, port in [("broker-proxy", 8100), ("1.1.1.1", 443), ("172.17.0.1", 22)]:
     try:

@@ -12,7 +12,7 @@ So a pair whose requests are byte-identical to scored ones is settled at once
 with no model call: a re-score after a change no judge can see (the Arabic
 title under an English one) rewrites the standing decision in place with the
 new content hashes and stops; a re-score after a new pplx version re-uses the
-Kev scores and goes straight to pplx.
+first judge's (H2O's) scores and goes straight to pplx.
 
 `write_decision` keeps one standing decision per (pipeline, pair), serialised
 by a transaction-scoped advisory lock on the pair. Same outcome: the same row,

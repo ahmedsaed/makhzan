@@ -1,0 +1,38 @@
+# home-h2o: H2O-Lightning-4B Q4_K_M, the match pipeline's first judge since D25 (owner,
+# 2026-11-27; docs/ai/decision-review.md), on the home server's AMD card through llama.cpp,
+# 01:00-05:00 Cairo time, waiting between windows. Its judge is the "h2o" model of the stack's
+# llama.cpp router (compose.yml, service "llamacpp"), which this worker loads on its window's first
+# lease with jobs: the 4 GB card holds one model, and pplx's worker swaps it out at 05:05.
+[worker]
+name = "home-h2o"
+broker_url = "http://broker-proxy:8100/ai/v1"
+broker_via_proxy = true
+token_file = "/run/secrets/makhzan-ai-token"
+model = "h2o"
+
+[model.h2o]
+expect_version = "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0"
+
+[compute]
+backend = "llamacpp"
+device = "gpu"
+dtype = "q4_k_m"
+llamacpp_url = "http://llamacpp:8080"
+# The same file the router serves, mounted read-only into the worker too: it is checked
+# against the pin (sha256, decision type, temperature) before anything is scored.
+gguf_path = "/models/h2o-lightning-4b-Q4_K_M.gguf"
+# Refuse to load unless the card's clock limit is applied (re-read at every load).
+require_clock_limit = true
+nice = 10
+
+[schedule]
+windows = ["01:00-05:00"]
+timezone = "Africa/Cairo"
+outside_window = "wait"
+on_empty = "exit"
+
+[leases]
+# About 4-5 s a request on the card at 512-token batches: 2 jobs (4 requests) take ~20 s.
+max_jobs = 2
+lease_s = 900
+heartbeat_s = 60

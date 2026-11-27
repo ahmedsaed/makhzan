@@ -1187,7 +1187,7 @@ class AiDecision(Base):
     DECIDE. `outcome` is `same` or `not_same`; `decided_by` is the stage that
     settled it (the stage whose score fell below its threshold, or the last
     stage). `scores` keeps every stage's evidence, by stage name:
-    {"kev": {"model": "kev", "model_version_id": 1, "ab": 0.91, "ba": 0.88,
+    {"h2o": {"model": "h2o", "model_version_id": 1, "ab": 0.91, "ba": 0.88,
     "min": 0.88}, ...}. `state`:
 
     - `standing`: the pair's decision in force, one per (pipeline, pair). It
@@ -1343,7 +1343,7 @@ class AiSession(Base):
     """One worker session with the broker, from its hello (docs/ai/broker-api.md §3.1).
 
     `models` holds what the worker reported at hello and what the broker
-    answered, by model key: {"kev": {"model_version": ..., "weights_revision":
+    answered, by model key: {"h2o": {"model_version": ..., "weights_revision":
     ..., "ok": true}}. A lease names its session, and is refused for a model
     the session did not report, or reported at another version (§3.2).
     `lease_s` is the lease length the worker asked for at hello. `ended_at`

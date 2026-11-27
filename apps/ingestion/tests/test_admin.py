@@ -629,14 +629,14 @@ async def test_a_worker_token_is_shown_once_and_revoking_takes_two_clicks(queued
     async with _client() as client:
         csrf = await _session(client)
         page = await client.post(
-            "/ai/workers/add", data={"csrf": csrf, "name": "cpu-box", "model_kev": "on"}
+            "/ai/workers/add", data={"csrf": csrf, "name": "cpu-box", "model_h2o": "on"}
         )
         assert page.status_code == 200
         token = re.search(r"<code>([^<]+)</code>", page.text).group(1)
         assert token not in (await client.get("/ai")).text
         async with SessionLocal() as session:
             worker = await session.scalar(select(AiWorker))
-        assert worker.models == ["kev"] and token.encode() not in worker.token_sha256
+        assert worker.models == ["h2o"] and token.encode() not in worker.token_sha256
         await client.post("/ai/workers/cpu-box/revoke", data={"csrf": csrf, "confirmed": ""})
         async with SessionLocal() as session:
             assert (await session.scalar(select(AiWorker))).revoked_at is None
@@ -676,7 +676,7 @@ async def _decision() -> int:
         listing_b=b,
         outcome="same",
         decided_by="pplx",
-        scores={"kev": {"ab": 0.95, "ba": 0.93, "min": 0.93}},
+        scores={"h2o": {"ab": 0.95, "ba": 0.93, "min": 0.93}},
         policy_version="p1",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,

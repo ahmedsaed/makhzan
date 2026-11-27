@@ -15,9 +15,9 @@ Plus the Arabic title as written, so a listing whose Arabic title changes
 under an English one is due again too (P5 names both languages).
 
 **Never price**, nor stock, photos, the shop or anything else the prompt does
-not show: a price change must not make a decision look out of date. Kev's
-capped block is a prefix of the full one, so any change Kev could see moves
-this hash; an edit past Kev's 150th description word moves it too (pplx reads
+not show: a price change must not make a decision look out of date. K2-150's
+capped block is a prefix of the full one, so any change the first judge could see moves
+this hash; an edit past its 150th description word moves it too (pplx reads
 the whole description).
 
 A changed hash, or a new model or prompt version, is what makes a pair due to

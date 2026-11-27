@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from makhzan_schemas.ai.pipelines import PIPELINES, SAME, rank
-from makhzan_schemas.ai.policy import DOMAINS, GROUP_CHECK_MODEL, KEV_BLOCK
+from makhzan_schemas.ai.policy import DOMAINS, JUDGE_FLOORS
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import AiDecision, Listing, WorkerState, listed_source
 from makhzan_schemas.overrides import Overrides, Pair, pair
@@ -55,7 +55,7 @@ class AiSame:
       a person's rulings; every one of today's vetoes still applies.
     - `ids`: each pair's decision id, cited on the product events it causes
       and written to `listings.matched_ai_decision_id`.
-    - `no`: pairs `policy.GROUP_CHECK_MODEL` scored below `policy.KEV_BLOCK`
+    - `no`: pairs a first-stage judge scored below its floor (`policy.JUDGE_FLOORS`)
       (P14). An AI join is blocked when any member of one side has one of
       these with any member of the other; a join the rules make alone never is.
     - `rank`: each pair's strength (`pipelines.rank`: its stages' lower
@@ -113,7 +113,7 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
       longer in the registry is skipped, and logged.
 
     `no` holds every standing decision's pair, between two active listings in
-    any department, that the group-check model scored below `KEV_BLOCK`,
+    any department, that a first-stage judge scored below its floor (`JUDGE_FLOORS`),
     whatever its outcome: it can only block, never admit.
     """
     la, lb = aliased(Listing), aliased(Listing)
@@ -226,9 +226,10 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             skipped[decision_id] = (BLOCKED, NOT_MUTUAL_BEST)
 
     # Constants from code, never input: the jsonpath is written out in full.
-    below = literal_column(
-        f"""'$.* ? (@.model == "{GROUP_CHECK_MODEL}" && @.min < {KEV_BLOCK!r})'::jsonpath"""
+    floors = " || ".join(
+        f'(@.model == "{model}" && @.min < {floor!r})' for model, floor in JUDGE_FLOORS.items()
     )
+    below = literal_column(f"""'$.* ? ({floors})'::jsonpath""")
     # Unfiltered by department: a confident "no" blocks whatever the domain.
     no_rows = await session.execute(
         active.with_only_columns(AiDecision.listing_a, AiDecision.listing_b).where(

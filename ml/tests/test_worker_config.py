@@ -322,7 +322,7 @@ def documented_configs() -> list[tuple[str, str]]:
 
 def test_the_docs_carry_the_four_example_workers():
     names = [n for n, _ in documented_configs()]
-    for want in ("home-kev", "home-pplx", "desk-kev", "desk-pplx"):
+    for want in ("home-h2o", "home-pplx", "desk-h2o", "desk-pplx"):
         assert want in names
 
 

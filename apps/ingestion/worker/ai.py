@@ -1,7 +1,7 @@
 """AI matching by hand: workers, the admin token, the mode, decisions, the backlog.
 
     python -m worker.ai status [--json]            # queue, throughput, workers, decisions
-    python -m worker.ai worker add NAME --models kev[,pplx]   # prints the token once
+    python -m worker.ai worker add NAME --models h2o[,pplx]   # prints the token once
     python -m worker.ai worker list
     python -m worker.ai worker revoke NAME
     python -m worker.ai admin-token                # a fresh admin token and its sha256

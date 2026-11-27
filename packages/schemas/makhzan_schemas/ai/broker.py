@@ -171,8 +171,12 @@ def lease_seconds(value) -> int:
 async def sweep_judges(session: AsyncSession, judges: flow.Judges | None = None) -> int:
     """Move every queued job whose (pipeline, stage, judge) is not its stage's
     current judge (a new model or prompt version) to the current one, keeping
-    its reason and priority; a job whose stage left the registry is only
-    cancelled. Set-based: one UPDATE, then batched inserts. Run at hello and by
+    its reason and priority. A job whose stage left the registry (Kev's, when
+    H2O replaced it: D25) is re-offered to its pipeline (`flow.advance`), which
+    queues the stage the pair now owes at the same reason and priority, or
+    decides it when every stage is already scored; only a job whose pipeline
+    left the registry is cancelled outright. Set-based: one UPDATE, then
+    batched inserts. Run at hello and by
     the daily producers, never inside a lease, so a version bump with a large
     queue does not hold a lease's rows (or its HTTP request) for long. Rows a
     lease has locked are skipped and moved by the next sweep."""
@@ -203,13 +207,17 @@ async def sweep_judges(session: AsyncSession, judges: flow.Judges | None = None)
         )
     ).all()
     by_stage: dict[tuple[str, str], list[triggers.PairRequest]] = {}
+    reoffer: list[triggers.PairRequest] = []
     for pipeline_name, stage, reason, priority, a, b in moved:
+        request = triggers.PairRequest(a, b, pipeline_name, priority, reason)
         if (pipeline_name, stage) in judges:
-            by_stage.setdefault((pipeline_name, stage), []).append(
-                triggers.PairRequest(a, b, pipeline_name, priority, reason)
-            )
+            by_stage.setdefault((pipeline_name, stage), []).append(request)
+        elif pipeline_name in PIPELINES:
+            reoffer.append(request)
     for (_, stage), requests in by_stage.items():
         await triggers.enqueue(session, requests, stage=stage)
+    if reoffer:
+        await flow.advance(session, reoffer, judges=judges)
     return len(moved)
 
 

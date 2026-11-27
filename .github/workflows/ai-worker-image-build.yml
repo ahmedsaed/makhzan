@@ -37,10 +37,11 @@ jobs:
       matrix:
         include:
           # No base image (python-slim is pinned in its Dockerfile) and no model code, so no
-          # upstream licence to carry; smoke-tested for both models it serves.
+          # upstream licence to carry; smoke-tested for every model it serves (h2o and pplx in
+          # production since D25; kev, the rollback).
           - image: worker-llamacpp
             base: ""
-            models: kev pplx
+            models: h2o pplx kev
             backend: llamacpp
             licence: ""
           - image: kev-worker-cpu

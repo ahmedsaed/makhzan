@@ -1,6 +1,6 @@
 """Import a locally scored AI backlog: its scores, then the decisions they make.
 
-    python -m worker.ai_import DIR [--dry-run | --verify] [--policy p1]
+    python -m worker.ai_import DIR [--dry-run | --verify] [--policy p2]
     python -m worker.ai import DIR ...            # the same, from the AI command
     ./makhzan ai import DIR ...                   # production (scripts/lib/ai_import.sh)
 
@@ -75,7 +75,7 @@ minimums and request hashes the stored scores give, unless a person's
 revocation keeps it from being written (`flow.write_decision`'s guard),
 which is expected and counted. Exit 1 on any mismatch.
 
-`--policy` names the policy the run was approved under (`p1`); the import
+`--policy` names the policy the run was approved under (`p2`); the import
 refuses to run when the code's active policy is another.
 """
 
@@ -559,7 +559,7 @@ async def import_scores(
     directory: Path,
     *,
     dry_run: bool = False,
-    policy: str = "p1",
+    policy: str = "p2",
     chunk: int = CHUNK,
     log=print,
 ) -> Report:
@@ -645,7 +645,7 @@ def _from_file(extra: dict | None, scored_at: datetime | None, line: Line) -> bo
     return line.scored_at is None or scored_at == line.scored_at
 
 
-async def verify(directory: Path, *, policy: str = "p1") -> Report:
+async def verify(directory: Path, *, policy: str = "p2") -> Report:
     """What `--verify` checks; changes nothing."""
     _check_policy(policy)
     lines = read_lines(directory)
@@ -723,7 +723,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="report, then roll back")
     mode.add_argument("--verify", action="store_true", help="check what is stored; change nothing")
-    parser.add_argument("--policy", default="p1", help="the policy the run was approved under")
+    parser.add_argument("--policy", default="p2", help="the policy the run was approved under")
 
 
 async def main(args: argparse.Namespace) -> int:
