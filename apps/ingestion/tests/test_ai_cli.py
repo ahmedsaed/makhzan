@@ -47,9 +47,11 @@ async def _two_listings() -> tuple[uuid.UUID, uuid.UUID]:
     return tuple(sorted(ids))
 
 
-async def _decision(outcome: str, kev: float, pplx: float | None) -> int:
+async def _decision(outcome: str, first: float, pplx: float | None) -> int:
     a, b = await _two_listings()
-    scores = {"kev": {"model": "kev", "model_version_id": 1, "ab": kev, "ba": kev, "min": kev}}
+    scores = {
+        "h2o": {"model": "h2o", "model_version_id": 1, "ab": first, "ba": first, "min": first}
+    }
     if pplx is not None:
         scores["pplx"] = {
             "model": "pplx",
@@ -63,9 +65,9 @@ async def _decision(outcome: str, kev: float, pplx: float | None) -> int:
         listing_a=a,
         listing_b=b,
         outcome=outcome,
-        decided_by="pplx" if pplx is not None else "kev",
+        decided_by="pplx" if pplx is not None else "h2o",
         scores=scores,
-        policy_version="p1",
+        policy_version="p2",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,
     )
@@ -76,18 +78,18 @@ async def _decision(outcome: str, kev: float, pplx: float | None) -> int:
 
 
 async def test_a_worker_token_is_printed_once_and_stored_as_its_sha256(capsys):
-    assert await ai.run(["worker", "add", "cpu-kev", "--models", "kev"]) == 0
+    assert await ai.run(["worker", "add", "cpu-h2o", "--models", "h2o"]) == 0
     token = capsys.readouterr().out.strip().splitlines()[-1]
     async with SessionLocal() as session:
         worker = await session.scalar(select(AiWorker))
-    assert worker.models == ["kev"]
+    assert worker.models == ["h2o"]
     assert worker.token_sha256 == hashlib.sha256(token.encode()).digest()
     assert token.encode() not in worker.token_sha256
-    assert await ai.run(["worker", "add", "cpu-kev", "--models", "kev"]) == 1
+    assert await ai.run(["worker", "add", "cpu-h2o", "--models", "h2o"]) == 1
     assert await ai.run(["worker", "add", "x", "--models", "nope"]) == 1
     assert await ai.run(["worker", "list"]) == 0
-    assert "cpu-kev" in capsys.readouterr().out
-    assert await ai.run(["worker", "revoke", "cpu-kev"]) == 0
+    assert "cpu-h2o" in capsys.readouterr().out
+    assert await ai.run(["worker", "revoke", "cpu-h2o"]) == 0
     async with SessionLocal() as session:
         with pytest.raises(core.BrokerError) as refused:
             await core.authenticate(session, token, await core.db_now(session))
@@ -115,13 +117,16 @@ async def test_redecide_dry_run_recomputes_from_stored_scores_and_writes_nothing
 ):
     await _decision("same", 0.9, 0.97)
     await _decision("not_same", 0.5, None)
-    monkeypatch.setitem(policy.POLICIES, "p-strict", {"kev": 0.80, "pplx": 0.99})
-    monkeypatch.setitem(policy.POLICIES, "p-loose", {"kev": 0.40, "pplx": 0.95})
+    monkeypatch.setitem(policy.POLICIES, "p-strict", {"h2o": 0.578, "pplx": 0.99})
+    monkeypatch.setitem(policy.POLICIES, "p-loose", {"h2o": 0.40, "pplx": 0.95})
     assert await ai.run(["redecide", "--dry-run", "--policy", "p-strict"]) == 0
     out = capsys.readouterr().out
     assert "same -> not_same" in out and "unchanged not_same" in out
     assert await ai.run(["redecide", "--dry-run", "--policy", "p-loose"]) == 0
     assert "needs pplx scores first" in capsys.readouterr().out
+    # p1 (Kev first) has no threshold for H2O's stage: counted, not a traceback.
+    assert await ai.run(["redecide", "--dry-run", "--policy", "p1"]) == 0
+    assert "policy lacks h2o" in capsys.readouterr().out
     async with SessionLocal() as session:
         assert sorted(d.outcome for d in await session.scalars(select(AiDecision))) == [
             "not_same",
@@ -158,10 +163,10 @@ async def test_status_reports_the_queue_and_decisions(capsys):
     assert await ai.run(["status"]) == 0
     out = capsys.readouterr().out
     assert "mode: off" in out
-    assert "queue match.kev" in out and "1 queued (2 requests" in out
+    assert "queue match.h2o" in out and "1 queued (2 requests" in out
     assert "standing: same 1" in out
     assert await ai.run(["status", "--json"]) == 0
-    assert '"match.kev"' in capsys.readouterr().out
+    assert '"match.h2o"' in capsys.readouterr().out
 
 
 async def test_a_dead_job_is_retried_by_hand(capsys):
@@ -183,11 +188,11 @@ async def test_a_flag_is_dismissed_with_a_note_and_its_resolved_time(capsys):
     from makhzan_schemas.models import AiFlag
 
     async with SessionLocal() as session:
-        flag = AiFlag(kind="version_drift", subject="cpu-kev/kev", detail={})
+        flag = AiFlag(kind="version_drift", subject="cpu-h2o/h2o", detail={})
         session.add(flag)
         await session.commit()
     assert await ai.run(["flags", "list"]) == 0
-    assert f"#{flag.id} version_drift open cpu-kev/kev" in capsys.readouterr().out
+    assert f"#{flag.id} version_drift open cpu-h2o/h2o" in capsys.readouterr().out
     assert (
         await ai.run(
             ["flags", "dismiss", str(flag.id), "--note", "worker updated", "--by", "tester"]
@@ -206,7 +211,7 @@ def _status_fixture(**decisions) -> dict:
     return {
         "at": "2026-11-19T12:00:00+00:00",
         "mode": "live",
-        "policy": {"name": "p1", "thresholds": {"kev": 0.5}},
+        "policy": {"name": "p2", "thresholds": {"h2o": 0.5}},
         "judges": {},
         "queue": {},
         "throughput": {},
@@ -215,7 +220,7 @@ def _status_fixture(**decisions) -> dict:
         "flags": {},
         "decisions": decisions,
         "rescore_due": {"due": 0, "open_job": 0, "dead_job": 0, "no_job": 0},
-        "audit": {"scored": 0, "below_0.8": 0, "below_0.05": 0},
+        "audit": {"scored": 0, "by_model": {}},
     }
 
 
@@ -272,7 +277,7 @@ def test_a_worker_seen_after_the_status_snapshot_is_not_seen_in_the_future():
     data["workers"] = [
         {
             "name": "cpu-1",
-            "models": ["kev"],
+            "models": ["h2o"],
             "last_seen_at": "2026-11-19T12:00:02.5+00:00",
             "revoked": False,
             "device": "cpu",

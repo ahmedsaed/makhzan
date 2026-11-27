@@ -48,7 +48,7 @@
     {% for p in a.pipelines.values() %}
     <div><b>{{ p.name }}</b> <span class="muted">· {{ "decides" if p.decides else "records only" }}</span><div class="mono ink2">{{ p.stages|map(attribute="model")|join(" → ") }}</div></div>{% if not loop.last %}<hr class="sep">{% endif %}
     {% endfor %}
-    {% if s.audit.scored %}<p class="muted small" style="margin:0">Audit: {{ s.audit.scored|num }} rules-merged pairs scored; {{ s.audit["below_0.8"]|num }} below 0.8, {{ s.audit["below_0.05"]|num }} below 0.05.</p>{% endif %}
+    {% for model, e in s.audit.by_model|dictsort %}<p class="muted small" style="margin:0">Audit ({{ model }}): {{ e.scored|num }} rules-merged pairs scored{% for limit, count in e.below %}; {{ count|num }} below {{ limit }}{% endfor %}.</p>{% endfor %}
   </div></section>
 </div>
 

@@ -14,7 +14,7 @@ from makhzan_ml.worker.pins import PINS, production_pin
 DEPLOY = Path(__file__).resolve().parents[1] / "deploy" / "home-server"
 
 
-@pytest.mark.parametrize("name, model", [("home-kev", "kev"), ("home-pplx", "pplx")])
+@pytest.mark.parametrize("name, model", [("home-h2o", "h2o"), ("home-pplx", "pplx")])
 def test_the_compose_examples_parse_and_wait_for_their_windows(tmp_path, name, model):
     # Production since 2026-11-27: both on the card through the stack's llama.cpp router.
     data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
@@ -86,13 +86,13 @@ def test_the_compose_windows_never_overlap_and_leave_a_gap():
                 },
             }
         )  # fmt: skip
-        for n, m in (("home-kev", "kev"), ("home-pplx", "pplx"))
+        for n, m in (("home-h2o", "h2o"), ("home-pplx", "pplx"))
     )
 
     kw, pw = kev.schedule.windows, pplx.schedule.windows
     both = held_minutes(kw, 0) & held_minutes(pw, 0)
     assert not both, f"both windows are open at {sorted(map(hhmm, both))}"
-    for first, second, name in ((kw, pw, "kev"), (pw, kw, "pplx")):
+    for first, second, name in ((kw, pw, "h2o"), (pw, kw, "pplx")):
         clash = gap_clashes(first, second)
         assert not clash, (
             f"the other worker's window opens less than {MIN_GAP_MINUTES} minutes after "
@@ -122,7 +122,7 @@ def test_the_gap_check_itself(first, second, ok):
 def test_the_proxy_listens_only_on_its_internal_address_and_workers_are_capped():
     """Read as text (no YAML parser in the test environment): the lines that matter."""
     text = (DEPLOY / "compose.yml").read_text()
-    proxy = text[text.index("  broker-proxy:") : text.index("\n  kev:")]
+    proxy = text[text.index("  broker-proxy:") : text.index("\n  h2o:")]
     assert "0.0.0.0" not in proxy
     assert "      - --listen\n      - ${PROXY_ADDRESS:-10.231.89.2}:8100\n" in proxy
     assert "        ipv4_address: ${PROXY_ADDRESS:-10.231.89.2}\n" in proxy
@@ -152,6 +152,6 @@ def test_the_proxy_address_is_in_the_subnet_and_outside_the_workers_range():
     assert proxy in subnet and proxy not in dynamic
     worker = text[text.index("x-worker: &worker") : text.index("\nservices:")]
     assert "  pids_limit: 256\n" in worker and "  networks: [broker-only]\n" in worker
-    for name in ("kev", "pplx"):
+    for name in ("h2o", "pplx"):
         block = text[text.index(f"\n  {name}:\n") :].split("\n\n")[0]
         assert "<<: *worker" in block and "networks" not in block  # the anchor's network only

@@ -24,7 +24,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from makhzan_ml.worker.pins import BACKENDS, PINS, pin_for
+from makhzan_ml.worker.pins import BACKENDS, MODEL_KEYS, llamacpp_pins, pin_for
 
 DEVICES = ("cpu", "gpu")
 #: The validated setups (decision-review §4, P8): fp32 on CPU, bf16 on the GPU. Any other
@@ -32,7 +32,8 @@ DEVICES = ("cpu", "gpu")
 DTYPES = {"cpu": ("fp32",), "gpu": ("bf16",)}
 #: The llama.cpp backend's precision is the GGUF's, on either device (D20 as amended
 #: 2026-11-26 accepts Kev-4B Q4_K_M and pplx Q4_K_S; docs/ai/kev-llamacpp.md, pplx-llamacpp.md).
-LLAMACPP_DTYPES = {"kev": ("q4_k_m",), "pplx": ("q4_k_s",)}
+#: Per model key, the dtype a llama.cpp worker must name: its pinned GGUF's quantisation.
+LLAMACPP_DTYPES = {key: (pin.dtype,) for key, pin in llamacpp_pins().items()}
 ON_EMPTY = ("exit", "wait")
 OUTSIDE_WINDOW = ("exit", "wait")
 #: Floors on the two intervals: a heartbeat or a poll every few milliseconds would only
@@ -438,8 +439,10 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
                 'takes one per session); write model = "kev", and run two workers for two'
             )
         model = models[0]
-    if model not in PINS:
-        raise ConfigError(f"[worker] model: unknown model key {model!r} (known: {sorted(PINS)})")
+    if model not in MODEL_KEYS:
+        raise ConfigError(
+            f"[worker] model: unknown model key {model!r} (known: {list(MODEL_KEYS)})"
+        )
     backend = compute.get("backend", "torch")
     if backend not in BACKENDS:
         raise ConfigError(f"[compute] backend {backend!r}: one of {list(BACKENDS)}")

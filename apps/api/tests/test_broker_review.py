@@ -69,7 +69,7 @@ async def _queue_many(pairs, priority=60) -> None:
 
 async def _old_judge(session) -> int:
     judges = await flow.current_judges(session)
-    current = await session.get(AiModelVersion, judges[("match", "kev")])
+    current = await session.get(AiModelVersion, judges[("match", "h2o")])
     old = AiModelVersion(
         model=current.model,
         model_version=current.model_version,
@@ -92,7 +92,7 @@ async def test_leases_during_a_judge_sweep_find_work_and_never_share_it(broker, 
         session.add_all(
             AiJob(
                 pipeline="match",
-                stage="kev",
+                stage="h2o",
                 reason="candidates",
                 model_version_id=old,
                 listing_a=a,
@@ -102,8 +102,8 @@ async def test_leases_during_a_judge_sweep_find_work_and_never_share_it(broker, 
             for a, b in pairs[10:]
         )
         await session.commit()
-    one, two = await _worker("w1", ["kev"]), await _worker("w2", ["kev"])
-    h1, h2 = await _hello(broker, one, "kev"), await _hello(broker, two, "kev")
+    one, two = await _worker("w1", ["h2o"]), await _worker("w2", ["h2o"])
+    h1, h2 = await _hello(broker, one, "h2o"), await _hello(broker, two, "h2o")
     # Stale jobs again (the hellos swept the first lot), and a sweep left open.
     async with SessionLocal() as session:
         await session.execute(
@@ -116,8 +116,8 @@ async def test_leases_during_a_judge_sweep_find_work_and_never_share_it(broker, 
         moved = await core.sweep_judges(sweeping)
         assert moved == len(pairs) - 10
         a, b = await asyncio.gather(
-            _lease(broker, one, h1["session"], "kev", max_jobs=4),
-            _lease(broker, two, h2["session"], "kev", max_jobs=4),
+            _lease(broker, one, h1["session"], "h2o", max_jobs=4),
+            _lease(broker, two, h2["session"], "h2o", max_jobs=4),
         )
         await sweeping.commit()
     ids_a = {j["job_id"] for j in a["jobs"]}
@@ -131,9 +131,9 @@ async def test_leases_during_a_judge_sweep_find_work_and_never_share_it(broker, 
 
 async def test_a_crash_is_charged_to_the_job_in_hand_only(broker, db):
     await _queue_many(await _grid(db, 1) + await _grid(db, 1))
-    kev = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, kev, "kev")
-    lease = await _lease(broker, kev, hello["session"], "kev", max_jobs=2)
+    h2o = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, h2o, "h2o")
+    lease = await _lease(broker, h2o, hello["session"], "h2o", max_jobs=2)
     first, second = (j["job_id"] for j in lease["jobs"])
     r = await broker.post(
         "/ai/v1/heartbeat",
@@ -142,7 +142,7 @@ async def test_a_crash_is_charged_to_the_job_in_hand_only(broker, db):
             "lease_ids": [lease["lease_id"]],
             "progress": {"job_id": second, "order": "ab"},
         },
-        headers=_auth(kev),
+        headers=_auth(h2o),
     )
     assert r.status_code == 200
     await _expire_all()
@@ -157,9 +157,9 @@ async def test_a_crash_is_charged_to_the_job_in_hand_only(broker, db):
 
 async def test_with_nothing_reported_in_hand_every_job_is_charged(broker, db):
     await _queue_many(await _grid(db, 1) + await _grid(db, 1))
-    kev = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, kev, "kev")
-    await _lease(broker, kev, hello["session"], "kev", max_jobs=2)
+    h2o = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, h2o, "h2o")
+    await _lease(broker, h2o, hello["session"], "h2o", max_jobs=2)
     await _expire_all()
     async with SessionLocal() as session:
         await core.reap(session)
@@ -169,32 +169,32 @@ async def test_with_nothing_reported_in_hand_every_job_is_charged(broker, db):
 
 @pytest.mark.parametrize("lease_s", [10**12, -5, 30, 7201, "abc", "900", True, 1.5])
 async def test_a_lease_length_outside_the_bounds_or_not_an_integer_is_refused(broker, lease_s):
-    kev = await _worker("cpu-kev", ["kev"])
+    h2o = await _worker("cpu-h2o", ["h2o"])
     r = await broker.post(
         "/ai/v1/hello",
-        json={"models": _report("kev"), "config": {"lease_s": lease_s}},
-        headers=_auth(kev),
+        json={"models": _report("h2o"), "config": {"lease_s": lease_s}},
+        headers=_auth(h2o),
     )
     assert r.status_code == 422
     assert r.json()["error"] == "invalid"
 
 
 async def test_a_lease_length_within_the_bounds_is_kept(broker):
-    kev = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, kev, "kev", lease_s=120)
+    h2o = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, h2o, "h2o", lease_s=120)
     assert (hello["lease_s"], hello["heartbeat_s"]) == (120, 40)
 
 
 async def test_a_retried_lease_gets_the_same_jobs_back(broker, db):
     await _queue_many(await _grid(db, 2))
-    kev = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, kev, "kev")
-    first = await _lease(broker, kev, hello["session"], "kev", max_jobs=2, lease_request_id="r1")
-    again = await _lease(broker, kev, hello["session"], "kev", max_jobs=2, lease_request_id="r1")
+    h2o = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, h2o, "h2o")
+    first = await _lease(broker, h2o, hello["session"], "h2o", max_jobs=2, lease_request_id="r1")
+    again = await _lease(broker, h2o, hello["session"], "h2o", max_jobs=2, lease_request_id="r1")
     assert again["lease_id"] == first["lease_id"]
     assert [j["job_id"] for j in again["jobs"]] == [j["job_id"] for j in first["jobs"]]
     assert again["jobs"][0]["requests"] == first["jobs"][0]["requests"]
-    other = await _lease(broker, kev, hello["session"], "kev", max_jobs=2, lease_request_id="r2")
+    other = await _lease(broker, h2o, hello["session"], "h2o", max_jobs=2, lease_request_id="r2")
     assert {j["job_id"] for j in other["jobs"]}.isdisjoint(j["job_id"] for j in first["jobs"])
     assert sum(j.status == "leased" for j in await _jobs()) == 4
 
@@ -210,16 +210,16 @@ async def test_an_empty_release_ends_the_session_and_can_queue_the_rebuild(broke
                 outcome="same",
                 decided_by="pplx",
                 scores={},
-                policy_version="p1",
+                policy_version="p2",
                 content_sha256_a=b"\0" * 32,
                 content_sha256_b=b"\0" * 32,
             )
         )
         await set_ai_mode(session, "live")
         await session.commit()
-    kev = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, kev, "kev")
-    r = await broker.post("/ai/v1/release", json={"session": hello["session"]}, headers=_auth(kev))
+    h2o = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, h2o, "h2o")
+    r = await broker.post("/ai/v1/release", json={"session": hello["session"]}, headers=_auth(h2o))
     assert r.json() == {"released": 0}
     assert broker.rebuilds == ["rebuild"]
     async with SessionLocal() as session:
@@ -228,24 +228,24 @@ async def test_an_empty_release_ends_the_session_and_can_queue_the_rebuild(broke
     refused = await broker.post(
         "/ai/v1/release",
         json={"session": hello["session"], "reason": "error"},
-        headers=_auth(kev),
+        headers=_auth(h2o),
     )
     assert refused.status_code == 422
 
 
 async def test_version_drift_is_one_flag_per_worker_and_model(broker):
     for name in ("w1", "w2"):
-        token = await _worker(name, ["kev"])
+        token = await _worker(name, ["h2o"])
         for _ in range(2):
             r = await broker.post(
                 "/ai/v1/hello",
-                json={"models": _report("kev", weights="f" * 40)},
+                json={"models": _report("h2o", weights="f" * 40)},
                 headers=_auth(token),
             )
             assert r.status_code == 200
     async with SessionLocal() as session:
         subjects = sorted(await session.scalars(select(AiFlag.subject)))
-    assert subjects == ["w1/kev", "w2/kev"]
+    assert subjects == ["w1/h2o", "w2/h2o"]
 
 
 async def test_partial_index_upserts_survive_asyncpgs_generic_plan(db):
@@ -268,15 +268,15 @@ async def test_partial_index_upserts_survive_asyncpgs_generic_plan(db):
 
 
 async def _session_body(token: str, broker, **extra) -> tuple[AiWorker, dict]:
-    hello = await _hello(broker, token, "kev")
+    hello = await _hello(broker, token, "h2o")
     async with SessionLocal() as session:
         worker = await session.scalar(
             select(AiWorker).where(AiWorker.token_sha256 == core.token_sha256(token))
         )
     body = {
         "session": hello["session"],
-        "model": "kev",
-        "model_version": MODELS["kev"].model_version,
+        "model": "h2o",
+        "model_version": MODELS["h2o"].model_version,
         "max_jobs": 2,
         **extra,
     }
@@ -288,7 +288,7 @@ async def test_a_retry_that_overlaps_the_original_waits_and_replays_it(broker, d
     uncommitted. The session row lock makes it wait, then replay: one lease,
     and nothing charged when the original's jobs are the ones the worker has."""
     await _queue_many(await _grid(db, 2))
-    token = await _worker("cpu-kev", ["kev"])
+    token = await _worker("cpu-h2o", ["h2o"])
     worker, body = await _session_body(token, broker, lease_request_id="r1")
     s1, s2 = SessionLocal(), SessionLocal()
     try:
@@ -312,26 +312,26 @@ async def test_a_retry_that_overlaps_the_original_waits_and_replays_it(broker, d
 
 async def test_a_hello_names_exactly_one_model(broker):
     """One model per session: a worker serving two keys opens two sessions."""
-    token = await _worker("both", ["kev", "pplx"])
+    token = await _worker("both", ["h2o", "pplx"])
     r = await broker.post(
-        "/ai/v1/hello", json={"models": _report("kev", "pplx")}, headers=_auth(token)
+        "/ai/v1/hello", json={"models": _report("h2o", "pplx")}, headers=_auth(token)
     )
     assert r.status_code == 422
     assert r.json()["error"] == "invalid"
-    kev, pplx = await _hello(broker, token, "kev"), await _hello(broker, token, "pplx")
-    assert kev["session"] != pplx["session"]
+    h2o, pplx = await _hello(broker, token, "h2o"), await _hello(broker, token, "pplx")
+    assert h2o["session"] != pplx["session"]
     # A session leases only its own model.
     r = await broker.post(
         "/ai/v1/lease",
         json={
-            "session": kev["session"],
+            "session": h2o["session"],
             "model": "pplx",
             "model_version": MODELS["pplx"].model_version,
         },
         headers=_auth(token),
     )
     assert r.status_code == 409
-    assert r.json() == {"error": "wrong_model", "model": "pplx", "session_model": "kev"}
+    assert r.json() == {"error": "wrong_model", "model": "pplx", "session_model": "h2o"}
 
 
 async def _store_scores(job: dict, orders=("ab", "ba"), p: float = 0.1) -> None:
@@ -357,12 +357,12 @@ async def _store_scores(job: dict, orders=("ab", "ba"), p: float = 0.1) -> None:
 
 async def test_a_replayed_job_scored_meanwhile_is_finished_not_renewed(broker, db):
     await _queue_many(await _grid(db, 1) + await _grid(db, 1))
-    token = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, token, "kev")
-    first = await _lease(broker, token, hello["session"], "kev", max_jobs=2, lease_request_id="r1")
+    token = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, token, "h2o")
+    first = await _lease(broker, token, hello["session"], "h2o", max_jobs=2, lease_request_id="r1")
     scored, kept = first["jobs"]
     await _store_scores(scored)
-    again = await _lease(broker, token, hello["session"], "kev", max_jobs=2, lease_request_id="r1")
+    again = await _lease(broker, token, hello["session"], "h2o", max_jobs=2, lease_request_id="r1")
     assert [j["job_id"] for j in again["jobs"]] == [kept["job_id"]]
     jobs = {j.id: j for j in await _jobs()}
     assert (jobs[scored["job_id"]].status, jobs[scored["job_id"]].lease_id) == ("done", None)
@@ -371,9 +371,9 @@ async def test_a_replayed_job_scored_meanwhile_is_finished_not_renewed(broker, d
 @pytest.mark.parametrize("ending", ["release", "results", "reap"])
 async def test_a_replay_of_a_lease_no_longer_held_is_a_fresh_lease(broker, db, ending):
     await _queue_many(await _grid(db, 1) + await _grid(db, 1))
-    token = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, token, "kev")
-    first = await _lease(broker, token, hello["session"], "kev", max_jobs=1, lease_request_id="r1")
+    token = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, token, "h2o")
+    first = await _lease(broker, token, hello["session"], "h2o", max_jobs=1, lease_request_id="r1")
     [job] = first["jobs"]
     if ending == "release":
         await broker.post(
@@ -389,7 +389,7 @@ async def test_a_replay_of_a_lease_no_longer_held_is_a_fresh_lease(broker, db, e
         await _post(broker, token, hello["session"], first, job, _scores(job, 0.1, 0.1))
     else:
         await _expire_all()
-    again = await _lease(broker, token, hello["session"], "kev", max_jobs=1, lease_request_id="r1")
+    again = await _lease(broker, token, hello["session"], "h2o", max_jobs=1, lease_request_id="r1")
     assert again["lease_id"] != first["lease_id"]
     assert len(again["jobs"]) == 1
     leased = [j for j in await _jobs() if j.status == "leased"]
@@ -399,8 +399,8 @@ async def test_a_replay_of_a_lease_no_longer_held_is_a_fresh_lease(broker, db, e
 
 
 async def test_a_heartbeat_progress_job_id_must_be_an_integer(broker):
-    token = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, token, "kev")
+    token = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, token, "h2o")
     r = await broker.post(
         "/ai/v1/heartbeat",
         json={"session": hello["session"], "lease_ids": [], "progress": {"job_id": "12"}},
@@ -412,9 +412,9 @@ async def test_a_heartbeat_progress_job_id_must_be_an_integer(broker):
 async def test_a_release_after_an_empty_lease_keeps_the_recorded_end(broker):
     """The broker ended the session at the empty lease; a release that comes
     anyway does not turn it into "released"."""
-    token = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, token, "kev")
-    assert (await _lease(broker, token, hello["session"], "kev"))["reason"] == "empty"
+    token = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, token, "h2o")
+    assert (await _lease(broker, token, hello["session"], "h2o"))["reason"] == "empty"
     r = await broker.post(
         "/ai/v1/release", json={"session": hello["session"]}, headers=_auth(token)
     )
@@ -428,9 +428,9 @@ async def test_a_lease_takes_up_to_max_jobs_with_no_time_budget(broker, db):
     """There is no time fit: a lease returns up to max_jobs in priority order,
     and fields an older worker might still send are ignored."""
     await _queue_many(await _grid(db, 2))
-    token = await _worker("cpu-kev", ["kev"])
-    hello = await _hello(broker, token, "kev")
+    token = await _worker("cpu-h2o", ["h2o"])
+    hello = await _hello(broker, token, "h2o")
     lease = await _lease(
-        broker, token, hello["session"], "kev", max_jobs=3, seconds_left=1, seconds_per_request=99
+        broker, token, hello["session"], "h2o", max_jobs=3, seconds_left=1, seconds_per_request=99
     )
     assert len(lease["jobs"]) == 3

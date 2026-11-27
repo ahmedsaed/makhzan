@@ -12,7 +12,8 @@ Today's are in `makhzan_schemas.ai.candidates`, registered when it is imported:
 - **candidates** (`match`): each new or changed listing's top-K lexical
   matches in other shops, filtered by today's vetoes (P1, P13); **backlog**
   is the same over the whole catalogue, at a lower priority;
-- **audit** (`audit`): each pair the rules merged, Kev only (P12);
+- **audit** (`audit`): each pair the rules merged, the first judge only
+  (H2O since D25, Kev before) (P12);
 - **re-score** (whichever pipeline the pair was in, `reason="rescore"`): a
   changed content hash or a new model or prompt version (P5, P8), standing
   "same" decisions first.

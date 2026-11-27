@@ -56,7 +56,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from makhzan_ml.worker.pins import Pin, pin_for
+from makhzan_ml.worker.pins import Pin, llamacpp_pins, pin_for
 
 log = logging.getLogger("makhzan_ml.worker.judges")
 
@@ -421,23 +421,12 @@ _LOADERS = {"kev": _load_kev, "pplx": _load_pplx}
 #: in (~5-16 s on the 3060; a 3 GB file from an HDD can take longer). Interruptible by a stop, as
 #: is the hash before it, so it is not part of any stop bound.
 LLAMACPP_READY_S = 180.0
-#: One scoring request's timeout, per model and device. A request is the one part of a session
-#: a stop cannot interrupt, so each stays inside its worker's stop bound (docs/ai/worker.md, "A
-#: stop sets one deadline"; the compose stop_grace_period of the worker that runs it).
-#: - Kev: about 0.5 s on the 3060, 4.4-6.1 s on the home server's AMD card; on the i7-3770's CPU
-#:   about 95 s for its longest request (1,625 tokens at ~17 tokens/s).
-#: - pplx (non-causal, its K1 prompt with the full description, so longer): the longest Phase E
-#:   request, 3,574 tokens, took 48.9 s on the desktop's CPU (4 threads, 73 tokens/s); scaled by
-#:   Kev Q4's measured i7-3770/desktop ratio (17.1 / 67.5 tokens/s), about 193 s on the home
-#:   server. Not measured there yet. Its timeout, 225 s, covers that with margin and keeps the
-#:   whole stop (request, 3 x 10 s of last posts, 10 s join: 265 s) under the supervisor's
-#:   window-end kill (supervisor.KILL_AFTER_S, 270 s) and the pplx worker's 300 s
-#:   stop_grace_period.
+#: One scoring request's timeout, per model and device: each llama.cpp pin's own
+#: `request_s_gpu` / `request_s_cpu` (pins.py says why each is what it is).
 LLAMACPP_REQUEST_S = {
-    ("kev", "gpu"): 60.0,
-    ("kev", "cpu"): 120.0,
-    ("pplx", "gpu"): 60.0,
-    ("pplx", "cpu"): 225.0,
+    (key, device): getattr(pin, f"request_s_{device}")
+    for key, pin in llamacpp_pins().items()
+    for device in ("gpu", "cpu")
 }
 
 _GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
@@ -594,8 +583,11 @@ def rescale(p: float, served: float, wanted: float) -> float:
 
 
 #: Per model: the GGUF's `qwen35.decision.type`, and the `model` name sent with a request (with
-#: a router sidecar, the section name in its preset, ml/deploy/home-server/models.ini).
-LLAMACPP_MODELS = {"kev": ("kev", "kev"), "pplx": ("pplx-decider", "pplx")}
+#: a router sidecar, the section name in its preset, ml/deploy/home-server/models.ini). From
+#: each llama.cpp pin.
+LLAMACPP_MODELS = {
+    key: (pin.gguf_decision_type, pin.router_model) for key, pin in llamacpp_pins().items()
+}
 
 #: A router's model states in which the model is ready to score (a sleeping one wakes on the first
 #: request, ~5.6 s on the 3060, inside the request timeout).
@@ -825,14 +817,6 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
         "image": pin.code,
     }
     return Judge(key, score, info)
-
-
-def _load_kev_llamacpp(rt: Runtime, pin: Pin) -> Judge:
-    return _load_llamacpp("kev", rt, pin)
-
-
-def _load_pplx_llamacpp(rt: Runtime, pin: Pin) -> Judge:
-    return _load_llamacpp("pplx", rt, pin)
 
 
 def load(key: str, rt: Runtime) -> Judge:

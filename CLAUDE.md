@@ -780,8 +780,10 @@ removes. AI matching must read the same set
 `makhzan_schemas.ai`, `docs/ai/broker-api.md`).
 Then they act last (`grouping._ai_phase`): once the rules and the rulings have
 formed every cluster, an AI pair may join two whole clusters, today's vetoes
-checked between every member, a ruled pair never read, and a Kev score below
-0.05 between any two members blocks the join. Acting last is what makes the
+checked between every member, a ruled pair never read, and a first-judge score
+below its floor between any two members blocks the join (`policy.JUDGE_FLOORS`, per
+model: Kev's 0.05 for decisions not yet re-scored, H2O's 0.19 confirmed by the owner
+2026-11-27, D25 in `docs/ai/decision-review.md`). Acting last is what makes the
 result independent of placement order and keeps it from ever splitting a
 rules merge. The regroup alone writes `listings.matched_via`
 (`matching.matched_by` reads it), and after it commits, in its own transaction,
@@ -792,7 +794,11 @@ byte what it was (`test_grouping_differential.py`); `make regroup-dry-run
 ARGS=--ai` previews standing decisions while off, which is how the backlog's
 groupings are reviewed on a local copy before production.
 Pipelines, models and prompts are data (`ai/pipelines.py`, `ai/policy.py`,
-`ai/prompt.py`): a new one is a registry entry, not a migration.
+`ai/prompt.py`): a new one is a registry entry, not a migration. Policies are
+never edited: a new threshold set is a new policy made `ACTIVE` (p2 since
+2026-11-27: H2O-Lightning ≥ 0.578 on its raw scale, then pplx ≥ 0.95; p1 was Kev
+≥ 0.80). A stage that leaves the registry is not an error: the sweep re-offers its
+queued jobs to the pipeline, and decisions carrying its score are re-scored.
 
 **Workers talk only to the broker** (`app.broker.main:app`, its own service
 and port, reached only over Tailscale, never under `/api`;
@@ -813,10 +819,11 @@ prepared statement goes generic (the sixth run on a connection).
 
 The home server runs the two workers as one compose stack
 (`ml/deploy/home-server/`, `docs/ai/worker.md`): each waits for its window
-(Kev 01:00–05:00, pplx 05:05–07:00 Africa/Cairo), with a broker-only proxy as
-its sole egress. Since 2026-11-27 both judges run on the server's 4 GB AMD
-card through one llama.cpp router in the stack (Kev Q4_K_M, pplx Q4_K_S;
-`policy.MODELS`, the torch versions kept as `TORCH_MODELS`), one model at a
+(first judge 01:00–05:00, pplx 05:05–07:00 Africa/Cairo), with a broker-only proxy
+as its sole egress. Since 2026-11-27 both judges run on the server's 4 GB AMD
+card through one llama.cpp router in the stack (H2O-Lightning Q4_K_M since D25,
+Kev Q4_K_M before it; pplx Q4_K_S; `policy.MODELS`, Kev's llama.cpp version kept
+as `LLAMACPP_KEV` and the torch versions as `TORCH_MODELS`), one model at a
 time: each worker loads its own on its window's first lease. The stack is
 containers only (owner's rule: no host timers or scripts); the host's one
 setting is the udev rule `99-amdgpu-clock-limit.rules`, which holds the card to

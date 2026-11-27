@@ -44,58 +44,65 @@ def _orders(ab, ba):
 # --- the transition rule, pure ----------------------------------------------
 
 
-def test_kev_below_its_threshold_decides_not_same_by_kev():
-    step = decide("match", {"kev": _orders(0.95, 0.79)})
-    assert (step.action, step.outcome, step.decided_by) == (DECIDE, NOT_SAME, "kev")
-    assert step.mins == (("kev", 0.79),)
+def test_h2o_below_its_threshold_decides_not_same_by_h2o():
+    step = decide("match", {"h2o": _orders(0.95, 0.577)})
+    assert (step.action, step.outcome, step.decided_by) == (DECIDE, NOT_SAME, "h2o")
+    assert step.mins == (("h2o", 0.577),)
 
 
-def test_kev_passing_hands_the_pair_to_pplx():
-    step = decide("match", {"kev": _orders(0.80, 0.91)})
+def test_h2o_passing_hands_the_pair_to_pplx():
+    step = decide("match", {"h2o": _orders(0.578, 0.91)})
     assert (step.action, step.stage) == (SCORE, "pplx")
 
 
 def test_pplx_at_its_threshold_decides_same_and_below_not_same():
-    same = decide("match", {"kev": _orders(0.9, 0.85), "pplx": _orders(0.95, 0.99)})
+    same = decide("match", {"h2o": _orders(0.9, 0.85), "pplx": _orders(0.95, 0.99)})
     assert (same.action, same.outcome, same.decided_by) == (DECIDE, SAME, "pplx")
-    assert dict(same.mins) == {"kev": 0.85, "pplx": 0.95}
-    no = decide("match", {"kev": _orders(0.9, 0.85), "pplx": _orders(0.97, 0.949)})
+    assert dict(same.mins) == {"h2o": 0.85, "pplx": 0.95}
+    no = decide("match", {"h2o": _orders(0.9, 0.85), "pplx": _orders(0.97, 0.949)})
     assert (no.outcome, no.decided_by) == (NOT_SAME, "pplx")
 
 
 def test_one_reading_order_settles_nothing_not_even_a_no():
-    assert decide("match", {"kev": _orders(0.01, None)}).stage == "kev"
-    assert decide("match", {"kev": _orders(0.9, 0.9), "pplx": _orders(None, 0.99)}).stage == "pplx"
+    assert decide("match", {"h2o": _orders(0.01, None)}).stage == "h2o"
+    assert decide("match", {"h2o": _orders(0.9, 0.9), "pplx": _orders(None, 0.99)}).stage == "pplx"
 
 
-def test_the_audit_records_kev_and_decides_nothing():
-    assert transition("audit", {}).stage == "kev"
-    step = transition("audit", {"kev": _orders(0.01, 0.02)})
+def test_the_audit_records_h2o_and_decides_nothing():
+    assert transition("audit", {}).stage == "h2o"
+    step = transition("audit", {"h2o": _orders(0.01, 0.02)})
     assert (step.action, step.outcome) == (RECORD, None)
-    assert step.mins == (("kev", 0.01),)
+    assert step.mins == (("h2o", 0.01),)
 
 
 def test_an_unknown_pipeline_or_policy_is_refused():
     with pytest.raises(ValueError):
         transition("nope", {})
     with pytest.raises(ValueError):
-        decide("match", {"kev": _orders(0.9, 0.9)}, policy="p0")
+        decide("match", {"h2o": _orders(0.9, 0.9)}, policy="p0")
+
+
+def test_a_policy_without_the_stages_threshold_is_refused():
+    # p1 (Kev first) stays in POLICIES as history and rollback, but has no
+    # threshold for the h2o stage: deciding under it is an error, not a guess.
+    with pytest.raises(ValueError, match="no threshold 'h2o'"):
+        decide("match", {"h2o": _orders(0.9, 0.9)}, policy="p1")
 
 
 def test_a_new_pipeline_is_data(monkeypatch):
     # A three-stage pipeline needs no code beyond its declaration.
-    third = Stage("kev-again", model="kev", prompt="K1-full", threshold="kev")
+    third = Stage("h2o-again", model="h2o", prompt="K1-full", threshold="h2o")
     monkeypatch.setitem(
         pipelines.PIPELINES,
         "triple",
         Pipeline("triple", (*pipelines.PIPELINES["match"].stages, third)),
     )
     pipelines.check_registry()
-    scores = {"kev": _orders(0.9, 0.9), "pplx": _orders(0.99, 0.99)}
-    assert transition("triple", scores).stage == "kev-again"
-    scores["kev-again"] = _orders(0.85, 0.82)
+    scores = {"h2o": _orders(0.9, 0.9), "pplx": _orders(0.99, 0.99)}
+    assert transition("triple", scores).stage == "h2o-again"
+    scores["h2o-again"] = _orders(0.85, 0.82)
     assert transition("triple", scores).outcome == SAME
-    assert ("triple", "kev-again") in stages_for_models({"kev"})
+    assert ("triple", "h2o-again") in stages_for_models({"h2o"})
 
 
 def test_the_registry_refuses_an_unknown_model_prompt_or_threshold(monkeypatch):
@@ -112,7 +119,7 @@ def test_the_registry_refuses_an_unknown_model_prompt_or_threshold(monkeypatch):
 
 
 def test_a_worker_leases_every_stage_its_models_serve():
-    assert stages_for_models({"kev"}) == [("match", "kev"), ("audit", "kev")]
+    assert stages_for_models({"h2o"}) == [("match", "h2o"), ("audit", "h2o")]
     assert stages_for_models({"pplx"}) == [("match", "pplx")]
     assert stages_for_models({"other"}) == []
 
@@ -149,10 +156,18 @@ async def _listing(supplier: Supplier, title: str, status=ListingStatus.ACTIVE) 
 
 
 async def _decision(
-    x, y, outcome="same", *, kev=0.9, pplx=0.97, state="standing", pipeline="match"
+    x,
+    y,
+    outcome="same",
+    *,
+    first=0.9,
+    judge="h2o",
+    pplx=0.97,
+    state="standing",
+    pipeline="match",
 ):
     a, b = pair(x, y)
-    scores = {"kev": {"model": "kev", "ab": kev, "ba": kev, "min": kev}}
+    scores = {judge: {"model": judge, "ab": first, "ba": first, "min": first}}
     if pplx is not None:
         scores["pplx"] = {"model": "pplx", "ab": pplx, "ba": pplx, "min": pplx}
     row = AiDecision(
@@ -160,9 +175,9 @@ async def _decision(
         listing_a=a,
         listing_b=b,
         outcome=outcome,
-        decided_by="pplx" if pplx is not None else "kev",
+        decided_by="pplx" if pplx is not None else judge,
         scores=scores,
-        policy_version="p1",
+        policy_version="p2" if judge == "h2o" else "p1",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,
         state=state,
@@ -233,13 +248,26 @@ async def test_only_the_best_match_per_other_shop_counts_on_both_sides():
     assert got.rank == {pair(x, b1): (0.99, 0.9), pair(x, c1): (0.96, 0.9)}
 
 
-async def test_the_group_check_reads_every_standing_kev_no():
-    shops = [await _supplier(f"shop-{c}") for c in "abc"]
-    a, b, c = [await _listing(s, s.slug) for s in shops]
-    await _decision(a, b, outcome="not_same", kev=0.04, pplx=None)
-    await _decision(a, c, outcome="not_same", kev=0.05, pplx=None)
+async def test_a_decision_not_yet_rescored_ranks_by_its_retired_stages_score():
+    # Made under p1 (Kev, then pplx) before D25: Kev's score stands in for H2O's when
+    # ranking, rather than ranking as if H2O had said 0 and losing every tie.
+    shop_a, shop_b = await _supplier("shop-a"), await _supplier("shop-b")
+    x, y = await _listing(shop_a, "x"), await _listing(shop_b, "y")
+    await _decision(x, y, first=0.93, judge="kev", pplx=0.98)
+    assert (await _load()).rank == {pair(x, y): (0.98, 0.93)}
+
+
+async def test_the_group_check_reads_every_standing_first_judge_no_at_its_own_floor():
+    shops = [await _supplier(f"shop-{c}") for c in "abcde"]
+    a, b, c, d, e = [await _listing(s, s.slug) for s in shops]
+    await _decision(a, b, outcome="not_same", first=0.18, pplx=None)
+    await _decision(a, c, outcome="not_same", first=0.19, pplx=None)
+    # A decision still carrying Kev's score (made under p1, not yet re-scored
+    # by H2O) is read at Kev's floor: H2O's would block nearly every Kev "no".
+    await _decision(a, d, outcome="not_same", first=0.04, judge="kev", pplx=None)
+    await _decision(a, e, outcome="not_same", first=0.18, judge="kev", pplx=None)
     got = await _load()
-    assert got.no == {pair(a, b)}  # 0.05 is not below 0.05
+    assert got.no == {pair(a, b), pair(a, d)}  # 0.19 is not below 0.19
     assert not got  # no "same" pair: nothing to read
 
 
@@ -256,14 +284,14 @@ async def test_enqueue_puts_a_pair_into_its_pipelines_first_stage_once():
         jobs = list(await session.scalars(select(AiJob).order_by(AiJob.id)))
         versions = {v.id: v for v in await session.scalars(select(AiModelVersion))}
     assert [(j.pipeline, j.stage, j.listing_a, j.listing_b) for j in jobs] == [
-        ("match", "kev", *pair(a, b)),
+        ("match", "h2o", *pair(a, b)),
         ("match", "pplx", *pair(a, b)),
-        ("audit", "kev", *pair(a, b)),
+        ("audit", "h2o", *pair(a, b)),
     ]
     # One judge row per (model, model version, prompt version), shared by
     # every stage that reads the same model through the same prompt.
     assert {(v.model, v.prompt_version) for v in versions.values()} == {
-        ("kev", "K2-150@6aef2c6c"),
+        ("h2o", "K2-150@6aef2c6c"),
         ("pplx", "K1-full@6aef2c6c"),
     }
     assert jobs[0].model_version_id == jobs[2].model_version_id

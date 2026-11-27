@@ -14,8 +14,9 @@ from makhzan_schemas.ai import pipelines, policy, prompt
 
 
 def test_production_pins_are_the_policy_models():
-    # What production serves (owner, 2026-11-27): the llama.cpp pins, equal to policy.MODELS.
-    assert set(pins.ACTIVE_BACKEND) == set(policy.MODELS) == set(PINS)
+    # What production serves (owner, 2026-11-27; H2O first since D25): the llama.cpp pins, equal
+    # to policy.MODELS.
+    assert set(pins.ACTIVE_BACKEND) == set(policy.MODELS) == {"h2o", "pplx"}
     for key, model in policy.MODELS.items():
         pin = pins.production_pin(key)
         assert pin.backend == pins.ACTIVE_BACKEND[key] == model.scoring["backend"] == "llamacpp"
@@ -67,7 +68,17 @@ def test_the_lean_images_serve_the_pinned_revisions():
 def test_every_stage_model_can_be_served():
     for p in pipelines.PIPELINES.values():
         for stage in p.stages:
-            assert stage.model in PINS
+            assert stage.model in pins.MODEL_KEYS
+            assert pins.production_pin(stage.model).model_version == stage.model_version
+
+
+def test_the_kev_rollback_of_d25_is_the_policys():
+    alt = pins.pin_for("kev", "llamacpp")
+    model = policy.LLAMACPP_KEV
+    assert (alt.repo, alt.weights_revision, alt.model_version) == (
+        model.repo, model.weights_revision, model.model_version,
+    )  # fmt: skip
+    assert alt.gguf_sha256 == model.scoring["gguf_sha256"]
 
 
 def record(n: int) -> dict:

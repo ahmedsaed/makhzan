@@ -18,8 +18,10 @@
   kept when the mode goes off, so its age says how old they are); re-scores
   due (P6: a standing decision whose text or
   judge changed), with how many have an open job, a dead one, or none;
-- the audit (P12): rules-merged pairs scored, and how many fell below 0.8 and
-  below 0.05. No threshold is chosen; these are counts only.
+- the audit (P12): rules-merged pairs scored, per judge, and how many fell
+  below that judge's match threshold and below its group-check floor (Kev:
+  0.8 and 0.05; H2O since D25: 0.578 and 0.19). No audit threshold is chosen;
+  these are counts only.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ from makhzan_schemas.ai.decisions import (
 )
 from makhzan_schemas.ai.mode import ai_mode
 from makhzan_schemas.ai.pipelines import PIPELINES
-from makhzan_schemas.ai.policy import ACTIVE, MODELS, thresholds
+from makhzan_schemas.ai.policy import ACTIVE, JUDGE_FLOORS, MODELS, POLICIES, thresholds
 from makhzan_schemas.enums import ListingStatus
 from makhzan_schemas.models import (
     AiDecision,
@@ -56,8 +58,21 @@ from makhzan_schemas.models import (
     Listing,
 )
 
-#: P12's two counts.
-AUDIT_BELOW = (0.8, 0.05)
+
+def _audit_below() -> dict[str, tuple[float, float]]:
+    """P12's two counts, per first-stage judge: its match threshold (in the active policy, or
+    the latest policy naming it, for a judge since replaced) and its group-check floor."""
+    newest_first = [ACTIVE, *reversed([name for name in POLICIES if name != ACTIVE])]
+    out = {}
+    for model, floor in JUDGE_FLOORS.items():
+        named = [POLICIES[name][model] for name in newest_first if model in POLICIES[name]]
+        if named:
+            out[model] = (named[0], floor)
+    return out
+
+
+#: From the policy registry: Kev 0.8 and 0.05, H2O 0.578 and 0.19 today.
+AUDIT_BELOW: dict[str, tuple[float, float]] = _audit_below()
 
 #: `ai_decisions.effect` in the order status prints it; None is "unchecked".
 EFFECTS = (IN_EFFECT, BLOCKED, INACTIVE, OVERRIDDEN)
@@ -373,33 +388,43 @@ async def _rescore_due(session: AsyncSession, judges: dict) -> dict:
 
 async def _audit(session: AsyncSession, judges: dict) -> dict:
     """Pairs a recording pipeline (the audit: `decides=False`) scored in both
-    orders, at the judge each job was queued at, one per pair (its latest
-    job), and how many fell below each of P12's counts."""
+    orders, at the judge each job was queued at, one per pair and judge model
+    (its latest job), and how many fell below each of that model's P12 counts.
+    Kev's audit scores stay as they were when H2O replaced it (D25): the audit
+    re-scores nothing, so both models appear while Kev's last pairs stand."""
     recording = [p.name for p in PIPELINES.values() if not p.decides]
     if not recording:
-        return {"scored": 0, **{f"below_{limit}": 0 for limit in AUDIT_BELOW}}
+        return {"scored": 0, "by_model": {}}
     rows = (
         await session.execute(
             text(
                 """
-            SELECT DISTINCT ON (j.listing_a, j.listing_b) LEAST(sab.p, sba.p) AS low
+            SELECT DISTINCT ON (j.listing_a, j.listing_b, v.model) v.model AS model,
+                   j.listing_a AS a, j.listing_b AS b, LEAST(sab.p, sba.p) AS low
               FROM ai_jobs j
+              JOIN ai_model_versions v ON v.id = j.model_version_id
               JOIN ai_scores sab ON sab.model_version_id = j.model_version_id
                                 AND sab.request_sha256 = decode(j.request_sha256->>'ab', 'hex')
               JOIN ai_scores sba ON sba.model_version_id = j.model_version_id
                                 AND sba.request_sha256 = decode(j.request_sha256->>'ba', 'hex')
              WHERE j.pipeline = ANY(:recording) AND j.status = 'done'
-             ORDER BY j.listing_a, j.listing_b, j.done_at DESC NULLS LAST, j.id DESC
+             ORDER BY j.listing_a, j.listing_b, v.model, j.done_at DESC NULLS LAST, j.id DESC
             """
             ),
             {"recording": recording},
         )
     ).all()
-    lows = [row.low for row in rows]
-    return {
-        "scored": len(lows),
-        **{f"below_{limit}": sum(1 for x in lows if x < limit) for limit in AUDIT_BELOW},
-    }
+    by_model: dict[str, dict] = {}
+    for row in rows:
+        entry = by_model.setdefault(
+            row.model,
+            {"scored": 0, "below": [[limit, 0] for limit in AUDIT_BELOW.get(row.model, ())]},
+        )
+        entry["scored"] += 1
+        for band in entry["below"]:
+            band[1] += row.low < band[0]
+    # Pairs, not scores: a pair both Kev and H2O audited counts once in the total.
+    return {"scored": len({(row.a, row.b) for row in rows}), "by_model": by_model}
 
 
 def _age(iso: str | None, now: datetime) -> str:
@@ -503,8 +528,11 @@ def format_text(data: dict) -> str:
     else:
         lines.append("  re-score due none")
     a = data["audit"]
-    lines.append(
-        f"  audit        {a['scored']} rules-merged pairs scored; "
-        + ", ".join(f"below {limit}: {a[f'below_{limit}']}" for limit in AUDIT_BELOW)
-    )
+    if not a["by_model"]:
+        lines.append("  audit        0 rules-merged pairs scored")
+    for model, entry in sorted(a["by_model"].items()):
+        lines.append(
+            f"  audit {model:<6} {entry['scored']} rules-merged pairs scored; "
+            + ", ".join(f"below {limit}: {count}" for limit, count in entry["below"])
+        )
     return "\n".join(lines)

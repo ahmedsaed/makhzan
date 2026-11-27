@@ -10,10 +10,10 @@ owner's "safest" operating point of 2026-11-16: Kev (K2, description capped at
 150 words) at least 0.80 **and** pplx (K1, full description) at least 0.95,
 each the lower of its two reading orders, behind today's vetoes.
 
-**The group check** (P14): a score by `GROUP_CHECK_MODEL` below `KEV_BLOCK`
-between a listing and any member of a product blocks a join that rests on an
-AI decision. It reads scores already stored and triggers nothing; it never
-splits what the rules merged.
+**The group check** (P14): a score by a first-stage judge below its floor
+(`JUDGE_FLOORS`) between a listing and any member of a product blocks a join
+that rests on an AI decision. It reads scores already stored and triggers
+nothing; it never splits what the rules merged.
 
 **Models** (P8), keyed by the model key that pipeline stages and worker
 configurations name. A model version is the weights revision, the serving
@@ -28,6 +28,14 @@ home server's AMD card taking turns. The torch versions stay in `TORCH_MODELS`, 
 moving `MODELS` back to them (and the worker's `pins.ACTIVE_BACKEND`) is one commit. A version
 change makes every standing decision's judge stale, so the re-score producer re-queues them at the
 amended P8 priorities (after new pairs and the backlog; decision-review.md).
+
+**First judge: H2O-Lightning (owner, 2026-11-27, D25):** policy `p2` replaces Kev with
+H2O-Lightning-4B Q4_K_M (llama.cpp) as the match pipeline's first stage, at 0.578 on the raw
+scale (its precision on the labelled Phase E set matched to full-precision Kev's at 0.8), pplx
+Q4_K_S at 0.95 unchanged. With pplx Q4 on the labels: 229 merges, 227 correct, 2 wrong (both
+grey), against Kev Q4's 217/216/1. `p1` stays, a record of what decisions were made under; its
+stage no longer exists. The H2O floor of the group check (0.19) was proposed by the session and
+confirmed by the owner, 2026-11-27 (decision-review.md, D25).
 """
 
 from __future__ import annotations
@@ -35,8 +43,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 #: Named threshold sets. Never edit one in place: add the next and move ACTIVE.
-POLICIES: dict[str, dict[str, float]] = {"p1": {"kev": 0.80, "pplx": 0.95}}
-ACTIVE = "p1"
+POLICIES: dict[str, dict[str, float]] = {
+    "p1": {"kev": 0.80, "pplx": 0.95},
+    # Owner, 2026-11-27 (D25): H2O-Lightning Q4_K_M first, raw P(yes) (its GGUF's 0.8 undone).
+    "p2": {"h2o": 0.578, "pplx": 0.95},
+}
+ACTIVE = "p2"
 
 #: P15: the departments AI matching serves. Triggers offer pairs only from
 #: these, and the regroup reads a decision only while both of its listings are
@@ -44,9 +56,12 @@ ACTIVE = "p1"
 #: the AI merge apart at the next regroup.
 DOMAINS: tuple[str, ...] = ("electronics",)
 
-#: P14: the model whose "confident no" blocks an AI-dependent join, and below what.
-GROUP_CHECK_MODEL = "kev"
-KEV_BLOCK = 0.05
+#: P14: per first-stage model, the score below which its "confident no" blocks an AI-dependent
+#: join. Kev's 0.05 (owner, P14) still reads the Kev scores standing decisions carry until they are
+#: re-scored. H2O's 0.19 blocks the same share of the labelled Phase E "not same" pairs as Kev's
+#: 0.05 (358 of 463, 77.3%) while blocking fewer labelled "same" ones (12 vs 16): confirmed by
+#: the owner, 2026-11-27 (decision-review.md, D25).
+JUDGE_FLOORS: dict[str, float] = {"h2o": 0.19, "kev": 0.05}
 
 #: Kev-4B's weights on the Hub, pinned (the revision the CPU and GPU images load).
 KEV_REPO = "jaredpalmer/kev-4b"
@@ -71,6 +86,11 @@ KEV_GGUF_REVISION = "f4624b6bb7072f1bab726a622c1cad3f96030b9e"
 KEV_GGUF_SHA256 = "33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9"
 #: pplx Q4_K_S: our own conversion of PPLX_REPO@PPLX_REVISION (ml/models/convert_pplx_v13.py).
 PPLX_GGUF_SHA256 = "819a9ad0f8f4aacb055f6d1783a155e3bd0bf33afb9c2f33749ef25350c61ab3"
+#: H2O-Lightning-4B Q4_K_M, the publisher's own GGUF (decision type `h2o-lightning`, noul
+#: temperature 0.8 built in; the worker undoes it: raw P(yes)).
+H2O_GGUF_REPO = "h2oai/h2o-lightning-4b-gguf"
+H2O_GGUF_REVISION = "61f8d8b7a8c2d84426d0d143ca187f65d235934b"
+H2O_GGUF_SHA256 = "5ec969c6edbad5f1750141742f635cc7f01576bf9432151f730f0a6c30042768"
 
 
 @dataclass(frozen=True)
@@ -84,22 +104,41 @@ class Model:
     scoring: dict = field(default_factory=dict)
 
 
-#: What production serves (owner, 2026-11-27): the llama.cpp versions.
+#: Kev-4B Q4_K_M through llama.cpp: the first judge from the production switch until D25 (the
+#: rollback of D25 is putting it back in `MODELS` with policy `p1`).
+LLAMACPP_KEV = Model(
+    key="kev",
+    repo=KEV_GGUF_REPO,
+    weights_revision=KEV_GGUF_REVISION,
+    model_version=(
+        f"kev-4b-Q4_K_M@{KEV_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
+        f"-{LLAMACPP_IMAGE_DIGEST[:12]}+T1.0"
+    ),
+    # Raw P(yes) at temperature 1: the worker undoes the GGUF's built-in 2.406.
+    scoring={
+        "score": "p_yes",
+        "temperature": 1.0,
+        "backend": "llamacpp",
+        "gguf_sha256": KEV_GGUF_SHA256,
+    },  # fmt: skip
+)
+
+#: What production serves: H2O-Lightning first (D25), pplx second, both through llama.cpp.
 MODELS: dict[str, Model] = {
-    "kev": Model(
-        key="kev",
-        repo=KEV_GGUF_REPO,
-        weights_revision=KEV_GGUF_REVISION,
+    "h2o": Model(
+        key="h2o",
+        repo=H2O_GGUF_REPO,
+        weights_revision=H2O_GGUF_REVISION,
         model_version=(
-            f"kev-4b-Q4_K_M@{KEV_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
+            f"h2o-lightning-4b-Q4_K_M@{H2O_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
             f"-{LLAMACPP_IMAGE_DIGEST[:12]}+T1.0"
         ),
-        # Raw P(yes) at temperature 1: the worker undoes the GGUF's built-in 2.406.
+        # Raw P(yes) at temperature 1: the worker undoes the GGUF's built-in 0.8.
         scoring={
             "score": "p_yes",
             "temperature": 1.0,
             "backend": "llamacpp",
-            "gguf_sha256": KEV_GGUF_SHA256,
+            "gguf_sha256": H2O_GGUF_SHA256,
         },  # fmt: skip
     ),
     "pplx": Model(

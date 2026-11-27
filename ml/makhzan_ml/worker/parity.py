@@ -40,7 +40,7 @@ from pathlib import Path
 from makhzan_ml.worker import config as config_mod
 from makhzan_ml.worker import judges, run
 from makhzan_ml.worker.fake_broker import FakeBroker
-from makhzan_ml.worker.pins import pin_for
+from makhzan_ml.worker.pins import MODEL_KEYS, pin_for
 
 TOKEN = "parity-token"
 
@@ -79,7 +79,7 @@ def compare(rows: list[dict], tolerance: float) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m makhzan_ml.worker.parity")
-    ap.add_argument("--model", required=True, choices=["kev", "pplx"])
+    ap.add_argument("--model", required=True, choices=MODEL_KEYS)
     ap.add_argument("--device", default="gpu", choices=["cpu", "gpu"])
     ap.add_argument("--threads", type=int)
     ap.add_argument("--requests", type=Path, required=True)

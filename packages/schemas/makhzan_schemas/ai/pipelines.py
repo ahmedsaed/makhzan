@@ -15,10 +15,16 @@ scores: each stage still runs in order, and nothing is concluded.
 
 Today's two:
 
-- `match`: candidate pairs. Kev (K2, description capped at 150 words), then
-  pplx (K1, full description): the owner's "safest" operating point.
-- `audit`: pairs the rules merged, scored by Kev only and recorded (P12: no
-  threshold is chosen yet; status lists the counts below 0.8 and 0.05).
+- `match`: candidate pairs. H2O-Lightning (K2, description capped at 150 words;
+  D25, 2026-11-27, replacing Kev), then pplx (K1, full description).
+- `audit`: pairs the rules merged, scored by the first judge only and recorded
+  (P12: no threshold is chosen yet; status counts each judge's scores below its
+  threshold and below its floor).
+
+A stage that leaves the registry (Kev's, at D25) is not an error: a queued job
+naming it is re-offered to its pipeline at the next sweep, which queues the
+stage the pair now owes, and a standing decision whose stored scores name it is
+re-scored like any other changed judge (`candidates.RescoreTrigger`).
 
 A re-score is not a pipeline: a changed content hash or a new model or prompt
 version re-queues the pair into the pipeline it was in. The group check (P14)
@@ -76,15 +82,15 @@ class Pipeline:
         raise ValueError(f"pipeline {self.name!r} has no stage {name!r}")
 
 
-_KEV = Stage("kev", model="kev", prompt="K2-150", threshold="kev")
+_H2O = Stage("h2o", model="h2o", prompt="K2-150", threshold="h2o")
 
 PIPELINES: dict[str, Pipeline] = {
     "match": Pipeline(
         "match",
-        (_KEV, Stage("pplx", model="pplx", prompt="K1-full", threshold="pplx")),
+        (_H2O, Stage("pplx", model="pplx", prompt="K1-full", threshold="pplx")),
     ),
     "audit": Pipeline(
-        "audit", (Stage("kev", model="kev", prompt="K2-150", threshold=None),), decides=False
+        "audit", (Stage("h2o", model="h2o", prompt="K2-150", threshold=None),), decides=False
     ),
 }
 
@@ -100,8 +106,10 @@ def pipeline(name: str) -> Pipeline:
 
 def check_registry() -> None:
     """Every stage names a known model and prompt, every deciding stage a
-    threshold every policy defines, and stage names are unique per pipeline.
-    Run at import, so a broken registry never starts."""
+    threshold the active policy defines, and stage names are unique per
+    pipeline. Run at import, so a broken registry never starts. An older policy
+    may lack a current stage's threshold (`p1` has no `h2o`): it is the record
+    of what decisions were made under, and recomputing with it raises."""
     for p in PIPELINES.values():
         if not p.stages:
             raise ValueError(f"pipeline {p.name!r} has no stages")
@@ -115,9 +123,8 @@ def check_registry() -> None:
                 raise ValueError(f"{p.name}.{s.name}: unknown prompt {s.prompt!r}")
             if p.decides and s.threshold is None:
                 raise ValueError(f"{p.name}.{s.name}: a deciding stage needs a threshold")
-            for name, limits in POLICIES.items():
-                if s.threshold is not None and s.threshold not in limits:
-                    raise ValueError(f"policy {name!r} has no threshold {s.threshold!r}")
+            if s.threshold is not None and s.threshold not in POLICIES[ACTIVE]:
+                raise ValueError(f"policy {ACTIVE!r} has no threshold {s.threshold!r}")
 
 
 check_registry()
@@ -172,6 +179,8 @@ def transition(name: str, scores: Scores, policy: str = ACTIVE) -> Step:
         if low is None:
             return Step(SCORE, stage=stage.name, mins=tuple(mins))
         mins.append((stage.name, low))
+        if p.decides and stage.threshold not in limits:
+            raise ValueError(f"policy {policy!r} has no threshold {stage.threshold!r}")
         if p.decides and low < limits[stage.threshold]:
             return Step(DECIDE, outcome=NOT_SAME, decided_by=stage.name, mins=tuple(mins))
     if not p.decides:
@@ -189,6 +198,6 @@ def decide(pipeline_name: str, scores: Scores, policy: str = ACTIVE) -> Step:
 def rank(step_mins: Mapping[str, float], pipeline_name: str) -> tuple[float, ...]:
     """How strongly a decision says "same", for choosing a listing's best match
     per other shop (P14): the stages' lower scores, last stage first (pplx,
-    then Kev, for `match`)."""
+    then H2O, for `match`)."""
     p = pipeline(pipeline_name)
     return tuple(step_mins.get(s.name, 0.0) for s in reversed(p.stages))

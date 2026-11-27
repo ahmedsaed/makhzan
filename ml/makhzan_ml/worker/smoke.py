@@ -45,7 +45,7 @@ from makhzan_ml.worker.broker import Broker
 from makhzan_ml.worker.config import parse
 from makhzan_ml.worker.fake_broker import FakeBroker
 from makhzan_ml.worker.config import LLAMACPP_DTYPES
-from makhzan_ml.worker.pins import PINS, pin_for
+from makhzan_ml.worker.pins import MODEL_KEYS, pin_for
 
 log = logging.getLogger("makhzan_ml.worker.smoke")
 
@@ -353,7 +353,7 @@ def check_revision(expected: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m makhzan_ml.worker.smoke", description=__doc__)
-    ap.add_argument("--model", required=True, choices=sorted(PINS))
+    ap.add_argument("--model", required=True, choices=MODEL_KEYS)
     ap.add_argument("--backend", choices=("torch", "llamacpp"), default="torch",
                     help="llamacpp: the slim llama.cpp worker image (no torch)")  # fmt: skip
     ap.add_argument("--expect-revision", help="the commit the image must record")

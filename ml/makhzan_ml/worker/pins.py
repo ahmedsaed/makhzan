@@ -15,9 +15,10 @@ worker's process) and `ALTERNATIVES` (llama.cpp: Kev-4B Q4_K_M and pplx Q4_K_S s
 sidecar, accepted by the owner on 2026-11-26, D20 amended; docs/ai/kev-llamacpp.md,
 docs/ai/pplx-llamacpp.md). A worker selects one with `[compute] backend`.
 
-**Production** is `ACTIVE_BACKEND`: since the owner's switch of 2026-11-27, both keys serve
-the llama.cpp pins, and `production_pin(key)` is the one equal to the policy's `MODELS`
-(decision-review.md, "Production switch"). The torch pins stay, unchanged, as the rollback: a
+**Production** is `ACTIVE_BACKEND`: since the owner's switch of 2026-11-27, every key it names
+serves its llama.cpp pin, and `production_pin(key)` is the one equal to the policy's `MODELS`
+(decision-review.md, "Production switch"). Since D25 (2026-11-27) the first judge is H2O-Lightning
+(`h2o`, llama.cpp only: it has no torch pin); Kev's pins stay as the rollback of D25. The torch pins stay, unchanged, as the rollback: a
 worker on them is refused at hello (`ok: false`) while the policy names the llama.cpp versions.
 Rolling back is the reverse change to `ACTIVE_BACKEND` and the policy, in one commit.
 """
@@ -47,6 +48,18 @@ class Pin:
     gguf_file: str | None = None
     gguf_sha256: str | None = None
     gguf_temperature: float | None = None
+    #: llama.cpp only: the GGUF's `qwen35.decision.type`, checked before scoring.
+    gguf_decision_type: str | None = None
+    #: llama.cpp only: the `model` name sent with each request, which is the section name in a
+    #: router's preset (ml/deploy/home-server/models.ini).
+    router_model: str | None = None
+    #: llama.cpp only: the `[compute] dtype` a worker must name (the GGUF's quantisation).
+    dtype: str | None = None
+    #: llama.cpp only: one request's timeout in seconds on a "gpu" and on a "cpu" sidecar.
+    #: A request is the one part of a session a stop cannot interrupt, so each stays inside its
+    #: worker's stop bound (docs/ai/worker.md, "A stop sets one deadline").
+    request_s_gpu: float | None = None
+    request_s_cpu: float | None = None
 
 
 KEV_REVISION = "6cfce5c2fa4b4bd64026336ab649c5ca78857d52"
@@ -99,6 +112,14 @@ PPLX_GGUF_SHA256 = "819a9ad0f8f4aacb055f6d1783a155e3bd0bf33afb9c2f33749ef25350c6
 #: which llama.cpp applies; pplx's validated scores (and the policy's 0.95) are on that scale.
 PPLX_GGUF_TEMPERATURE = 1.3302961587905884
 
+#: H2O-Lightning-4B Q4_K_M (D25, 2026-11-27): the publisher's own GGUF, served by the same image.
+H2O_GGUF_REPO = "h2oai/h2o-lightning-4b-gguf"
+H2O_GGUF_REVISION = "61f8d8b7a8c2d84426d0d143ca187f65d235934b"
+H2O_GGUF_FILE = "h2o-lightning-4b-Q4_K_M.gguf"
+H2O_GGUF_SHA256 = "5ec969c6edbad5f1750141742f635cc7f01576bf9432151f730f0a6c30042768"
+#: `qwen35.decision.temperature.noul` in that file (the publisher's fitted 0.8, as stored).
+H2O_GGUF_TEMPERATURE = 0.800000011920929
+
 BACKENDS = ("torch", "llamacpp")
 
 ALTERNATIVES: dict[tuple[str, str], Pin] = {
@@ -117,6 +138,36 @@ ALTERNATIVES: dict[tuple[str, str], Pin] = {
         gguf_file=KEV_GGUF_FILE,
         gguf_sha256=KEV_GGUF_SHA256,
         gguf_temperature=KEV_GGUF_TEMPERATURE,
+        gguf_decision_type="kev",
+        router_model="kev",
+        dtype="q4_k_m",
+        # About 0.5 s on the 3060, 4.4-6.1 s on the home server's AMD card; on the i7-3770's CPU
+        # about 95 s for its longest request (1,625 tokens at ~17 tokens/s).
+        request_s_gpu=60.0,
+        request_s_cpu=120.0,
+    ),
+    ("h2o", "llamacpp"): Pin(
+        key="h2o",
+        repo=H2O_GGUF_REPO,
+        weights_revision=H2O_GGUF_REVISION,
+        # Raw P(yes), the scale the policy's 0.578 was matched on: the GGUF's 0.8 is undone.
+        temperature=1.0,
+        code=LLAMACPP_IMAGE,
+        model_version=(
+            f"h2o-lightning-4b-Q4_K_M@{H2O_GGUF_SHA256[:12]}+llama.cpp-{LLAMACPP_BUILD}"
+            f"-{LLAMACPP_IMAGE.rsplit(':', 1)[1][:12]}+T1.0"
+        ),
+        backend="llamacpp",
+        gguf_file=H2O_GGUF_FILE,
+        gguf_sha256=H2O_GGUF_SHA256,
+        gguf_temperature=H2O_GGUF_TEMPERATURE,
+        gguf_decision_type="h2o-lightning",
+        router_model="h2o",
+        dtype="q4_k_m",
+        # The same 4B architecture and K2 requests as Kev's (~0.6-0.9 s at batch 512 on the 3060),
+        # so Kev's bounds.
+        request_s_gpu=60.0,
+        request_s_cpu=120.0,
     ),
     ("pplx", "llamacpp"): Pin(
         key="pplx",
@@ -134,12 +185,33 @@ ALTERNATIVES: dict[tuple[str, str], Pin] = {
         gguf_file=PPLX_GGUF_FILE,
         gguf_sha256=PPLX_GGUF_SHA256,
         gguf_temperature=PPLX_GGUF_TEMPERATURE,
+        gguf_decision_type="pplx-decider",
+        router_model="pplx",
+        dtype="q4_k_s",
+        # Non-causal, its K1 prompt with the full description, so longer: the longest Phase E
+        # request (3,574 tokens) took 48.9 s on the desktop's CPU, about 193 s scaled to the home
+        # server (not measured there). 225 s keeps the whole stop (request, 3 x 10 s of last
+        # posts, 10 s join: 265 s) under supervisor.KILL_AFTER_S (270 s) and its 300 s
+        # stop_grace_period.
+        request_s_gpu=60.0,
+        request_s_cpu=225.0,
     ),
 }
 
 
-#: What production serves per model key (owner, 2026-11-27): the policy's MODELS equal these.
-ACTIVE_BACKEND: dict[str, str] = {"kev": "llamacpp", "pplx": "llamacpp"}
+#: What production serves per model key (owner, 2026-11-27; H2O first since D25): the policy's
+#: MODELS equal these. Kev is no longer served; its pins stay as the rollback of D25.
+ACTIVE_BACKEND: dict[str, str] = {"h2o": "llamacpp", "pplx": "llamacpp"}
+
+
+#: Every model key a worker can be configured for, on any backend (h2o has llama.cpp only).
+MODEL_KEYS: tuple[str, ...] = tuple(sorted({*PINS, *(key for key, _ in ALTERNATIVES)}))
+
+
+def llamacpp_pins() -> dict[str, Pin]:
+    """Every model key's llama.cpp pin. A new llama.cpp judge is one more `ALTERNATIVES`
+    entry: the worker's loader, config check, timeouts and smoke read these fields."""
+    return {key: pin for (key, backend), pin in ALTERNATIVES.items() if backend == "llamacpp"}
 
 
 def production_pin(key: str) -> Pin:

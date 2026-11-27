@@ -2,7 +2,7 @@
 
 An AI "same" pair acts last: once the rules and the rulings have formed every
 cluster, it may join two whole clusters. Every one of today's vetoes still
-applies against every member, a person's ruling wins, and a Kev confident no
+applies against every member, a person's ruling wins, and a first-judge confident no
 between any two members blocks the join (P14) but never splits what the rules
 merged; the outcome does not depend on placement order. Decisions are read
 only in `live` mode, or in a dry run's preview; with none, grouping is exactly
@@ -123,7 +123,7 @@ def _rules_pair():
     return a, b
 
 
-def test_a_kev_no_with_any_member_blocks_an_ai_join():
+def test_a_first_judge_no_with_any_member_blocks_an_ai_join():
     a, b = _rules_pair()
     x = _mem("Distance ranging board", "shop-c")
     assert _together(_group_listings([a, b, x], None, None, _ai((x, a))), a, b, x)
@@ -131,12 +131,12 @@ def test_a_kev_no_with_any_member_blocks_an_ai_join():
     assert _together(blocked, a, b) and not _together(blocked, a, x)
 
 
-def test_a_kev_no_never_splits_what_the_rules_merged():
+def test_a_first_judge_no_never_splits_what_the_rules_merged():
     a, b = _rules_pair()
     x = _mem("Distance ranging board", "shop-c")
     groups = _group_listings([a, b, x], None, None, _ai((x, a), no=[(a, b)]))
     assert _together(groups, a, b, x)
-    # And a rules join with a Kev no inside it, with an AI pair elsewhere.
+    # And a rules join with a first-judge no inside it, with an AI pair elsewhere.
     c = _mem("HCSR04 Ultrasonic Sensor Module", "shop-d", "HCSR04")
     groups = _group_listings([a, b, c, x], None, None, _ai((x, a), no=[(c, x), (c, a)]))
     assert _together(groups, a, b, c)
@@ -144,7 +144,7 @@ def test_a_kev_no_never_splits_what_the_rules_merged():
 
 @pytest.mark.parametrize("x_shop", ["shop-0", "shop-z"])
 def test_the_group_check_does_not_depend_on_which_shop_sorts_first(x_shop):
-    # X's AI pair is with M; its Kev no is with N, M's rules partner. Whether
+    # X's AI pair is with M; its first-judge no is with N, M's rules partner. Whether
     # X sorts before or after them, from scratch, X stays out.
     m = _mem("HCSR04 Ultrasonic Sensor Module", "shop-m", "HCSR04")
     n = _mem("HCSR04 Ultrasonic Sensor Module", "shop-n", "HCSR04")
@@ -182,7 +182,7 @@ def test_from_scratch_and_incremental_agree(x_shop):
 
 
 @pytest.mark.parametrize("x_shop", ["shop-0", "shop-z"])
-def test_a_kev_no_that_arrives_after_an_ai_merge_undoes_only_that_merge(x_shop):
+def test_a_first_judge_no_that_arrives_after_an_ai_merge_undoes_only_that_merge(x_shop):
     product = uuid.uuid4()
     m = _mem("HCSR04 Ultrasonic Sensor Module", "shop-m", "HCSR04", product=product)
     n = _mem("HCSR04 Ultrasonic Sensor Module", "shop-n", "HCSR04", product=product)
@@ -216,7 +216,7 @@ def test_with_no_ai_pair_grouping_is_byte_for_byte_what_it_was():
     never = Overrides(never=frozenset({pair(listings[4].id, listings[5].id)}))
     for overrides in (None, never):
         want = _shape(_group_listings(listings, None, overrides))
-        # An empty set, or Kev "no" pairs alone, change nothing at all.
+        # An empty set, or first-judge "no" pairs alone, change nothing at all.
         for ai in (AiSame(), _ai(no=[(listings[0], listings[2])])):
             assert _shape(_group_listings(listings, None, overrides, ai)) == want
 
@@ -274,10 +274,10 @@ async def _same(x, y) -> int:
         outcome="same",
         decided_by="pplx",
         scores={
-            "kev": {"model": "kev", "ab": 0.9, "ba": 0.9, "min": 0.9},
+            "h2o": {"model": "h2o", "ab": 0.9, "ba": 0.9, "min": 0.9},
             "pplx": {"model": "pplx", "ab": 0.98, "ba": 0.97, "min": 0.97},
         },
-        policy_version="p1",
+        policy_version="p2",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,
     )
@@ -537,7 +537,7 @@ def test_a_pair_with_no_known_strength_sorts_last():
 # --- what a live regroup found of each decision (ai_decisions.effect) -------
 
 
-async def _decision(x, y, *, outcome="same", kev=0.9, pplx=0.97, state="standing") -> int:
+async def _decision(x, y, *, outcome="same", first=0.9, pplx=0.97, state="standing") -> int:
     a, b = pair(x, y)
     row = AiDecision(
         pipeline="match",
@@ -546,10 +546,10 @@ async def _decision(x, y, *, outcome="same", kev=0.9, pplx=0.97, state="standing
         outcome=outcome,
         decided_by="pplx",
         scores={
-            "kev": {"model": "kev", "ab": kev, "ba": kev, "min": kev},
+            "h2o": {"model": "h2o", "ab": first, "ba": first, "min": first},
             "pplx": {"model": "pplx", "ab": pplx, "ba": pplx, "min": pplx},
         },
-        policy_version="p1",
+        policy_version="p2",
         content_sha256_a=b"\0" * 32,
         content_sha256_b=b"\0" * 32,
         state=state,
@@ -599,7 +599,7 @@ async def test_a_live_regroup_writes_each_same_decisions_effect():
     # Blocked by the AI phase: values (5 V against 12 V).
     v_a = await _listing(shop_a, "Example relay board 5V")
     v_b = await _listing(shop_b, "Switching module 12V")
-    # Blocked by the AI phase: a Kev confident no with a rules-merged member.
+    # Blocked by the AI phase: a first-judge confident no with a rules-merged member.
     k_x = await _listing(shop_a, "Example rotary knob encoder")
     k_y = await _listing(shop_b, "Example servo tester ZT48", "ZT48")
     k_z = await _listing(shop_c, "Example servo tester ZT48", "ZT48")
@@ -639,7 +639,7 @@ async def test_a_live_regroup_writes_each_same_decisions_effect():
         "ai": await _decision(ai_a, ai_b),
         "rules": await _decision(rules_a, rules_b),
         "values": await _decision(v_a, v_b),
-        "kev": await _decision(k_x, k_y),
+        "floor": await _decision(k_x, k_y),
         "shop": await _decision(s_a, s_b),
         "best": await _decision(n_x, n_y, pplx=0.99),
         "second": await _decision(n_x, n_w, pplx=0.95),
@@ -648,7 +648,7 @@ async def test_a_live_regroup_writes_each_same_decisions_effect():
         "ruled": await _decision(o_a, o_b),
         "stale": await _decision(ai_a, rules_b, state="stale"),
     }
-    no = await _decision(k_x, k_z, outcome="not_same", kev=0.01)
+    no = await _decision(k_x, k_z, outcome="not_same", first=0.01)
     await _mode("live")
     stats = await _rebuild()
     found = await _effects()
@@ -656,7 +656,7 @@ async def test_a_live_regroup_writes_each_same_decisions_effect():
         "ai": ("in_effect", None),
         "rules": ("in_effect", None),
         "values": ("blocked", "values"),
-        "kev": ("blocked", "Kev floor"),
+        "floor": ("blocked", "judge floor"),
         "shop": ("blocked", "same shop"),
         "best": ("in_effect", None),
         "second": ("blocked", "not mutual best"),

@@ -1,7 +1,7 @@
 """AI matching by hand: workers, the admin token, the mode, decisions, the backlog.
 
     python -m worker.ai status [--json]            # queue, throughput, workers, decisions
-    python -m worker.ai worker add NAME --models kev[,pplx]   # prints the token once
+    python -m worker.ai worker add NAME --models h2o[,pplx]   # prints the token once
     python -m worker.ai worker list
     python -m worker.ai worker revoke NAME
     python -m worker.ai admin-token                # a fresh admin token and its sha256
@@ -173,7 +173,8 @@ async def redecide(session, policy: str) -> dict:
 
     `{"policy", "thresholds", "active", "total", "counts": {key: n}, "examples": {key: [ids]}}`,
     where a key is `unchanged <outcome>`, `<before> -> <after>`, `needs <stage>
-    scores first` or `unregistered pipeline`. Raises `Refused` for an unknown policy.
+    scores first`, `policy lacks <stage>` (no threshold for a stage of the pipeline) or
+    `unregistered pipeline`. Raises `Refused` for an unknown policy.
     """
     if policy not in POLICIES:
         raise Refused(f"No policy {policy!r} (known: {sorted(POLICIES)}).")
@@ -188,6 +189,18 @@ async def redecide(session, policy: str) -> dict:
             name: {"ab": entry.get("ab"), "ba": entry.get("ba")}
             for name, entry in (d.scores or {}).items()
         }
+        lacking = [
+            s.name
+            for s in PIPELINES[d.pipeline].stages
+            if s.threshold is not None and s.threshold not in POLICIES[policy]
+        ]
+        if lacking:
+            # A policy of another judge (p1 has no threshold for H2O's stage, D25): nothing
+            # to recompute, rather than a traceback.
+            key = f"policy lacks {lacking[0]}"
+            counts[key] += 1
+            examples.setdefault(key, []).append(d.id)
+            continue
         step = decide(d.pipeline, scores, policy)
         if step.action != DECIDE:
             key = f"needs {step.stage} scores first"

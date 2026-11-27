@@ -275,7 +275,7 @@ def test_load_checks_everything_then_scores_raw(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     side = sidecar(not_ready=2, calibrated=lambda _p: 1 / (1 + math.exp(-2.0 / T)))
     pin = pin_of(gguf)
-    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin)
     p, extra = judge.score(PAYLOAD)
     assert p == pytest.approx(1 / (1 + math.exp(-2.0)))
     assert extra == {}
@@ -310,19 +310,19 @@ def test_load_refuses_a_mismatch(tmp_path, sidecar, override, sidecar_kw, match)
     gguf = kev_gguf(tmp_path, **override)
     side = sidecar(**sidecar_kw)
     with pytest.raises(judges.LoadError, match=match):
-        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
 
 
 def test_load_refuses_another_file(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     pin = pin_of(gguf, gguf_sha256="0" * 64)
     with pytest.raises(judges.LoadError, match="sha256"):
-        judges._load_kev_llamacpp(rt(sidecar().url, gguf), pin)
+        judges._load_llamacpp("kev", rt(sidecar().url, gguf), pin)
     other = write_gguf(tmp_path / "Kev-4B-Q8_0.gguf", {"qwen35.decision.type": "kev"})
     with pytest.raises(judges.LoadError, match="not the pinned"):
-        judges._load_kev_llamacpp(rt(sidecar().url, other), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(sidecar().url, other), pin_of(gguf))
     with pytest.raises(judges.LoadError, match="not a file"):
-        judges._load_kev_llamacpp(rt(sidecar().url, tmp_path / "none.gguf"), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(sidecar().url, tmp_path / "none.gguf"), pin_of(gguf))
 
 
 def test_what_is_sent_is_nfc_like_kevs_own_tokenizer_sees_it(tmp_path, sidecar):
@@ -330,7 +330,7 @@ def test_what_is_sent_is_nfc_like_kevs_own_tokenizer_sees_it(tmp_path, sidecar):
     decomposed é tokenised differently for 10 of 1,800 Phase E requests on pplx's twin)."""
     gguf = kev_gguf(tmp_path)
     side = sidecar(calibrated=lambda _p: 0.5)
-    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     raw = {
         "state": "47K\u2126 resistor, cafe\u0301",
         "questions": {"same": {"type": "noul", "instructions": "Ohm \u2126?",
@@ -348,7 +348,7 @@ def test_load_gives_up_on_a_sidecar_that_never_gets_ready(tmp_path, monkeypatch)
     gguf = kev_gguf(tmp_path)
     monkeypatch.setattr(judges, "LLAMACPP_READY_S", 0.0)
     with pytest.raises(judges.LoadError, match="not ready"):
-        judges._load_kev_llamacpp(rt("http://127.0.0.1:9", gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt("http://127.0.0.1:9", gguf), pin_of(gguf))
 
 
 @pytest.mark.parametrize(
@@ -366,7 +366,7 @@ def test_load_gives_up_on_a_sidecar_that_never_gets_ready(tmp_path, monkeypatch)
 )
 def test_a_malformed_answer_is_an_error_never_a_score(tmp_path, sidecar, answer, match):
     gguf = kev_gguf(tmp_path)
-    judge = judges._load_kev_llamacpp(rt(sidecar(answer=answer).url, gguf), pin_of(gguf))
+    judge = judges._load_llamacpp("kev", rt(sidecar(answer=answer).url, gguf), pin_of(gguf))
     with pytest.raises(RuntimeError, match=match):
         judge.score(PAYLOAD)
 
@@ -374,12 +374,15 @@ def test_a_malformed_answer_is_an_error_never_a_score(tmp_path, sidecar, answer,
 def test_the_request_timeout_is_per_device_and_inside_the_stop_bound(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     for device, want in (("gpu", 60.0), ("cpu", 120.0)):
-        judge = judges._load_kev_llamacpp(rt(sidecar().url, gguf, device=device), pin_of(gguf))
+        judge = judges._load_llamacpp("kev", rt(sidecar().url, gguf, device=device), pin_of(gguf))
         assert judge.info["request_timeout_s"] == want
     # The compose stop_grace_period of the worker that runs each one covers a request, 3 x 10 s
     # of last posts and a 10 s join (docs/ai/worker.md, "A stop sets one deadline").
     text = (DEPLOY / "compose.yml").read_text()
     for (key, _device), timeout in judges.LLAMACPP_REQUEST_S.items():
+        if f"\n  {key}:\n" not in text:
+            assert key not in pins.ACTIVE_BACKEND, key  # only a rollback model has no service
+            continue
         block = text[text.index(f"\n  {key}:\n") :]
         block = block[: block.index("\n\n")]
         grace = (
@@ -405,7 +408,7 @@ def test_a_stop_interrupts_the_hash_and_the_wait(tmp_path):
     stop = threading.Event()
     stop.set()
     with pytest.raises(judges.LoadInterrupted, match="hashing"):
-        judges._load_kev_llamacpp(rt("http://127.0.0.1:9", gguf, stop), pin_of(gguf))
+        judges._load_llamacpp("kev", rt("http://127.0.0.1:9", gguf, stop), pin_of(gguf))
     with pytest.raises(judges.LoadInterrupted, match="waiting"):
         judges._wait_ready("http://127.0.0.1:9", 120.0, stop)
     # Not yet stopped, then stopped while waiting: it ends at the next check, not at 120 s.
@@ -422,7 +425,7 @@ def test_a_stop_interrupts_the_hash_and_the_wait(tmp_path):
 def test_a_refused_request_is_an_error_not_a_score(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     side = sidecar()
-    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     side.status = 400
     with pytest.raises(RuntimeError, match="HTTP 400"):
         judge.score(PAYLOAD)
@@ -433,17 +436,29 @@ def test_a_refused_request_is_an_error_not_a_score(tmp_path, sidecar):
 # --- the pin and the configuration --------------------------------------------------------
 
 
-def test_the_kev_llamacpp_pin_is_what_production_serves():
+def test_the_kev_llamacpp_pin_is_the_rollback_of_d25():
     alt = pins.pin_for("kev", "llamacpp")
     assert alt.backend == "llamacpp" and alt.temperature == 1.0
-    # The production switch (owner, 2026-11-27): the policy names this version.
-    assert alt.model_version == policy.MODELS["kev"].model_version
-    assert pins.production_pin("kev") is alt
+    # D25 (owner, 2026-11-27): H2O replaced Kev; the policy keeps Kev's version as its rollback.
+    assert alt.model_version == policy.LLAMACPP_KEV.model_version
+    assert "kev" not in pins.ACTIVE_BACKEND and "kev" not in policy.MODELS
     assert alt.code == pins.LLAMACPP_IMAGE and "@sha256:" in alt.code
     assert alt.model_version.startswith(f"kev-4b-Q4_K_M@{pins.KEV_GGUF_SHA256[:12]}+")
     assert pins.pin_for("kev") is pins.PINS["kev"]
     with pytest.raises(KeyError):
         pins.pin_for("kev", "onnx")
+
+
+def test_the_h2o_pin_is_what_production_serves_and_reads_raw_scores():
+    alt = pins.pin_for("h2o", "llamacpp")
+    assert pins.production_pin("h2o") is alt
+    assert alt.model_version == policy.MODELS["h2o"].model_version
+    assert alt.model_version.startswith(f"h2o-lightning-4b-Q4_K_M@{pins.H2O_GGUF_SHA256[:12]}+")
+    # Raw P(yes), the scale the policy's 0.578 was matched on: the GGUF's 0.8 is undone.
+    assert alt.temperature == 1.0 and abs(alt.gguf_temperature - 0.8) < 1e-6
+    assert judges.LLAMACPP_MODELS["h2o"] == ("h2o-lightning", "h2o")
+    with pytest.raises(KeyError):
+        pins.pin_for("h2o")  # no torch build
 
 
 def test_the_pplx_alternative_reads_scores_as_served():
@@ -521,17 +536,17 @@ def test_expect_version_is_the_backends():
 
 
 def test_the_compose_example_parses():
-    data = tomllib.loads((DEPLOY / "home-kev.toml").read_text())
+    data = tomllib.loads((DEPLOY / "home-h2o.toml").read_text())
     data["worker"].pop("token_file")
     data["worker"]["token"] = "example"
     cfg = parse(data)
     assert (cfg.backend, cfg.device, cfg.llamacpp_url) == (
         "llamacpp", "gpu", "http://llamacpp:8080",
     )  # fmt: skip
-    assert cfg.expect_versions == {"kev": pins.pin_for("kev", "llamacpp").model_version}
+    assert cfg.expect_versions == {"h2o": pins.pin_for("h2o", "llamacpp").model_version}
     # Its window is the torch Kev worker's (the rollback config): one replaces the other.
     cpu = parse({**tomllib.loads((DEPLOY / "torch-kev.toml").read_text()),
-                 "worker": {**data["worker"]}})  # fmt: skip
+                 "worker": {**data["worker"], "model": "kev"}})  # fmt: skip
     assert cfg.schedule.windows == cpu.schedule.windows
 
 
@@ -628,7 +643,7 @@ def test_on_a_router_the_load_swaps_its_own_model_in_and_checks_its_file(tmp_pat
     gguf = kev_gguf(tmp_path)
     side = sidecar(router=ROUTER, load_polls=3)
     side.states["pplx"] = "loaded"  # pplx held the card
-    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     assert side.loads == ["kev"] and side.states == {"kev": "loaded", "pplx": "unloaded"}
     assert judge.info["router"] is True and judge.info["llamacpp_build"] == "b12767-a8ad690ca"
     judge.score(PAYLOAD)
@@ -639,7 +654,7 @@ def test_on_a_router_the_load_swaps_its_own_model_in_and_checks_its_file(tmp_pat
 def test_on_a_router_a_ready_model_is_not_reloaded(tmp_path, sidecar, state):
     gguf = pplx_gguf(tmp_path)
     side = sidecar(router=ROUTER, initial=state)
-    judges._load_pplx_llamacpp(rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
+    judges._load_llamacpp("pplx", rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
     assert side.loads == []
 
 
@@ -647,14 +662,14 @@ def test_on_a_router_another_file_under_the_name_is_refused(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     side = sidecar(router={**ROUTER, "kev": "/models/other.gguf"})
     with pytest.raises(judges.LoadError, match="other.gguf"):
-        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
 
 
 def test_on_a_router_without_the_model_the_load_fails(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     side = sidecar(router={"pplx": ROUTER["pplx"]})
     with pytest.raises(judges.LoadError, match="no model 'kev'"):
-        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
 
 
 def test_on_a_router_a_load_that_never_finishes_gives_up(tmp_path, sidecar, monkeypatch):
@@ -662,7 +677,7 @@ def test_on_a_router_a_load_that_never_finishes_gives_up(tmp_path, sidecar, monk
     side = sidecar(router=ROUTER, load_polls=10**9)
     monkeypatch.setattr(judges, "LLAMACPP_READY_S", 2.5)
     with pytest.raises(judges.LoadError, match="did not load 'kev' \\(loading\\)"):
-        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
 
 
 def test_on_a_router_a_stop_interrupts_the_load(tmp_path, sidecar):
@@ -673,7 +688,7 @@ def test_on_a_router_a_stop_interrupts_the_load(tmp_path, sidecar):
     stop = _t.Event()
     _t.Timer(1.5, stop.set).start()
     with pytest.raises(judges.LoadInterrupted):
-        judges._load_kev_llamacpp(rt(side.url, gguf, stop=stop), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf, stop=stop), pin_of(gguf))
 
 
 # --- a whole session ----------------------------------------------------------------------
@@ -760,7 +775,7 @@ def test_a_stop_during_the_load_hands_the_lease_back_not_a_config_error(tmp_path
 def test_pplx_scores_are_taken_as_served_and_kevs_gguf_is_refused(tmp_path, sidecar):
     gguf = pplx_gguf(tmp_path)
     side = sidecar(model_path=f"/models/{pins.PPLX_GGUF_FILE}", calibrated=lambda _p: 0.9612)
-    judge = judges._load_pplx_llamacpp(rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
+    judge = judges._load_llamacpp("pplx", rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
     p, _ = judge.score(PAYLOAD)
     # llama.cpp applies pplx's own temperature, the scale of its validated scores: unchanged.
     assert p == 0.9612
@@ -773,14 +788,14 @@ def test_pplx_scores_are_taken_as_served_and_kevs_gguf_is_refused(tmp_path, side
         "qwen35.decision.type": "kev",
         "qwen35.decision.temperature.noul": pins.PPLX_GGUF_TEMPERATURE})  # fmt: skip
     with pytest.raises(judges.LoadError, match="not a pplx-decider decision model"):
-        judges._load_pplx_llamacpp(rt(side.url, wrong, dtype="q4_k_s"), pin_of(wrong, "pplx"))
+        judges._load_llamacpp("pplx", rt(side.url, wrong, dtype="q4_k_s"), pin_of(wrong, "pplx"))
 
 
 @pytest.mark.parametrize("bad", [math.nan, 1.5, -0.1, True, "0.9"])
 def test_a_bad_pplx_answer_is_an_error_never_a_score(tmp_path, sidecar, bad):
     gguf = pplx_gguf(tmp_path)
     side = sidecar(model_path=f"/models/{pins.PPLX_GGUF_FILE}", calibrated=lambda _p: bad)
-    judge = judges._load_pplx_llamacpp(rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
+    judge = judges._load_llamacpp("pplx", rt(side.url, gguf, dtype="q4_k_s"), pin_of(gguf, "pplx"))
     with pytest.raises(RuntimeError, match="noul"):
         judge.score(PAYLOAD)
 
@@ -849,14 +864,14 @@ def test_on_a_router_a_busy_other_model_is_waited_for(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     side = sidecar(router=ROUTER, busy_loads=2)
     side.states["pplx"] = "loaded"
-    judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     assert side.loads == ["kev"] and side.states["kev"] == "loaded"
 
 
 def test_on_a_router_a_restarting_router_is_retried_not_read_as_single_model(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     side = sidecar(router=ROUTER, models_errors=2)
-    judge = judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     assert judge.info["router"] is True and side.loads == ["kev"]
 
 
@@ -865,7 +880,7 @@ def test_a_failing_models_endpoint_is_never_a_single_model_server(tmp_path, side
     side = sidecar(router=ROUTER, models_errors=10**9)
     monkeypatch.setattr(judges, "LLAMACPP_READY_S", 1.0)
     with pytest.raises(judges.LoadError, match="did not list its models"):
-        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
 
 
 def test_on_a_router_a_load_whose_child_exits_fails_at_once(tmp_path, sidecar):
@@ -873,7 +888,7 @@ def test_on_a_router_a_load_whose_child_exits_fails_at_once(tmp_path, sidecar):
     side = sidecar(router=ROUTER, load_fails=True)
     t0 = time.monotonic()
     with pytest.raises(judges.LoadError, match="failed to load 'kev'"):
-        judges._load_kev_llamacpp(rt(side.url, gguf), pin_of(gguf))
+        judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     assert time.monotonic() - t0 < 10  # not the 180 s budget
 
 
@@ -899,10 +914,10 @@ def test_the_worker_rechecks_the_clock_limit_at_every_load(tmp_path, sidecar, mo
     side = sidecar(router=ROUTER)
     runtime = dataclasses.replace(rt(side.url, gguf), require_clock_limit=True)
     if ok:
-        judges._load_kev_llamacpp(runtime, pin_of(gguf))
+        judges._load_llamacpp("kev", runtime, pin_of(gguf))
     else:
         with pytest.raises(judges.LoadError, match="manual|clock mode"):
-            judges._load_kev_llamacpp(runtime, pin_of(gguf))
+            judges._load_llamacpp("kev", runtime, pin_of(gguf))
         assert side.loads == []  # refused before the card is touched
 
 
@@ -916,6 +931,6 @@ def test_require_clock_limit_defaults_on_for_a_gpu_and_is_llamacpp_only():
     torch["compute"] = {"device": "cpu", "require_clock_limit": True}
     with pytest.raises(ConfigError, match="only read with"):
         parse(torch)
-    for name in ("home-kev", "home-pplx"):
+    for name in ("home-h2o", "home-pplx"):
         data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
         assert data["compute"]["require_clock_limit"] is True

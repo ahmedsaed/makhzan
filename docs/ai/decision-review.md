@@ -147,6 +147,7 @@ is the decision that should have come back to the owner.
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
 | D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M and pplx-decider-flash-v1.3 Q4_K_S (llama.cpp) accepted on the label test (see "Kev quantisation" and "pplx quantisation" below) | Owner | serving | settled |
 | D24 | Serving | Production switch 2026-11-27: both judges served by llama.cpp (Kev-4B Q4_K_M, pplx Q4_K_S) on the home server's AMD card, taking turns (Kev 01:00–05:00, pplx 05:05–07:00), the card held to clock states 0–2; the judge-version catch-up drained by the owner (see "Production switch" below) | Owner | serving | settled |
+| D25 | Models | First judge: H2O-Lightning-4B Q4_K_M (llama.cpp) replaces Kev, at 0.578 on its raw scale; pplx Q4_K_S ≥ 0.95 stays second, same K2 payload; policy p2. Its group-check floor (P14's role) is 0.19, proposed by the session and confirmed by the owner, 2026-11-27 (see "H2O first" below) | Owner | pipeline, group check, audit | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
@@ -512,4 +513,55 @@ below).*
 - **Not done:**
   - **A proper power supply** for the card (the clock limit is the workaround).
   - **A CPU route for pplx requests over 4,096 tokens,** about 1 pair in 3,000.
+
+### H2O first (owner, 2026-11-27, D25)
+
+**H2O-Lightning-4B Q4_K_M replaces Kev as the first judge, at 0.578; pplx Q4_K_S ≥ 0.95 stays
+the second.** Policy **p2** = {h2o: 0.578, pplx: 0.95} is active; p1 (Kev ≥ 0.80, pplx ≥ 0.95)
+stays in `policy.POLICIES`, never edited, as history and the rollback.
+
+- **Accepted on the label test (D20).** With pplx Q4 under p2, on the labelled Phase E set:
+  229 merges, 227 correct and 2 wrong, both grey-area (E0098, E0639). Q4 and Q8 make the same
+  merges; AUC 0.951.
+- **The scale.** H2O's GGUF bakes in T = 0.8 (`qwen35.decision.temperature.noul`). The worker
+  undoes it like Kev's, so the stored score is the raw one: raw = sigmoid(0.8 · logit p). The
+  threshold 0.578 is on that raw scale. The pin is the GGUF's sha256 (`5ec969c6edba…`, the Hub's
+  own etag) at revision `61f8d8b7a8c2`, served by the same pinned llama.cpp image as pplx.
+- **Same prompt.** The stage reads layout K2-150 (`kev_payload`, the name kept so the prompt
+  version stays `K2-150@6aef2c6c`).
+- **The switch.**
+  - The stage is a new one, `h2o`. Kev's stage leaves `match`.
+  - A queued Kev job is re-offered to the pipeline at the next sweep (hello, or the daily
+    producers). It is queued at `h2o` with the same reason and priority, never cancelled.
+  - Standing decisions carrying a Kev score are re-scored at the amended P8 priorities: 35 for
+    "same", 30 for "not same", 100 for a "same" whose text changed.
+  - Until a decision is re-scored, its Kev score is read at Kev's floor (0.05), not H2O's.
+- **The audit (P12)** records H2O from now on. Pairs Kev already audited stay as they were (the
+  audit re-offers no pair it has seen), so `ai status` shows the audit per model, each at its own
+  bands: H2O below 0.578 and below 0.19; Kev below 0.8 and below 0.05.
+
+**H2O's group-check floor: 0.19, confirmed by the owner, 2026-11-27** (proposed by the session). P14 blocks an AI join when the
+first judge's minimum between any two members is below a floor. Kev's was 0.05. H2O's raw
+scores are compressed (none go below about 0.10), so 0.05 would block nothing. The proposal
+keeps P14's strength rather than its number, matching how many labelled "not same" pairs the
+floor catches (Phase E labels, pairs passing the vetoes):
+
+| Floor | "Not same" blocked (of 463) | "Same" wrongly blocked |
+|---|---|---|
+| Kev bf16 < 0.05 (today) | 358 (77.3%) | 16 |
+| H2O raw < 0.185 | 351 (75.8%) | 11 |
+| **H2O raw < 0.19** | **358 (77.3%)** | **12** |
+| H2O raw < 0.195 | 365 (78.8%) | 16 |
+
+At 0.19 the floor catches the same share of "not same" pairs as Kev's did, and wrongly
+catches 4 fewer "same" pairs. It is in `policy.JUDGE_FLOORS`, read per model by the group
+check (`decisions.load_ai_same`); the audit's bands (`status.AUDIT_BELOW`) derive from it and
+the policies. A floor only ever blocks an AI join, never a rules merge. A different number is a
+one-line change to `JUDGE_FLOORS`.
+
+**Not done:**
+
+- **Old audit pairs.** Pairs Kev audited are not re-audited by H2O, so the H2O audit grows only
+  with new rules merges. Re-auditing them all is an owner call: one producer run with the audit
+  filter keyed on the judge.
 

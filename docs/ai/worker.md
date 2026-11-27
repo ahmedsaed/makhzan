@@ -9,7 +9,7 @@ queue empty; `docs/ai/decision-review.md`, "Go-live"). What is not here yet is l
 the end.
 
 A worker is one process that serves the one model key its configuration names: the broker
-takes exactly one model per session, so two models are two workers (for example `home-kev`
+takes exactly one model per session, so two models are two workers (for example `home-h2o`
 and `home-pplx`, each with its own window). It talks only to the broker, with its own
 bearer token, over Tailscale (`http://<tailscale-ip>:<port>`, inside the tailnet's encrypted
 WireGuard tunnel; there is no public HTTPS endpoint). It loads its model once, scores the
@@ -284,7 +284,7 @@ this image can load the model key, and exits.
 | `broker_proxy_hosts` | `["broker-proxy"]` | with `broker_via_proxy`: the exact names allowed, each a compose service name (one DNS label with a letter in it, no dots, nothing the resolver reads as an address such as `1234` or `0x7f000001`) |
 | `token_file` / `token` | exactly one | the bearer token, preferably as a file (a Docker secret or a read-only mount) |
 | `ca_file` | system CAs | for an `https://` broker only: a CA bundle to trust instead, for a privately signed certificate |
-| `model` | required | the one model key served, from `policy.MODELS`: `"kev"` or `"pplx"`. The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
+| `model` | required | the one model key served, from `policy.MODELS`: `"h2o"` or `"pplx"` (`"kev"` until D25, 2026-11-27, and for its rollback). The broker takes one model per session, so two models are two workers. A key the image cannot load is refused at start and by `--check`. The older `models = ["kev"]` is still read when it names exactly one key |
 
 ### `[model.<key>]` (optional)
 
@@ -308,8 +308,8 @@ this image can load the model key, and exits.
 | `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
 | `require_clock_limit` | `true` on a GPU | `backend = "llamacpp"` only: refuse to load unless every AMD card's `power_dpm_force_performance_level` reads `manual` (the home server's udev clock limit), re-read at every load. Set `false` on a machine whose GPU is not that card (the desktop's NVIDIA card) |
 
-With `backend = "llamacpp"`, `dtype` is the pinned GGUF's: `"q4_k_m"` for Kev, `"q4_k_s"` for
-pplx (the only accepted values), and `mmap` and `weights_cache` are refused (the worker holds no
+With `backend = "llamacpp"`, `dtype` is the pinned GGUF's: `"q4_k_m"` for H2O and Kev, `"q4_k_s"`
+for pplx (the only accepted values), and `mmap` and `weights_cache` are refused (the worker holds no
 weights).
 
 ### `[schedule]`
@@ -335,37 +335,43 @@ weights).
 ## Example configurations
 
 These four are examples, as production runs them since the owner's switch of 2026-11-27: both
-judges through llama.cpp (Kev-4B Q4_K_M, pplx Q4_K_S; "Kev on a llama.cpp sidecar",
-"pplx on a llama.cpp sidecar" below). The home server's windows are the owner's (Kev
-01:00–05:00, pplx 05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts
+judges through llama.cpp (H2O-Lightning-4B Q4_K_M since D25, Kev-4B Q4_K_M before it, pplx
+Q4_K_S; "Kev on a llama.cpp sidecar", "pplx on a llama.cpp sidecar" below). The home server's
+windows are the owner's (first judge 01:00–05:00, pplx 05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts
 and tokens are placeholders. The worker's tests parse every block below, and the compose stack's
 files. The torch configurations production ran until then are kept as
 `ml/deploy/home-server/torch-kev.toml` and `torch-pplx.toml`, the rollback (the broker refuses
 them while the policy names the llama.cpp versions).
 
-The home server's Kev worker, as `ml/deploy/home-server/home-kev.toml` has it: through the
-compose stack's broker proxy, waiting for its window, its judge the `kev` model of the stack's
-llama.cpp router on the AMD card (service `llamacpp`; the worker loads its model on its window's
-first lease with jobs, "The llama.cpp router" below):
+The home server's first-judge worker, H2O-Lightning since D25 (2026-11-27; Kev before it), as
+`ml/deploy/home-server/home-h2o.toml` has it: through the compose stack's broker proxy, waiting
+for its window, its judge the `h2o` model of the stack's llama.cpp router on the AMD card (service
+`llamacpp`; the worker loads its model on its window's first lease with jobs, "The llama.cpp
+router" below). H2O's GGUF bakes in a temperature of 0.8, which the worker undoes (raw P(yes), the
+scale of the policy's 0.578), as it undoes Kev's 2.406. Parity on the 3060 (2026-11-27), the
+worker's own `parity` tool through the whole protocol against the pinned server-vulkan image
+with the home server's preset (`-dev Vulkan0`, batch 512): 20 requests, every one within
+3.4e-9 of the stored H2O Q4 scores from the label test (raw, read at T 0.8), no decision moved
+(`ml/out/models-compare/parity-h2o-llamacpp-3060.json`):
 
 ```toml
-# home-kev.toml
+# home-h2o.toml
 [worker]
-name = "home-kev"
+name = "home-h2o"
 broker_url = "http://broker-proxy:8100/ai/v1"
 broker_via_proxy = true
 token_file = "/run/secrets/makhzan-ai-token"
-model = "kev"
+model = "h2o"
 
-[model.kev]
-expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
+[model.h2o]
+expect_version = "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0"
 
 [compute]
 backend = "llamacpp"
 device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://llamacpp:8080"
-gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+gguf_path = "/models/h2o-lightning-4b-Q4_K_M.gguf"
 require_clock_limit = true
 nice = 10
 
@@ -381,8 +387,8 @@ lease_s = 900
 heartbeat_s = 60
 ```
 
-The home server's pplx worker. Its window follows Kev's: the 4 GB card holds one model, and on its
-window's first lease with jobs its worker asks the same router for `pplx`, which unloads Kev's
+The home server's pplx worker. Its window follows H2O's: the 4 GB card holds one model, and on its
+window's first lease with jobs its worker asks the same router for `pplx`, which unloads H2O's
 first:
 
 ```toml
@@ -421,44 +427,45 @@ heartbeat_s = 60
 The desktop's GPU workers, for a backlog. They run until the queue is empty. Each needs its
 sidecar on the desktop first, run from **the same image digest** as the home server's: the
 digest is part of the model version, so a CUDA build would be a different version and the broker
-would refuse its scores. The server-vulkan image runs on the 3060 too (2.3 requests/s for Kev Q4
-there, against Kev's own server's 2.96). One at a time:
+would refuse its scores. The server-vulkan image runs on the 3060 too (H2O Q4 at batch 2048:
+2.72 requests/s there). One at a time:
 
 ```bash
-docker run -d --name desk-kev-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
+docker run -d --name desk-h2o-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
   -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 \
   ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486 \
-  -m /models/Kev-4B-Q4_K_M.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 2048 -ub 2048 \
+  -m /models/h2o-lightning-4b-Q4_K_M.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 2048 -ub 2048 \
   --host 0.0.0.0 --port 8080
 # pplx: -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 4096 -ub 4096 -fa on
 ```
 
-`-dev Vulkan0` makes a missing card a startup error rather than a silent CPU run. Kev runs here at
-batch 2048, where the home server's 4 GB card needs 512. Kev is causal, so the batch changes speed
-(2.7x on the 3060), not scores: measured on the 3060, Q4 at 2048 against 512 over 200 requests
-differed by at most 0.014 (calibrated; 0.030 raw) with no decision moved (`kev-llamacpp.md`).
+`-dev Vulkan0` makes a missing card a startup error rather than a silent CPU run. H2O runs here at
+batch 2048, where the home server's preset uses 512 (2048 not yet tested on the 4 GB card). H2O is
+causal, like Kev, so the batch changes speed (3.1x on the 3060), not scores: measured for Kev on
+the 3060, Q4 at 2048 against 512 over 200 requests differed by at most 0.014 (calibrated; 0.030
+raw) with no decision moved (`kev-llamacpp.md`).
 pplx needs 4096 everywhere (non-causal).
 
 The worker container then runs with `--network host`, so `127.0.0.1:8130` is the sidecar, and
 the same models directory mounted at `/models` (the worker hashes the GGUF it is pinned to).
 
 ```toml
-# desk-kev.toml
+# desk-h2o.toml
 [worker]
-name = "desk-kev"
+name = "desk-h2o"
 broker_url = "http://<tailscale-ip>:<port>/ai/v1"
 token_file = "/run/secrets/makhzan-ai-token"
-model = "kev"
+model = "h2o"
 
-[model.kev]
-expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
+[model.h2o]
+expect_version = "h2o-lightning-4b-Q4_K_M@5ec969c6edba+llama.cpp-b12767-87d189d403fd+T1.0"
 
 [compute]
 backend = "llamacpp"
 device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://127.0.0.1:8130"
-gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+gguf_path = "/models/h2o-lightning-4b-Q4_K_M.gguf"
 # The desktop's NVIDIA card is not the home server's clock-limited AMD card.
 require_clock_limit = false
 
@@ -629,8 +636,8 @@ models and holds one at a time, because the 4 GB card fits one:
 
 | Time (Africa/Cairo) | Worker | The router |
 |---|---|---|
-| 01:00–05:00 | home-kev scores | loads `kev` when home-kev's session asks (unloading `pplx`) |
-| 05:05–07:00 | home-pplx scores | loads `pplx` when home-pplx's session asks (unloading `kev`) |
+| 01:00–05:00 | home-h2o scores | loads `h2o` when home-h2o's session asks (unloading `pplx`) |
+| 05:05–07:00 | home-pplx scores | loads `pplx` when home-pplx's session asks (unloading `h2o`) |
 | otherwise | waiting | the last model sleeps after 10 idle minutes; the card is free |
 
 The router's entrypoint refuses to start unless the card is in `manual` performance mode, which
@@ -641,7 +648,7 @@ describe the rollback configurations (`torch-kev.toml`, `torch-pplx.toml`).
 ```bash
 docker compose up -d                            # start, and after any change
 docker compose pull && docker compose up -d     # update to the latest tested images
-docker compose logs -f kev                      # sleeping until 01:00, window open, ...
+docker compose logs -f h2o                      # sleeping until 01:00, window open, ...
 ```
 
 - **Scheduling.** Each worker stays up with `outside_window = "wait"` ("Waiting for the
@@ -818,6 +825,42 @@ NVIDIA card and a fake sysfs reading `manual`): Kev parity within 0.016 (40 requ
 is E0251, the near-threshold pair below), pplx bit-identical (40 requests), the worker's own load
 swapping models in 5.7 s (pplx to Kev) and 8.5 s (Kev to pplx). With the desktop's real sysfs
 (`auto`) the guard refused, as intended.
+
+## Swapping a llama.cpp judge (data, not code)
+
+Since D25 a llama.cpp judge is described entirely by data. Replacing the first judge again, with
+a GGUF that carries `qwen35.decision.*` metadata and is served by the pinned image, needs these
+edits, and no code:
+
+1. **The worker's pin** (`ml/makhzan_ml/worker/pins.py`): one `ALTERNATIVES[(key, "llamacpp")]`
+   entry with the GGUF's repo, revision, file, sha256, its stored decision temperature, its
+   `qwen35.decision.type`, the router name, the dtype, and the request timeouts; its key in
+   `ACTIVE_BACKEND`. The loader, the configuration check (`LLAMACPP_DTYPES`), the timeouts
+   (`judges.LLAMACPP_REQUEST_S`), the request's model name (`judges.LLAMACPP_MODELS`), the smoke,
+   parity and the fake broker all read them.
+2. **The policy registry** (`makhzan_schemas/ai/policy.py`): the `MODELS` entry (its version
+   equal to the pin's; the worker's tests hold them equal), a new policy made `ACTIVE`, and the
+   model's group-check floor in `JUDGE_FLOORS`. The audit's bands in `ai status` follow from them.
+3. **The pipelines registry** (`makhzan_schemas/ai/pipelines.py`): the `match` and `audit` first
+   stage's name, model and threshold key. The old stage leaving is handled (the sweep re-offers
+   its queued jobs; decisions carrying its score are re-scored).
+4. **The deployment**: a `models.ini` section named as the pin's router name, the worker TOML
+   (`model`, `expect_version`, `dtype`, `gguf_path`), the compose service and the router's
+   mount, and the CI smoke's model list (`.github/workflows/ai-worker-image-build.yml`).
+
+**Still model-specific in code, and why:**
+
+- **The torch loaders** (`judges._LOADERS`: `_load_kev`, `_load_pplx`) run each model's own
+  Python code, which differs per model. They are the rollback of the 2026-11-27 switch; a new
+  judge comes in through llama.cpp, which needs no loader of its own.
+- **The prompt layouts** (`prompt.VARIANTS`: `kev_payload` for K2-150, `pplx_payload` for
+  K1-full). A function's source is part of its prompt version, so renaming `kev_payload` would
+  change `K2-150`'s version and re-queue every decision for re-scoring. A judge on a new prompt
+  is a prompt change, reviewed by the owner, not a swap.
+- **The smoke's torch checks** (Kev's code commit in the torch image): torch images only.
+- **The GGUF metadata keys** (`qwen35.decision.type`, `qwen35.decision.temperature.noul`): the
+  decision-model format of the llama.cpp build in the pin. A model of another architecture
+  family would need the loader to read its keys.
 
 ## Kev on a llama.cpp sidecar (production since 2026-11-27)
 
