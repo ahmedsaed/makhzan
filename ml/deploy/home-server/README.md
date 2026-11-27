@@ -39,12 +39,12 @@ whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 
 `kev-llamacpp` (profile `llamacpp`) is Kev-4B Q4_K_M on the AMD card through llama.cpp, with
 `llamacpp-kev.toml` as its worker configuration. It is built but **not in use**, and plain
-`docker compose up -d` does not start it. The card is serviced and passed a 1,800-request soak
-**at a 65 W cap** (docs/ai/kev-llamacpp.md). Install the udev rule `99-amdgpu-power-cap.rules`
-first (its header has the commands): at the stock 85 W the card's SATA-adapter power feed reset
-the server. Nothing stops the sidecar if the cap is missing, so check
-`cat /sys/class/drm/card*/device/hwmon/hwmon*/power1_cap` reads 65000000 after any reboot before
-enabling it.
+`docker compose up -d` does not start it. The card is held to clock states 0–2 (max 753 MHz) by the
+udev rule `99-amdgpu-clock-limit.rules`; install it first (its header has the commands). At
+higher states the card's SATA-adapter power feed resets the whole server (docs/ai/kev-llamacpp.md).
+Nothing stops a sidecar if the rule is missing, so after any reboot check that
+`cat /sys/class/drm/card*/device/power_dpm_force_performance_level` reads `manual` before
+enabling one.
 Enabling the sidecar then waits only on the owner's policy switch: docs/ai/worker.md, "Kev on a
 llama.cpp sidecar".
 

@@ -186,15 +186,42 @@ Notes:
   - The likely cause is the inrush when the first large dispatch starts. The firmware cap is
     enforced over a time window, so it cannot stop a millisecond spike from idle to full draw.
     Kev's 512-token chunks make smaller bursts than pplx's 4,096-token ones.
-- **Conclusion:** the card computes correctly, but **its power feed is marginal.**
-  - Kev at 65 W (512-token batches) passed a 2 h 54 min soak.
-  - pplx's 4,096-token batches tripped it at once, so pplx stays on the CPU.
-  - Any nightly use of the card risks a hard reset of every service on the server until it has a
-    supply with a native PCIe cable. Whether to accept that for Kev is the owner's decision,
-    pending.
-  - The cap is applied at boot by `ml/deploy/home-server/99-amdgpu-power-cap.rules`, a udev rule.
-  - Traces: `ml/out/gguf-kev/amd-monitor*.log` and `home-amd-65w-soak.jsonl`. The server-side
-    `guard*.log` files are in `/mnt/disk3/makhzan-ml/gguf-test/`.
+- **The cause, captured live (2026-11-27).** netconsole sent kernel messages to the desktop, and
+  sensors were streamed at 10 Hz.
+  - At 85 W, the pplx trigger reset the server within ~0.1 s of the card jumping from idle
+    (8 W, 300 MHz, 800 mV) to 905 MHz at 1,118 mV.
+  - The kernel sent nothing. EFI pstore was empty (`kernel.panic=10` was armed). The owner saw
+    the fans and lights go off.
+  - So the power supply cuts out on the card's step into its top clock and voltage states. It is
+    not the average power, and not a driver fault.
+- **Clock-state limit: the fix in software.** With the card kept to clock states 0–2 (max 753 MHz,
+  950 mV), the average draw stays the card's own 85 W maximum (`power1_cap_max`, from its firmware)
+  but the voltage step is smaller.
+
+  | Clock states | Peak clock / voltage | Result | pplx speed |
+  |---|---|---|---|
+  | 0–7 (stock) | 1,210 MHz / ~1.12 V | reset in ~0.1 s | — |
+  | 0–4 | 1,078 MHz | reset on the 2nd request | — |
+  | 0–3 | 1,019 MHz / 1,075 mV | survived a 108-request test | 245 tokens/s (+1%) |
+  | **0–2** | **753 MHz / 950 mV** | **1,800 pplx + 1,800 Kev requests, no reset** | **242 tokens/s** |
+
+  - **At states 0–2:**
+    - **pplx Q4_K_S:** 4.6 s per request, about 33× its CPU worker. Within 0.038 of the 3060's
+      scores. With Kev Q4: 218 merges, 217 correct, 1 grey-area.
+    - **Kev Q4_K_M:** 4.4 s per request, 197 tokens/s, about 21–27× the CPU worker. Within 0.038
+      of the 3060. Production rule: 205 merges, 0 wrong.
+    - **Peaks:** 85 W, 950 mV, 71 °C.
+  - **States 3 and up are not used.** The card is power-bound at its 85 W maximum, so state 3 gained
+    only 1% while moving the voltage near the failing point, and state 4 failed.
+- **Conclusion:** cleared for nightly use **at states 0–2**, applied at boot by
+  `ml/deploy/home-server/99-amdgpu-clock-limit.rules`, a udev rule. The rule also keeps the card awake,
+  since runtime power management could bring it back with automatic clocks.
+  - The limit applies to every user of the card. Video decode and encode run on separate blocks.
+  - It is a workaround: the fix is a supply with a native PCIe cable, which this machine's supply
+    lacks.
+  - Traces: `ml/out/server-capture/runs/` (netconsole, sensors, journal, markers),
+    `ml/out/gguf-kev/` and `ml/out/gguf-pplx/` (`*state2-soak*`). The server-side `guard*.log`
+    files are in `/mnt/disk3/makhzan-ml/gguf-test/`.
 
 ## Not done
 
@@ -208,8 +235,10 @@ Notes:
   - Its parity: against a live sidecar on the 3060, 40 requests through the whole protocol came
     within 0.016 of the stored Q4 scores.
   - Not done: the production switch (owner-gated), and a run on the AMD card under compose.
-- **Stopgap power.** The card runs at a 65 W cap (about 35% slower than stock), because the
-  original 320 W supply feeds it through a SATA adapter. A proper supply would allow 85 W.
+- **Workaround for power.** The card is held to clock states 0–2 because the original 320 W
+  supply, which has no PCIe cable, feeds it through a SATA adapter. A proper supply would allow the
+  top states. That is worth little at the card's 85 W maximum, but it would remove the dependency
+  on the rule being installed.
 - **No crash logging on the home server.** No `kernel.panic` timeout, kdump or pstore. These
   would not catch a power-level reset, but they would turn a freeze into a reboot with a dump.
 - **CPU options not tried:** F32 (about 17 GB; likely close to F16), and Q4_0 (128-bit integer
