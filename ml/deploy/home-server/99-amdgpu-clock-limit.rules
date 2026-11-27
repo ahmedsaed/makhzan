@@ -1,0 +1,26 @@
+# Limits the home server's AMD card (RX 470/570 4 GB) to its core clock states 0-2 (max 753 MHz,
+# 950 mV) whenever the card appears (every boot).
+#
+# Why: the card is fed from the original 320 W power supply through a SATA-to-PCIe adapter (the
+# supply has no PCIe cable). When a GPU job starts, the driver jumps to the top clock states
+# (1,078-1,210 MHz at ~1.1 V); that current step makes the supply cut out and the server hard-resets
+# within ~0.1 s, with no kernel message (four times, 2026-11-26/27, captured live). Limited to
+# states 0-2 the card ran 1,800 pplx and 1,800 Kev requests at its full 85 W with no reset; state 3
+# gained 1% and state 4 reset the server (docs/ai/kev-llamacpp.md). The power cap stays at the
+# card's own 85 W; the fan stays automatic. Applies to every user of the card (Plex, Jellyfin):
+# video decode/encode run on separate blocks and are unaffected.
+#
+# Three settings, in this order:
+#   power/control=on  keeps the card awake: runtime power management could otherwise power it down
+#                     when idle and bring it back with automatic clocks (no limit)
+#   manual            lets the driver honour a clock-state mask
+#   pp_dpm_sclk       the mask: states 0, 1 and 2
+#
+# Install (root):
+#   sudo cp 99-amdgpu-clock-limit.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=drm --action=add
+# Check (also after any reboot, before enabling the GPU sidecars):
+#   cat /sys/class/drm/card*/device/power_dpm_force_performance_level   # manual
+#   cat /sys/class/drm/card*/device/pp_dpm_sclk   # with load, the * never goes above 2: 753Mhz
+# Undo: sudo rm /etc/udev/rules.d/99-amdgpu-clock-limit.rules, then reboot (or write "auto")
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]", ENV{DEVTYPE}=="drm_minor", DRIVERS=="amdgpu", ATTR{device/power/control}="on", ATTR{device/power_dpm_force_performance_level}="manual", ATTR{device/pp_dpm_sclk}="0 1 2"
