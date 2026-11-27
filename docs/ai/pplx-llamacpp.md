@@ -114,7 +114,7 @@ It prints the variant (217 merges, 216 "same", 1 "not") beside pplx bf16 with th
   first: the stack's llama.cpp router holds one at a time and loads pplx when its worker asks at
   05:05 (`docs/ai/worker.md`, "The llama.cpp router"). At stock clocks its first large job reset the server (the card's power feed), which
   is what the clock limit prevents.
-- **The CPU fallback** (the router's `[pplx]` with `n-gpu-layers = 0`, `threads = 4`; `device = "cpu"`), the same model version:
+- **The CPU fallback** (not set up in the home stack: it would need its own llama.cpp server without `-dev Vulkan0`, `n-gpu-layers = 0`, `device = "cpu"`), the same model version:
 - **CPU, measured on the desktop** (4 threads, Q4_K_S):
 
   | Request | Tokens | Time | Tokens/s | Score vs the 3060's |

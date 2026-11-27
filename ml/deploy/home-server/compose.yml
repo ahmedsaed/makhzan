@@ -6,7 +6,8 @@
 #
 # Production (owner, 2026-11-27): both judges run on the AMD card through one llama.cpp router
 # (service "llamacpp"), which serves both models and holds one at a time (the 4 GB card fits one).
-# Each worker asks for its own model when its window opens and the router swaps it in; idle, the
+# Each worker asks for its own model on its window's first lease with jobs and the router swaps it
+# in; idle, the
 # model sleeps and the card is free for other users. The router refuses to start unless the
 # card's clock limit is applied (llamacpp-guard.sh).
 #
@@ -16,8 +17,9 @@
 #
 # Each worker stays up and waits for its own window (outside_window = "wait" in its TOML):
 # Kev 01:00-05:00, pplx 05:05-07:00, Africa/Cairo. Each window's session runs in a child
-# process that exits at the window's end. The windows never overlap, so the router never swaps
-# back and forth within one.
+# process that exits at the window's end. The windows never overlap. Never point anything else at
+# the router during a window (a parity run, a request for the other model): it evicts the window's
+# model and the two swap back and forth, each swap re-reading ~3 GB from disk (README.md).
 #
 # Network: the workers sit on `broker-only`, an internal network with no route anywhere.
 # Their one way out is `broker-proxy`, our own TCP forwarder (makhzan_ml.worker.proxy), which
@@ -95,7 +97,7 @@ services:
   pplx:
     <<: *worker
     image: ${PPLX_IMAGE:-ghcr.io/ahmedsaed/makhzan/worker-llamacpp:latest}
-    # Above the anchor's 240 s for the llama.cpp backend's CPU fallback (home-pplx.toml): its
+    # Above the anchor's 240 s for a CPU llama.cpp server (not set up here; home-pplx.toml): its
     # longest request on this CPU is about 193 s (estimated) and may run to its 225 s timeout, then
     # 3 x 10 s of last posts and a 10 s join (265 s). On the card (production) a request is at
     # most 60 s, far inside it.
@@ -142,8 +144,8 @@ services:
     devices:
       - /dev/dri:/dev/dri
     volumes:
-      - ./models.ini:/cfg/models.ini:ro
-      - ./llamacpp-guard.sh:/cfg/llamacpp-guard.sh:ro
+      - ${WORKER_DIR:?set WORKER_DIR in .env}/models.ini:/cfg/models.ini:ro
+      - ${WORKER_DIR:?set WORKER_DIR in .env}/llamacpp-guard.sh:/cfg/llamacpp-guard.sh:ro
       # The files in WEIGHTS_DIR, the workers' own /models mount, so each pair reads one file.
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}/Kev-4B-Q4_K_M.gguf:/models/Kev-4B-Q4_K_M.gguf:ro
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}/pplx-flash-v1.3-Q4_K_S.gguf:/models/pplx-flash-v1.3-Q4_K_S.gguf:ro

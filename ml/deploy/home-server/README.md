@@ -15,8 +15,8 @@ kernel settings only the host can make. The reference is `docs/ai/worker.md`.
 | `broker-proxy` | our own TCP forwarder (`makhzan_ml.worker.proxy`), the workers' only way out |
 
 The 4 GB card holds one model. The router (`--models-max 1`) loads whichever a worker asks for,
-swapping the other out: Kev's worker loads `kev` when its window opens at 01:00, pplx's loads
-`pplx` at 05:05. Idle for 10 minutes, the model sleeps and the card is free for Plex, Jellyfin and
+swapping the other out: Kev's worker loads `kev` on its window's first lease with jobs (from
+01:00), pplx's loads `pplx` the same way (from 05:05). Idle for 10 minutes, the model sleeps and the card is free for Plex, Jellyfin and
 Pitlane. Plain `docker compose up -d` starts all four services. The torch configurations
 production ran until 2026-11-27 are kept as `torch-kev.toml` and `torch-pplx.toml` (the rollback,
 below).
@@ -83,17 +83,26 @@ file), asks the router to load it (`POST /models/load`; the other model is unloa
 waits until it is loaded (up to 180 s, interruptible by a stop), then checks the build from
 `/props?model=<name>`. On the 3060 the swap took 5–9 s; from this server's disk it may take
 longer. Only then does it lease, so no request pays the load. A sleeping model wakes on its first
-request (~6 s). The windows never overlap, so the router never swaps back and forth inside one.
+request (~6 s). The workers' windows never overlap. **Never send the router anything else during
+a window** (a parity run, a `--check` that loads, a request for the other model): it evicts the
+window's model and the two swap back and forth, each swap re-reading about 3 GB from this server's
+disk under the container's memory limit. Run parity on the desktop. While the other model is busy
+the router answers a load with HTTP 500 "model limit reached"; the worker retries within its
+180 s budget.
+
+**The clock limit at every load.** Each worker also re-reads the card's mode before every load
+(`require_clock_limit = true` in `home-*.toml`) and refuses unless it reads `manual`: the router
+checks only at its own start and may run for weeks.
 
 **Concurrent use.** Plex, Jellyfin and Pitlane can use the card during a window: their video
 encode and decode run on separate engines, and a 1080p hardware transcode beside pplx at full
 load ran at real time with about 665 MB of the card's memory to spare (2026-11-27). pplx was about
 15% slower meanwhile.
 
-**pplx on the CPU instead** (the card unavailable): the same GGUF is the same model version. Give
-the router's `[pplx]` section `n-gpu-layers = 0` and `threads = 4` in `models.ini`, and in
-`home-pplx.toml` set `device = "cpu"` (its request timeout becomes 225 s, inside the pplx
-worker's 300 s `stop_grace_period`). Requests take about a minute.
+**No CPU fallback is set up.** The router runs only on the card (`-dev Vulkan0`, and its guard
+needs the clock limit). Scoring pplx on the CPU with the same GGUF (the same model version) would
+need its own llama.cpp server without `-dev`, `n-gpu-layers = 0`, and `device = "cpu"` in
+`home-pplx.toml`, which also turns off its clock-limit check; it is not built.
 
 ## Runbook: the production switch (2026-11-27)
 

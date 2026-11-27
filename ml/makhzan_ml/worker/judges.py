@@ -269,6 +269,9 @@ class Runtime:
     #: The worker's stop event (a threading.Event): the llama.cpp load checks it while it
     #: hashes the GGUF and waits for the sidecar, so a stop never waits on either.
     stop: object = None
+    #: llamacpp on a GPU: refuse to load unless every AMD card reads "manual" performance mode
+    #: (the home server's udev clock limit), checked at every load (config: require_clock_limit).
+    require_clock_limit: bool = False
 
 
 def prepare_environment(rt: Runtime) -> None:
@@ -599,13 +602,23 @@ LLAMACPP_MODELS = {"kev": ("kev", "kev"), "pplx": ("pplx-decider", "pplx")}
 ROUTER_READY = ("loaded", "sleeping")
 
 
+class RouterUnavailable(Exception):
+    """The router did not answer usably this time (restarting, a 5xx, a timeout, bad JSON):
+    retried within the load's budget, never read as "a single-model server"."""
+
+
 def _router_models(base: str) -> dict | None:
-    """A router sidecar's models, by id: {id: (status, model path from its args)}; None for a
-    single-model sidecar (its /models carries no per-model status). Never loads anything."""
+    """A router sidecar's models, by id: {id: status dict, with "path" added from its args};
+    None for a single-model sidecar (no /models endpoint, or one without per-model status).
+    Never loads anything. A transient failure raises RouterUnavailable."""
     try:
         listing = _http_json(f"{base}/models", timeout=10)
-    except urllib.error.HTTPError:
-        return None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise RouterUnavailable(f"/models answered HTTP {e.code}") from None
+    except (OSError, ValueError) as e:
+        raise RouterUnavailable(f"/models: {type(e).__name__}: {e}") from None
     data = listing.get("data") if isinstance(listing, dict) else None
     if (
         not isinstance(data, list)
@@ -615,44 +628,116 @@ def _router_models(base: str) -> dict | None:
         return None
     out = {}
     for m in data:
-        args = m["status"].get("args") or []
-        path = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in ("--model", "-m")), "")
-        out[str(m.get("id"))] = (str(m["status"].get("value")), path)
+        status = dict(m["status"])
+        args = status.get("args") or []
+        status["path"] = next(
+            (args[i + 1] for i, a in enumerate(args[:-1]) if a in ("--model", "-m")), ""
+        )
+        out[str(m.get("id"))] = status
     return out
+
+
+def _pause(stop, seconds: float) -> None:
+    if stop is not None:
+        stop.wait(seconds)
+    else:
+        time.sleep(seconds)
+
+
+def _detect_router(base: str, budget_s: float, stop=None, clock=time.monotonic) -> bool:
+    """Whether the sidecar is a router, retrying a transient failure within the budget."""
+    deadline = clock() + budget_s
+    while True:
+        if _stopped(stop):
+            raise LoadInterrupted("stopped while asking the llama.cpp sidecar for its models")
+        try:
+            return _router_models(base) is not None
+        except RouterUnavailable as e:
+            if clock() >= deadline:
+                raise LoadError(f"the llama.cpp sidecar at {base} did not list its models ({e})")
+        _pause(stop, 2.0)
 
 
 def _router_ready(base: str, name: str, budget_s: float, stop=None, clock=time.monotonic) -> str:
     """Load `name` on a router sidecar (swapping out whatever it holds: one model at a time) and
-    wait until it is ready to score. Returns its model path. Stop-aware, like `_wait_ready`."""
+    wait until it is ready to score. Returns its model path. Stop-aware, like `_wait_ready`.
+
+    The router refuses a load with HTTP 500 "model limit reached" while the model it holds is
+    busy (serving or loading; it evicts only idle ones): retried until the deadline, as are a
+    router that restarts meanwhile and its transient errors. A load that fails (the child exits)
+    is an error at once."""
     deadline = clock() + budget_s
     asked = False
     last = "not listed"
     while True:
         if _stopped(stop):
             raise LoadInterrupted("stopped while the llama.cpp router loads the model")
-        models = _router_models(base) or {}
-        if name not in models:
-            raise LoadError(
-                f"the llama.cpp router at {base} has no model {name!r}: {sorted(models)}"
-            )
-        status, path = models[name]
-        if status in ROUTER_READY:
-            return path
-        last = status
-        if not asked and status not in ("loading",):
-            try:
-                _http_json(f"{base}/models/load", {"model": name}, timeout=30)
-            except urllib.error.HTTPError as e:
-                if e.code != 400:  # 400: "model is already running", a race with its own load
+        try:
+            models = _router_models(base)
+        except RouterUnavailable as e:
+            models, last = {}, str(e)
+        if models is None:
+            raise LoadError(f"the llama.cpp sidecar at {base} is no longer a router")
+        if models:
+            if name not in models:
+                raise LoadError(
+                    f"the llama.cpp router at {base} has no model {name!r}: {sorted(models)}"
+                )
+            status = models[name]
+            value = status.get("value")
+            if value in ROUTER_READY:
+                return status["path"]
+            if asked and (status.get("failed") or status.get("exit_code") not in (None, 0)):
+                raise LoadError(
+                    f"the llama.cpp router failed to load {name!r} (exit code "
+                    f"{status.get('exit_code')}): its log has the reason"
+                )
+            last = str(value)
+            if value != "loading":
+                try:
+                    _http_json(f"{base}/models/load", {"model": name}, timeout=30)
+                    asked = True
+                except urllib.error.HTTPError as e:
                     detail = e.read()[:200].decode("utf-8", "replace")
-                    raise LoadError(f"the llama.cpp router refused to load {name!r}: {detail}")
-            asked = True
+                    if e.code == 400:  # "model is already running": a race with its own load
+                        asked = True
+                    elif e.code >= 500:  # "model limit reached": the other model is busy
+                        last = f"HTTP {e.code} {detail.strip()}"
+                    else:
+                        raise LoadError(f"the llama.cpp router refused to load {name!r}: {detail}")
+                except (OSError, ValueError) as e:
+                    last = f"{type(e).__name__}: {e}"
         if clock() >= deadline:
             raise LoadError(f"the llama.cpp router at {base} did not load {name!r} ({last})")
-        if stop is not None:
-            stop.wait(1.0)
-        else:
-            time.sleep(1.0)
+        _pause(stop, 1.0)
+
+
+#: The host's sysfs, as containers see it (read-only). Tests point it at a fake tree.
+SYSFS = Path("/sys")
+
+
+def check_clock_limit(root: Path | None = None) -> None:
+    """Refuse (LoadError) unless every AMD card reads "manual" performance mode: the home
+    server's udev rule holds the card to clock states 0-2, without which a job on it resets the
+    whole server (docs/ai/kev-llamacpp.md). The router checks the same at its start; this
+    re-checks it at every load, since the router may run for weeks."""
+    root = SYSFS if root is None else root
+    files = sorted(root.glob("class/drm/card*/device/power_dpm_force_performance_level"))
+    if not files:
+        raise LoadError(
+            f"no AMD card's clock mode under {root}/class/drm: require_clock_limit is set but "
+            "the card's limit cannot be checked"
+        )
+    for f in files:
+        try:
+            mode = f.read_text().strip()
+        except OSError as e:
+            raise LoadError(f"cannot read {f}: {e}") from None
+        if mode != "manual":
+            raise LoadError(
+                f"{f} reads {mode!r}, not 'manual': the clock-limit udev rule "
+                "(99-amdgpu-clock-limit.rules) is not applied; refusing to score on the card"
+            )
 
 
 def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
@@ -676,11 +761,15 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
     digest = sha256_file(path, stop=rt.stop)
     if digest != pin.gguf_sha256:
         raise LoadError(f"{who}: {path.name} sha256 {digest}, pinned {pin.gguf_sha256}")
+    if rt.require_clock_limit:
+        check_clock_limit()
     base = rt.llamacpp_url.rstrip("/")
     started = time.monotonic()
     _wait_ready(base, LLAMACPP_READY_S, rt.stop)
     request_timeout = LLAMACPP_REQUEST_S[(key, rt.device)]
-    router = _router_models(base) is not None
+    router = _detect_router(
+        base, max(1.0, LLAMACPP_READY_S - (time.monotonic() - started)), rt.stop
+    )
     if router:
         # One server for both models, one loaded at a time: load this worker's own (the other
         # one is swapped out; the windows never overlap) before the first lease, so no request

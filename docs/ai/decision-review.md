@@ -491,7 +491,7 @@ below).*
     started and stopped each sidecar with host systemd timers. The owner's rule for the home
     server is a compose-only stack (no host timers or scripts), so one llama.cpp router (compose
     service `llamacpp`) now serves both models, one at a time (`--models-max 1`). Each worker loads
-    its own when its window opens, and an idle model sleeps after 10 minutes.
+    its own on its window's first lease with jobs, and an idle model sleeps after 10 minutes.
   - **The concurrency bug does not apply here:** the windows never overlap, so the router never
     serves both at once.
   - **Tested on the desktop:** Kev within 0.016, pplx bit-identical, swaps in 6–9 s

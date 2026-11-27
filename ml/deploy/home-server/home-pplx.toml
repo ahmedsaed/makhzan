@@ -1,13 +1,12 @@
 # home-pplx: pplx-decider-flash-v1.3 Q4_K_S on the home server's AMD card through llama.cpp,
 # 05:05-07:00 Cairo time, waiting between windows. Production since 2026-11-27
 # (docs/ai/decision-review.md, "Production switch"). Its judge is the "pplx" model of the
-# stack's llama.cpp router (compose.yml, service "llamacpp"), which this worker loads when its
-# window opens: the 4 GB card holds one model, and the router swaps Kev's out.
+# stack's llama.cpp router (compose.yml, service "llamacpp"), which this worker loads on its
+# window's first lease with jobs: the 4 GB card holds one model, and the router swaps Kev's out.
 #
-# CPU fallback (the card unavailable): the same GGUF on the CPU is the same model version (P8:
-# device and dtype are recorded per score, not part of the version). Set device = "cpu" here and
-# give the router n-gpu-layers = 0 and -t 4 (models.ini) and no /dev/dri; requests then take ~55 s (up to the 225 s CPU
-# timeout, inside this worker's 300 s stop_grace_period).
+# No CPU fallback is set up: the router runs only on the card (-dev Vulkan0, its guard requires
+# the clock limit), so a CPU run of the same GGUF would need its own llama.cpp server
+# (docs/ai/worker.md, "pplx on a llama.cpp sidecar").
 [worker]
 name = "home-pplx"
 broker_url = "http://broker-proxy:8100/ai/v1"
@@ -26,6 +25,8 @@ llamacpp_url = "http://llamacpp:8080"
 # The same file the router serves, mounted read-only into the worker too: it is checked
 # against the pin (sha256, decision type, temperature) before anything is scored.
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+# Refuse to load unless the card's clock limit is applied (re-read at every load).
+require_clock_limit = true
 nice = 10
 
 [schedule]

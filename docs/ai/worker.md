@@ -306,6 +306,7 @@ this image can load the model key, and exits.
 | `backend` | `"torch"` | `"torch"`: the model's own code in this process. `"llamacpp"`: the model on a llama.cpp sidecar (see "Kev on a llama.cpp sidecar" and "pplx on a llama.cpp sidecar") |
 | `llamacpp_url` | none | `backend = "llamacpp"` only, and required there: the sidecar's base URL, plain `http://` to a compose service name or a loopback address |
 | `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
+| `require_clock_limit` | `true` on a GPU | `backend = "llamacpp"` only: refuse to load unless every AMD card's `power_dpm_force_performance_level` reads `manual` (the home server's udev clock limit), re-read at every load. Set `false` on a machine whose GPU is not that card (the desktop's NVIDIA card) |
 
 With `backend = "llamacpp"`, `dtype` is the pinned GGUF's: `"q4_k_m"` for Kev, `"q4_k_s"` for
 pplx (the only accepted values), and `mmap` and `weights_cache` are refused (the worker holds no
@@ -344,8 +345,8 @@ them while the policy names the llama.cpp versions).
 
 The home server's Kev worker, as `ml/deploy/home-server/home-kev.toml` has it: through the
 compose stack's broker proxy, waiting for its window, its judge the `kev` model of the stack's
-llama.cpp router on the AMD card (service `llamacpp`; the worker loads its model when its window
-opens, "The llama.cpp router" below):
+llama.cpp router on the AMD card (service `llamacpp`; the worker loads its model on its window's
+first lease with jobs, "The llama.cpp router" below):
 
 ```toml
 # home-kev.toml
@@ -365,6 +366,7 @@ device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://llamacpp:8080"
 gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+require_clock_limit = true
 nice = 10
 
 [schedule]
@@ -379,8 +381,9 @@ lease_s = 900
 heartbeat_s = 60
 ```
 
-The home server's pplx worker. Its window follows Kev's: the 4 GB card holds one model, and when
-pplx's window opens its worker asks the same router for `pplx`, which unloads Kev's first:
+The home server's pplx worker. Its window follows Kev's: the 4 GB card holds one model, and on its
+window's first lease with jobs its worker asks the same router for `pplx`, which unloads Kev's
+first:
 
 ```toml
 # home-pplx.toml
@@ -400,6 +403,7 @@ device = "gpu"
 dtype = "q4_k_s"
 llamacpp_url = "http://llamacpp:8080"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+require_clock_limit = true
 nice = 10
 
 [schedule]
@@ -455,6 +459,8 @@ device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://127.0.0.1:8130"
 gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
+# The desktop's NVIDIA card is not the home server's clock-limited AMD card.
+require_clock_limit = false
 
 [schedule]
 windows = "always"
@@ -483,6 +489,8 @@ device = "gpu"
 dtype = "q4_k_s"
 llamacpp_url = "http://127.0.0.1:8130"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+# The desktop's NVIDIA card is not the home server's clock-limited AMD card.
+require_clock_limit = false
 
 [schedule]
 windows = "always"
@@ -781,9 +789,17 @@ in router mode (compose service `llamacpp`) serves both, from the preset
 `ml/deploy/home-server/models.ini` (one section per model, named as the workers ask for it):
 
 - **`--models-max 1`:** at most one model loaded; loading the other unloads it first.
-- **On demand:** each worker's session loads its own model before its window's first lease
-  (`POST /models/load`, then waits on `GET /models`), so no request pays the load. The windows
-  never overlap, so the router never swaps inside one.
+- **On demand:** each worker's session loads its own model on its window's first lease with jobs,
+  before scoring it (`POST /models/load`, then waits on `GET /models`), so no request pays the
+  load. While the other model is busy the router refuses with HTTP 500 "model limit reached"; the
+  worker retries until its 180 s budget. A load whose child exits is an error at once.
+- **Never point anything else at the router during a window.** A parity run or any request for
+  the other model evicts the window's model and the two then swap back and forth, each swap
+  re-reading about 3 GB from the server's disk under the container's memory limit. Run parity on
+  the desktop.
+- **The clock limit at every load:** besides the router's entrypoint guard, each worker re-reads
+  the card's mode at every load (`require_clock_limit`, on by default for a GPU), since the router
+  may run for weeks after its own check.
 - **`--sleep-idle-seconds 600`:** idle for 10 minutes, the model sleeps (its memory released,
   ~190 MB kept); the next request wakes it in about 6 s. The card is free for Plex, Jellyfin and
   Pitlane by day.
@@ -842,8 +858,9 @@ clock states 0–2: 4.4 s a request, about 20–27x the CPU worker.
     (`qwen35.decision.type = kev`, the temperature), read with the standard library;
   - the sidecar's `/health`;
   - on a router (the home server's): its `GET /models` lists `kev` with the pinned file in its
-    preset args, and the worker loads it (`POST /models/load`) and waits until it is loaded or
-    asleep (all within 180 s); then `/props?model=kev` for the build. On a single-model server:
+    preset args, and the worker loads it (`POST /models/load`, retried while the router answers
+    "model limit reached") and waits until it is loaded or asleep (all within 180 s; a load whose
+    child exits fails at once); then `/props?model=kev` for the build. On a single-model server:
     `/props`, the file it serves and the build;
   - llama.cpp build b12767.
 
@@ -902,8 +919,10 @@ the same way as Kev above, with these differences.
     4,096 (`pplx-llamacpp.md`), and fails its job, never scores wrongly.
   - The worker configuration is `home-pplx.toml` (device `gpu`; the torch one is
     `torch-pplx.toml`, the rollback), window 05:05–07:00.
-  - **CPU fallback**: the same GGUF on the CPU is the same model version (P8). `n-gpu-layers = 0`
-    and `threads = 4` in the router's `[pplx]` section, and `device = "cpu"` in `home-pplx.toml`.
+  - **No CPU fallback is set up.** The same GGUF on the CPU would be the same model version (P8),
+    but the router runs only on the card (`-dev Vulkan0`, and its guard needs the clock limit): a
+    CPU run needs its own llama.cpp server (no `-dev`, `n-gpu-layers = 0`) and `device = "cpu"`
+    in `home-pplx.toml`. Not built.
 - **Its request timeout is 60 s on the card, 225 s on a CPU (the fallback).** The longest Phase E request took 48.9 s on the
   desktop's CPU (4 threads) and is estimated at about 193 s on the i7-3770 (not measured there).
   With 3 × 10 s of last posts and the 10 s join, the stop bound is 265 s: under the supervisor's

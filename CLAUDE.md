@@ -817,7 +817,7 @@ The home server runs the two workers as one compose stack
 its sole egress. Since 2026-11-27 both judges run on the server's 4 GB AMD
 card through one llama.cpp router in the stack (Kev Q4_K_M, pplx Q4_K_S;
 `policy.MODELS`, the torch versions kept as `TORCH_MODELS`), one model at a
-time: each worker loads its own when its window opens. The stack is
+time: each worker loads its own on its window's first lease. The stack is
 containers only (owner's rule: no host timers or scripts); the host's one
 setting is the udev rule `99-amdgpu-clock-limit.rules`, which holds the card to
 clock states 0–2: at higher states its SATA-adapter power feed hard-resets the
