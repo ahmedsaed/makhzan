@@ -370,11 +370,12 @@ def test_a_refused_request_is_an_error_not_a_score(tmp_path, sidecar):
 # --- the pin and the configuration --------------------------------------------------------
 
 
-def test_the_alternative_is_not_what_production_serves():
+def test_the_kev_llamacpp_pin_is_what_production_serves():
     alt = pins.pin_for("kev", "llamacpp")
     assert alt.backend == "llamacpp" and alt.temperature == 1.0
-    # Its own version: the broker refuses it until the policy names it (an owner step).
-    assert alt.model_version != policy.MODELS["kev"].model_version
+    # The production switch (owner, 2026-11-27): the policy names this version.
+    assert alt.model_version == policy.MODELS["kev"].model_version
+    assert pins.production_pin("kev") is alt
     assert alt.code == pins.LLAMACPP_IMAGE and "@sha256:" in alt.code
     assert alt.model_version.startswith(f"kev-4b-Q4_K_M@{pins.KEV_GGUF_SHA256[:12]}+")
     assert pins.pin_for("kev") is pins.PINS["kev"]
@@ -384,7 +385,8 @@ def test_the_alternative_is_not_what_production_serves():
 
 def test_the_pplx_alternative_reads_scores_as_served():
     alt = pins.pin_for("pplx", "llamacpp")
-    assert alt.backend == "llamacpp" and alt.model_version != policy.MODELS["pplx"].model_version
+    assert alt.backend == "llamacpp" and alt.model_version == policy.MODELS["pplx"].model_version
+    assert pins.production_pin("pplx") is alt
     # The scale of every validated pplx score: the checkpoint's own temperature, which the GGUF
     # carries in full and llama.cpp applies, so nothing is undone.
     assert alt.temperature == policy.MODELS["pplx"].scoring["temperature"] == 1.3303
@@ -456,7 +458,7 @@ def test_expect_version_is_the_backends():
 
 
 def test_the_compose_example_parses():
-    data = tomllib.loads((DEPLOY / "llamacpp-kev.toml").read_text())
+    data = tomllib.loads((DEPLOY / "home-kev.toml").read_text())
     data["worker"].pop("token_file")
     data["worker"]["token"] = "example"
     cfg = parse(data)
@@ -464,15 +466,15 @@ def test_the_compose_example_parses():
         "llamacpp", "gpu", "http://kev-llamacpp:8080",
     )  # fmt: skip
     assert cfg.expect_versions == {"kev": pins.pin_for("kev", "llamacpp").model_version}
-    # Its window is the CPU Kev worker's: it replaces it, never runs beside it.
-    cpu = parse({**tomllib.loads((DEPLOY / "home-kev.toml").read_text()),
+    # Its window is the torch Kev worker's (the rollback config): one replaces the other.
+    cpu = parse({**tomllib.loads((DEPLOY / "torch-kev.toml").read_text()),
                  "worker": {**data["worker"]}})  # fmt: skip
     assert cfg.schedule.windows == cpu.schedule.windows
 
 
 def test_the_sidecar_is_off_by_default_pinned_and_unreachable():
     text = (DEPLOY / "compose.yml").read_text()
-    block = text[text.index("\n  kev-llamacpp:\n") : text.index("\n  # pplx on the home")]
+    block = text[text.index("\n  kev-llamacpp:\n") : text.index("\n  # pplx on the AMD card")]
     assert "    profiles: [llamacpp]\n" in block
     assert f"    image: {pins.LLAMACPP_IMAGE}\n" in block
     assert "ports" not in block and "0.0.0.0:" not in block
@@ -517,10 +519,12 @@ def test_a_session_on_the_sidecar_posts_raw_scores_under_the_alternative_version
         assert (s["device"], s["dtype"]) == ("gpu", "q4_k_m")
 
 
-def test_the_production_broker_version_refuses_the_alternative(tmp_path, sidecar, monkeypatch):
+def test_a_broker_on_the_torch_versions_refuses_the_llamacpp_worker(tmp_path, sidecar,
+                                                                   monkeypatch):  # fmt: skip
+    # A broker still on the torch versions (before its deploy, or after a rollback) refuses it.
     gguf = kev_gguf(tmp_path)
     monkeypatch.setitem(pins.ALTERNATIVES, ("kev", "llamacpp"), pin_of(gguf))
-    with FakeBroker({"tok": ("amd-kev", ["kev"])}) as broker:  # the policy's versions
+    with FakeBroker({"tok": ("amd-kev", ["kev"])}) as broker:  # default: the torch pins
         broker.add_job("kev", {"ab": PAYLOAD})
         cfg = parse({
             "worker": {"name": "amd-kev", "broker_url": broker.url, "token": "tok",
@@ -597,32 +601,36 @@ def test_rescale_is_kevs_uncalibrate_and_pplxs_identity():
 
 
 def test_the_pplx_compose_example_parses_and_the_sidecar_is_off_by_default():
-    data = tomllib.loads((DEPLOY / "llamacpp-pplx.toml").read_text())
+    data = tomllib.loads((DEPLOY / "home-pplx.toml").read_text())
     data["worker"].pop("token_file")
     data["worker"]["token"] = "example"
     cfg = parse(data)
     assert (cfg.model, cfg.backend, cfg.device, cfg.dtype, cfg.llamacpp_url) == (
-        "pplx", "llamacpp", "cpu", "q4_k_s", "http://pplx-llamacpp:8080",
+        "pplx", "llamacpp", "gpu", "q4_k_s", "http://pplx-llamacpp:8080",
     )  # fmt: skip
     assert cfg.expect_versions == {"pplx": pins.pin_for("pplx", "llamacpp").model_version}
     text = (DEPLOY / "compose.yml").read_text()
     block = text[text.index("\n  pplx-llamacpp:\n") : text.index("\nnetworks:")]
     assert "    profiles: [llamacpp-pplx]\n" in block
     assert f"    image: {pins.LLAMACPP_IMAGE}\n" in block
-    assert "ports" not in block and "0.0.0.0:" not in block and "devices" not in block
+    assert "ports" not in block and "0.0.0.0:" not in block
+    # On the card since 2026-11-27, like kev-llamacpp (the timers keep one sidecar up at a time).
+    assert "      - /dev/dri:/dev/dri\n" in block and '"${RENDER_GID:-65533}"' in block
     assert "    networks: [broker-only]\n" in block and "egress" not in block
     assert f":/models/{pins.PPLX_GGUF_FILE}:ro" in block
-    # Non-causal: the whole request in one batch.
-    for flag in ('- -b\n      - "4096"', '- -ub\n      - "4096"', '- -ngl\n      - "0"'):
+    # Non-causal: the whole request in one batch; every layer on the card, flash attention on
+    # (the settings soaked on the card).
+    for flag in ('- -b\n      - "4096"', '- -ub\n      - "4096"', '- -ngl\n      - "99"',
+                 '- -fa\n      - "on"'):  # fmt: skip
         assert flag in block
     assert ":?" not in block.replace("${WEIGHTS_DIR:?", "")
 
 
-def test_the_production_broker_version_refuses_the_pplx_alternative(tmp_path, sidecar,
-                                                                     monkeypatch):  # fmt: skip
+def test_a_broker_on_the_torch_versions_refuses_the_pplx_llamacpp_worker(tmp_path, sidecar,
+                                                                        monkeypatch):  # fmt: skip
     gguf = pplx_gguf(tmp_path)
     monkeypatch.setitem(pins.ALTERNATIVES, ("pplx", "llamacpp"), pin_of(gguf, "pplx"))
-    with FakeBroker({"tok": ("cpu-pplx", ["pplx"])}) as broker:  # the policy's versions
+    with FakeBroker({"tok": ("cpu-pplx", ["pplx"])}) as broker:  # default: the torch pins
         broker.add_job("pplx", {"ab": PAYLOAD})
         cfg = parse({
             "worker": {"name": "cpu-pplx", "broker_url": broker.url, "token": "tok",

@@ -1,5 +1,8 @@
-# home-kev: Kev on the home server's CPU, 01:00-05:00 Cairo time, waiting between windows.
-# The broker is reached through the compose stack's broker proxy (compose.yml).
+# home-kev: Kev-4B Q4_K_M on the home server's AMD card through llama.cpp, 01:00-05:00 Cairo time,
+# waiting between windows. Production since 2026-11-27 (docs/ai/decision-review.md, "Production
+# switch"). Its sidecar, kev-llamacpp (compose.yml, profile "llamacpp"), is started before the
+# window and stopped after it by the host's timers (sidecar-window.sh, README.md): the 4 GB card
+# holds one model, and pplx's sidecar takes it from 05:03.
 [worker]
 name = "home-kev"
 broker_url = "http://broker-proxy:8100/ai/v1"
@@ -8,27 +11,26 @@ token_file = "/run/secrets/makhzan-ai-token"
 model = "kev"
 
 [model.kev]
-expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
+expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
 
 [compute]
-device = "cpu"
-dtype = "fp32"
-threads = 6
+backend = "llamacpp"
+device = "gpu"
+dtype = "q4_k_m"
+llamacpp_url = "http://kev-llamacpp:8080"
+# The same file the sidecar serves, mounted read-only into the worker too: it is checked
+# against the pin (sha256, decision type, temperature) before anything is scored.
+gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
 nice = 10
-memory_gib = 20
-mmap = false
-weights_cache = "/models"
 
 [schedule]
-# One model at a time on this machine: home-pplx starts 5 minutes after this window ends.
 windows = ["01:00-05:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
-# An empty queue ends this window's session and frees the model until the next window;
-# "wait" would keep the model loaded and poll every poll_s until the window's end.
 on_empty = "exit"
 
 [leases]
-max_jobs = 2   # 4 requests, about 6 minutes on this CPU (about 86 s a request)
+# About 5 s a request on the card: 2 jobs (4 requests) take about 20 s.
+max_jobs = 2
 lease_s = 900
 heartbeat_s = 60

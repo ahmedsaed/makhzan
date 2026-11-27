@@ -13,10 +13,25 @@ from makhzan_ml.worker.pins import PINS
 from makhzan_schemas.ai import pipelines, policy, prompt
 
 
-def test_pins_are_the_policy_models():
-    assert set(PINS) == set(policy.MODELS)
+def test_production_pins_are_the_policy_models():
+    # What production serves (owner, 2026-11-27): the llama.cpp pins, equal to policy.MODELS.
+    assert set(pins.ACTIVE_BACKEND) == set(policy.MODELS) == set(PINS)
     for key, model in policy.MODELS.items():
+        pin = pins.production_pin(key)
+        assert pin.backend == pins.ACTIVE_BACKEND[key] == model.scoring["backend"] == "llamacpp"
+        assert pin.repo == model.repo
+        assert pin.weights_revision == model.weights_revision
+        assert pin.model_version == model.model_version
+        assert pin.temperature == model.scoring["temperature"]
+        assert pin.gguf_sha256 == model.scoring["gguf_sha256"]
+        assert pin.code.endswith(policy.LLAMACPP_IMAGE_DIGEST)
+
+
+def test_the_torch_pins_are_the_policys_rollback():
+    assert set(PINS) == set(policy.TORCH_MODELS)
+    for key, model in policy.TORCH_MODELS.items():
         pin = PINS[key]
+        assert pin.backend == "torch"
         assert pin.repo == model.repo
         assert pin.weights_revision == model.weights_revision
         assert pin.model_version == model.model_version

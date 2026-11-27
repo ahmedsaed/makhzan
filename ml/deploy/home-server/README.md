@@ -1,19 +1,28 @@
 # The home server's AI workers, as one compose stack
 
-Everything the home server needs to run makhzan's CPU AI-matching workers is one folder:
-`compose.yml`, a `.env`, the two worker TOMLs and their token files. There are no systemd
-timers and no host firewall rules. The reference is `docs/ai/worker.md`.
+Everything the home server needs to run makhzan's AI-matching workers is one folder:
+`compose.yml`, a `.env`, the two worker TOMLs and their token files, plus (since the production
+switch of 2026-11-27) the two GGUF files, the udev rule that limits the AMD card's clocks, and the
+systemd timers that start and stop the llama.cpp sidecars. No host firewall rules. The reference
+is `docs/ai/worker.md`.
 
 | Service | What it is |
 |---|---|
-| `kev` | `home-kev`: Kev on CPU, window 01:00–05:00 (Africa/Cairo) |
-| `pplx` | `home-pplx`: pplx on CPU, window 05:05–07:00 (Africa/Cairo) |
+| `kev` | `home-kev`: Kev-4B Q4_K_M, window 01:00–05:00 (Africa/Cairo), judge: `kev-llamacpp` |
+| `pplx` | `home-pplx`: pplx-decider Q4_K_S, window 05:05–07:00 (Africa/Cairo), judge: `pplx-llamacpp` |
+| `kev-llamacpp` | llama.cpp on the AMD card with Kev's GGUF (profile `llamacpp`), up 00:55–05:03 |
+| `pplx-llamacpp` | llama.cpp on the AMD card with pplx's GGUF (profile `llamacpp-pplx`), up 05:03–07:03 |
 | `broker-proxy` | our own TCP forwarder (`makhzan_ml.worker.proxy`), the workers' only way out |
+
+The 4 GB card holds one model, so the sidecars take turns, started and stopped by the host's
+timers (`install-sidecar-timers.sh`, `sidecar-window.sh`). Plain `docker compose up -d` starts the
+workers and the proxy only. The torch configurations production ran until 2026-11-27 are kept as
+`torch-kev.toml` and `torch-pplx.toml` (the rollback, below).
 
 ## Set up
 
-1. Make the folder and copy in `compose.yml`, `home-kev.toml`, `home-pplx.toml`, and
-   `.env.example` as `.env`. Fill in `.env`: the folder itself (`WORKER_DIR`), the weights
+1. Make the folder and copy in `compose.yml`, `home-kev.toml`, `home-pplx.toml`,
+   `sidecar-window.sh`, `install-sidecar-timers.sh`, and `.env.example` as `.env`. Fill in `.env`: the folder itself (`WORKER_DIR`), the weights
    (`WEIGHTS_DIR`, a Hugging Face home whose `hub/` holds the pinned snapshots as real files,
    copied with `rsync -L`), the user to run as (`UID`, `GID`: `id -u`, `id -g`), and the
    broker's Tailscale address and port (`BROKER_TARGET`, an IP, never a name).
@@ -37,28 +46,84 @@ Update to the latest tested images with `docker compose pull && docker compose u
 roll back, set `KEV_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
 whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 
-`kev-llamacpp` (profile `llamacpp`) is Kev-4B Q4_K_M on the AMD card through llama.cpp, with
-`llamacpp-kev.toml` as its worker configuration. It is built but **not in use**, and plain
-`docker compose up -d` does not start it. The card is held to clock states 0–2 (max 753 MHz) by the
-udev rule `99-amdgpu-clock-limit.rules`; install it first (its header has the commands). At
-higher states the card's SATA-adapter power feed resets the whole server (docs/ai/kev-llamacpp.md).
-Nothing stops a sidecar if the rule is missing, so after any reboot check that
-`cat /sys/class/drm/card*/device/power_dpm_force_performance_level` reads `manual` before
-enabling one.
-Enabling the sidecar then waits only on the owner's policy switch: docs/ai/worker.md, "Kev on a
-llama.cpp sidecar".
+## The llama.cpp sidecars on the AMD card
 
-`pplx-llamacpp` (profile `llamacpp-pplx`) is pplx-decider-flash-v1.3 Q4_K_S on the CPU through
-llama.cpp, with `llamacpp-pplx.toml` as its worker configuration and the GGUF
-`pplx-flash-v1.3-Q4_K_S.gguf` in `WEIGHTS_DIR`. Also built and **not in use**: it waits on the
-owner's policy switch, and its speed on this CPU is estimated, not measured
-(docs/ai/worker.md, "pplx on a llama.cpp sidecar"). The pplx worker's `stop_grace_period` is
-300 s, for this backend's longer requests.
+**The clock limit comes first.** The card is held to clock states 0–2 (max 753 MHz) by the udev
+rule `99-amdgpu-clock-limit.rules` (its header has the install commands). At higher states the
+card's SATA-adapter power feed resets the whole server (docs/ai/kev-llamacpp.md).
+`sidecar-window.sh` refuses to start a sidecar unless the card reads `manual`:
+`cat /sys/class/drm/card*/device/power_dpm_force_performance_level`.
+
+**The GGUFs** go in `WEIGHTS_DIR` (both the sidecar and the worker mount them, read-only; the worker
+hashes its copy against the pin before scoring):
+
+| File | sha256 |
+|---|---|
+| `Kev-4B-Q4_K_M.gguf` (`ggml-org/Kev-4B-GGUF@f4624b6…`) | `33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9` |
+| `pplx-flash-v1.3-Q4_K_S.gguf` (our conversion, `ml/models/convert_pplx_v13.py`) | `819a9ad0f8f4aacb055f6d1783a155e3bd0bf33afb9c2f33749ef25350c61ab3` |
+
+**`.env`** also needs `RENDER_GID` and `VIDEO_GID` (`getent group render video`), so the sidecars,
+running as `UID`, can open `/dev/dri`. Unset, a sidecar fails at start and the workers are
+unaffected.
+
+**The timers** (`sudo sh install-sidecar-timers.sh`, from this folder): four systemd timers with
+the time zone in their `OnCalendar`, so the server's UTC clock does not matter, each running
+`sidecar-window.sh` as the invoking user (in the `docker` group):
+
+| Africa/Cairo | Runs | Why then |
+|---|---|---|
+| 00:55 | `start kev` (stops pplx's first) | Kev's window opens at 01:00 |
+| 05:03 | `stop kev` | Kev's last request ends by about 05:01:40 (60 s GPU timeout + posts) |
+| 05:03:30 | `start pplx` (stops Kev's first) | pplx's window opens at 05:05; its worker waits up to 120 s for the sidecar |
+| 07:03 | `stop pplx` | the card is free for Plex and Jellyfin until 00:55 |
+
+`systemctl list-timers 'makhzan-sidecar-*'` shows the next runs, `journalctl -u
+'makhzan-sidecar@*'` what each did. By hand: `./sidecar-window.sh start kev`, `stop kev`, and so
+on. A sidecar that was up when the server rebooted comes back with Docker (`restart:
+unless-stopped`); the timers' next run puts the right one up.
+
+**pplx on the CPU instead** (the card unavailable): the same GGUF is the same model version. In
+`compose.yml` give `pplx-llamacpp` `-ngl 0 -t 4` instead of `-ngl 99` and drop its `devices` and
+`group_add`; in `home-pplx.toml` set `device = "cpu"` (its request timeout becomes 225 s, inside
+the pplx worker's 300 s `stop_grace_period`). Requests take about a minute.
+
+## Runbook: the production switch (2026-11-27)
+
+In this order. Until the home server is updated (step 3), its torch workers are refused at hello
+by the new policy (exit 4, a `version_drift` flag): harmless, nothing is scored.
+
+1. **Merge** PR #94 (the udev rule), then this PR.
+2. **Production:** `./makhzan deploy`. The broker and API take the new policy (`MODELS` names the
+   llama.cpp versions). Queued jobs move to the new judge at the next hello; standing decisions
+   are re-queued by the next re-score run at the low P8 priorities (after new pairs and the
+   backlog), the catch-up the owner drains (wider windows, the desktop).
+3. **The home server**, in this folder:
+   1. The udev rule installed and checked (`manual`; done on 2026-11-27).
+   2. Copy the new `compose.yml`, `home-kev.toml`, `home-pplx.toml`, `sidecar-window.sh`,
+      `install-sidecar-timers.sh` from the repository (`ml/deploy/home-server/`), keeping `.env`
+      and the tokens. Add `RENDER_GID` and `VIDEO_GID` to `.env`.
+   3. Put both GGUFs in `WEIGHTS_DIR` and check them: `sha256sum Kev-4B-Q4_K_M.gguf
+      pplx-flash-v1.3-Q4_K_S.gguf` against the table above.
+   4. `docker compose pull` (the worker images CI publishes from `main`; the llama.cpp backend
+      needs no torch, any of them runs it), then each worker's `--check` (Set up, step 3): it
+      must print the llama.cpp version, `kev-4b-Q4_K_M@33ae6b189265+…` / `pplx-…-Q4_K_S@819a9ad0f8f4+…`.
+   5. `sudo sh install-sidecar-timers.sh`; `systemctl list-timers 'makhzan-sidecar-*'`.
+   6. `docker compose up -d` (the workers and the proxy; they wait for their windows).
+   7. A dry check outside the windows: `./sidecar-window.sh start kev`, wait for
+      `docker compose --profile llamacpp logs kev-llamacpp` to say the model is loaded, then
+      `./sidecar-window.sh stop kev`; the same for pplx.
+4. **The first night:** `docker compose logs -f kev` from 01:00 (the sidecar checked, requests
+   at about 4–5 s), and pplx from 05:05; `./makhzan ai status` the next morning.
+
+**Rollback:** move `policy.MODELS` back to `policy.TORCH_MODELS` and `pins.ACTIVE_BACKEND` to
+`torch` (one commit) and deploy; on the home server mount `torch-kev.toml` / `torch-pplx.toml` as
+the workers' `worker.toml` (or copy them over `home-*.toml`), `sudo sh
+install-sidecar-timers.sh remove`, stop the sidecars, `docker compose up -d`.
 
 ## How it behaves
 
 - **Each worker waits for its own window** (`outside_window = "wait"`). Outside it, the
-  container holds only a small supervisor process, no model: `docker stats` shows a few tens
+  container holds only a small supervisor process, no model (the model is in the window's sidecar, on the card): `docker stats` shows a few tens
   of MB. When the window opens, the supervisor forks a session that says hello, leases,
   loads the model on the first lease with jobs, scores, and stops gracefully at the window's
   end (finishes the request in flight, submits, releases the rest, ends the session, unloads).
@@ -67,19 +132,16 @@ owner's policy switch, and its speed on this CPU is estimated, not measured
 - **An empty queue** (`on_empty = "exit"`) ends that window's session early and frees the
   model until the next window. Set `on_empty = "wait"` to keep polling every `poll_s` until
   the window's end instead, with the model held once loaded.
-- **One model at a time on this machine** (the owner's rule: 31 GB in all, other services
-  running, about 18 GB per model). The windows never overlap, and pplx starts 5 minutes after
-  Kev's ends: Kev's graceful stop can run about 4 minutes past 05:00 (a request in flight, up
-  to about 104 s on this CPU, or a model load, about 150 s, then its last posts), and pplx
-  loads on its first lease after its window opens. Keep at least that gap when changing
-  either window; a test (`ml/tests/test_worker_deploy.py`) fails without it. It is also
-  enforced: a worker takes no new lease and starts no model load in its window's last
-  5 minutes (`no_new_lease_s = 300`, the CPU default), and if a session is still running
-  4.5 minutes after its window's end the supervisor kills it (logged as `KILLING the
-  session`), so its memory is free before the other worker's window opens. A killed session's
-  lease expires at the broker and charges the job in hand one attempt.
+- **One model at a time on the card.** The windows never overlap, and the timers keep exactly one
+  sidecar up: Kev's stops at 05:03, two minutes after Kev's last possible request on the card
+  (60 s timeout, then its posts), before pplx's starts at 05:03:30. A test
+  (`ml/tests/test_worker_sidecar_window.py`) holds the timers against the windows and the stop
+  bound. A worker whose sidecar is down when its window opens waits up to 120 s for it, then
+  fails the load (logged), and the next window tries again. If a session is still running
+  4.5 minutes after its window's end the supervisor kills it (logged as `KILLING the session`);
+  a killed session's lease expires at the broker and charges the job in hand one attempt.
 - **`docker compose stop`** while a worker sleeps exits at once; during a window it is the
-  graceful stop, within `stop_grace_period` (240 s).
+  graceful stop, within `stop_grace_period` (240 s; 300 s for pplx, for its CPU fallback).
 - **The image names itself at hello** as `ghcr.io/ahmedsaed/makhzan/<image>:sha-<commit>`,
   the commit CI built and tested, so the broker's record says which build scored.
 

@@ -146,6 +146,7 @@ is the decision that should have come back to the owner.
 | D18 | Group check | Complete-link; one best match per other shop; Kev < 0.05 inside a group blocks it | Session, concept approved | gain (2,336 merges) | confirm thresholds |
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
 | D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M and pplx-decider-flash-v1.3 Q4_K_S (llama.cpp) accepted on the label test (see "Kev quantisation" and "pplx quantisation" below) | Owner | serving | settled |
+| D24 | Serving | Production switch 2026-11-27: both judges served by llama.cpp (Kev-4B Q4_K_M, pplx Q4_K_S) on the home server's AMD card, taking turns (Kev 01:00–05:00, pplx 05:05–07:00), the card held to clock states 0–2; the judge-version catch-up drained by the owner (see "Production switch" below) | Owner | serving | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
@@ -450,6 +451,7 @@ agreement rule, or the same label test plus the owner's sign-off. Q8_0 passes th
 
 Measurements: `docs/ai/kev-llamacpp.md`. Not yet in production: the worker's llama.cpp backend
 is built but not switched on (an owner step), and the AMD card needs a passing soak test first.
+*Since done: soaked and switched on 2026-11-27 ("Production switch" below).*
 
 ### pplx quantisation (owner, 2026-11-26)
 
@@ -468,4 +470,36 @@ but needs 5.4 GB, more than the home server's card.
 needs the agreement rule, or the label test plus the owner's sign-off. Measurements:
 `docs/ai/pplx-llamacpp.md`. Not yet in production: the worker's llama.cpp backend for pplx is
 built but not switched on (an owner step), and its speed on the home server's CPU is estimated,
-not measured.
+not measured. *Since done: on the card, soaked and switched on 2026-11-27 ("Production switch"
+below).*
+
+### Production switch (owner, 2026-11-27)
+
+**Both judges move to llama.cpp, on the home server's AMD card, taking turns.**
+
+- **The versions:** `policy.MODELS` names
+  `kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0` and
+  `pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303` (D20 as
+  amended), and the worker's `pins.ACTIVE_BACKEND` is `llamacpp` for both.
+  - The torch versions stay as `policy.TORCH_MODELS` and `pins.PINS`, the rollback.
+  - The llama.cpp image digest is part of each version, so any machine serving them, the desktop
+    included, runs that one image.
+- **The card:** the 4 GB card holds one model, so the host's timers start and stop each sidecar
+  around its worker's window. Kev's is up 00:55–05:03 and pplx's 05:03:30–07:03, Africa/Cairo
+  (`ml/deploy/home-server/install-sidecar-timers.sh`). This was option (b) of three; the others
+  were pplx on the CPU, and llama.cpp's router mode, which has an open concurrency bug.
+- **The clock limit:** the card is held to clock states 0–2 by a udev rule
+  (`99-amdgpu-clock-limit.rules`). At higher states its power feed, a SATA adapter on the
+  original 320 W supply, resets the server on a job's first load step (captured live; state 3
+  gained 1%, state 4 reset). At states 0–2:
+  - **Kev:** 1,800 requests, 4.4 s each.
+  - **pplx:** 1,800 requests, 4.6 s each.
+  - **Both:** within 0.038 of the 3060's scores (`kev-llamacpp.md`).
+- **The catch-up.** The switch makes every standing decision's judge stale, so they are re-queued
+  at the amended P8 priorities (35 "same", 30 "not same"), after new pairs and the backlog. The
+  owner drains them, with wider windows and the desktop (whose workers must now run the
+  llama.cpp backend with the same image digest; `worker.md`).
+- **Not done:**
+  - **A proper power supply** for the card (the clock limit is the workaround).
+  - **A CPU route for pplx requests over 4,096 tokens,** about 1 pair in 3,000.
+

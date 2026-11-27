@@ -10,8 +10,9 @@ on its 4 GB card.
 - **The owner accepted Q4_K_S** on the label test (`decision-review.md`, "pplx quantisation").
   Together with Kev Q4 under the production rule it made 216 correct merges against bf16's 209,
   plus one grey-area pair labelled "not".
-- **The worker's llama.cpp backend serves it on the home server's CPU** (`docs/ai/worker.md`).
-  It is built but **not in use**, and its speed there is estimated, not measured.
+- **In production since 2026-11-27** (`decision-review.md`, "Production switch"): on the home
+  server's AMD card at clock states 0–2, taking turns with Kev's sidecar, 4.6 s a request
+  (`docs/ai/worker.md`, "pplx on a llama.cpp sidecar").
 
 ## How pplx differs from Kev
 
@@ -107,11 +108,13 @@ It prints the variant (217 merges, 216 "same", 1 "not") beside pplx bf16 with th
 ## Speed and placement
 
 - **3060:** 2.3–2.6 requests/s, against 2.96 for Kev's own server.
-- **The home server's card: not tried.**
-  - Q4_K_S peaked at 3,849 MiB on the 3060 at `-ub 4096`. The card has 4 GB, and Kev's sidecar
-    keeps its own GGUF loaded there.
-  - So pplx's sidecar runs on the **CPU** (compose profile `llamacpp-pplx`, `-ngl 0 -t 4`), free
-    while Kev is on the card.
+- **The home server's card (production).** Q4_K_S at `-ub 4096 -fa on` loads in 3,273 MiB of
+  the card's 4 GB. At clock states 0–2 (`kev-llamacpp.md`) it ran 1,800 requests with no
+  reset: 4.6 s each (242 tokens/s), within 0.038 of the 3060's scores. Kev's sidecar is stopped
+  first: the host's timers swap them at 05:03 (`docs/ai/worker.md`, "Running on the home
+  server"). At stock clocks its first large job reset the server (the card's power feed), which
+  is what the clock limit prevents.
+- **The CPU fallback** (compose `-ngl 0 -t 4`, `device = "cpu"`), the same model version:
 - **CPU, measured on the desktop** (4 threads, Q4_K_S):
 
   | Request | Tokens | Time | Tokens/s | Score vs the 3060's |
@@ -134,14 +137,12 @@ It prints the variant (217 merges, 216 "same", 1 "not") beside pplx bf16 with th
 
 ## Not done
 
-- **The production switch.** `policy.MODELS["pplx"]` and `pins.PINS["pplx"]` are unchanged, so the
-  broker refuses this worker. Switching starts the judge-version re-scores at the low priorities
-  of P8 as amended.
-- **Speed on the i7-3770 itself:** the 55 s and 193 s above are estimates.
-- **The wider pplx window.** With Kev on the card, the CPU is free all night, but
-  `llamacpp-pplx.toml` keeps today's 05:05–07:00. Widening it is the owner's call.
-- **pplx on the card.** It is untested whether Q4_K_S fits beside nothing else at `-ub 4096`.
+- **The CPU fallback's speed on the i7-3770 itself:** the 55 s and 193 s above are estimates.
+- **Requests over 4,096 tokens** (about 1 pair in 3,000 of the real backlog) fail their job on
+  the card; a CPU route for them at 8,192 is not built.
 - **Trimming the output matrix.**
+- **The judge-version catch-up** (every standing decision re-scored after the switch) is the
+  owner's to drain, with wider windows and the desktop.
 
 ## Files
 

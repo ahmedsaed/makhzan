@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from makhzan_ml.worker.config import ConfigError, Schedule, Window, load, parse
-from makhzan_ml.worker.pins import PINS
+from makhzan_ml.worker.pins import PINS, production_pin
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "ai" / "worker.md"
 DEPLOY = Path(__file__).resolve().parents[1] / "deploy" / "home-server"
@@ -346,8 +346,10 @@ def test_every_documented_example_parses(name, body):
     assert cfg.name == name
     if name.startswith("desk-"):
         assert cfg.device == "gpu"
+    # Production since 2026-11-27: every example serves the version the policy names.
+    assert cfg.expect_versions == {cfg.model: production_pin(cfg.model).model_version}
     if name.startswith("home-"):
-        assert (cfg.device, cfg.threads, cfg.mmap) == ("cpu", 6, False)
+        assert (cfg.backend, cfg.device) == ("llamacpp", "gpu")
         assert cfg.schedule.outside_window == "wait"
         # The documented example is the compose stack's file, minus its comments.
         deployed = parse({**tomllib.loads((DEPLOY / f"{name}.toml").read_text()),

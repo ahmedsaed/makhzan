@@ -333,12 +333,18 @@ weights).
 
 ## Example configurations
 
-These four are examples. The home server's windows are the owner's (Kev 01:00–05:00, pplx
-05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts and tokens are
-placeholders. The worker's tests parse every block below, and the compose stack's two files.
+These four are examples, as production runs them since the owner's switch of 2026-11-27: both
+judges through llama.cpp sidecars (Kev-4B Q4_K_M, pplx Q4_K_S; "Kev on a llama.cpp sidecar",
+"pplx on a llama.cpp sidecar" below). The home server's windows are the owner's (Kev
+01:00–05:00, pplx 05:05–07:00, Cairo time); the desktop's run until their queue is empty. Hosts
+and tokens are placeholders. The worker's tests parse every block below, and the compose stack's
+files. The torch configurations production ran until then are kept as
+`ml/deploy/home-server/torch-kev.toml` and `torch-pplx.toml`, the rollback (the broker refuses
+them while the policy names the llama.cpp versions).
 
 The home server's Kev worker, as `ml/deploy/home-server/home-kev.toml` has it: through the
-compose stack's broker proxy, waiting for its window:
+compose stack's broker proxy, waiting for its window, its judge the `kev-llamacpp` sidecar on
+the AMD card (started at 00:55 and stopped at 05:03 by the host's timers):
 
 ```toml
 # home-kev.toml
@@ -350,16 +356,15 @@ token_file = "/run/secrets/makhzan-ai-token"
 model = "kev"
 
 [model.kev]
-expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
+expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
 
 [compute]
-device = "cpu"
-dtype = "fp32"
-threads = 6
+backend = "llamacpp"
+device = "gpu"
+dtype = "q4_k_m"
+llamacpp_url = "http://kev-llamacpp:8080"
+gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
 nice = 10
-memory_gib = 20
-mmap = false
-weights_cache = "/models"
 
 [schedule]
 windows = ["01:00-05:00"]
@@ -368,14 +373,14 @@ outside_window = "wait"
 on_empty = "exit"
 
 [leases]
-max_jobs = 2   # 4 requests, about 6 minutes on this CPU (about 86 s a request)
+max_jobs = 2
 lease_s = 900
 heartbeat_s = 60
 ```
 
-The home server's pplx worker. Its window follows Kev's, so the two never share the memory
-and starts 5 minutes after Kev's ends, since Kev's graceful stop can run about 4 minutes past
-05:00:
+The home server's pplx worker. Its window follows Kev's: the 4 GB card holds one model, so the
+timers stop Kev's sidecar at 05:03 (two minutes after a window's last possible request) and
+start pplx's at 05:03:30:
 
 ```toml
 # home-pplx.toml
@@ -387,16 +392,15 @@ token_file = "/run/secrets/makhzan-ai-token"
 model = "pplx"
 
 [model.pplx]
-expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
+expect_version = "pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303"
 
 [compute]
-device = "cpu"
-dtype = "fp32"
-threads = 6
+backend = "llamacpp"
+device = "gpu"
+dtype = "q4_k_s"
+llamacpp_url = "http://pplx-llamacpp:8080"
+gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
 nice = 10
-memory_gib = 20
-mmap = false
-weights_cache = "/models"
 
 [schedule]
 windows = ["05:05-07:00"]
@@ -410,8 +414,22 @@ lease_s = 900
 heartbeat_s = 60
 ```
 
-The desktop's GPU workers, for a backlog. They run until the queue is empty. Run one at a
-time: each 4B model needs most of the 12 GB card.
+The desktop's GPU workers, for a backlog. They run until the queue is empty. Each needs its
+sidecar on the desktop first, run from **the same image digest** as the home server's: the
+digest is part of the model version, so a CUDA build would be a different version and the broker
+would refuse its scores. The server-vulkan image runs on the 3060 too (2.3 requests/s for Kev Q4
+there, against Kev's own server's 2.96). One at a time:
+
+```bash
+docker run -d --name desk-kev-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 \
+  ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486 \
+  -m /models/Kev-4B-Q4_K_M.gguf -ngl 99 -np 1 -c 4096 -b 2048 -ub 2048 --host 0.0.0.0 --port 8080
+# pplx: -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -np 1 -c 4096 -b 4096 -ub 4096 -fa on
+```
+
+The worker container then runs with `--network host`, so `127.0.0.1:8130` is the sidecar, and
+the same models directory mounted at `/models` (the worker hashes the GGUF it is pinned to).
 
 ```toml
 # desk-kev.toml
@@ -422,12 +440,14 @@ token_file = "/run/secrets/makhzan-ai-token"
 model = "kev"
 
 [model.kev]
-expect_version = "kev-4b@6cfce5c2fa4b+kev-6b719c3+T1.0"
+expect_version = "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
 
 [compute]
+backend = "llamacpp"
 device = "gpu"
-dtype = "bf16"
-weights_cache = "/models"
+dtype = "q4_k_m"
+llamacpp_url = "http://127.0.0.1:8130"
+gguf_path = "/models/Kev-4B-Q4_K_M.gguf"
 
 [schedule]
 windows = "always"
@@ -448,12 +468,14 @@ token_file = "/run/secrets/makhzan-ai-token"
 model = "pplx"
 
 [model.pplx]
-expect_version = "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"
+expect_version = "pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303"
 
 [compute]
+backend = "llamacpp"
 device = "gpu"
-dtype = "bf16"
-weights_cache = "/models"
+dtype = "q4_k_s"
+llamacpp_url = "http://127.0.0.1:8130"
+gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
 
 [schedule]
 windows = "always"
@@ -562,11 +584,33 @@ The Kev images record the Kev code commit they were built from as `MAKHZAN_KEV_C
 (`ml/kev/Dockerfile*`), and the worker refuses to load Kev if it differs from its pin. A Kev
 base built before that change records none, and the worker only logs that.
 
-## Running on the home server (CPU, capped)
+## Running on the home server
 
-The home server runs both CPU workers as one compose stack, `ml/deploy/home-server/`: a
-folder with `compose.yml`, a `.env` (from `.env.example`), the two worker TOMLs and their token
-files. No systemd timers and no host firewall rules. Its README says how to set it up.
+The home server runs both workers as one compose stack, `ml/deploy/home-server/`: a folder with
+`compose.yml`, a `.env` (from `.env.example`), the two worker TOMLs and their token files. No
+host firewall rules. Its README says how to set it up.
+
+**Since the owner's production switch (2026-11-27)** both judges run on the server's AMD card
+through llama.cpp sidecars ("Kev on a llama.cpp sidecar" and "pplx on a llama.cpp sidecar"
+below), taking turns because the 4 GB card holds one model:
+
+| Time (Africa/Cairo) | Host timer (`sidecar-window.sh`) | Worker |
+|---|---|---|
+| 00:55 | start `kev-llamacpp` (stops `pplx-llamacpp` first) | |
+| 01:00–05:00 | | home-kev scores on the card |
+| 05:03 | stop `kev-llamacpp` | Kev's last request ended by about 05:01:40 |
+| 05:03:30 | start `pplx-llamacpp` (stops Kev's again, to be sure) | |
+| 05:05–07:00 | | home-pplx scores on the card |
+| 07:03 | stop `pplx-llamacpp` | the card is free for Plex/Jellyfin |
+
+The timers are systemd system units running as the owner (`install-sidecar-timers.sh`), with
+the time zone in each `OnCalendar`, so the server's UTC clock does not matter.
+`sidecar-window.sh` refuses to start a sidecar unless the card is in `manual` performance
+mode, which the udev rule `99-amdgpu-clock-limit.rules` sets together with its clock-state
+limit (states 0–2). Without that limit a job on this card resets the whole server
+(`kev-llamacpp.md`). `ml/tests/test_worker_sidecar_window.py` holds the script's behaviour and
+the timers against the windows and the GPU stop bound. The CPU caps and the torch notes below
+describe the rollback configurations (`torch-kev.toml`, `torch-pplx.toml`).
 
 ```bash
 docker compose up -d                            # start, and after any change
@@ -670,7 +714,15 @@ fake judge taking 600 s a request:
 ## Running on the desktop (GPU) for a backlog
 
 The owner decides when a backlog runs (P10). A desktop GPU worker connects to the broker and
-drains the queue. Only one 4B model fits on the 12 GB card, so run Kev first, then pplx:
+drains the queue.
+
+**Since the production switch (2026-11-27) the desktop must run the llama.cpp backend too**:
+the broker refuses the torch versions at hello. Start the sidecar first, from the same image
+digest as the home server's (the digest is part of the version), as under "Example
+configurations" (`desk-kev.toml`, `desk-pplx.toml`), then the worker with `--network host` and
+the GGUFs at `/models`. Any worker image runs the llama.cpp backend (it needs no torch); the
+steps below are the torch ones, kept for a rollback. Only one 4B model fits on the 12 GB card,
+so run Kev first, then pplx:
 
 1. Make sure nothing else holds the card: `docker ps` and `nvidia-smi`. Stop any
    `ml/docker-compose.yml` model services.
@@ -704,21 +756,24 @@ For a backlog scored against a local copy (P4), the broker runs on the desktop t
 `--network host` and set `broker_url = "http://127.0.0.1:<port>/ai/v1"`. Plain HTTP is
 accepted for a loopback address only.
 
-## Kev on a llama.cpp sidecar (built, not in use)
+## Kev on a llama.cpp sidecar (production since 2026-11-27)
 
 Kev-4B Q4_K_M served by llama.cpp, accepted by the owner on 2026-11-26 (D20 amended;
-measurements in `docs/ai/kev-llamacpp.md`). It is meant for the home server's 4 GB AMD card,
-where it runs about 15-20x the CPU worker's speed per token.
+measurements in `docs/ai/kev-llamacpp.md`) and made production on 2026-11-27
+(`decision-review.md`, "Production switch"). It runs on the home server's 4 GB AMD card, held to
+clock states 0–2: 4.4 s a request, about 20–27x the CPU worker.
 
-- **The pin** is `pins.ALTERNATIVES[("kev", "llamacpp")]`, not `PINS`:
+- **The pin** is `pins.ALTERNATIVES[("kev", "llamacpp")]`, which `pins.production_pin("kev")`
+  returns since `pins.ACTIVE_BACKEND` names llama.cpp:
   - the GGUF `ggml-org/Kev-4B-GGUF@f4624b6…`, file `Kev-4B-Q4_K_M.gguf`, sha256 `33ae6b18…`;
   - llama.cpp's `server-vulkan` image, build b12767, by digest (`pins.LLAMACPP_IMAGE`);
   - model version `kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0`.
 
-  The policy still names the torch version, so the broker answers this worker's hello with
-  `ok: false` and it exits 4. Switching production is one owner-gated change: the policy's
-  `MODELS["kev"]` and `PINS["kev"]` to this pin. Then every standing decision is re-scored,
-  at the low priorities of P8 as amended 2026-11-26 (35 for a "same", 30 for a "not same").
+  The policy's `MODELS["kev"]` names this version; the torch pin (`PINS["kev"]`,
+  `policy.TORCH_MODELS`) is the rollback, refused at hello while the policy names this one. The
+  switch made every standing decision's judge stale, so they are re-scored at the low
+  priorities of P8 as amended 2026-11-26 (35 for a "same", 30 for a "not same"), after new
+  pairs and the backlog; the owner drains that catch-up (wider windows, the desktop).
 - **Scoring.** The worker posts the approved payload to the sidecar's `POST /v1/systemone`,
   one request per call. The GGUF carries Kev's fitted temperature (2.406) and llama.cpp
   always applies it, so the worker undoes it (`judges.uncalibrate`). The score is then raw
@@ -757,8 +812,9 @@ where it runs about 15-20x the CPU worker's speed per token.
   - the stack's hardening: non-root, read-only filesystem, no capabilities. It started
     and scored that way on CPU.
 
-  `llamacpp-kev.toml` beside it is the worker configuration. It has the same name and window
-  as `home-kev.toml`, which it replaces.
+  `home-kev.toml` beside it is the worker configuration (the torch one it replaced is
+  `torch-kev.toml`, the rollback). The host's timers start the sidecar at 00:55 and stop it at
+  05:03 (`sidecar-window.sh`, "Running on the home server").
 - **Parity:** `python -m makhzan_ml.worker.parity --backend llamacpp --llamacpp-url ...
   --gguf-path ... --stored <llama.cpp scores> --stored-temperature 2.406`. On 2026-11-26,
   against a live sidecar on the desktop's 3060 (Vulkan, the 4 GB settings), 40 requests
@@ -770,19 +826,15 @@ where it runs about 15-20x the CPU worker's speed per token.
 
 **Not done** for this backend:
 
-- **The AMD card.** It hard-reset the server once at stock fan settings
-  (`kev-llamacpp.md`). It needs servicing, its fan and power settings applied at boot (a
-  systemd unit; not written), then a monitored soak test of a whole window. The sidecar
-  has not yet run on that card under compose: `/dev/dri` with the stack's non-root user and
-  dropped capabilities is untested.
-- **The policy switch** (above): owner-gated, not made.
-- **No image** carries only the worker without torch. The existing Kev worker image is
-  enough.
-- **The sidecar runs whenever its profile is up** and holds the model in the card's memory
-  between windows. That is harmless for the card, but it is not stopped with the window as
-  the torch worker's model is.
+- **The card's power feed is a workaround.** The original 320 W supply has no PCIe cable and
+  feeds the card through a SATA adapter; the udev clock-state limit keeps the card's load step
+  small enough (`kev-llamacpp.md`). A proper supply is the fix.
+- **No image** carries only the worker without torch. The existing Kev worker image is enough.
+- **The sidecar has not run under the compose stack's hardening on the card in production yet**
+  (non-root with the render/video groups, read-only, no capabilities): the soaks ran the same
+  image and settings with `docker run`. The first night's logs are the check.
 
-## pplx on a llama.cpp sidecar (built, not in use)
+## pplx on a llama.cpp sidecar (production since 2026-11-27)
 
 pplx-decider-flash-v1.3 **Q4_K_S**, accepted by the owner under D20's label test
 (`decision-review.md`, "pplx quantisation"; measurements in `docs/ai/pplx-llamacpp.md`), served
@@ -799,13 +851,19 @@ the same way as Kev above, with these differences.
   pplx score and of the policy's 0.95, so the answer is taken as served (`judges.rescale`
   returns it unchanged when the two temperatures agree), after the same strict validation.
 - **Text is sent in NFC**, as for Kev: pplx's tokenizer is the same family.
-- **On the CPU** (`pplx-llamacpp`, compose profile `llamacpp-pplx`, `-ngl 0 -t 4`, 4 CPUs,
-  6 GB). The 4 GB card holds one model, and Kev's sidecar keeps its GGUF there.
+- **On the card** (`pplx-llamacpp`, compose profile `llamacpp-pplx`, `-ngl 99 -fa on`,
+  2 CPUs, 4 GB), taking turns with Kev's sidecar: the host's timers start it at 05:03:30, after
+  stopping Kev's, and stop it at 07:03. Soaked on the card at clock states 0–2: 1,800 requests,
+  4.6 s each, about 33x the torch CPU worker, within 0.038 of the 3060's scores
+  (`kev-llamacpp.md`).
   - pplx is non-causal, so a whole request must fit one batch: `-b`/`-ub`/`-c` 4096. The
-    longest Phase E request is about 3,500 tokens.
-  - The worker configuration is `llamacpp-pplx.toml`, today's 05:05–07:00 window unchanged. A
-    wider window beside Kev is possible but the owner's call.
-- **Its request timeout is 225 s on a CPU.** The longest Phase E request took 48.9 s on the
+    longest Phase E request is 3,574 tokens; about 1 pair in 3,000 of the real backlog exceeds
+    4,096 (`pplx-llamacpp.md`), and fails its job, never scores wrongly.
+  - The worker configuration is `home-pplx.toml` (device `gpu`; the torch one is
+    `torch-pplx.toml`, the rollback), window 05:05–07:00.
+  - **CPU fallback**: the same GGUF on the CPU is the same model version (P8). `-ngl 0 -t 4`, no
+    devices, and `device = "cpu"` in `home-pplx.toml`.
+- **Its request timeout is 60 s on the card, 225 s on a CPU (the fallback).** The longest Phase E request took 48.9 s on the
   desktop's CPU (4 threads) and is estimated at about 193 s on the i7-3770 (not measured there).
   With 3 × 10 s of last posts and the 10 s join, the stop bound is 265 s: under the supervisor's
   270 s window-end kill, and covered by the pplx worker's `stop_grace_period` of 300 s.
@@ -819,10 +877,9 @@ the same way as Kev above, with these differences.
   - Report: `ml/out/gguf-pplx/parity-llamacpp-cpu.json`.
 
 **Not done:**
-- the switch (policy and `PINS`, owner-gated);
-- a run on the i7-3770 itself;
-- the wider window;
-- pplx on the card (whether Q4_K_S fits there at `-ub 4096` is untested).
+- a run of the CPU fallback on the i7-3770 itself (its 225 s timeout rests on an estimate);
+- requests over 4,096 tokens (about 1 pair in 3,000) fail on the card; a CPU route for them at
+  8,192 is possible but not built.
 
 ## Parity with the validated scores
 

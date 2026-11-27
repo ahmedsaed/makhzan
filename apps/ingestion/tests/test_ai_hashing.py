@@ -7,7 +7,14 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from makhzan_schemas.ai.hashing import listing_hash
-from makhzan_schemas.ai.policy import ACTIVE, KEV_REVISION, MODELS, POLICIES, thresholds
+from makhzan_schemas.ai.policy import (
+    ACTIVE,
+    KEV_REVISION,
+    MODELS,
+    POLICIES,
+    TORCH_MODELS,
+    thresholds,
+)
 from makhzan_schemas.ai.prompt import listing_row, pplx_payload, record
 
 
@@ -99,5 +106,13 @@ def test_policy_p1_is_the_owners_safest_operating_point():
     assert POLICIES == {"p1": {"kev": 0.80, "pplx": 0.95}}
     assert ACTIVE == "p1" and thresholds() == {"kev": 0.80, "pplx": 0.95}
     assert KEV_REVISION == "6cfce5c2fa4b4bd64026336ab649c5ca78857d52"
-    assert MODELS["kev"].model_version.startswith("kev-4b@6cfce5c2fa4b")
+    # Production serves the llama.cpp versions (owner, 2026-11-27); the torch ones are the rollback.
+    assert MODELS["kev"].model_version == (
+        "kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0"
+    )
+    assert MODELS["pplx"].model_version == (
+        "pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303"
+    )
     assert MODELS["pplx"].weights_revision.startswith("d06fb3f2d97e")
+    assert TORCH_MODELS["kev"].model_version.startswith("kev-4b@6cfce5c2fa4b")
+    assert TORCH_MODELS["pplx"].model_version == "pplx-decider-flash-v1.3@d06fb3f2d97e+T1.3303"

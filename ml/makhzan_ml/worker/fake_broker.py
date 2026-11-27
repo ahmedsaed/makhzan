@@ -93,6 +93,9 @@ class FakeBroker:
         port: int = 0,
     ):
         self.tokens = tokens  # token -> (worker name, model keys)
+        # Default: the torch pins, which the tests' fake judges serve. Production's broker names
+        # the llama.cpp versions since 2026-11-27 (pins.production_pin); pass `versions` (and
+        # `weights`) to stand in for it, as parity does.
         self.versions = versions or {k: p.model_version for k, p in PINS.items()}
         #: The weights revision hello must name per key (an alternative backend's pin has
         #: its own; parity passes it with that pin's version).
