@@ -143,8 +143,10 @@ With pplx at Q4_K_S, the production quantisation:
 | Kev Q4 ≥ 0.8 (p1) | 217 / 216 / 1 | E0098 |
 | H2O Q4 or Q8 ≥ 0.578 (**p2**) | 229 / 227 / 2 | E0098, E0639 |
 | H2O Q4 ≥ 0.597 (its own matched threshold) | 228 / 226 / 2 | E0098, E0639 |
-| Kev OR H2O | 236 / 234 / 2 | |
-| Kev AND H2O | 211 / 210 / 1 | |
+| Kev Q4 OR H2O Q8 | 235 / 233 / 2 | E0098, E0639 |
+| Kev Q4 AND H2O Q8 | 211 / 210 / 1 | E0098 |
+| Kev Q4 OR H2O Q4 | 236 / 234 / 2 | E0098, E0639 |
+| Kev Q4 AND H2O Q4 | 210 / 209 / 1 | E0098 |
 
 Every wrong merge in these tables is a grey-area pair (E0098, E0639, E0535, E0138), the kind the
 owner ruled acceptable for pplx Q4.
@@ -174,12 +176,13 @@ setup keeps 512. The card's scores were within 0.016 of the 3060's on every requ
 
 ## 5. H2O in depth
 
-**Q4 against Q8 (D20).** Spearman 0.9962; |Δp| at most 0.198, mean 0.017. Pair agreement is
+**Q4 against Q8 (D20)**, all 900 Phase E pairs in both orders. Spearman 0.9962; |Δp| at most 0.198, mean 0.017. Pair agreement is
 98.56% at 0.5 and 98.33% at 0.578. Q4 therefore **fails the agreement rule**. The owner accepted
 it on the label test: at 0.578 it makes the same merges as Q8 (229 / 227 / 2), with higher AP
 and recall at 0.991.
 
-**Error analysis: H2O at 0.578 against Kev at 0.8,** each alone, at the same precision:
+**Error analysis: H2O Q8 at 0.578 against Kev BF16 at 0.8,** each alone, at the same precision
+(`decision_models_errors.py`; `--q4` for H2O Q4):
 
 - Both make **11 false merges**. H2O misses 89 true pairs and Kev 109; H2O alone finds 39 that
   Kev misses, and Kev alone 19.
@@ -204,15 +207,22 @@ The owner asked whether any model could do the job alone.
 - the two-judge rule (p2): 227 merges, 2 wrong.
 
 That costs only a few merges, but a threshold chosen on the same pairs it is scored on flatters
-the single judge. So: **cross-validation**, 500 random 50/50 splits. Each split picks the
-threshold on one half (the lowest reaching precision ≥ 0.99) and scores the other half.
+the single judge. So: **cross-validation** (`decision_models_cv.py`, seeded, so the table is
+exact), 500 random 50/50 splits of the 626 pairs, H2O Q4 and pplx Q4. Each split picks a
+threshold on one half (of those reaching precision ≥ 0.99, the one admitting the most correct
+pairs) and scores the other half.
 
-| Setup | Mean precision | Worst 5% | Recall | Wrong merges per half |
+| Setup | Mean precision | 5th percentile | Mean recall | Wrong merges per half: mean, max, share of splits ≥ 3 |
 |---|---|---|---|---|
-| H2O alone | 0.9856 | 0.9627 | 0.624 | up to 11; ≥ 3 in 31% of splits |
-| pplx alone | 0.9851 | 0.9590 | | up to 12 |
-| Rule, H2O threshold tuned per split | 0.9914 | 0.9825 | 0.591 | at most 2 |
-| Rule, fixed (0.578, 0.95) | 0.9911 | 0.9818 | | |
+| H2O alone, tuned per split | 0.9856 | 0.9627 | 0.624 | 1.90, 11, 31% |
+| pplx alone, tuned per split | 0.9851 | 0.9590 | 0.622 | 1.94, 12, 31% |
+| Rule, H2O tuned per split (on pairs pplx passes), pplx ≥ 0.95 | 0.9914 | 0.9825 | 0.591 | 1.01, 2, 0% |
+| Rule, fixed (0.578, 0.95) | 0.9911 | 0.9818 | 0.589 | 1.01, 2, 0% |
+| H2O alone, fixed ≥ 0.7299 | 0.9918 | 0.9828 | 0.618 | 0.99, 2, 0% |
+
+The last row looks as good as the rule, but 0.7299 was chosen on all 626 pairs, test halves
+included, so it carries the in-sample flattery the tuned rows remove. Chosen fairly, on half the
+pairs, a single judge's threshold lands anywhere on a steep part of its curve.
 
 A single judge's threshold sits on a steep part of its curve and moves with the sample; the
 second judge removes that variance. **Decision: keep two judges.** The cost is about 3 points of
@@ -231,8 +241,9 @@ the judges never see them.
 | < 0.10 | 11% | 1 |
 | < 0.20 | 15% | 4 |
 
-**On the real backlog**: 1,000 uniformly drawn backlog pairs (seed 20261127) and 500 pairs the
-production judges had merged (seed 7), at 7.7–8.6 requests/s. Merges were judged by the old BF16
+**On the real backlog** (the 2026-11-17 backlog, 92,833 pairs; `d1_prefilter_sample.py`
+redraws both samples exactly): 1,000 uniformly drawn pairs (seed 20261127) and 500 of the 6,236
+other pairs both judges had merged (seed 7), at 7.7–8.6 requests/s. Merges were judged by the old BF16
 Kev and pplx decisions.
 
 | Cut | Backlog dropped | Merges lost |
@@ -279,8 +290,9 @@ revision `61f8d8b7…` and sha256
 `5ec969c6edbad5f1750141742f635cc7f01576bf9432151f730f0a6c30042768` (2.71 GB).
 
 **Its floor, 0.19.** The group check blocks an AI join when any two members score below a
-floor (Kev's was 0.05). H2O's floor was chosen to block what Kev's did, on the labelled set
-(463 "not same" pairs):
+floor (Kev's was 0.05). H2O's floor was chosen to block what Kev's did, on every labelled
+Phase E pair, vetoed ones included (882 pairs, 463 "not same"), Kev BF16 against H2O Q4
+(`decision_models_floor.py`):
 
 | Floor | "Not same" blocked | "Same" blocked |
 |---|---|---|
@@ -303,7 +315,12 @@ Scripts (in this repository):
 - `ml/models/intern_struct_requests.py`, `intern_struct_draft.py`, `intern_struct_analyse.py`:
   section 8's structured state: the requests, the two-pair draft, and the comparison
   (`intern-struct-analysis.json`, which also covers H2O Q4 and the 0.578 rule).
-- `ml/models/d1_prefilter_score.py`, `d1_prefilter_analyse.py`: section 7.
+- `ml/models/decision_models_errors.py`: section 5's error analysis and the first-stage →
+  pplx table of section 4 (Kev, H2O, OR, AND; pplx BF16 and Q4).
+- `ml/models/decision_models_cv.py`: section 6's cross-validation.
+- `ml/models/d1_prefilter_sample.py`, `d1_prefilter_score.py`, `d1_prefilter_analyse.py`:
+  section 7: draw the two backlog samples and render their requests, score them, analyse.
+- `ml/models/decision_models_floor.py`: section 9's floor table.
 
 Each script's docstring gives its command. They read the answer key from the private
 configuration beside this repository and write to git-ignored `ml/out/models-compare/`, which
@@ -311,16 +328,16 @@ holds every raw score (`h2o-K2.jsonl`, `h2o-K2c.jsonl`, `h2o-q4-K2.jsonl`, `d1-K
 `intern-K2*.jsonl`, `intern-struct-K2*.jsonl`, `h2o-card-ub*.jsonl`, `speed-*.jsonl`),
 `parity-h2o-llamacpp-3060.json`, `intern-structured-draft.md` and `d1-prefilter/`.
 
-**Not kept as scripts** (one-off analyses run inline; their method is described above and their
-inputs are in `ml/out/`):
+Each of these was re-run from `ml/models/` and reproduces the numbers above exactly; the d1
+sample script rewrites its four files byte for byte. The scores themselves came from the
+servers (`compare_models.py score`, `intern_runner.py`, `d1_prefilter_score.py`) and are not
+re-run by the analyses.
 
-- the cross-validation (section 6);
-- the H2O / Kev error analysis (section 5);
-- the floor table (section 9);
-- drawing the d1 pre-filter's backlog samples (section 7).
-
-Re-running them means rewriting them from these descriptions; the exact random splits of section
-6 would differ.
+Without a script of their own: the Phase E d1 cut table of section 7 (d1 K2, 626 pairs) and the
+Q4/Q8 agreement figures of section 5 (all 900 pairs, both orders of `h2o-K2.jsonl` against
+`h2o-q4-K2.jsonl`) were recomputed inline from the stored scores and match; the speed and memory
+figures come from the `speed-*` and `h2o-card-*` runs and their `.vram` logs.
+`parity-h2o-llamacpp-3060.json` is the worker backend's parity with the stored H2O Q4 scores.
 
 Sources: [llama.cpp h2o-lightning, PR #30361](https://github.com/ggml-org/llama.cpp/pull/30361),
 [h2oai/h2o-lightning-4b](https://huggingface.co/h2oai/h2o-lightning-4b),
