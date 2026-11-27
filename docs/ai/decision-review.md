@@ -147,7 +147,7 @@ is the decision that should have come back to the owner.
 | D19 | Sampling | 900 pairs: 400 Kev-positive, 120 borderline, 120 confident-no, 260 veto strata, inclusion-weighted | Session | precision estimates | confirm |
 | D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M and pplx-decider-flash-v1.3 Q4_K_S (llama.cpp) accepted on the label test (see "Kev quantisation" and "pplx quantisation" below) | Owner | serving | settled |
 | D24 | Serving | Production switch 2026-11-27: both judges served by llama.cpp (Kev-4B Q4_K_M, pplx Q4_K_S) on the home server's AMD card, taking turns (Kev 01:00–05:00, pplx 05:05–07:00), the card held to clock states 0–2; the judge-version catch-up drained by the owner (see "Production switch" below) | Owner | serving | settled |
-| D25 | Models | First judge: H2O-Lightning-4B Q4_K_M (llama.cpp) replaces Kev, at 0.578 on its raw scale; pplx Q4_K_S ≥ 0.95 stays second, same K2 payload; policy p2. Its group-check floor (P14's role) is proposed at 0.19, **pending the owner** (see "H2O first" below) | Owner (floor: session) | pipeline, group check, audit | settled; floor **owner review** |
+| D25 | Models | First judge: H2O-Lightning-4B Q4_K_M (llama.cpp) replaces Kev, at 0.578 on its raw scale; pplx Q4_K_S ≥ 0.95 stays second, same K2 payload; policy p2. Its group-check floor (P14's role) is 0.19, proposed by the session and confirmed by the owner, 2026-11-27 (see "H2O first" below) | Owner | pipeline, group check, audit | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
@@ -540,7 +540,7 @@ stays in `policy.POLICIES`, never edited, as history and the rollback.
   audit re-offers no pair it has seen), so `ai status` shows the audit per model, each at its own
   bands: H2O below 0.578 and below 0.19; Kev below 0.8 and below 0.05.
 
-**Pending the owner: H2O's group-check floor, proposed 0.19.** P14 blocks an AI join when the
+**H2O's group-check floor: 0.19, confirmed by the owner, 2026-11-27** (proposed by the session). P14 blocks an AI join when the
 first judge's minimum between any two members is below a floor. Kev's was 0.05. H2O's raw
 scores are compressed (none go below about 0.10), so 0.05 would block nothing. The proposal
 keeps P14's strength rather than its number, matching how many labelled "not same" pairs the
@@ -554,15 +554,14 @@ floor catches (Phase E labels, pairs passing the vetoes):
 | H2O raw < 0.195 | 365 (78.8%) | 16 |
 
 At 0.19 the floor catches the same share of "not same" pairs as Kev's did, and wrongly
-catches 4 fewer "same" pairs. It is in `policy.JUDGE_FLOORS`, read per model by the group check
-(`decisions.load_ai_same`) and the audit bands (`status.AUDIT_BELOW`). A floor only ever blocks
-an AI join, never a rules merge. A different number is a one-line change to those two
-constants.
+catches 4 fewer "same" pairs. It is in `policy.JUDGE_FLOORS`, read per model by the group
+check (`decisions.load_ai_same`); the audit's bands (`status.AUDIT_BELOW`) derive from it and
+the policies. A floor only ever blocks an AI join, never a rules merge. A different number is a
+one-line change to `JUDGE_FLOORS`.
 
 **Not done:**
 
 - **Old audit pairs.** Pairs Kev audited are not re-audited by H2O, so the H2O audit grows only
   with new rules merges. Re-auditing them all is an owner call: one producer run with the audit
   filter keyed on the judge.
-- **The floor is unconfirmed** (above).
 

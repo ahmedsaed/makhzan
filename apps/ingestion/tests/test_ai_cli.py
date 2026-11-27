@@ -124,6 +124,9 @@ async def test_redecide_dry_run_recomputes_from_stored_scores_and_writes_nothing
     assert "same -> not_same" in out and "unchanged not_same" in out
     assert await ai.run(["redecide", "--dry-run", "--policy", "p-loose"]) == 0
     assert "needs pplx scores first" in capsys.readouterr().out
+    # p1 (Kev first) has no threshold for H2O's stage: counted, not a traceback.
+    assert await ai.run(["redecide", "--dry-run", "--policy", "p1"]) == 0
+    assert "policy lacks h2o" in capsys.readouterr().out
     async with SessionLocal() as session:
         assert sorted(d.outcome for d in await session.scalars(select(AiDecision))) == [
             "not_same",

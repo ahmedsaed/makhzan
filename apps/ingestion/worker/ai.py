@@ -173,7 +173,8 @@ async def redecide(session, policy: str) -> dict:
 
     `{"policy", "thresholds", "active", "total", "counts": {key: n}, "examples": {key: [ids]}}`,
     where a key is `unchanged <outcome>`, `<before> -> <after>`, `needs <stage>
-    scores first` or `unregistered pipeline`. Raises `Refused` for an unknown policy.
+    scores first`, `policy lacks <stage>` (no threshold for a stage of the pipeline) or
+    `unregistered pipeline`. Raises `Refused` for an unknown policy.
     """
     if policy not in POLICIES:
         raise Refused(f"No policy {policy!r} (known: {sorted(POLICIES)}).")
@@ -188,6 +189,18 @@ async def redecide(session, policy: str) -> dict:
             name: {"ab": entry.get("ab"), "ba": entry.get("ba")}
             for name, entry in (d.scores or {}).items()
         }
+        lacking = [
+            s.name
+            for s in PIPELINES[d.pipeline].stages
+            if s.threshold is not None and s.threshold not in POLICIES[policy]
+        ]
+        if lacking:
+            # A policy of another judge (p1 has no threshold for H2O's stage, D25): nothing
+            # to recompute, rather than a traceback.
+            key = f"policy lacks {lacking[0]}"
+            counts[key] += 1
+            examples.setdefault(key, []).append(d.id)
+            continue
         step = decide(d.pipeline, scores, policy)
         if step.action != DECIDE:
             key = f"needs {step.stage} scores first"

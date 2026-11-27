@@ -248,6 +248,15 @@ async def test_only_the_best_match_per_other_shop_counts_on_both_sides():
     assert got.rank == {pair(x, b1): (0.99, 0.9), pair(x, c1): (0.96, 0.9)}
 
 
+async def test_a_decision_not_yet_rescored_ranks_by_its_retired_stages_score():
+    # Made under p1 (Kev, then pplx) before D25: Kev's score stands in for H2O's when
+    # ranking, rather than ranking as if H2O had said 0 and losing every tie.
+    shop_a, shop_b = await _supplier("shop-a"), await _supplier("shop-b")
+    x, y = await _listing(shop_a, "x"), await _listing(shop_b, "y")
+    await _decision(x, y, first=0.93, judge="kev", pplx=0.98)
+    assert (await _load()).rank == {pair(x, y): (0.98, 0.93)}
+
+
 async def test_the_group_check_reads_every_standing_first_judge_no_at_its_own_floor():
     shops = [await _supplier(f"shop-{c}") for c in "abcde"]
     a, b, c, d, e = [await _listing(s, s.slug) for s in shops]

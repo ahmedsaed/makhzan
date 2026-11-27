@@ -782,8 +782,8 @@ Then they act last (`grouping._ai_phase`): once the rules and the rulings have
 formed every cluster, an AI pair may join two whole clusters, today's vetoes
 checked between every member, a ruled pair never read, and a first-judge score
 below its floor between any two members blocks the join (`policy.JUDGE_FLOORS`, per
-model: Kev's 0.05 for decisions not yet re-scored, H2O's 0.19 pending the owner's
-confirmation, D25 in `docs/ai/decision-review.md`). Acting last is what makes the
+model: Kev's 0.05 for decisions not yet re-scored, H2O's 0.19 confirmed by the owner
+2026-11-27, D25 in `docs/ai/decision-review.md`). Acting last is what makes the
 result independent of placement order and keeps it from ever splitting a
 rules merge. The regroup alone writes `listings.matched_via`
 (`matching.matched_by` reads it), and after it commits, in its own transaction,

@@ -34,8 +34,8 @@ H2O-Lightning-4B Q4_K_M (llama.cpp) as the match pipeline's first stage, at 0.57
 scale (its precision on the labelled Phase E set matched to full-precision Kev's at 0.8), pplx
 Q4_K_S at 0.95 unchanged. With pplx Q4 on the labels: 229 merges, 227 correct, 2 wrong (both
 grey), against Kev Q4's 217/216/1. `p1` stays, a record of what decisions were made under; its
-stage no longer exists. The H2O floor of the group check (0.19) is a session proposal pending the
-owner's confirmation (decision-review.md, D25).
+stage no longer exists. The H2O floor of the group check (0.19) was proposed by the session and
+confirmed by the owner, 2026-11-27 (decision-review.md, D25).
 """
 
 from __future__ import annotations
@@ -59,8 +59,8 @@ DOMAINS: tuple[str, ...] = ("electronics",)
 #: P14: per first-stage model, the score below which its "confident no" blocks an AI-dependent
 #: join. Kev's 0.05 (owner, P14) still reads the Kev scores standing decisions carry until they are
 #: re-scored. H2O's 0.19 blocks the same share of the labelled Phase E "not same" pairs as Kev's
-#: 0.05 (358 of 463, 77.3%) while blocking fewer labelled "same" ones (12 vs 16): a session
-#: proposal, pending the owner's confirmation (decision-review.md, D25).
+#: 0.05 (358 of 463, 77.3%) while blocking fewer labelled "same" ones (12 vs 16): confirmed by
+#: the owner, 2026-11-27 (decision-review.md, D25).
 JUDGE_FLOORS: dict[str, float] = {"h2o": 0.19, "kev": 0.05}
 
 #: Kev-4B's weights on the Hub, pinned (the revision the CPU and GPU images load).

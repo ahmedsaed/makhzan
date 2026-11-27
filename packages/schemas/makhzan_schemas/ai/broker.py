@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, text, tuple_, update
+from sqlalchemy import func, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -216,9 +216,58 @@ async def sweep_judges(session: AsyncSession, judges: flow.Judges | None = None)
             reoffer.append(request)
     for (_, stage), requests in by_stage.items():
         await triggers.enqueue(session, requests, stage=stage)
+    # A later stage queued before an earlier stage's judge changed (pplx, queued because Kev
+    # passed, when H2O replaced Kev: D25) would be scored before the new first judge has seen
+    # the pair. Such a job is re-offered too, so the pair goes through the earlier stage first.
+    reoffer += await _cancel_ahead_of_their_stages(session, judges)
     if reoffer:
         await flow.advance(session, reoffer, judges=judges)
     return len(moved)
+
+
+async def _cancel_ahead_of_their_stages(
+    session: AsyncSession, judges: flow.Judges
+) -> list[triggers.PairRequest]:
+    """Cancel every queued job at a later stage whose pair has no score from an earlier stage's
+    current judge (in either order), and return them as requests to re-offer. Set-based, one
+    UPDATE per later stage; rows a lease has locked are left for the next sweep."""
+    out: list[triggers.PairRequest] = []
+    for name, pipeline in PIPELINES.items():
+        stages = pipeline.stages
+        for i, stage in enumerate(stages[1:], start=1):
+            earlier = [judges.get((name, s.name)) for s in stages[:i]]
+            if None in earlier:
+                continue
+            unscored = [
+                ~select(AiScore.id)
+                .where(
+                    AiScore.model_version_id == judge,
+                    AiScore.listing_a == AiJob.listing_a,
+                    AiScore.listing_b == AiJob.listing_b,
+                )
+                .exists()
+                for judge in earlier
+            ]
+            ahead = (
+                select(AiJob.id)
+                .where(AiJob.status == QUEUED, AiJob.pipeline == name, AiJob.stage == stage.name)
+                .where(or_(*unscored))
+                .with_for_update(skip_locked=True)
+            )
+            rows = (
+                await session.execute(
+                    update(AiJob)
+                    .where(AiJob.id.in_(ahead))
+                    .values(
+                        status=CANCELLED,
+                        last_error="an earlier stage's judge changed; re-offered to it first",
+                    )
+                    .returning(AiJob.priority, AiJob.reason, AiJob.listing_a, AiJob.listing_b)
+                    .execution_options(synchronize_session=False)
+                )
+            ).all()
+            out += [triggers.PairRequest(a, b, name, prio, reason) for prio, reason, a, b in rows]
+    return out
 
 
 # --- hello ------------------------------------------------------------------------------------

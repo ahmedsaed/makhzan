@@ -180,6 +180,9 @@ card with Plex's headroom and nothing resets; otherwise put 512 back.
    take out the sweep's re-offer, and the queued `h2o` jobs would be cancelled. Deploy: the sweep
    moves queued `h2o` jobs back to `kev`, and decisions carrying H2O scores are re-scored (the
    group check still reads them at H2O's floor meanwhile).
+   The same commit sets `ai_import`'s default `--policy` back to `p1`
+   (`apps/ingestion/worker/ai_import.py`: `import_scores`, `verify` and the CLI default), or pass
+   `--policy p1` to every `./makhzan ai import` after the rollback.
 2. `./makhzan ai worker add home-kev --models kev` (a new token; the old record was revoked).
 3. On the server: the previous `compose.yml`, `home-kev.toml` and `models.ini` from git,
    the new token in `home-kev.token`, `docker compose up -d --remove-orphans`. Kev's GGUF is still

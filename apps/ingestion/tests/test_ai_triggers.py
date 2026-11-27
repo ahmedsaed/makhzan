@@ -383,6 +383,8 @@ async def test_the_first_judge_leaving_the_registry_moves_its_work_to_the_new_on
     n2 = await _listing(b, "ceramic capacitor 100nf 50v disc")
     q1 = await _listing(a, "electrolytic capacitor 100uf 25v")
     q2 = await _listing(b, "electrolytic capacitor 100uf 25v radial")
+    r1 = await _listing(a, "tantalum capacitor 10uf 16v")
+    r2 = await _listing(b, "tantalum capacitor 10uf 16v smd")
     await _daily()
     await _score_all(s1, s2)
     await _score_all(n1, n2, h2o=0.3)
@@ -422,14 +424,55 @@ async def test_the_first_judge_leaving_the_registry_moves_its_work_to_the_new_on
                 reason="candidates",
             )
         )
+        # A pplx job queued because Kev passed: pplx's judge is unchanged, but H2O has not
+        # seen the pair, so it must not be scored by pplx first.
+        r_a, r_b = pair(r1, r2)
+        session.add(
+            AiJob(
+                pipeline="match",
+                stage="pplx",
+                listing_a=r_a,
+                listing_b=r_b,
+                model_version_id=(await flow.current_judges(session))[("match", "pplx")],
+                priority=80,
+                reason="candidates",
+            )
+        )
         await session.commit()
 
     async with SessionLocal() as session:
         assert await core.sweep_judges(session) == 1
         await session.commit()
     queued = await _jobs(status="queued")
-    assert [(j.stage, j.priority, j.reason) for j in queued] == [("h2o", 60, "candidates")]
-    assert _pairs(queued) == {pair(q1, q2)}
+    assert {(j.listing_a, j.listing_b): (j.stage, j.priority, j.reason) for j in queued} == {
+        pair(q1, q2): ("h2o", 60, "candidates"),
+        pair(r1, r2): ("h2o", 80, "candidates"),
+    }
+    # Once H2O has scored, a queued pplx job is left alone by the next sweep.
+    await _score_all(r1, r2)
+    async with SessionLocal() as session:
+        await session.execute(text("DELETE FROM ai_jobs WHERE listing_a = :a"), {"a": r_a})
+        session.add(
+            AiJob(
+                pipeline="match",
+                stage="pplx",
+                listing_a=r_a,
+                listing_b=r_b,
+                model_version_id=(await flow.current_judges(session))[("match", "pplx")],
+                priority=80,
+                reason="candidates",
+            )
+        )
+        await session.commit()
+    async with SessionLocal() as session:
+        await core.sweep_judges(session)
+        await session.commit()
+    assert [(j.stage, j.listing_a) for j in await _jobs(status="queued", listing_a=r_a)] == [
+        ("pplx", r_a)
+    ]
+    async with SessionLocal() as session:
+        await session.execute(text("DELETE FROM ai_jobs WHERE listing_a = :a"), {"a": r_a})
+        await session.commit()
 
     async with SessionLocal() as session:
         await producers.run(session, producers.RescoreTrigger())
@@ -932,3 +975,60 @@ async def test_a_decision_written_while_a_revoke_is_open_waits_and_is_refused():
     out = await asyncio.wait_for(task, 10)
     assert out["revoked_blocked"] == 1
     assert await _standing() == []
+
+
+async def test_the_audit_total_counts_pairs_once_whichever_judges_scored_them():
+    """A pair Kev audited before D25 and H2O after counts once in the total, once per model."""
+    import hashlib
+
+    from makhzan_schemas.ai import status
+
+    a, b = await _shop("shop-a"), await _shop("shop-b")
+    x, y = pair(await _listing(a, "relay module 5v"), await _listing(b, "relay module 5v 1ch"))
+    async with SessionLocal() as session:
+        for model, low in (("kev", 0.03), ("h2o", 0.5)):
+            version = AiModelVersion(
+                model=model,
+                model_version=f"{model}@audit-test",
+                prompt_version="K2-150@test",
+                weights_revision="0" * 40,
+                scoring={},
+            )
+            session.add(version)
+            await session.flush()
+            hashes = {}
+            for order, p in (("ab", low), ("ba", 0.9)):
+                digest = hashlib.sha256(f"{model}{order}".encode()).digest()
+                hashes[order] = digest.hex()
+                session.add(
+                    AiScore(
+                        model_version_id=version.id,
+                        listing_a=x,
+                        listing_b=y,
+                        reading_order=order,
+                        request_sha256=digest,
+                        content_sha256_a=b"\0" * 32,
+                        content_sha256_b=b"\0" * 32,
+                        p=p,
+                    )
+                )
+            session.add(
+                AiJob(
+                    pipeline="audit",
+                    stage=model,
+                    reason="audit",
+                    model_version_id=version.id,
+                    listing_a=x,
+                    listing_b=y,
+                    priority=10,
+                    status="done",
+                    request_sha256=hashes,
+                )
+            )
+        await session.commit()
+        got = await status._audit(session, {})
+    assert got["scored"] == 1
+    assert got["by_model"] == {
+        "kev": {"scored": 1, "below": [[0.8, 1], [0.05, 1]]},
+        "h2o": {"scored": 1, "below": [[0.578, 1], [0.19, 0]]},
+    }

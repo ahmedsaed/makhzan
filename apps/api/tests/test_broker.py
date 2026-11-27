@@ -528,12 +528,7 @@ async def test_a_ruled_or_archived_pair_is_cancelled_at_lease(broker, db):
 
 async def test_a_session_end_queues_a_rebuild_only_when_live_and_only_for_new_same(broker, db):
     a, b = await _pair(db)
-    await _queue(a, b, stage="pplx")
-    pplx = await _worker("cpu-pplx", ["pplx"])
-    hello = await _hello(broker, pplx, "pplx")
-    lease = await _lease(broker, pplx, hello["session"], "pplx")
-    [job] = lease["jobs"]
-    async with SessionLocal() as session:  # H2O's scores, as if scored earlier
+    async with SessionLocal() as session:  # H2O's scores, scored before pplx's job was queued
         shown = await load_shown(session, (a, b))
         h2o_stage = PIPELINES["match"].stage("h2o")
         judge = (await flow.current_judges(session))[("match", "h2o")]
@@ -551,6 +546,12 @@ async def test_a_session_end_queues_a_rebuild_only_when_live_and_only_for_new_sa
                 )
             )
         await session.commit()
+    # Queued after H2O scored, so the sweep at hello leaves it at pplx.
+    await _queue(a, b, stage="pplx")
+    pplx = await _worker("cpu-pplx", ["pplx"])
+    hello = await _hello(broker, pplx, "pplx")
+    lease = await _lease(broker, pplx, hello["session"], "pplx")
+    [job] = lease["jobs"]
     r = await _post(broker, pplx, hello["session"], lease, job, _scores(job, 0.99, 0.98))
     assert r.json()["next"] == {"action": "decide", "outcome": "same"}
 

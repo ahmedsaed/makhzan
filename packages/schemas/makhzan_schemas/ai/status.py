@@ -400,7 +400,7 @@ async def _audit(session: AsyncSession, judges: dict) -> dict:
             text(
                 """
             SELECT DISTINCT ON (j.listing_a, j.listing_b, v.model) v.model AS model,
-                   LEAST(sab.p, sba.p) AS low
+                   j.listing_a AS a, j.listing_b AS b, LEAST(sab.p, sba.p) AS low
               FROM ai_jobs j
               JOIN ai_model_versions v ON v.id = j.model_version_id
               JOIN ai_scores sab ON sab.model_version_id = j.model_version_id
@@ -423,7 +423,8 @@ async def _audit(session: AsyncSession, judges: dict) -> dict:
         entry["scored"] += 1
         for band in entry["below"]:
             band[1] += row.low < band[0]
-    return {"scored": sum(e["scored"] for e in by_model.values()), "by_model": by_model}
+    # Pairs, not scores: a pair both Kev and H2O audited counts once in the total.
+    return {"scored": len({(row.a, row.b) for row in rows}), "by_model": by_model}
 
 
 def _age(iso: str | None, now: datetime) -> str:

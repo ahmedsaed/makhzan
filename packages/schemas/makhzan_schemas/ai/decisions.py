@@ -95,6 +95,23 @@ def stage_mins(scores: dict) -> dict[str, float]:
     }
 
 
+def _retired_in_place(mins: dict[str, float], pipeline_name: str) -> dict[str, float]:
+    """A decision made before a stage was replaced (Kev's, by H2O's: D25) carries the old
+    stage's score, not the new one's. For ranking, its retired stage's score stands in for the
+    pipeline stage it lacks, so a not-yet-re-scored decision does not rank as if that stage
+    had said 0 and lose every tie to a re-scored one. The two judges' scales differ, so this
+    orders a mixed pair only roughly, until the catch-up re-scores it."""
+    names = [s.name for s in PIPELINES[pipeline_name].stages]
+    retired = [mins[k] for k in sorted(mins) if k not in names]
+    if not retired:
+        return mins
+    out = dict(mins)
+    for name in names:
+        if name not in out and retired:
+            out[name] = retired.pop(0)
+    return out
+
+
 async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
     """The AI "same" pairs the regroup may act on.
 
@@ -191,7 +208,8 @@ async def load_ai_same(session: AsyncSession, overrides: Overrides) -> AiSame:
             unknown.add(pipeline_name)
             skipped[decision_id] = (INACTIVE, None)
             continue
-        rows.append((decision_id, a, b, rank(stage_mins(scores), pipeline_name), shop_a, shop_b))
+        mins = _retired_in_place(stage_mins(scores), pipeline_name)
+        rows.append((decision_id, a, b, rank(mins, pipeline_name), shop_a, shop_b))
 
     if unknown:
         log.warning("AI decisions of unregistered pipelines skipped: %s", sorted(unknown))
