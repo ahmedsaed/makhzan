@@ -5,8 +5,9 @@
 # Production (owner, 2026-11-27): both judges run on the AMD card through llama.cpp sidecars
 # (kev-llamacpp, pplx-llamacpp), taking turns, because the 4 GB card holds one model. The host's
 # systemd timers start and stop each sidecar around its worker's window (sidecar-window.sh):
-# Kev's 00:55-05:03, pplx's 05:03-07:03, Africa/Cairo. Plain `docker compose up -d` starts the
-# workers and the proxy only; the sidecars are in profiles, started only by the timers. The card
+# Kev's 00:55-05:03, pplx's 05:03:30-07:03, Africa/Cairo (and at boot, inside a window). Plain
+# `docker compose up -d` starts the workers and the proxy only; the sidecars are in profiles,
+# started only by sidecar-window.sh (timers and the boot unit). The card
 # must be held to clock states 0-2 by the udev rule 99-amdgpu-clock-limit.rules first (README.md).
 #
 #   docker compose up -d                              # start (and after every change)
@@ -16,8 +17,8 @@
 # Each worker stays up and waits for its own window (outside_window = "wait" in its TOML):
 # Kev 01:00-05:00, pplx 05:05-07:00, Africa/Cairo. Each window's session runs in a child
 # process that exits at the window's end. The model itself is in the window's sidecar on the
-# card; the timers keep exactly one sidecar up at a time (Kev's stops at 05:03, at least two
-# minutes after a session's last possible request, before pplx's starts).
+# card; the timers keep exactly one sidecar up at a time (Kev's stops at 05:03, at least a
+# minute after a session's last possible request, before pplx's starts at 05:03:30).
 #
 # Network: the workers sit on `broker-only`, an internal network with no route anywhere.
 # Their one way out is `broker-proxy`, our own TCP forwarder (makhzan_ml.worker.proxy), which
@@ -110,6 +111,10 @@ services:
   kev-llamacpp:
     <<: *hardening
     profiles: [llamacpp]
+    # The host's timers own the sidecar's lifecycle (sidecar-window.sh checks the clock limit before
+    # every start). Docker must never restart it on its own: after a reboot or a crash that would
+    # bypass the check. A server down at the start time is covered by the boot unit.
+    restart: "no"
     # llama.cpp's official server-vulkan image, build b12767, by digest (pins.LLAMACPP_IMAGE).
     image: ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
     # The validated 4 GB settings: every layer on the card, one slot, 4k context, 512-token
@@ -120,6 +125,11 @@ services:
       - /models/Kev-4B-Q4_K_M.gguf
       - -ngl
       - "99"
+      # Only the card: without it llama.cpp silently falls back to the CPU when the card cannot be
+      # opened (missing render/video groups), while the worker records device "gpu". With it, no
+      # card is a startup error ("invalid device: Vulkan0").
+      - -dev
+      - Vulkan0
       - -np
       - "1"
       - -c
@@ -135,8 +145,8 @@ services:
     # The host's render and video group ids (`getent group render video`), set in .env. Not
     # required (no `?` form): compose interpolates every service, profile or not, so that would break
     # `docker compose up` for the workers. Unset, they default to two unused ids (compose
-    # refuses a repeated one), so the sidecar cannot open the card: it fails at start,
-    # loudly, and the workers are unaffected.
+    # refuses a repeated one) and the sidecar cannot open the card: with `-dev Vulkan0` it then
+    # exits at start, and sidecar-window.sh refuses to start it at all without both ids.
     group_add:
       - "${RENDER_GID:-65533}"
       - "${VIDEO_GID:-65534}"
@@ -161,12 +171,16 @@ services:
     networks: [broker-only]
 
   # pplx on the AMD card through llama.cpp (docs/ai/pplx-llamacpp.md), the pplx worker's judge since
-  # 2026-11-27 (home-pplx.toml, backend = "llamacpp"). Started at 05:03, after Kev's sidecar has
+  # 2026-11-27 (home-pplx.toml, backend = "llamacpp"). Started at 05:03:30, after Kev's sidecar has
   # stopped, and stopped at 07:03 by the host's timers (`sidecar-window.sh start|stop pplx`). On
   # the card, like kev-llamacpp: the two never run together (the script stops the other first).
   pplx-llamacpp:
     <<: *hardening
     profiles: [llamacpp-pplx]
+    # The host's timers own the sidecar's lifecycle (sidecar-window.sh checks the clock limit before
+    # every start). Docker must never restart it on its own: after a reboot or a crash that would
+    # bypass the check. A server down at the start time is covered by the boot unit.
+    restart: "no"
     # llama.cpp's official server-vulkan image, build b12767, by digest (pins.LLAMACPP_IMAGE).
     image: ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
     # pplx's full-attention layers are non-causal, so a whole request must fit one batch: -b and
@@ -179,6 +193,11 @@ services:
       - /models/pplx-flash-v1.3-Q4_K_S.gguf
       - -ngl
       - "99"
+      # Only the card: without it llama.cpp silently falls back to the CPU when the card cannot be
+      # opened (missing render/video groups), while the worker records device "gpu". With it, no
+      # card is a startup error ("invalid device: Vulkan0").
+      - -dev
+      - Vulkan0
       - -np
       - "1"
       - -c

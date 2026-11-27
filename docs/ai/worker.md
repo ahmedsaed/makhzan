@@ -424,9 +424,16 @@ there, against Kev's own server's 2.96). One at a time:
 docker run -d --name desk-kev-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
   -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 \
   ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486 \
-  -m /models/Kev-4B-Q4_K_M.gguf -ngl 99 -np 1 -c 4096 -b 2048 -ub 2048 --host 0.0.0.0 --port 8080
-# pplx: -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -np 1 -c 4096 -b 4096 -ub 4096 -fa on
+  -m /models/Kev-4B-Q4_K_M.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 2048 -ub 2048 \
+  --host 0.0.0.0 --port 8080
+# pplx: -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 4096 -ub 4096 -fa on
 ```
+
+`-dev Vulkan0` makes a missing card a startup error rather than a silent CPU run. Kev runs here at
+batch 2048, where the home server's 4 GB card needs 512. Kev is causal, so the batch changes speed
+(2.7x on the 3060), not scores: measured on the 3060, Q4 at 2048 against 512 over 200 requests
+differed by at most 0.014 (calibrated; 0.030 raw) with no decision moved (`kev-llamacpp.md`).
+pplx needs 4096 everywhere (non-causal).
 
 The worker container then runs with `--network host`, so `127.0.0.1:8130` is the sidecar, and
 the same models directory mounted at `/models` (the worker hashes the GGUF it is pinned to).
