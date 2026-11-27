@@ -12,13 +12,15 @@ ids sorted, in the order the Kev file first names them.
 Each pair is rendered both ways with Kev's K2 payload (prompt.payload("K2-150", ...)) from
 ml/out/gain-v2/listings.json, A,B first. Writes meta.json, meta-merged.json, requests.jsonl and
 requests-merged.jsonl to ml/out/models-compare/d1-prefilter/; score them with
-d1_prefilter_score.py.
+d1_prefilter_score.py. Exits non-zero unless the four files come out byte-identical to the ones
+the scoring runs used.
 
     python3 ml/models/d1_prefilter_sample.py
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import sys
@@ -29,6 +31,15 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKLOG = ROOT / "ml/out/backlog-2026-11-17"
 LISTINGS = ROOT / "ml/out/gain-v2/listings.json"
 OUT = ROOT / "ml/out/models-compare/d1-prefilter"
+# The files the scoring runs used, as sha256; the script exits non-zero unless it rewrites them
+# byte for byte (and the sample sizes the doc states).
+EXPECTED_SHA256 = {
+    "meta.json": "138d6ce927eb8ae7e5a875811c89cd14baebd55ff37a4a04326fce7908d1d8cf",
+    "meta-merged.json": "6c4a9700eba20437d081503c76be3facc3d722d8cb9fab3d37118557f5816f19",
+    "requests.jsonl": "307f6ac4e88635507eb8184f1e5daac4a8f1a58873730d2a0efb030880334dfd",
+    "requests-merged.jsonl": "96a71d7016315837bb01bb3261b794bdf73397b00a0b469327bc8a47d61b388a",
+}
+EXPECTED_COUNTS = (92833, 1000, 500, 6236)
 
 _stub = types.ModuleType("makhzan_schemas")
 _stub.__path__ = [str(ROOT / "packages/schemas/makhzan_schemas")]
@@ -68,9 +79,15 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     write("meta", uniform, kev, pplx, listings)
     write("meta-merged", merged, kev, pplx, listings)
-    print(
-        f"{len(kev)} backlog pairs; uniform {len(uniform)}; merged {len(merged)} of {len(merged_pool)}"
-    )
+    counts = (len(kev), len(uniform), len(merged), len(merged_pool))
+    print(f"{counts[0]} backlog pairs; uniform {counts[1]}; merged {counts[2]} of {counts[3]}")
+    bad = [] if counts == EXPECTED_COUNTS else [f"counts: expected {EXPECTED_COUNTS}"]
+    for name, want in EXPECTED_SHA256.items():
+        if hashlib.sha256((OUT / name).read_bytes()).hexdigest() != want:
+            bad.append(f"{name}: not byte-identical to the file the runs scored")
+    print("\n".join(bad) if bad else "check: all four files byte-identical to the scored ones")
+    if bad:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

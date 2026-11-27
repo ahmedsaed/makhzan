@@ -5,11 +5,11 @@ output line keeps the server's calibrated P(yes) for "same" (d1_prefilter_analys
 baked temperature), the seconds and the input tokens. Strings are NFC-normalised first.
 
     python3 ml/models/d1_prefilter_score.py ml/out/models-compare/d1-prefilter/requests.jsonl \
-        ml/out/models-compare/d1-prefilter/d1-uniform.jsonl [--base http://127.0.0.1:8200]
+        ml/out/models-compare/d1-prefilter/d1-uniform.jsonl --base http://127.0.0.1:<port>
 
-The requests and meta files (the 1,000-pair uniform backlog sample, seed 20261127, and the
-500 merged pairs, seed 7, with their production Kev and pplx scores) were drawn by a one-off
-that was not kept; they live in ml/out/models-compare/d1-prefilter/.
+--base is the llama.cpp server serving d1 (`--model d1` by default). It has no default, so a
+run cannot reach another local service by accident. The requests come from
+d1_prefilter_sample.py.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
     ap.add_argument("dst")
-    ap.add_argument("--base", default="http://127.0.0.1:8200")
+    ap.add_argument("--base", required=True, help="the llama.cpp server serving d1")
     ap.add_argument("--model", default="d1")
     args = ap.parse_args()
     t0, n, err = time.time(), 0, 0

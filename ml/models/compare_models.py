@@ -6,7 +6,7 @@ Two prompts, no new wording: "K2" is Kev's approved payload (prompt_grid.payload
     python3 ml/models/compare_models.py render                       # requests.jsonl
     python3 ml/models/compare_models.py score --base URL --model NAME --variant K2 \
         --out ml/out/models-compare/<name>-K2.jsonl [--nfc] [--n N]   # /v1/systemone
-    python3 ml/models/compare_models.py analyse
+    python3 ml/models/compare_models.py analyse    # exits non-zero unless the doc's numbers hold
 
 Score files keep the server's calibrated P(yes); `analyse` converts to raw with each model's
 temperature where one is baked in (raw = sigmoid(T * logit p)).
@@ -129,7 +129,7 @@ def pmin(d: dict, p: str):
 
 def auc(pos: list[float], neg: list[float]) -> float:
     allv = sorted([(v, 1) for v in pos] + [(v, 0) for v in neg])
-    ranks, i = {}, 0
+    i = 0
     r = [0.0] * len(allv)
     while i < len(allv):
         j = i
@@ -138,7 +138,6 @@ def auc(pos: list[float], neg: list[float]) -> float:
         for q in range(i, j + 1):
             r[q] = (i + j) / 2 + 1
         i = j + 1
-    del ranks
     rp = sum(rk for rk, (_, y) in zip(r, allv, strict=True) if y)
     return (rp - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg))
 
@@ -170,16 +169,57 @@ def matched_threshold(scored, target_precision):
     return best
 
 
+# The runs docs/ai/decision-models.md section 4 reports from analysis.json, in its order. Other
+# runs in OUT (H2O Q4, Intern structured) are analysed by intern_struct_analyse.py.
+ANALYSED = ("d1-K2", "d1-K2c", "h2o-K2", "h2o-K2c", "intern-K2", "intern-K2c")
+
+# What the doc states, checked after every analyse: (auc, ap, recall at Kev's precision,
+# recall at pplx's precision, (merges, correct, wrong) replacing Kev, the same replacing pplx,
+# mean |ab - ba|).
+EXPECTED = {
+    "kev-bf16": (0.942, 0.9619, 0.7221, 0.3974, None, None, 0.1058),
+    "pplx-bf16": (0.9563, 0.9727, 0.7429, 0.587, None, None, 0.0471),
+    "d1-K2": (0.9207, 0.9473, 0.6545, 0.2883, (196, 196, 0), (102, 102, 0), 0.0664),
+    "d1-K2c": (0.9228, 0.95, 0.6701, 0.3117, (196, 195, 1), (113, 113, 0), 0.0536),
+    "h2o-K2": (0.9499, 0.9696, 0.7688, 0.5688, (217, 216, 1), (211, 210, 1), 0.0747),
+    "h2o-K2c": (0.9508, 0.97, 0.7636, 0.5818, (215, 214, 1), (213, 211, 2), 0.0774),
+    "intern-K2": (0.932, 0.9522, 0.6104, 0.3688, (184, 183, 1), (143, 142, 1), 0.1188),
+    "intern-K2c": (0.9332, 0.9514, 0.5818, 0.0909, (178, 178, 0), (35, 35, 0), 0.1048),
+}
+
+
+def check_expected(rep: dict) -> None:
+    """Exit non-zero unless the analysis matches the numbers the doc states."""
+
+    def mwc(r):
+        return None if r is None else (r["merges"], r["correct"], r["wrong"])
+
+    bad = []
+    for name, want in EXPECTED.items():
+        m = rep["models"].get(name)
+        got = m and (
+            m["auc"],
+            m["ap"],
+            m["threshold_at_kev_precision"][2],
+            m["threshold_at_pplx_precision"][2],
+            mwc(m.get("as_kev")),
+            mwc(m.get("as_pplx")),
+            m["order_mean_abs_diff"],
+        )
+        if got != want:
+            bad.append(f"{name}: expected {want}, got {got}")
+    print("\n".join(bad) if bad else "check: every documented number reproduced")
+    if bad:
+        sys.exit(1)
+
+
 def cmd_analyse(args) -> None:
     key = {r["pair_id"]: r for r in map(json.loads, KEY.open())}
     kev, pplx = load(KEV), load(PPLX)
     runs = {"kev-bf16": (kev, 1.0), "pplx-bf16": (pplx, 1.0)}
-    for f in sorted(OUT.glob("*-K2*.jsonl")):
-        if f.stem.startswith("smoke-"):
-            continue
-        name = f.stem
-        model = name.split("-")[0]
-        runs[name] = (load(f, TEMPERATURES.get(model, 1.0)), TEMPERATURES.get(model, 1.0))
+    for name in ANALYSED:
+        t = TEMPERATURES.get(name.split("-")[0], 1.0)
+        runs[name] = (load(OUT / f"{name}.jsonl", t), t)
     base = [p for p, k in key.items() if not any(k["veto"].values()) and k["label"] != "unsure"
             and pmin(kev, p) is not None and pmin(pplx, p) is not None]  # fmt: skip
     rep = {"pairs_base": len(base), "models": {}}
@@ -206,28 +246,21 @@ def cmd_analyse(args) -> None:
         mt = m["threshold_at_kev_precision"]
         if mt and name not in ("kev-bf16", "pplx-bf16"):
             t = mt[0]
-            both = [p for p in ps]
-            for role, rule in (
-                ("as_kev", lambda p: pmin(d, p) >= t and pmin(pplx, p) >= 0.95),
-                ("as_pplx", lambda p: pmin(kev, p) >= 0.8 and pmin(d, p) >= tp_),
-            ):
-                if role == "as_pplx":
-                    mp = m["threshold_at_pplx_precision"]
-                    if not mp:
-                        continue
-                    tp_ = mp[0]  # noqa: F841 - read by the lambda
-                merged = [p for p in both if rule(p)]
+            mp = m["threshold_at_pplx_precision"]
+            roles = {"as_kev": [p for p in ps if pmin(d, p) >= t and pmin(pplx, p) >= 0.95]}
+            if mp:
+                roles["as_pplx"] = [p for p in ps if pmin(kev, p) >= 0.8 and pmin(d, p) >= mp[0]]
+            for role, merged in roles.items():
                 m[role] = {"merges": len(merged),
                            "correct": sum(key[p]["label"] == "same" for p in merged),
                            "wrong": sum(key[p]["label"] == "not" for p in merged)}  # fmt: skip
-            ref = [p for p in both if pmin(kev, p) >= 0.8 and pmin(pplx, p) >= 0.95]
+            ref = [p for p in ps if pmin(kev, p) >= 0.8 and pmin(pplx, p) >= 0.95]
             m["production_bf16_same_pairs"] = {
                 "merges": len(ref),
                 "correct": sum(key[p]["label"] == "same" for p in ref),
             }
-            ks = [p for p in ps]
             m["agree_with_kev_at_matched"] = round(
-                sum((pmin(d, p) >= t) == (pmin(kev, p) >= 0.8) for p in ks) / len(ks), 4
+                sum((pmin(d, p) >= t) == (pmin(kev, p) >= 0.8) for p in ps) / len(ps), 4
             )
             vals = [pmin(d, p) for p in ps]
             m["score_spread"] = [round(min(vals), 4), round(sorted(vals)[len(vals) // 2], 4),
@@ -237,6 +270,7 @@ def cmd_analyse(args) -> None:
     rep["pplx_precision_at_0.95"] = round(pplx_prec, 4)
     (OUT / "analysis.json").write_text(json.dumps(rep, indent=1))
     print(json.dumps(rep, indent=1))
+    check_expected(rep)
 
 
 def main() -> None:

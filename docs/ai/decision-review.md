@@ -521,8 +521,9 @@ the second.** Policy **p2** = {h2o: 0.578, pplx: 0.95} is active; p1 (Kev ≥ 0.
 stays in `policy.POLICIES`, never edited, as history and the rollback.
 
 - **Accepted on the label test (D20).** With pplx Q4 under p2, on the labelled Phase E set:
-  229 merges, 227 correct and 2 wrong, both grey-area (E0098, E0639). Q4 and Q8 make the same
-  merges; AUC 0.951.
+  229 merges, 227 correct and 2 wrong, both grey-area (E0098, E0639). Q8 makes as many, with
+  the same two wrong ones, but not the same correct ones (Q4 merges E0486 and not E0693); AUC
+  0.951 (`docs/ai/decision-models.md`).
 - **The scale.** H2O's GGUF bakes in T = 0.8 (`qwen35.decision.temperature.noul`). The worker
   undoes it like Kev's, so the stored score is the raw one: raw = sigmoid(0.8 · logit p). The
   threshold 0.578 is on that raw scale. The pin is the GGUF's sha256 (`5ec969c6edba…`, the Hub's
@@ -544,7 +545,8 @@ stays in `policy.POLICIES`, never edited, as history and the rollback.
 first judge's minimum between any two members is below a floor. Kev's was 0.05. H2O's raw
 scores are compressed (none go below about 0.10), so 0.05 would block nothing. The proposal
 keeps P14's strength rather than its number, matching how many labelled "not same" pairs the
-floor catches (Phase E labels, pairs passing the vetoes):
+floor catches (all 882 labelled Phase E pairs, vetoed ones included, H2O Q4 against Kev BF16;
+`ml/models/decision_models_floor.py`):
 
 | Floor | "Not same" blocked (of 463) | "Same" wrongly blocked |
 |---|---|---|

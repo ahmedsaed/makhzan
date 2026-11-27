@@ -111,19 +111,21 @@ our configuration:
 | pplx BF16 | 0.956 | 0.973 | 0.743 (0.905) | 0.587 (0.949) |
 | H2O Q8 K2 | 0.950 | 0.970 | **0.769** (0.578) | 0.569 (0.742) |
 | H2O Q8 K2c | 0.951 | 0.970 | 0.764 (0.659) | 0.582 (0.764) |
-| H2O Q4 K2 | 0.951 | 0.971 | 0.761 (0.597) | **0.621** |
+| H2O Q4 K2 | 0.951 | 0.971 | 0.761 (0.597) | **0.621** (0.730) |
 | Intern K2, string state | 0.932 | 0.952 | 0.610 (0.852) | 0.369 (0.958) |
 | Intern K2c, string state | 0.933 | 0.951 | 0.582 (0.953) | 0.091 (0.991) |
-| Intern K2, structured state | 0.939 | 0.958 | 0.720 | 0.291 |
-| Intern K2c, structured state | 0.943 | 0.960 | 0.756 | 0.218 |
+| Intern K2, structured state | 0.939 | 0.958 | 0.720 (0.731) | 0.291 (0.971) |
+| Intern K2c, structured state | 0.943 | 0.960 | 0.756 (0.881) | 0.218 (0.989) |
 | d1 Q8 K2 | 0.921 | 0.947 | 0.655 (0.981) | 0.288 (0.996) |
 | d1 Q8 K2c | 0.923 | 0.950 | 0.670 (0.995) | 0.312 (0.999) |
 
 The criteria (K2c) helped no model consistently (and cost Intern most of its recall at 0.991);
 K2 stays.
 
-**Production rule, merges / correct / wrong.** Baseline, BF16 Kev ≥ 0.8 and BF16 pplx ≥ 0.95:
-209 / 209 / 0.
+**Production rule, merges / correct / wrong.** Every row here keeps the other judge at BF16:
+"replacing Kev" is the candidate at its matched threshold with pplx BF16 ≥ 0.95, "replacing
+pplx" is Kev BF16 ≥ 0.8 with the candidate at its own. Baseline, BF16 Kev ≥ 0.8 and BF16
+pplx ≥ 0.95: 209 / 209 / 0.
 
 | Candidate | Replacing Kev | Replacing pplx |
 |---|---|---|
@@ -131,8 +133,8 @@ K2 stays.
 | H2O K2c | 215 / 214 / 1 | 213 / 211 / 2 |
 | Intern K2, string | 184 / 183 / 1 | 143 / 142 / 1 |
 | Intern K2c, string | 178 / 178 / 0 | 35 / 35 / 0 |
-| Intern K2, structured | 213 / 212 / 1 | — |
-| Intern K2c, structured | 220 / 218 / 2 | — |
+| Intern K2, structured | 204 / 203 / 1 | — |
+| Intern K2c, structured | 211 / 209 / 2 | — |
 | d1 K2 | 196 / 196 / 0 | 102 / 102 / 0 |
 | d1 K2c | 196 / 195 / 1 | 113 / 113 / 0 |
 
@@ -148,8 +150,8 @@ With pplx at Q4_K_S, the production quantisation:
 | Kev Q4 OR H2O Q4 | 236 / 234 / 2 | E0098, E0639 |
 | Kev Q4 AND H2O Q4 | 210 / 209 / 1 | E0098 |
 
-Every wrong merge in these tables is a grey-area pair (E0098, E0639, E0535, E0138), the kind the
-owner ruled acceptable for pplx Q4.
+Every wrong merge in these tables is one of four pairs, E0098, E0639, E0535 and E0138, each
+labelled "not" on adjudication. E0098 and E0639 are the two the owner accepted with p2 (D25).
 
 **Speed and memory.**
 
@@ -172,14 +174,15 @@ On the AMD card a bigger batch gains about 5%, because the card is power-bound, 
 setup keeps 512. The card's scores were within 0.016 of the 3060's on every request.
 
 **Order sensitivity** (mean |score(A,B) − score(B,A)|, lower is better): pplx 0.047; d1
-0.054–0.066; H2O 0.074–0.075; Kev 0.106; Intern 0.105–0.119 (structured 0.108–0.123).
+0.054–0.066; H2O 0.074–0.077; Kev 0.106; Intern 0.105–0.119 (structured 0.108–0.123).
 
 ## 5. H2O in depth
 
 **Q4 against Q8 (D20)**, all 900 Phase E pairs in both orders. Spearman 0.9962; |Δp| at most 0.198, mean 0.017. Pair agreement is
 98.56% at 0.5 and 98.33% at 0.578. Q4 therefore **fails the agreement rule**. The owner accepted
-it on the label test: at 0.578 it makes the same merges as Q8 (229 / 227 / 2), with higher AP
-and recall at 0.991.
+it on the label test: at 0.578 with pplx Q4 it makes as many merges as Q8 with the same two
+wrong ones (229 / 227 / 2: E0098, E0639), with higher AP and recall at 0.991. The merges are
+not identical: Q4 merges E0486 and not E0693, both "same".
 
 **Error analysis: H2O Q8 at 0.578 against Kev BF16 at 0.8,** each alone, at the same precision
 (`decision_models_errors.py`; `--q4` for H2O Q4):
@@ -200,11 +203,11 @@ than Kev's (0.578 here, against Kev's 0.8). A threshold carried over from Kev wo
 
 The owner asked whether any model could do the job alone.
 
-**In sample**, each judge alone can reach precision ≥ 0.99:
+**In sample**, each judge alone can reach precision ≥ 0.99 (merges / correct / wrong):
 
-- H2O Q4 ≥ 0.7299: 239 merges, 2 wrong (E0098, E0778);
-- pplx Q4 ≥ 0.948: 241 merges, 2 wrong (E0098, E0639);
-- the two-judge rule (p2): 227 merges, 2 wrong.
+- H2O Q4 ≥ 0.7299: 241 / 239 / 2 (E0098, E0778);
+- pplx Q4 ≥ 0.9482, just below production's 0.95: 243 / 241 / 2 (E0098, E0639);
+- the two-judge rule (p2): 229 / 227 / 2 (E0098, E0639).
 
 That costs only a few merges, but a threshold chosen on the same pairs it is scored on flatters
 the single judge. So: **cross-validation** (`decision_models_cv.py`, seeded, so the table is
@@ -222,16 +225,15 @@ pairs) and scores the other half.
 
 The last row looks as good as the rule, but 0.7299 was chosen on all 626 pairs, test halves
 included, so it carries the in-sample flattery the tuned rows remove. Chosen fairly, on half the
-pairs, a single judge's threshold lands anywhere on a steep part of its curve.
-
-A single judge's threshold sits on a steep part of its curve and moves with the sample; the
-second judge removes that variance. **Decision: keep two judges.** The cost is about 3 points of
+pairs, a single judge's threshold sits on a steep part of its curve and moves with the sample;
+the second judge removes that variance. **Decision: keep two judges.** The cost is about 3 points of
 recall.
 
 ## 7. The d1 pre-filter (deferred)
 
-d1 is about 3 times faster than H2O at batch 2048 on the 3060 (8.3 against 2.7 requests/s). As a gate it would skip pairs it scores very low, so
-the judges never see them.
+d1 is about 3 times faster than H2O on the 3060: 8.3 requests/s, against H2O's 2.7 at its
+fastest batch (2048). As a gate it would skip pairs it scores very low, so the judges never see
+them.
 
 **On Phase E** (pair score below the cut):
 
@@ -272,7 +274,8 @@ instructions are unchanged. It costs about 7–9% more tokens. The owner approve
 (`intern_struct_draft.py`) before it ran.
 
 Structure helped: recall at 0.962 rose from 0.61 to 0.72 (K2) and 0.76 (K2c), and the rule
-with Intern replacing Kev went from 184 to 213–220 merges. It still trails H2O, most at
+with Intern replacing Kev grew from 184 to 204 merges (K2) and from 178 to 211 (K2c) with pplx
+BF16, or from 190 to 213 and from 181 to 220 with pplx Q4. It still trails H2O, most at
 precision 0.991 (0.22–0.29 against 0.57–0.62), and its order sensitivity did not improve. **The
 Intern weights were deleted on 2026-11-27.**
 
@@ -309,17 +312,20 @@ session, confirmed by the owner.
 Scripts (in this repository):
 
 - `ml/models/compare_models.py`: `render` writes the K2/K2c requests; `score` sends them to a
-  llama.cpp `/v1/systemone` server; `analyse` produces section 4's tables (`analysis.json`).
+  llama.cpp `/v1/systemone` server; `analyse` produces section 4's first two tables for the
+  BF16 judges, H2O Q8, string-state Intern and d1 (`analysis.json`; only those runs).
 - `ml/models/intern_runner.py`: scores the requests with Intern's own reference code, inside
   its container.
 - `ml/models/intern_struct_requests.py`, `intern_struct_draft.py`, `intern_struct_analyse.py`:
   section 8's structured state: the requests, the two-pair draft, and the comparison
-  (`intern-struct-analysis.json`, which also covers H2O Q4 and the 0.578 rule).
+  (`intern-struct-analysis.json`, which also covers H2O Q4, the 0.578 rule and the
+  structured rows with pplx BF16 and Q4).
 - `ml/models/decision_models_errors.py`: section 5's error analysis and the first-stage →
   pplx table of section 4 (Kev, H2O, OR, AND; pplx BF16 and Q4).
-- `ml/models/decision_models_cv.py`: section 6's cross-validation.
+- `ml/models/decision_models_cv.py`: section 6, in sample and the cross-validation.
 - `ml/models/d1_prefilter_sample.py`, `d1_prefilter_score.py`, `d1_prefilter_analyse.py`:
-  section 7: draw the two backlog samples and render their requests, score them, analyse.
+  section 7: draw the two backlog samples and render their requests, score them, analyse
+  (both backlog tables and the Phase E table).
 - `ml/models/decision_models_floor.py`: section 9's floor table.
 
 Each script's docstring gives its command. They read the answer key from the private
@@ -328,15 +334,19 @@ holds every raw score (`h2o-K2.jsonl`, `h2o-K2c.jsonl`, `h2o-q4-K2.jsonl`, `d1-K
 `intern-K2*.jsonl`, `intern-struct-K2*.jsonl`, `h2o-card-ub*.jsonl`, `speed-*.jsonl`),
 `parity-h2o-llamacpp-3060.json`, `intern-structured-draft.md` and `d1-prefilter/`.
 
-Each of these was re-run from `ml/models/` and reproduces the numbers above exactly; the d1
-sample script rewrites its four files byte for byte. The scores themselves came from the
-servers (`compare_models.py score`, `intern_runner.py`, `d1_prefilter_score.py`) and are not
-re-run by the analyses.
+**Every analysis checks itself.** `compare_models.py analyse`, `intern_struct_analyse.py`,
+`decision_models_errors.py` (with and without `--q4`), `decision_models_cv.py`,
+`decision_models_floor.py`, `d1_prefilter_sample.py` and `d1_prefilter_analyse.py` each hold the
+numbers this document states and exit non-zero, naming the mismatch, unless they reproduce them
+exactly; the sample script checks its four files' sha256 against the ones the d1 runs scored.
+All pass on the stored scores. The scores themselves came from the servers
+(`compare_models.py score`, `intern_runner.py`, `d1_prefilter_score.py`) and are not re-run by
+the analyses.
 
-Without a script of their own: the Phase E d1 cut table of section 7 (d1 K2, 626 pairs) and the
-Q4/Q8 agreement figures of section 5 (all 900 pairs, both orders of `h2o-K2.jsonl` against
-`h2o-q4-K2.jsonl`) were recomputed inline from the stored scores and match; the speed and memory
-figures come from the `speed-*` and `h2o-card-*` runs and their `.vram` logs.
+Without a script of their own: the Q4/Q8 agreement figures of section 5 (all 900 pairs, both
+orders of `h2o-K2.jsonl` against `h2o-q4-K2.jsonl`) were recomputed inline from the stored scores
+and match; the speed and memory figures come from the `speed-*` and `h2o-card-*` runs and their
+`.vram` logs.
 `parity-h2o-llamacpp-3060.json` is the worker backend's parity with the stored H2O Q4 scores.
 
 Sources: [llama.cpp h2o-lightning, PR #30361](https://github.com/ggml-org/llama.cpp/pull/30361),
