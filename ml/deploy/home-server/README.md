@@ -115,6 +115,12 @@ deleted and the old test containers removed. The AI workers are stopped.
 
 1. **Merge** PR #94 (the udev rule), then this PR. CI then publishes the llama.cpp worker image
    from `main` (`worker-llamacpp`, smoke-tested first); the server can only pull it after that.
+   **GHCR creates a new package private on its first publish**, and the server pulls without
+   logging in, so `docker compose pull` would fail for all three services (the proxy included).
+   After that first `main` build, set the package public (GitHub: your profile → Packages →
+   `worker-llamacpp` → Package settings → Change visibility), mirroring `kev-worker-cpu` and
+   `pplx-worker-cpu` (check theirs are public too), or `docker login ghcr.io` on the server with
+   a read-only token.
 2. **Production:** `./makhzan deploy`. The broker and API take the new policy (`MODELS` names the
    llama.cpp versions). Queued jobs move to the new judge at the next hello; standing decisions
    are re-queued by the next re-score run at the low P8 priorities (after new pairs and the

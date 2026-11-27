@@ -23,6 +23,10 @@ COPY makhzan_ml/__init__.py /opt/makhzan/makhzan_ml/__init__.py
 COPY makhzan_ml/worker /opt/makhzan/makhzan_ml/worker
 RUN python -c "import makhzan_ml.worker.run, makhzan_ml.worker.judges, makhzan_ml.worker.supervisor, makhzan_ml.worker.proxy, zoneinfo; zoneinfo.ZoneInfo('Africa/Cairo'); print('makhzan_ml.worker ok')"
 
+# Not root, as the lean torch images (uid 1000); compose runs it as the host's UID:GID anyway.
+RUN useradd --uid 1000 --create-home worker
+USER worker
+
 # Last, so a new commit rebuilds only this layer. CI passes the commit it builds and the GHCR
 # repository; a local build says "local" unless given --build-arg REVISION=$(git rev-parse HEAD).
 ARG IMAGE_REPO=makhzan-ml/worker-llamacpp

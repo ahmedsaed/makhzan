@@ -63,6 +63,8 @@ Type=oneshot
 User=$RUN_AS
 Environment=MAKHZAN_AI_DIR=$STACK_DIR
 ExecStart=$STACK_DIR/sidecar-window.sh %i
+# A hung docker compose must not block the next activation (01:00:20 after 00:55, say).
+TimeoutStartSec=180
 UNIT
 
 cat > "$UNITS/makhzan-sidecar-boot.service" <<UNIT

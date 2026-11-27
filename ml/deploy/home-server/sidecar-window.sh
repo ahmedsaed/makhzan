@@ -82,24 +82,44 @@ run() {
   esac
 }
 
-# At boot: which sidecar window is it now (Africa/Cairo)? The timers' own times: Kev's
-# 00:55:00-05:03:00, pplx's 05:03:30-07:03:00. Waits up to BOOT_WAIT_S for the udev rule, which may
-# apply after Docker is up, then starts it through the same checks as a timer.
+# HHMMSS as seconds after midnight (portable: no leading-zero octal, no `expr` exit status).
+secs() {
+  h=$(echo "$1" | cut -c1-2 | sed 's/^0//'); m=$(echo "$1" | cut -c3-4 | sed 's/^0//')
+  s=$(echo "$1" | cut -c5-6 | sed 's/^0//')
+  echo $(( ${h:-0} * 3600 + ${m:-0} * 60 + ${s:-0} ))
+}
+
+# At boot: start the sidecar whose window it is (Africa/Cairo), the timers' own times: Kev's
+# 00:55:00-05:03:00, pplx's 05:03:30-07:03:00. First waits up to BOOT_WAIT_S for the udev rule
+# (which may apply after Docker is up), and only then reads the clock: a wait that crosses into
+# the next window must start that window's sidecar, not the one due when the wait began. A window
+# that ends within START_MARGIN_S (60 s) is skipped: its stop timer is about to run, and the next
+# window's start timer brings the right sidecar up.
+START_MARGIN_S=60
 boot() {
-  now=${NOW:-$(TZ=Africa/Cairo date +%H%M%S)}
-  now=$(expr "$now" + 0)
-  if [ "$now" -ge 5500 ] && [ "$now" -lt 50300 ]; then due=kev
-  elif [ "$now" -ge 50330 ] && [ "$now" -lt 70300 ]; then due=pplx
-  else
-    log "boot at $now (Africa/Cairo): outside the sidecar windows, nothing to start"
-    return 0
-  fi
-  log "boot inside $due's sidecar window"
   waited=0
   while [ "$(gpu_mode)" != manual ] && [ "$waited" -lt "${BOOT_WAIT_S:-60}" ]; do
     sleep 5
     waited=$((waited + 5))
   done
+  hhmmss=${NOW:-$(TZ=Africa/Cairo date +%H%M%S)}
+  now=$(secs "$hhmmss")
+  due=""
+  if [ "$now" -ge "$(secs 005500)" ] && [ "$now" -lt "$(secs 050300)" ]; then
+    due=kev; ends=$(secs 050300)
+  elif [ "$now" -ge "$(secs 050330)" ] && [ "$now" -lt "$(secs 070300)" ]; then
+    due=pplx; ends=$(secs 070300)
+  fi
+  if [ -z "$due" ]; then
+    log "boot at $hhmmss (Africa/Cairo): outside the sidecar windows, nothing to start"
+    return 0
+  fi
+  if [ $((ends - now)) -lt "$START_MARGIN_S" ]; then
+    log "boot at $hhmmss (Africa/Cairo): $due's sidecar window ends in under ${START_MARGIN_S}s;"
+    log "leaving it to the timers, nothing to start"
+    return 0
+  fi
+  log "boot at $hhmmss (Africa/Cairo), inside $due's sidecar window"
   run start "$due"
 }
 

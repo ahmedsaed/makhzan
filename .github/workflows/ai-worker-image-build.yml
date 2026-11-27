@@ -150,7 +150,8 @@ jobs:
       # the fake broker with a fake judge, the same through the supervisor's forked child, the
       # broker proxy forwarding over loopback to its one target, and the commit the image
       # records (ml/makhzan_ml/worker/smoke.py). Run under the home server's container
-      # restrictions (as root, so the weight scan can read every directory). Scoring parity needs the weights and stays the
+      # restrictions, as the image's own non-root user (uid 1000), as production runs it; the
+      # size scan below reads every file from outside. Scoring parity needs the weights and stays the
       # supervised first run on the home server.
       - name: Smoke test (no weights, no network)
         env:

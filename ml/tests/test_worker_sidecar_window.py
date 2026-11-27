@@ -109,8 +109,11 @@ def test_a_start_without_the_card_groups_in_env_is_refused(tmp_path, env_text):
 
 @pytest.mark.parametrize(
     "now, due",
-    [("005459", None), ("005500", "kev"), ("010020", "kev"), ("050259", "kev"), ("050300", None),
-     ("050329", None), ("050330", "pplx"), ("070259", "pplx"), ("070300", None), ("120000", None),
+    [("000000", None), ("005459", None), ("005500", "kev"), ("010020", "kev"),
+     ("050159", "kev"),   # 61 s before the window's end: still started
+     ("050250", None),    # under 60 s left: the timers handle it (stop-kev, then start-pplx)
+     ("050259", None), ("050300", None), ("050329", None), ("050330", "pplx"),
+     ("070159", "pplx"), ("070230", None), ("070300", None), ("120000", None),
      ("235959", None)],
 )  # fmt: skip
 def test_at_boot_the_due_sidecar_starts_through_the_same_checks(tmp_path, now, due):
@@ -119,6 +122,37 @@ def test_at_boot_the_due_sidecar_starts_through_the_same_checks(tmp_path, now, d
     assert r.returncode == 0, r.stdout + r.stderr
     if due is None:
         assert calls(log) == [] and "nothing to start" in r.stdout
+    else:
+        assert calls(log)[-1] == up(env["MAKHZAN_AI_DIR"], due)
+
+
+def slow_udev(tmp_path: Path, env: dict, after_wait: str) -> dict:
+    """A card whose clock limit applies only after one `sleep 5` (a fake sleep sets it), and a
+    clock that reads `after_wait` (a fake `date`): the boot's wait crossing a window's edge."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    mode = Path(env["SYSFS"], "class/drm/card1/device/power_dpm_force_performance_level")
+    (bin_ / "sleep").write_text(f"#!/bin/sh\necho manual > {mode}\n")
+    (bin_ / "date").write_text(f"#!/bin/sh\necho {after_wait}\n")
+    for f in bin_.iterdir():
+        f.chmod(0o755)
+    return {**env, "PATH": f"{bin_}:{env['PATH']}", "BOOT_WAIT_S": "60"}
+
+
+@pytest.mark.parametrize(
+    "after_wait, due",
+    [("050310", None),     # booted in Kev's window, the wait crossed its end: start nothing
+     ("050340", "pplx"),   # ... and into pplx's: start pplx, never Kev
+     ("070240", None),     # pplx's window ending: nothing left running past 07:03
+     ("020000", "kev")],
+)  # fmt: skip
+def test_the_boot_reads_the_clock_after_waiting_for_the_clock_limit(tmp_path, after_wait, due):
+    env, log = fake_env(tmp_path, "auto")
+    env = slow_udev(tmp_path, env, after_wait)
+    r = run(env, "boot")
+    assert r.returncode == 0, r.stdout + r.stderr
+    if due is None:
+        assert calls(log) == []
     else:
         assert calls(log)[-1] == up(env["MAKHZAN_AI_DIR"], due)
 
@@ -189,8 +223,10 @@ def test_the_timers_keep_one_sidecar_up_around_each_window():
     assert pplx_open - t["start-pplx"] + judges.LLAMACPP_READY_S >= 120
     # The boot unit's ranges are the timers' (sidecar-window.sh's boot()).
     script = SCRIPT.read_text()
-    assert '-ge 5500 ] && [ "$now" -lt 50300 ]' in script  # 00:55:00-05:03:00
-    assert '-ge 50330 ] && [ "$now" -lt 70300 ]' in script  # 05:03:30-07:03:00
+    assert '"$(secs 005500)" ] && [ "$now" -lt "$(secs 050300)" ]' in script  # 00:55:00-05:03:00
+    assert '"$(secs 050330)" ] && [ "$now" -lt "$(secs 070300)" ]' in script  # 05:03:30-07:03:00
+    assert t["start-kev"] == 55 * 60 and t["stop-kev"] == 5 * 3600 + 3 * 60
+    assert t["start-pplx"] == 5 * 3600 + 3 * 60 + 30 and t["stop-pplx"] == 7 * 3600 + 3 * 60
 
 
 def test_every_night_has_a_kev_start_even_when_the_clocks_spring_forward():
@@ -237,6 +273,8 @@ def test_the_installer_renders_the_units(tmp_path):
     boot = (units / "makhzan-sidecar-boot.service").read_text()
     assert "After=docker.service" in boot and "sidecar-window.sh boot" in boot
     assert "User=someone" in boot and "WantedBy=multi-user.target" in boot
+    template = (units / "makhzan-sidecar@.service").read_text()
+    assert "TimeoutStartSec=180" in template  # a hung compose cannot block the next activation
 
 
 def test_docker_never_restarts_a_sidecar_and_no_card_is_a_startup_error():
