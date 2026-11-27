@@ -46,6 +46,7 @@ import math
 import hashlib
 import json
 import os
+import re
 import struct
 import sys
 import time
@@ -732,6 +733,88 @@ def check_clock_limit(root: Path | None = None) -> None:
             )
 
 
+# --- over-long requests (owner, 2026-11-27) -------------------------------------------------------
+#: llama.cpp b12767's answers to a prompt larger than it can take: larger than the physical batch
+#: (HTTP 500; a non-causal model such as pplx needs the whole prompt in one ubatch), or larger
+#: than the context (HTTP 400). Both carry the prompt's token count where we read it.
+_TOO_LONG = re.compile(r"too large to process|exceeds? the available context size", re.I)
+_TOKENS = re.compile(r"input \((\d+) tokens\)|request \((\d+) tokens\)", re.I)
+_LIMIT = re.compile(r"batch size: (\d+)|context size \((\d+) tokens\)|n_ctx[^0-9]*(\d+)", re.I)
+#: How many times a request is shortened and sent again before the job fails.
+TRUNCATE_ATTEMPTS = 8
+#: The marker the renderer's own word cap appends (makhzan_schemas.ai.prompt.words).
+TRUNCATION_MARK = "[…]"
+
+
+def too_long(code: int, detail: str) -> tuple[int | None, int | None] | None:
+    """(prompt tokens, limit) when llama.cpp refused the request for its length, else None."""
+    if code not in (400, 500) or not _TOO_LONG.search(detail):
+        return None
+    t, lim = _TOKENS.search(detail), _LIMIT.search(detail)
+    tokens = next((int(g) for g in t.groups() if g), None) if t else None
+    limit = next((int(g) for g in lim.groups() if g), None) if lim else None
+    return tokens, limit
+
+
+def _descriptions(state: str) -> list[tuple[int, str, list[str]]]:
+    """(line index, listing name, words) of every listing block's `Description:` line.
+
+    Only lines inside a `[LISTING …]` block count, so the rules text is never touched. A
+    description the renderer already capped keeps its words; its trailing marker is dropped
+    here and put back by the truncation. "not stated" has no words to cut."""
+    out, listing = [], None
+    for i, line in enumerate(state.split("\n")):
+        if line.startswith("[LISTING ") and line.endswith("]"):
+            listing = line[1:-1]
+        elif line.startswith("[") and line.endswith("]"):
+            listing = None
+        elif listing and line.startswith("Description: "):
+            text = line[len("Description: ") :]
+            w = [] if text == "not stated" else text.split()
+            if w and w[-1] == TRUNCATION_MARK:
+                w = w[:-1]
+            out.append((i, listing, w))
+    return out
+
+
+def truncate_descriptions(payload: dict, cut: dict[str, int]) -> dict:
+    """`payload` with `cut[listing]` words removed from the end of that listing's description,
+    the renderer's marker appended. Only the state's description lines change: titles, specs,
+    the rules and the question are untouched. Deterministic."""
+    lines = payload["state"].split("\n")
+    for i, name, w in _descriptions(payload["state"]):
+        n = cut.get(name, 0)
+        if n <= 0:
+            continue
+        keep = w[: max(0, len(w) - n)]
+        lines[i] = "Description: " + " ".join([*keep, TRUNCATION_MARK])
+    return {**payload, "state": "\n".join(lines)}
+
+
+def plan_cut(
+    payload: dict, cut: dict[str, int], tokens: int | None, limit: int | None
+) -> dict[str, int] | None:
+    """The next, larger cut: words to remove, taken from the longest remaining description
+    first (down to the next longest, then from both). Roughly the excess in tokens plus a
+    margin (a word is at least one token), at least 15% of the longest remaining description.
+    None when no description words are left. Deterministic: ties go by listing name."""
+    remaining = {name: len(w) - cut.get(name, 0) for _, name, w in _descriptions(payload["state"])}
+    if sum(max(0, r) for r in remaining.values()) <= 0:
+        return None
+    need = (tokens - limit + 64) if tokens and limit and tokens > limit else 0
+    need = max(need, math.ceil(0.15 * max(remaining.values())), 1)
+    new = dict(cut)
+    while need > 0 and any(r > 0 for r in remaining.values()):
+        order = sorted(remaining.items(), key=lambda kv: (-kv[1], kv[0]))
+        name, r = order[0]
+        second = order[1][1] if len(order) > 1 else 0
+        take = min(need, r - second) if r > second else min(need, max(1, math.ceil(r / 2)))
+        new[name] = new.get(name, 0) + take
+        remaining[name] -= take
+        need -= take
+    return new
+
+
 def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
     who = f"{key} (llamacpp)"
     decision_type, request_model = LLAMACPP_MODELS[key]
@@ -785,12 +868,37 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
 
     def score(payload: dict) -> tuple[float, dict]:
         q = question_key(payload)
-        try:
-            body = _http_json(f"{base}/v1/systemone", {"model": request_model, **nfc(payload)},
-                              timeout=request_timeout)  # fmt: skip
-        except urllib.error.HTTPError as e:
-            detail = e.read()[:300].decode("utf-8", "replace")
-            raise RuntimeError(f"llama.cpp answered HTTP {e.code}: {detail}") from None
+        original = nfc(payload)
+        sent, cut, extra, first_tokens = original, {}, {}, None
+        for attempt in range(TRUNCATE_ATTEMPTS + 1):
+            try:
+                body = _http_json(f"{base}/v1/systemone", {"model": request_model, **sent},
+                                  timeout=request_timeout)  # fmt: skip
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read()[:300].decode("utf-8", "replace")
+                long = too_long(e.code, detail)
+                if long is None:
+                    raise RuntimeError(f"llama.cpp answered HTTP {e.code}: {detail}") from None
+                # Too long for the model's context or batch: cut description words from the
+                # end, longest description first (owner, 2026-11-27), and send again.
+                tokens, limit = long
+                first_tokens = first_tokens or tokens
+                nxt = (
+                    plan_cut(original, cut, tokens, limit) if attempt < TRUNCATE_ATTEMPTS else None
+                )
+                if nxt is None:
+                    raise RuntimeError(
+                        f"llama.cpp: the request is too long even with its descriptions cut "
+                        f"({tokens} tokens, limit {limit}): {detail}"
+                    ) from None
+                cut = nxt
+                sent = truncate_descriptions(original, cut)
+        if cut:
+            extra = {"truncated": {"words_cut": dict(sorted(cut.items())),
+                                   "tokens_before": first_tokens,
+                                   "tokens": (body.get("usage") or {}).get("input_tokens"),
+                                   "attempts": attempt}}  # fmt: skip
         try:
             calibrated = body["answers"][q]["noul"]
         except (KeyError, TypeError):
@@ -798,7 +906,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
                 f"llama.cpp's answer has no answers.{q}.noul: {str(body)[:300]}"
             ) from None
         try:
-            return rescale(calibrated, pin.gguf_temperature, pin.temperature), {}
+            return rescale(calibrated, pin.gguf_temperature, pin.temperature), extra
         except ValueError as e:
             raise RuntimeError(f"llama.cpp answered {q}.noul = {calibrated!r}: {e}") from None
 

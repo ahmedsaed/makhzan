@@ -84,6 +84,7 @@ class Sidecar:
 
     def __init__(self, *, model_path="/models/Kev-4B-Q4_K_M.gguf", build="b12767-a8ad690ca",
                  not_ready=0, calibrated=None, status=200, answer=None, router=None,
+                 limit_words=None,
                  load_polls=1, initial="unloaded", busy_loads=0, models_errors=0,
                  load_fails=False):  # fmt: skip
         self.model_path, self.build, self.not_ready, self.status = (
@@ -100,6 +101,9 @@ class Sidecar:
         self.calibrated = calibrated or (lambda payload: 0.7)
         #: The whole response body, when a test needs a malformed one.
         self.answer = answer
+        #: A request whose state has more words than this is refused as llama.cpp b12767
+        #: refuses a prompt over its batch: HTTP 500 "input (N tokens) is too large to process".
+        self.limit_words = limit_words
         self.requests: list[dict] = []
         outer = self
 
@@ -177,6 +181,11 @@ class Sidecar:
                     outer.polls = 0
                     return self._send(200, {"success": True})
                 outer.requests.append(body)
+                n = len(body["state"].split())
+                if outer.limit_words is not None and n > outer.limit_words:
+                    return self._send(500, {"error": {"code": 500, "type": "server_error",
+                        "message": f"input ({n} tokens) is too large to process. increase the "
+                                   f"physical batch size (current batch size: {outer.limit_words})"}})  # fmt: skip
                 if outer.status != 200:
                     return self._send(outer.status, {"error": {"message": "bad request"}})
                 if outer.answer is not None:
@@ -934,3 +943,95 @@ def test_require_clock_limit_defaults_on_for_a_gpu_and_is_llamacpp_only():
     for name in ("home-h2o", "home-pplx"):
         data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
         assert data["compute"]["require_clock_limit"] is True
+
+
+# --- over-long requests: descriptions cut to fit (owner, 2026-11-27) ------------------------------
+
+LONG_A = " ".join(f"a{i}" for i in range(300))
+LONG_B = " ".join(f"b{i}" for i in range(120))
+
+
+def long_payload(desc_a=LONG_A, desc_b=LONG_B):
+    def blk(name, title, desc):
+        return "\n".join([f"[{name}]", f"Title: {title}", "Category: not stated",
+                          "Brand: not stated", "Part number: not stated", "Pack size: not stated",
+                          "Specifications: Voltage: 5V; Current: 2A", f"Description: {desc}"])  # fmt: skip
+
+    state = ("[RULES]\nCompare the two listings.\nDescription: this rules line is not a listing\n\n"
+             + blk("LISTING A", "Widget A 5V", desc_a) + "\n\n" + blk("LISTING B", "Widget B 5V", desc_b))  # fmt: skip
+    return {"state": state, "questions": {"same": {"type": "noul", "instructions": "Same part?"}}}
+
+
+def lines(state):
+    return state.split("\n")
+
+
+def test_too_long_reads_both_llamacpp_messages():
+    assert judges.too_long(500, "input (5469 tokens) is too large to process. increase the "
+                                "physical batch size (current batch size: 4096)") == (5469, 4096)  # fmt: skip
+    assert judges.too_long(400, "the request exceeds the available context size, try increasing "
+                                "it") == (None, None)  # fmt: skip
+    assert judges.too_long(500, "model limit reached, try again later") is None
+    assert judges.too_long(503, "input (9 tokens) is too large to process") is None
+
+
+def test_an_over_long_request_is_cut_from_its_longest_description_and_scored(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    payload = long_payload()
+    total = len(payload["state"].split())
+    side = sidecar(limit_words=total - 100)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    p, extra = judge.score(payload)
+    assert 0 <= p <= 1
+    sent = side.requests[-1]["state"]
+    assert len(sent.split()) <= total - 100
+    cut = extra["truncated"]["words_cut"]
+    assert cut.get("LISTING A", 0) >= 100 and cut.get("LISTING B", 0) == 0  # longest first
+    assert extra["truncated"]["tokens_before"] == total and extra["truncated"]["attempts"] >= 1
+    before, after = lines(payload["state"]), lines(sent)
+    changed = [i for i, (x, y) in enumerate(zip(before, after, strict=True)) if x != y]
+    assert [before[i].split(":")[0] for i in changed] == ["Description"]  # only A's description
+    assert after[changed[0]].endswith(" […]") and after[changed[0]].startswith("Description: a0 a1")
+    assert "Description: this rules line is not a listing" in after  # the rules are never cut
+    assert payload["state"] == long_payload()["state"]  # the caller's payload is untouched
+
+
+def test_the_cut_is_deterministic_and_reaches_both_descriptions_when_needed(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    payload = long_payload()
+    fixed = len(payload["state"].split()) - 420  # everything but the two descriptions
+    sents = []
+    for _ in range(2):
+        side = sidecar(limit_words=fixed + 60)
+        judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+        _, extra = judge.score(payload)
+        sents.append(side.requests[-1]["state"])
+        assert set(extra["truncated"]["words_cut"]) == {"LISTING A", "LISTING B"}
+    assert sents[0] == sents[1]
+
+
+def test_a_description_the_renderer_already_capped_keeps_one_marker(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    payload = long_payload(desc_a=LONG_A + " […]")
+    side = sidecar(limit_words=len(payload["state"].split()) - 100)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    judge.score(payload)
+    desc = next(x for x in lines(side.requests[-1]["state"]) if x.startswith("Description: a0"))
+    assert desc.count("[…]") == 1 and desc.endswith(" […]")
+
+
+def test_too_long_even_without_descriptions_fails_the_job(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit_words=10)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    with pytest.raises(RuntimeError, match="too long even with its descriptions cut"):
+        judge.score(long_payload())
+
+
+def test_another_server_error_is_not_retried(tmp_path, sidecar):
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(status=500)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        judge.score(long_payload())
+    assert len(side.requests) == 1
