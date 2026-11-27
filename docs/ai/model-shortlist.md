@@ -5,6 +5,11 @@ GitHub README unless marked. **UNVERIFIED** = no primary source read. **[est]** 
 (params x bytes), not a measurement. Dates: HF cards often give none; where so, the paper date is
 used and labelled "paper".
 
+*Measured since (2026-11-26/27): H2O-Lightning-4B, Intern-Decision-4B and Liquid d1-2B against
+Kev and pplx on our labels; H2O replaced Kev as the first judge (D25). See
+`docs/ai/decision-models.md`. The licence line below was relaxed by the owner: the project is
+non-commercial.*
+
 Hardware target: RTX 3060 12 GB, 30 GB RAM, CPU-only servers. Licence must allow commercial self-hosting.
 
 ## Key findings first

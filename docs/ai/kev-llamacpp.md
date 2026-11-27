@@ -17,6 +17,8 @@ These experiments asked whether a quantised Kev-4B could do two things:
   0–2 (its power feed resets the server at higher states), it runs 4.4 s a request.
 - **In production since 2026-11-27** (`decision-review.md`, "Production switch"): Kev and pplx on
   the home server's card, taking turns (`docs/ai/worker.md`, "Kev on a llama.cpp sidecar").
+- **Replaced as the first judge later on 2026-11-27** by H2O-Lightning-4B Q4_K_M (D25,
+  `docs/ai/decision-models.md`). p1 (Kev ≥ 0.80) stays as the rollback.
 
 ## What changed from earlier notes
 
@@ -246,6 +248,8 @@ Notes:
 
 ## Files
 
+- `docs/ai/decision-models.md`: the follow-up, other decision models against Kev and pplx;
+  H2O-Lightning-4B replaced Kev as the first judge on 2026-11-27 (D25).
 - `ml/models/kev_gguf.py`: the scorer and comparison.
 - `ml/out/gguf-kev/` (git-ignored): every run's raw scores (`q4km-vulkan-3060.jsonl`,
   `q8-ub2048.jsonl`, `bf16-ub2048.jsonl`, `q4km-ub2048.jsonl`, `q8-cuda-ub2048.jsonl`,
