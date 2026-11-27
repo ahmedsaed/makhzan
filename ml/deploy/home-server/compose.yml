@@ -1,14 +1,14 @@
-# The home server's AI-matching workers: this file, a .env, two worker TOMLs, two token files, and
-# (since 2026-11-27) the GGUFs and the sidecar timers. No host firewall rules.
+# The home server's AI-matching workers: this file, a .env, two worker TOMLs, two token files,
+# the llama.cpp router's preset (models.ini) and guard (llamacpp-guard.sh), and the GGUFs. Everything
+# runs in this stack: no host timers, scripts or firewall rules. The host's one setting is the udev
+# rule 99-amdgpu-clock-limit.rules, which holds the AMD card to its safe clock states (README.md).
 # README.md beside this file says how to set it up; docs/ai/worker.md is the reference.
 #
-# Production (owner, 2026-11-27): both judges run on the AMD card through llama.cpp sidecars
-# (kev-llamacpp, pplx-llamacpp), taking turns, because the 4 GB card holds one model. The host's
-# systemd timers start and stop each sidecar around its worker's window (sidecar-window.sh):
-# Kev's 00:55-05:03, pplx's 05:03:30-07:03, Africa/Cairo (and at boot, inside a window). Plain
-# `docker compose up -d` starts the workers and the proxy only; the sidecars are in profiles,
-# started only by sidecar-window.sh (timers and the boot unit). The card
-# must be held to clock states 0-2 by the udev rule 99-amdgpu-clock-limit.rules first (README.md).
+# Production (owner, 2026-11-27): both judges run on the AMD card through one llama.cpp router
+# (service "llamacpp"), which serves both models and holds one at a time (the 4 GB card fits one).
+# Each worker asks for its own model when its window opens and the router swaps it in; idle, the
+# model sleeps and the card is free for other users. The router refuses to start unless the
+# card's clock limit is applied (llamacpp-guard.sh).
 #
 #   docker compose up -d                              # start (and after every change)
 #   docker compose pull && docker compose up -d       # update to the latest tested images
@@ -16,9 +16,8 @@
 #
 # Each worker stays up and waits for its own window (outside_window = "wait" in its TOML):
 # Kev 01:00-05:00, pplx 05:05-07:00, Africa/Cairo. Each window's session runs in a child
-# process that exits at the window's end. The model itself is in the window's sidecar on the
-# card; the timers keep exactly one sidecar up at a time (Kev's stops at 05:03, at least a
-# minute after a session's last possible request, before pplx's starts at 05:03:30).
+# process that exits at the window's end. The windows never overlap, so the router never swaps
+# back and forth within one.
 #
 # Network: the workers sit on `broker-only`, an internal network with no route anywhere.
 # Their one way out is `broker-proxy`, our own TCP forwarder (makhzan_ml.worker.proxy), which
@@ -106,135 +105,61 @@ services:
       - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.toml:/etc/makhzan-ai/worker.toml:ro
       - ${WORKER_DIR:?set WORKER_DIR in .env}/home-pplx.token:/run/secrets/makhzan-ai-token:ro
 
-  # Kev on the AMD card through llama.cpp (docs/ai/kev-llamacpp.md), the kev worker's judge since
-  # 2026-11-27 (home-kev.toml, backend = "llamacpp"). Started at 00:55 and stopped at 05:03 by the
-  # host's timers (`sidecar-window.sh start|stop kev`, which runs `docker compose --profile
-  # llamacpp up -d kev-llamacpp` / `stop`); never by a plain `docker compose up -d`.
-  kev-llamacpp:
+  # Both judges on the AMD card through llama.cpp's router mode (docs/ai/kev-llamacpp.md,
+  # docs/ai/pplx-llamacpp.md): one llama-server serving Kev-4B Q4_K_M and pplx Q4_K_S from the
+  # preset models.ini, at most one loaded at a time (--models-max 1), loaded on demand by the
+  # request's model name, asleep after 10 idle minutes (the card is free by day). The workers
+  # reach it as http://llamacpp:8080 and load their own model before their window's first lease.
+  llamacpp:
     <<: *hardening
-    profiles: [llamacpp]
-    # The host's timers own the sidecar's lifecycle (sidecar-window.sh checks the clock limit before
-    # every start). Docker must never restart it on its own: after a reboot or a crash that would
-    # bypass the check. A server down at the start time is covered by the boot unit.
-    restart: "no"
     # llama.cpp's official server-vulkan image, build b12767, by digest (pins.LLAMACPP_IMAGE).
     image: ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
-    # The validated 4 GB settings: every layer on the card, one slot, 4k context, 512-token
-    # batches (2048 needs ~5.3 GB). The image runs as root by default; the hardening's user
-    # applies, with the render and video groups so it can open the card.
+    # The guard refuses to start unless the card is held to its safe clock states (the host's
+    # udev rule): a refusal repeats under restart: unless-stopped, a loop with its message in
+    # `docker compose logs llamacpp`, never an unlimited card. It then runs llama-server.
+    entrypoint: ["/bin/sh", "/cfg/llamacpp-guard.sh"]
     command:
-      - -m
-      - /models/Kev-4B-Q4_K_M.gguf
-      - -ngl
-      - "99"
+      - --models-preset
+      - /cfg/models.ini
+      - --models-max
+      - "1"
+      - --sleep-idle-seconds
+      - "600"
       # Only the card: without it llama.cpp silently falls back to the CPU when the card cannot be
-      # opened (missing render/video groups), while the worker records device "gpu". With it, no
+      # opened (missing render/video groups), while the workers record device "gpu". With it, no
       # card is a startup error ("invalid device: Vulkan0").
       - -dev
       - Vulkan0
-      - -np
-      - "1"
-      - -c
-      - "4096"
-      - -b
-      - "512"
-      - -ub
-      - "512"
       - --host
       - 0.0.0.0
       - --port
       - "8080"
-    # The host's render and video group ids (`getent group render video`), set in .env. Not
-    # required (no `?` form): compose interpolates every service, profile or not, so that would break
-    # `docker compose up` for the workers. Unset, they default to two unused ids (compose
-    # refuses a repeated one) and the sidecar cannot open the card: with `-dev Vulkan0` it then
-    # exits at start, and sidecar-window.sh refuses to start it at all without both ids.
+    # The host's render and video group ids (`getent group render video`), set in .env, so the
+    # non-root user can open the card.
     group_add:
-      - "${RENDER_GID:-65533}"
-      - "${VIDEO_GID:-65534}"
+      - "${RENDER_GID:?set RENDER_GID in .env (getent group render)}"
+      - "${VIDEO_GID:?set VIDEO_GID in .env (getent group video)}"
     devices:
       - /dev/dri:/dev/dri
     volumes:
-      # The file in WEIGHTS_DIR, the kev worker's own /models mount, so both read one file.
+      - ./models.ini:/cfg/models.ini:ro
+      - ./llamacpp-guard.sh:/cfg/llamacpp-guard.sh:ro
+      # The files in WEIGHTS_DIR, the workers' own /models mount, so each pair reads one file.
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}/Kev-4B-Q4_K_M.gguf:/models/Kev-4B-Q4_K_M.gguf:ro
-    tmpfs:
-      - /tmp:size=64m
-    environment:
-      HOME: /tmp
-    # The GGUF is memory-mapped (3 GB, page cache the cgroup counts but can reclaim).
-    cpus: 2
-    mem_limit: 4g
-    memswap_limit: 4g
-    pids_limit: 128
-    # Not published to the host, and on the workers' internal network only: the kev worker
-    # reaches it as http://kev-llamacpp:8080. From there it could reach broker-proxy:8100, as
-    # any worker can, which forwards only to the broker; without a token the broker refuses
-    # it. Nothing else.
-    networks: [broker-only]
-
-  # pplx on the AMD card through llama.cpp (docs/ai/pplx-llamacpp.md), the pplx worker's judge since
-  # 2026-11-27 (home-pplx.toml, backend = "llamacpp"). Started at 05:03:30, after Kev's sidecar has
-  # stopped, and stopped at 07:03 by the host's timers (`sidecar-window.sh start|stop pplx`). On
-  # the card, like kev-llamacpp: the two never run together (the script stops the other first).
-  pplx-llamacpp:
-    <<: *hardening
-    profiles: [llamacpp-pplx]
-    # The host's timers own the sidecar's lifecycle (sidecar-window.sh checks the clock limit before
-    # every start). Docker must never restart it on its own: after a reboot or a crash that would
-    # bypass the check. A server down at the start time is covered by the boot unit.
-    restart: "no"
-    # llama.cpp's official server-vulkan image, build b12767, by digest (pins.LLAMACPP_IMAGE).
-    image: ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
-    # pplx's full-attention layers are non-causal, so a whole request must fit one batch: -b and
-    # -ub at least the longest request (3,574 tokens in Phase E), hence 4096, as -c. One slot,
-    # every layer on the card, flash attention on: the settings soaked on this card at clock
-    # states 0-2 (1,800 requests, 4.6 s each, 3.3 GB; docs/ai/kev-llamacpp.md). CPU fallback:
-    # -ngl 0 -t 4, no devices/group_add, and device = "cpu" in home-pplx.toml.
-    command:
-      - -m
-      - /models/pplx-flash-v1.3-Q4_K_S.gguf
-      - -ngl
-      - "99"
-      # Only the card: without it llama.cpp silently falls back to the CPU when the card cannot be
-      # opened (missing render/video groups), while the worker records device "gpu". With it, no
-      # card is a startup error ("invalid device: Vulkan0").
-      - -dev
-      - Vulkan0
-      - -np
-      - "1"
-      - -c
-      - "4096"
-      - -b
-      - "4096"
-      - -ub
-      - "4096"
-      - -fa
-      - "on"
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-    # As kev-llamacpp: the host's render and video groups to open the card (.env).
-    group_add:
-      - "${RENDER_GID:-65533}"
-      - "${VIDEO_GID:-65534}"
-    devices:
-      - /dev/dri:/dev/dri
-    volumes:
-      # The file in WEIGHTS_DIR, the pplx worker's own /models mount, so both read one file.
       - ${WEIGHTS_DIR:?set WEIGHTS_DIR in .env}/pplx-flash-v1.3-Q4_K_S.gguf:/models/pplx-flash-v1.3-Q4_K_S.gguf:ro
     tmpfs:
       - /tmp:size=64m
     environment:
       HOME: /tmp
-    # The GGUF is memory-mapped (2.9 GB; page cache the cgroup counts but can reclaim).
+    # The router and at most one model instance; each GGUF is memory-mapped (~3 GB of page
+    # cache the cgroup counts but can reclaim).
     cpus: 2
     mem_limit: 4g
     memswap_limit: 4g
     pids_limit: 128
-    # As kev-llamacpp: not published, on the workers' internal network only (the pplx worker
-    # reaches it as http://pplx-llamacpp:8080); it could reach broker-proxy:8100, which the
-    # broker refuses without a token. Nothing else.
+    # Not published to the host, and on the workers' internal network only. From there it could
+    # reach broker-proxy:8100, as any worker can, which forwards only to the broker; without a
+    # token the broker refuses it. Nothing else.
     networks: [broker-only]
 
 networks:

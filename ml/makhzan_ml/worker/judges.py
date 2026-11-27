@@ -413,10 +413,11 @@ _LOADERS = {"kev": _load_kev, "pplx": _load_pplx}
 
 # --- llama.cpp sidecar ------------------------------------------------------------------------
 
-#: How long a load waits for the sidecar to answer /health ok (it loads the GGUF when it
-#: starts, normally long before a window opens; a 3 GB file from an HDD takes tens of
-#: seconds). Interruptible by a stop, as is the hash before it.
-LLAMACPP_READY_S = 120.0
+#: How long a load waits for its model: the sidecar's /health, then, with a router sidecar (the
+#: home server's, which serves both models and holds one at a time), the model loaded or swapped
+#: in (~5-16 s on the 3060; a 3 GB file from an HDD can take longer). Interruptible by a stop, as
+#: is the hash before it, so it is not part of any stop bound.
+LLAMACPP_READY_S = 180.0
 #: One scoring request's timeout, per model and device. A request is the one part of a session
 #: a stop cannot interrupt, so each stays inside its worker's stop bound (docs/ai/worker.md, "A
 #: stop sets one deadline"; the compose stop_grace_period of the worker that runs it).
@@ -589,8 +590,69 @@ def rescale(p: float, served: float, wanted: float) -> float:
     return uncalibrate(p, served / wanted)
 
 
-#: Per model: the GGUF's `qwen35.decision.type`, and the `model` name sent with a request.
+#: Per model: the GGUF's `qwen35.decision.type`, and the `model` name sent with a request (with
+#: a router sidecar, the section name in its preset, ml/deploy/home-server/models.ini).
 LLAMACPP_MODELS = {"kev": ("kev", "kev"), "pplx": ("pplx-decider", "pplx")}
+
+#: A router's model states in which the model is ready to score (a sleeping one wakes on the first
+#: request, ~5.6 s on the 3060, inside the request timeout).
+ROUTER_READY = ("loaded", "sleeping")
+
+
+def _router_models(base: str) -> dict | None:
+    """A router sidecar's models, by id: {id: (status, model path from its args)}; None for a
+    single-model sidecar (its /models carries no per-model status). Never loads anything."""
+    try:
+        listing = _http_json(f"{base}/models", timeout=10)
+    except urllib.error.HTTPError:
+        return None
+    data = listing.get("data") if isinstance(listing, dict) else None
+    if (
+        not isinstance(data, list)
+        or not data
+        or not all(isinstance(m, dict) and isinstance(m.get("status"), dict) for m in data)
+    ):
+        return None
+    out = {}
+    for m in data:
+        args = m["status"].get("args") or []
+        path = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in ("--model", "-m")), "")
+        out[str(m.get("id"))] = (str(m["status"].get("value")), path)
+    return out
+
+
+def _router_ready(base: str, name: str, budget_s: float, stop=None, clock=time.monotonic) -> str:
+    """Load `name` on a router sidecar (swapping out whatever it holds: one model at a time) and
+    wait until it is ready to score. Returns its model path. Stop-aware, like `_wait_ready`."""
+    deadline = clock() + budget_s
+    asked = False
+    last = "not listed"
+    while True:
+        if _stopped(stop):
+            raise LoadInterrupted("stopped while the llama.cpp router loads the model")
+        models = _router_models(base) or {}
+        if name not in models:
+            raise LoadError(
+                f"the llama.cpp router at {base} has no model {name!r}: {sorted(models)}"
+            )
+        status, path = models[name]
+        if status in ROUTER_READY:
+            return path
+        last = status
+        if not asked and status not in ("loading",):
+            try:
+                _http_json(f"{base}/models/load", {"model": name}, timeout=30)
+            except urllib.error.HTTPError as e:
+                if e.code != 400:  # 400: "model is already running", a race with its own load
+                    detail = e.read()[:200].decode("utf-8", "replace")
+                    raise LoadError(f"the llama.cpp router refused to load {name!r}: {detail}")
+            asked = True
+        if clock() >= deadline:
+            raise LoadError(f"the llama.cpp router at {base} did not load {name!r} ({last})")
+        if stop is not None:
+            stop.wait(1.0)
+        else:
+            time.sleep(1.0)
 
 
 def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
@@ -615,9 +677,23 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
     if digest != pin.gguf_sha256:
         raise LoadError(f"{who}: {path.name} sha256 {digest}, pinned {pin.gguf_sha256}")
     base = rt.llamacpp_url.rstrip("/")
+    started = time.monotonic()
     _wait_ready(base, LLAMACPP_READY_S, rt.stop)
     request_timeout = LLAMACPP_REQUEST_S[(key, rt.device)]
-    props = _http_json(f"{base}/props")
+    router = _router_models(base) is not None
+    if router:
+        # One server for both models, one loaded at a time: load this worker's own (the other
+        # one is swapped out; the windows never overlap) before the first lease, so no request
+        # pays the load. Its file is checked from the preset's args, then the build from the
+        # model's own /props (which does not wake a sleeping model).
+        left = max(1.0, LLAMACPP_READY_S - (time.monotonic() - started))
+        preset_path = _router_ready(base, request_model, left, rt.stop)
+        if Path(preset_path).name != pin.gguf_file:
+            raise LoadError(f"{who}: the router's {request_model!r} is {preset_path!r}, "
+                            f"pinned {pin.gguf_file!r}")  # fmt: skip
+        props = _http_json(f"{base}/props?model={request_model}")
+    else:
+        props = _http_json(f"{base}/props")
     served = Path(str(props.get("model_path") or "")).name
     if served != pin.gguf_file:
         raise LoadError(f"{who}: the sidecar serves {served!r}, pinned {pin.gguf_file!r}")
@@ -655,6 +731,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
         "temperature": pin.temperature,
         "llamacpp_build": build,
         "slots": props.get("total_slots"),
+        "router": router,
         "request_timeout_s": request_timeout,
         "image": pin.code,
     }

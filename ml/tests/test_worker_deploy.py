@@ -16,7 +16,7 @@ DEPLOY = Path(__file__).resolve().parents[1] / "deploy" / "home-server"
 
 @pytest.mark.parametrize("name, model", [("home-kev", "kev"), ("home-pplx", "pplx")])
 def test_the_compose_examples_parse_and_wait_for_their_windows(tmp_path, name, model):
-    # Production since 2026-11-27: both on the card through their llama.cpp sidecars.
+    # Production since 2026-11-27: both on the card through the stack's llama.cpp router.
     data = tomllib.loads((DEPLOY / f"{name}.toml").read_text())
     data["worker"].pop("token_file")
     data["worker"]["token"] = "example"
@@ -26,7 +26,7 @@ def test_the_compose_examples_parse_and_wait_for_their_windows(tmp_path, name, m
     assert cfg.schedule.outside_window == "wait"
     assert cfg.expect_versions == {model: production_pin(model).model_version}
     assert (cfg.backend, cfg.device) == ("llamacpp", "gpu")
-    assert cfg.llamacpp_url == f"http://{model}-llamacpp:8080"
+    assert cfg.llamacpp_url == "http://llamacpp:8080"
 
 
 @pytest.mark.parametrize("name, model", [("torch-kev", "kev"), ("torch-pplx", "pplx")])

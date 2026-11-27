@@ -814,12 +814,14 @@ prepared statement goes generic (the sixth run on a connection).
 The home server runs the two workers as one compose stack
 (`ml/deploy/home-server/`, `docs/ai/worker.md`): each waits for its window
 (Kev 01:00–05:00, pplx 05:05–07:00 Africa/Cairo), with a broker-only proxy as
-its sole egress. Since 2026-11-27 both judges are llama.cpp sidecars on the
-server's 4 GB AMD card (Kev Q4_K_M, pplx Q4_K_S; `policy.MODELS`, the torch
-versions kept as `TORCH_MODELS`), taking turns: host systemd timers start and
-stop each sidecar around its window (`sidecar-window.sh`). The card must be
-held to clock states 0–2 (udev rule `99-amdgpu-clock-limit.rules`): at higher
-states its SATA-adapter power feed hard-resets the whole server. CI builds, smoke-tests and
+its sole egress. Since 2026-11-27 both judges run on the server's 4 GB AMD
+card through one llama.cpp router in the stack (Kev Q4_K_M, pplx Q4_K_S;
+`policy.MODELS`, the torch versions kept as `TORCH_MODELS`), one model at a
+time: each worker loads its own when its window opens. The stack is
+containers only (owner's rule: no host timers or scripts); the host's one
+setting is the udev rule `99-amdgpu-clock-limit.rules`, which holds the card to
+clock states 0–2: at higher states its SATA-adapter power feed hard-resets the
+whole server, and the router refuses to start without it. CI builds, smoke-tests and
 publishes their images to GHCR and tags `latest` only after the checks pass;
 GPU images are local builds. A backlog scored on the GPU enters production
 through `./makhzan ai import`, which refuses any line from a judge other than

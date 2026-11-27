@@ -484,10 +484,20 @@ below).*
   - The torch versions stay as `policy.TORCH_MODELS` and `pins.PINS`, the rollback.
   - The llama.cpp image digest is part of each version, so any machine serving them, the desktop
     included, runs that one image.
-- **The card:** the 4 GB card holds one model, so the host's timers start and stop each sidecar
-  around its worker's window. Kev's is up 00:55–05:03 and pplx's 05:03:30–07:03, Africa/Cairo
-  (`ml/deploy/home-server/install-sidecar-timers.sh`). This was option (b) of three; the others
-  were pplx on the CPU, and llama.cpp's router mode, which has an open concurrency bug.
+- **The card:** the 4 GB card holds one model, so the two judges take turns on it (option (b) of
+  three; the others were pplx on the CPU, and llama.cpp's router mode, then set aside for an open
+  concurrency bug).
+  - **Amended 2026-11-27 (owner): containers only, so llama.cpp's router.** The first build
+    started and stopped each sidecar with host systemd timers. The owner's rule for the home
+    server is a compose-only stack (no host timers or scripts), so one llama.cpp router (compose
+    service `llamacpp`) now serves both models, one at a time (`--models-max 1`). Each worker loads
+    its own when its window opens, and an idle model sleeps after 10 minutes.
+  - **The concurrency bug does not apply here:** the windows never overlap, so the router never
+    serves both at once.
+  - **Tested on the desktop:** Kev within 0.016, pplx bit-identical, swaps in 6–9 s
+    (`docs/ai/worker.md`, "The llama.cpp router").
+  - **The host keeps one setting:** the udev clock-limit rule (kernel settings only the host can
+    make). The router refuses to start without it.
 - **The clock limit:** the card is held to clock states 0–2 by a udev rule
   (`99-amdgpu-clock-limit.rules`). At higher states its power feed, a SATA adapter on the
   original 320 W supply, resets the server on a job's first load step (captured live; state 3
