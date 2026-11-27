@@ -676,6 +676,11 @@ class Worker:
             t0 = self.clock.monotonic()
             try:
                 p, extra = judge.score(payload)
+            except judges.ScoreInterrupted:
+                # A stop between the retries of an over-long request: as for a stop between
+                # orders, the finished ones are posted and the job goes back with the lease.
+                self._submit(lease_id, job_id, scores, final=False)
+                return False
             except Exception as e:  # noqa: BLE001 - recorded on the job, never swallowed
                 self._submit(lease_id, job_id, scores, final=False)
                 self._release(lease_id, [job_id], "error", f"{type(e).__name__}: {str(e)[:400]}")

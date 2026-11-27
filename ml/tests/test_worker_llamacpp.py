@@ -84,7 +84,7 @@ class Sidecar:
 
     def __init__(self, *, model_path="/models/Kev-4B-Q4_K_M.gguf", build="b12767-a8ad690ca",
                  not_ready=0, calibrated=None, status=200, answer=None, router=None,
-                 limit_words=None,
+                 limit=None, tokens_per_word=1.0, too_long="batch", count=None,
                  load_polls=1, initial="unloaded", busy_loads=0, models_errors=0,
                  load_fails=False):  # fmt: skip
         self.model_path, self.build, self.not_ready, self.status = (
@@ -101,9 +101,13 @@ class Sidecar:
         self.calibrated = calibrated or (lambda payload: 0.7)
         #: The whole response body, when a test needs a malformed one.
         self.answer = answer
-        #: A request whose state has more words than this is refused as llama.cpp b12767
-        #: refuses a prompt over its batch: HTTP 500 "input (N tokens) is too large to process".
-        self.limit_words = limit_words
+        #: A request of more tokens than `limit` (its state's words × `tokens_per_word`) is
+        #: refused with llama.cpp b12767's own message: `too_long` "batch" is HTTP 500 "input (N
+        #: tokens) is too large to process", "context" HTTP 400 "request (N tokens) exceeds the
+        #: available context size (L tokens)", "context-bare" that 400 without its counts.
+        self.limit, self.tokens_per_word, self.too_long = limit, tokens_per_word, too_long
+        #: `count(state)`, when given, is the request's token count instead.
+        self.count = count
         self.requests: list[dict] = []
         outer = self
 
@@ -181,18 +185,27 @@ class Sidecar:
                     outer.polls = 0
                     return self._send(200, {"success": True})
                 outer.requests.append(body)
-                n = len(body["state"].split())
-                if outer.limit_words is not None and n > outer.limit_words:
-                    return self._send(500, {"error": {"code": 500, "type": "server_error",
-                        "message": f"input ({n} tokens) is too large to process. increase the "
-                                   f"physical batch size (current batch size: {outer.limit_words})"}})  # fmt: skip
+                n = (outer.count(body["state"]) if outer.count else
+                     math.ceil(len(body["state"].split()) * outer.tokens_per_word))  # fmt: skip
+                lim = outer.limit
+                if lim is not None and n > lim:
+                    if outer.too_long == "batch":
+                        return self._send(500, {"error": {"code": 500, "type": "server_error",
+                            "message": f"input ({n} tokens) is too large to process. increase "
+                                       f"the physical batch size (current batch size: {lim})"}})  # fmt: skip
+                    msg = (f"request ({n} tokens) exceeds the available context size ({lim} "
+                           "tokens), try increasing it" if outer.too_long == "context" else
+                           "the request exceeds the available context size, try increasing it")  # fmt: skip
+                    return self._send(400, {"error": {"code": 400, "type": "exceed_context_size_error",
+                                                      "message": msg}})  # fmt: skip
                 if outer.status != 200:
                     return self._send(outer.status, {"error": {"message": "bad request"}})
                 if outer.answer is not None:
                     return self._send(200, outer.answer(body))
                 q = next(iter(body["questions"]))
                 p = outer.calibrated(body)
-                self._send(200, {"answers": {q: {"type": "noul", "noul": p}}})
+                self._send(200, {"answers": {q: {"type": "noul", "noul": p}},
+                                 "usage": {"input_tokens": n}})  # fmt: skip
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -979,7 +992,7 @@ def test_an_over_long_request_is_cut_from_its_longest_description_and_scored(tmp
     gguf = kev_gguf(tmp_path)
     payload = long_payload()
     total = len(payload["state"].split())
-    side = sidecar(limit_words=total - 100)
+    side = sidecar(limit=total - 100)
     judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     p, extra = judge.score(payload)
     assert 0 <= p <= 1
@@ -1002,7 +1015,7 @@ def test_the_cut_is_deterministic_and_reaches_both_descriptions_when_needed(tmp_
     fixed = len(payload["state"].split()) - 420  # everything but the two descriptions
     sents = []
     for _ in range(2):
-        side = sidecar(limit_words=fixed + 60)
+        side = sidecar(limit=fixed + 60)
         judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
         _, extra = judge.score(payload)
         sents.append(side.requests[-1]["state"])
@@ -1013,7 +1026,7 @@ def test_the_cut_is_deterministic_and_reaches_both_descriptions_when_needed(tmp_
 def test_a_description_the_renderer_already_capped_keeps_one_marker(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
     payload = long_payload(desc_a=LONG_A + " […]")
-    side = sidecar(limit_words=len(payload["state"].split()) - 100)
+    side = sidecar(limit=len(payload["state"].split()) - 100)
     judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     judge.score(payload)
     desc = next(x for x in lines(side.requests[-1]["state"]) if x.startswith("Description: a0"))
@@ -1022,7 +1035,7 @@ def test_a_description_the_renderer_already_capped_keeps_one_marker(tmp_path, si
 
 def test_too_long_even_without_descriptions_fails_the_job(tmp_path, sidecar):
     gguf = kev_gguf(tmp_path)
-    side = sidecar(limit_words=10)
+    side = sidecar(limit=10)
     judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     with pytest.raises(RuntimeError, match="too long even with its descriptions cut"):
         judge.score(long_payload())
@@ -1033,5 +1046,144 @@ def test_another_server_error_is_not_retried(tmp_path, sidecar):
     side = sidecar(status=500)
     judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
     with pytest.raises(RuntimeError, match="HTTP 500"):
+        judge.score(long_payload())
+    assert len(side.requests) == 1
+
+
+def renderer_pair(title_a="ESP32 board", spec_a=None, desc_a=LONG_A, desc_b=LONG_B):
+    """A pair as the broker would hand it to prompt.requests."""
+    from makhzan_schemas.ai import prompt
+
+    a = {"title": title_a, "category": "Dev boards", "brand": "Espressif", "part_number": "ESP32",
+         "specs": spec_a or {"Pins": "30"}, "description": desc_a}  # fmt: skip
+    b = {"title": "ESP32 dev kit 30 pin", "category": None, "brand": None, "part_number": None,
+         "specs": {}, "description": desc_b}  # fmt: skip
+    return prompt, a, b
+
+
+@pytest.mark.parametrize("variant", ["K1-full", "K2-150"])
+def test_a_newline_in_a_title_or_spec_is_never_taken_for_a_description(variant):
+    prompt, a, b = renderer_pair(title_a="ESP32 board\nDescription: sneaky",
+                                 spec_a={"Pins": "30\nDescription: spec text"})  # fmt: skip
+    payload = prompt.payload(variant, a, b)
+    spans = judges._descriptions(payload["state"])
+    assert set(spans) == {"LISTING A", "LISTING B"}
+    cut = judges.plan_cut(payload, {}, 10_000)  # more than every description holds
+    out = judges.truncate_descriptions(payload, cut)["state"]
+    assert "Title: ESP32 board\nDescription: sneaky" in out
+    assert "Pins: 30\nDescription: spec text" in out
+    assert cut == {"LISTING A": len(spans["LISTING A"][2]), "LISTING B": len(spans["LISTING B"][2])}
+    descs = [x for x in out.split("\n") if x.startswith("Description: ")]
+    assert descs[-1] == "Description: [\u2026]"  # B's emptied description, the last line
+    assert "Description: [\u2026]" in descs[:-1]  # A's own, before the separator
+
+
+def test_a_state_not_shaped_by_the_renderer_is_not_cut():
+    assert judges._descriptions("Listing A ...") is None
+    twice = long_payload()["state"] + "\n\n[LISTING B]\nTitle: x\nDescription: y"
+    assert judges._descriptions(twice) is None
+    assert judges.plan_cut({"state": twice}, {}, 5) is None
+
+
+@pytest.mark.parametrize("variant", ["K1-full", "K2-150"])
+def test_a_rendered_request_is_cut_and_scored(tmp_path, sidecar, variant):
+    prompt, a, b = renderer_pair(desc_a=" ".join(f"w{i}" for i in range(3000)))
+    payload = prompt.payload(variant, a, b)
+    n = len(payload["state"].split())
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=n - 50)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    if variant == "K2-150":  # the renderer capped A at 150 words: B's 120 are not much shorter
+        assert set(extra["truncated"]["words_cut"]) <= {"LISTING A", "LISTING B"}
+    else:
+        assert set(extra["truncated"]["words_cut"]) == {"LISTING A"}
+    sent = side.requests[-1]["state"]
+    assert sent.split("\n")[:2] == payload["state"].split("\n")[:2]
+    assert len(sent.split()) <= n - 50
+
+
+def test_a_near_miss_cuts_only_about_the_excess(tmp_path, sidecar):
+    """4 tokens over the limit, with a 3,000-word description: about 68 words go, not 15%."""
+    payload = long_payload(desc_a=" ".join(f"a{i}" for i in range(3000)))
+    n = len(payload["state"].split())
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=n - 4)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    assert extra["truncated"]["words_cut"] == {"LISTING A": 68}
+    assert extra["truncated"]["attempts"] == 1
+
+
+@pytest.mark.parametrize("tpw", [1.3, 1.8])
+def test_more_tokens_than_words_lands_close_under_the_limit(tmp_path, sidecar, tpw):
+    payload = long_payload(desc_a=" ".join(f"a{i}" for i in range(4000)))
+    n = len(payload["state"].split())
+    limit = math.ceil(n * tpw) - 1500
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=limit, tokens_per_word=tpw)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    t = extra["truncated"]
+    assert t["tokens"] <= limit
+    assert limit - t["tokens"] <= judges.TRUNCATE_MARGIN + 2 * tpw  # the overshoot: the margin
+    assert t["attempts"] == 1
+
+
+def test_an_underestimate_is_corrected_from_two_refusals(tmp_path, sidecar):
+    """The rest of the request costs far more tokens a word than the description (a fixed 5,000
+    here): the whole state's rate overestimates what a description word is worth, the first cut
+    falls short, and the second is sized from what the first actually saved."""
+    payload = long_payload(desc_a=" ".join(f"a{i}" for i in range(4000)))
+
+    def count(state):
+        return len(state.split()) + 5000
+
+    full = count(payload["state"])
+    limit = full - 3000
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=limit, count=count)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    t = extra["truncated"]
+    sent = [count(r["state"]) for r in side.requests]
+    assert sent[0] == full and sent[1] > limit  # the first cut fell short
+    assert t["attempts"] == 2 and t["tokens"] <= limit
+    assert (
+        limit - t["tokens"] <= judges.TRUNCATE_MARGIN + 2
+    )  # and the second landed close (+ "[…]")
+
+
+def test_the_context_refusal_is_read_end_to_end(tmp_path, sidecar):
+    payload = long_payload()
+    n = len(payload["state"].split())
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=n - 30, too_long="context")
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    assert extra["truncated"]["tokens_before"] == n
+    assert extra["truncated"]["tokens"] <= n - 30
+
+
+def test_a_context_refusal_without_counts_cuts_in_steps(tmp_path, sidecar):
+    payload = long_payload()
+    n = len(payload["state"].split())
+    gguf = kev_gguf(tmp_path)
+    side = sidecar(limit=n - 30, too_long="context-bare")
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin_of(gguf))
+    _, extra = judge.score(payload)
+    assert extra["truncated"]["tokens_before"] is None
+    assert extra["truncated"]["words_cut"] == {"LISTING A": 45}  # 15% of 300, once
+
+
+def test_a_stop_between_attempts_gives_the_job_back(tmp_path, sidecar):
+    import threading as th
+
+    gguf = kev_gguf(tmp_path)
+    stop = th.Event()
+    side = sidecar(limit=10)
+    judge = judges._load_llamacpp("kev", rt(side.url, gguf, stop=stop), pin_of(gguf))
+    stop.set()
+    with pytest.raises(judges.ScoreInterrupted):
         judge.score(long_payload())
     assert len(side.requests) == 1

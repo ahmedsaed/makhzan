@@ -77,6 +77,10 @@ class LoadInterrupted(LoadError):
     """A stop came during an interruptible load (the llama.cpp backend's hash and wait)."""
 
 
+class ScoreInterrupted(RuntimeError):
+    """A stop came between the attempts of an over-long request: the job goes back unscored."""
+
+
 @dataclass
 class Judge:
     """A loaded model: `score(payload) -> (p, extra)`, one request per call."""
@@ -756,53 +760,70 @@ def too_long(code: int, detail: str) -> tuple[int | None, int | None] | None:
     return tokens, limit
 
 
-def _descriptions(state: str) -> list[tuple[int, str, list[str]]]:
-    """(line index, listing name, words) of every listing block's `Description:` line.
+#: How listing blocks begin and are separated (makhzan_schemas.ai.prompt.block and .listings):
+#: "[LISTING A]\n…\n\n[LISTING B]\n…", each block ending in its `Description:` line.
+_HEAD_A, _SEP_B, _DESC = "[LISTING A]\n", "\n\n[LISTING B]\n", "Description: "
 
-    Only lines inside a `[LISTING …]` block count, so the rules text is never touched. A
-    description the renderer already capped keeps its words; its trailing marker is dropped
-    here and put back by the truncation. "not stated" has no words to cut."""
-    out, listing = [], None
-    for i, line in enumerate(state.split("\n")):
-        if line.startswith("[LISTING ") and line.endswith("]"):
-            listing = line[1:-1]
-        elif line.startswith("[") and line.endswith("]"):
-            listing = None
-        elif listing and line.startswith("Description: "):
-            text = line[len("Description: ") :]
-            w = [] if text == "not stated" else text.split()
-            if w and w[-1] == TRUNCATION_MARK:
-                w = w[:-1]
-            out.append((i, listing, w))
+
+def _descriptions(state: str) -> dict[str, tuple[int, int, list[str]]] | None:
+    """{listing: (start, end, words)}: where each listing's description text sits in `state`.
+
+    Read from the renderer's structure, never by searching for "Description:": a title or a
+    spec value may hold a newline (only descriptions have their whitespace collapsed), and the
+    text after it is not a description. Each block's description is its fixed last line, which
+    holds no newline: listing B's is the state's last line, listing A's the line before the one
+    separator. None when the state is not in that shape (nothing is cut then). A description the
+    renderer already capped keeps its words, its trailing marker dropped here and put back by
+    the truncation; "not stated" has none."""
+    a, sep = state.find(_HEAD_A), state.find(_SEP_B)
+    if a < 0 or (a > 0 and state[a - 1] != "\n") or sep < a or state.count(_SEP_B) != 1:
+        return None
+    out = {}
+    for name, block_start, block_end in (("LISTING A", a, sep), ("LISTING B", sep, len(state))):
+        line_start = state.rfind("\n", block_start, block_end) + 1
+        if line_start <= block_start or not state.startswith(_DESC, line_start):
+            return None
+        text_start = line_start + len(_DESC)
+        text = state[text_start:block_end]
+        w = [] if text == "not stated" else text.split()
+        if w and w[-1] == TRUNCATION_MARK:
+            w = w[:-1]
+        out[name] = (text_start, block_end, w)
     return out
 
 
 def truncate_descriptions(payload: dict, cut: dict[str, int]) -> dict:
     """`payload` with `cut[listing]` words removed from the end of that listing's description,
-    the renderer's marker appended. Only the state's description lines change: titles, specs,
-    the rules and the question are untouched. Deterministic."""
-    lines = payload["state"].split("\n")
-    for i, name, w in _descriptions(payload["state"]):
+    the renderer's marker appended. Only the two description lines change: titles, specs, the
+    rules and the question are untouched. Deterministic."""
+    state = payload["state"]
+    spans = _descriptions(state) or {}
+    # Listing B first: it comes later in the state, so A's offsets still hold.
+    for name in ("LISTING B", "LISTING A"):
         n = cut.get(name, 0)
-        if n <= 0:
+        if n <= 0 or name not in spans:
             continue
-        keep = w[: max(0, len(w) - n)]
-        lines[i] = "Description: " + " ".join([*keep, TRUNCATION_MARK])
-    return {**payload, "state": "\n".join(lines)}
+        start, end, w = spans[name]
+        state = state[:start] + " ".join([*w[: max(0, len(w) - n)], TRUNCATION_MARK]) + state[end:]
+    return {**payload, "state": state}
 
 
-def plan_cut(
-    payload: dict, cut: dict[str, int], tokens: int | None, limit: int | None
-) -> dict[str, int] | None:
-    """The next, larger cut: words to remove, taken from the longest remaining description
-    first (down to the next longest, then from both). Roughly the excess in tokens plus a
-    margin (a word is at least one token), at least 15% of the longest remaining description.
-    None when no description words are left. Deterministic: ties go by listing name."""
-    remaining = {name: len(w) - cut.get(name, 0) for _, name, w in _descriptions(payload["state"])}
+#: Tokens over the limit that the first cut aims below (the estimate is per word, not exact).
+TRUNCATE_MARGIN = 64
+
+
+def plan_cut(payload: dict, cut: dict[str, int], need: int | None) -> dict[str, int] | None:
+    """The next, larger cut: `need` more words, taken from the longest remaining description
+    first (down to the next longest, then from both). `need` None (the server gave no counts):
+    15% of the longest remaining description. None when there is nothing left to cut.
+    Deterministic: ties go by listing name."""
+    spans = _descriptions(payload["state"])
+    if not spans:
+        return None
+    remaining = {name: len(w) - cut.get(name, 0) for name, (_, _, w) in spans.items()}
     if sum(max(0, r) for r in remaining.values()) <= 0:
         return None
-    need = (tokens - limit + 64) if tokens and limit and tokens > limit else 0
-    need = max(need, math.ceil(0.15 * max(remaining.values())), 1)
+    need = max(need or math.ceil(0.15 * max(remaining.values())), 1)
     new = dict(cut)
     while need > 0 and any(r > 0 for r in remaining.values()):
         order = sorted(remaining.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -813,6 +834,25 @@ def plan_cut(
         remaining[name] -= take
         need -= take
     return new
+
+
+def words_to_cut(
+    tokens: int | None, limit: int | None, words: int, history: list[tuple[int, int]]
+) -> int | None:
+    """How many more words to cut, from the server's counts. `words`: the whitespace words of
+    the state just refused; `history`: (tokens, words cut so far) of every refusal, this one
+    last.
+
+    The rate is tokens per word: from the last two refusals' Δtokens / Δwords when there are
+    two, else the whole state's tokens / words. None when the server gave no counts."""
+    if not tokens or not limit or tokens <= limit:
+        return None
+    rate = tokens / max(words, 1)
+    if len(history) >= 2:
+        (t0, c0), (t1, c1) = history[-2], history[-1]
+        if t0 > t1 and c1 > c0:
+            rate = (t0 - t1) / (c1 - c0)
+    return math.ceil((tokens - limit + TRUNCATE_MARGIN) / rate)
 
 
 def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
@@ -870,7 +910,10 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
         q = question_key(payload)
         original = nfc(payload)
         sent, cut, extra, first_tokens = original, {}, {}, None
+        history: list[tuple[int, int]] = []  # (tokens, words cut) of each refusal
         for attempt in range(TRUNCATE_ATTEMPTS + 1):
+            if attempt and _stopped(rt.stop):
+                raise ScoreInterrupted("stopped while shortening an over-long request")
             try:
                 body = _http_json(f"{base}/v1/systemone", {"model": request_model, **sent},
                                   timeout=request_timeout)  # fmt: skip
@@ -884,9 +927,10 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
                 # end, longest description first (owner, 2026-11-27), and send again.
                 tokens, limit = long
                 first_tokens = first_tokens or tokens
-                nxt = (
-                    plan_cut(original, cut, tokens, limit) if attempt < TRUNCATE_ATTEMPTS else None
-                )
+                if tokens:
+                    history.append((tokens, sum(cut.values())))
+                need = words_to_cut(tokens, limit, len(sent["state"].split()), history)
+                nxt = plan_cut(original, cut, need) if attempt < TRUNCATE_ATTEMPTS else None
                 if nxt is None:
                     raise RuntimeError(
                         f"llama.cpp: the request is too long even with its descriptions cut "

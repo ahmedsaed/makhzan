@@ -993,10 +993,18 @@ renderer is untouched, so request hashes and prompt versions do not change.
 - **Detected** from llama.cpp b12767's refusal (`judges.too_long`):
   - HTTP 500 "input (N tokens) is too large to process. increase the physical batch size
     (current batch size: 4096)";
-  - HTTP 400 "… exceeds the available context size …".
+  - HTTP 400 "request (N tokens) exceeds the available context size (L tokens) …", read with
+    or without its counts.
   - Any other error fails the job as before.
-- **What is cut:** only the text of the `Description:` lines inside the `[LISTING …]` blocks,
-  words from the end, the longest description first.
+- **What is cut:** only each listing's own description, words from the end, the longest
+  description first.
+  - It is found from the renderer's structure (`makhzan_schemas.ai.prompt.block`), not by
+    searching for "Description:". A title or spec value may hold a newline, since only
+    descriptions have their whitespace collapsed, so a free search would cut title text. Each
+    block's description is its fixed last line: listing B's is the state's last line, listing
+    A's the line before the one `[LISTING B]` separator.
+  - A state not in that shape (no single separator, or a block not ending in `Description:`) is
+    not cut, and the job fails as before.
   - The descriptions are levelled down: the longest is cut to the next one's length, then both
     alike.
   - Each cut description ends in the renderer's marker `[…]` (one marker, even where the renderer
@@ -1004,12 +1012,16 @@ renderer is untouched, so request hashes and prompt versions do not change.
   - Titles, category, brand, part number, pack size, specifications, the rules and the question
     are never touched.
   - Text is NFC first, as always.
-- **How much:** the refusal states the token count, so the first cut is the excess plus a
-  64-token margin, counted in words (at least 15% of the longest description). Words run
-  slightly over one token each, so it overshoots a little. The real check below needed one
-  retry.
+- **How much** (`judges.words_to_cut`): the excess plus a 64-token margin, turned into words.
+  - The first cut uses the refused state's own tokens per word.
+  - A later cut uses what the last cut actually saved: Δtokens / Δwords between the last two
+    refusals.
+  - Only a refusal without counts (a bare HTTP 400) cuts by a fixed step, 15% of the longest
+    description.
   - It retries up to 8 times. If even empty descriptions do not fit, the job fails: "too long
     even with its descriptions cut".
+  - A stop between retries gives the job back unscored (`judges.ScoreInterrupted`), as a stop
+    between orders does.
 - **Deterministic:** the cut depends only on the request and the server's answers, so the same
   request on the same server is cut the same way.
 - **Recorded** in the score's `extra`:
@@ -1023,10 +1035,11 @@ renderer is untouched, so request hashes and prompt versions do not change.
   - Setup: pplx Q4_K_S with the real pins, on the pinned llama.cpp image (b12767),
     `-c 4096 -b 4096 -ub 4096 -fa on`. It ran on the desktop's **CPU** (`-ngl 0 -t 8`), because the
     3060 was busy with another experiment.
-  - The request: the first K1-full request, with listing A's description extended to 7,105 words
-    of state.
-  - Result: llama.cpp refused it at 8,613 tokens; one cut of 4,581 words from A's description
-    brought it to 3,300 tokens, and it scored (35 s).
+  - The request: the first K1-full request, listing A's description replaced by filler text.
+  - 6,000 words: refused at 8,026 tokens. The first cut fell short: the rules cost more tokens
+    a word than the filler. The second, sized from what the first saved, landed at 4,030 tokens
+    (3,445 words cut, 2 retries).
+  - 3,000 words: refused at 4,546 tokens; one cut of 408 words landed at 4,074.
   - Not checked: the card's own behaviour, which is the same server code.
 
 ## Parity with the validated scores
