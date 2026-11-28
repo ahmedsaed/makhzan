@@ -40,6 +40,9 @@ OUTSIDE_WINDOW = ("exit", "wait")
 #: load the broker.
 MIN_HEARTBEAT_S = 5.0
 MIN_POLL_S = 5.0
+#: The home server's AMD card: compute held to clock states 0-2 runs at up to 950 mV; another
+#: app on its video engine lifts it to 1,150 mV (2026-11-28).
+DEFAULT_MAX_VDDGFX_MV = 1000
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 #: A compose service name: one DNS label, no dots, so it can only name a container on the
@@ -183,6 +186,11 @@ class Config:
     #: card's power_dpm_force_performance_level reads "manual"). On by default there; off for a
     #: machine whose GPU is not the limited card (the desktop's NVIDIA card).
     require_clock_limit: bool = False
+    #: llamacpp: score only while the AMD card's core voltage (amdgpu hwmon in0_input) is at most
+    #: this many mV; above it another app is using the card's video engine, which raises the
+    #: voltage past the clock limit (docs/ai/worker.md, "The card's voltage"). 0 is off. On by
+    #: default (1000) wherever require_clock_limit is.
+    max_vddgfx_mv: int = 0
     source: Path | None = None
 
     @property
@@ -227,6 +235,7 @@ _SCHEMA: dict[str, set[str]] = {
         "llamacpp_url",
         "gguf_path",
         "require_clock_limit",
+        "max_vddgfx_mv",
     },
     "schedule": {"windows", "timezone", "on_empty", "poll_s", "outside_window", "no_new_lease_s"},
     "leases": {"max_jobs", "lease_s", "heartbeat_s", "retry_max_s"},
@@ -481,11 +490,18 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         )
     llamacpp_url = gguf_path = None
     require_clock_limit = False
+    max_vddgfx_mv = 0
     if backend == "llamacpp":
         require_clock_limit = _typed(
             "compute", "require_clock_limit", compute.get("require_clock_limit", device == "gpu"),
             bool,
         )  # fmt: skip
+        max_vddgfx_mv = _typed(
+            "compute", "max_vddgfx_mv",
+            compute.get("max_vddgfx_mv", DEFAULT_MAX_VDDGFX_MV if require_clock_limit else 0), int,
+        )  # fmt: skip
+        if not 0 <= max_vddgfx_mv <= 2000:
+            raise ConfigError(f"[compute] max_vddgfx_mv {max_vddgfx_mv}: 0 (off) to 2000 mV")
         if "llamacpp_url" not in compute or "gguf_path" not in compute:
             raise ConfigError(
                 '[compute] backend = "llamacpp" needs llamacpp_url (the sidecar) and gguf_path '
@@ -497,7 +513,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             if key in compute:
                 raise ConfigError(f'[compute] {key} is not read with backend = "llamacpp"')
     else:
-        for key in ("llamacpp_url", "gguf_path", "require_clock_limit"):
+        for key in ("llamacpp_url", "gguf_path", "require_clock_limit", "max_vddgfx_mv"):
             if key in compute:
                 raise ConfigError(f'[compute] {key} is only read with backend = "llamacpp"')
     threads = compute.get("threads")
@@ -602,6 +618,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         llamacpp_url=llamacpp_url,
         gguf_path=gguf_path,
         require_clock_limit=require_clock_limit,
+        max_vddgfx_mv=max_vddgfx_mv,
         source=source,
     )
 

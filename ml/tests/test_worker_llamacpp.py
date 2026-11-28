@@ -920,6 +920,12 @@ def _sysfs(tmp_path, modes):
         d = root / "class" / "drm" / card / "device"
         d.mkdir(parents=True)
         (d / "power_dpm_force_performance_level").write_text(mode + "\n")
+        # The core voltage the session checks before each lease and request (max_vddgfx_mv,
+        # on by default with the clock limit): compute at clock state 2.
+        hw = d / "hwmon" / "hwmon0"
+        hw.mkdir(parents=True)
+        (hw / "name").write_text("amdgpu\n")
+        (hw / "in0_input").write_text("950\n")
     root.mkdir(exist_ok=True)
     return root
 

@@ -18,7 +18,7 @@
 #   docker compose logs -f h2o                        # watch a worker
 #
 # Each worker stays up and waits for its own window (outside_window = "wait" in its TOML):
-# H2O 01:00-05:00, pplx 05:05-07:00, Africa/Cairo. Each window's session runs in a child
+# H2O 06:00-10:00, pplx 10:05-12:00, Africa/Cairo. Each window's session runs in a child
 # process that exits at the window's end. The windows never overlap. Never point anything else at
 # the router during a window (a parity run, a request for the other model): it evicts the window's
 # model and the two swap back and forth, each swap re-reading ~3 GB from disk (README.md).

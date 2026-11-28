@@ -737,6 +737,30 @@ def check_clock_limit(root: Path | None = None) -> None:
             )
 
 
+class SensorUnavailable(RuntimeError):
+    """The card's core voltage cannot be read, so whether it is safe to score is unknown."""
+
+
+def read_vddgfx_mv(root: Path | None = None) -> int:
+    """The AMD card's core voltage now, in mV (the highest, with several amdgpu cards): the
+    hwmon `in0_input` whose `name` is amdgpu. The clock-limit rule holds compute to 950 mV, but
+    another app using the card's video engine (Jellyfin, Plex, Pitlane) raises it to the top
+    state's 1,150 mV whatever the limit, and full compute load there tripped the card's power
+    feed and reset the server (2026-11-28). Raises SensorUnavailable when nothing can be read."""
+    root = SYSFS if root is None else root
+    readings = []
+    for hw in sorted(root.glob("class/drm/card*/device/hwmon/hwmon*")):
+        try:
+            if (hw / "name").read_text().strip() != "amdgpu":
+                continue
+            readings.append(int((hw / "in0_input").read_text().strip()))
+        except (OSError, ValueError) as e:
+            raise SensorUnavailable(f"cannot read the card's voltage in {hw}: {e}") from None
+    if not readings:
+        raise SensorUnavailable(f"no amdgpu hwmon with in0_input under {root}/class/drm")
+    return max(readings)
+
+
 # --- over-long requests (owner, 2026-11-27) -------------------------------------------------------
 #: llama.cpp b12767's answers to a prompt larger than it can take: larger than the physical batch
 #: (HTTP 500; a non-causal model such as pplx needs the whole prompt in one ubatch), or larger

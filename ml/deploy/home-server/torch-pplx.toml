@@ -2,7 +2,7 @@
 # 2026-11-27. The broker refuses it (version) unless the policy is moved back to the torch
 # versions (policy.TORCH_MODELS, pins.ACTIVE_BACKEND; docs/ai/decision-review.md). To use it,
 # mount it as the pplx service's worker.toml.
-# home-pplx: pplx on the home server's CPU, 05:05-07:00 Cairo time, 5 minutes after Kev's window,
+# home-pplx: pplx on the home server's CPU, 10:05-12:00 Cairo time, 5 minutes after Kev's window,
 # waiting between windows. The broker is reached through the compose stack's broker proxy.
 [worker]
 name = "home-pplx"
@@ -26,8 +26,8 @@ weights_cache = "/models"
 [schedule]
 # One model at a time on this machine: at least 5 minutes after home-kev's window ends, since
 # Kev's graceful stop (a request in flight, or a model load, then its last posts) can run
-# about 4 minutes past 05:00.
-windows = ["05:05-07:00"]
+# about 4 minutes past 10:00.
+windows = ["10:05-12:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
 # An empty queue ends this window's session and frees the model until the next window;
