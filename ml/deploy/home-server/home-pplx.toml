@@ -1,5 +1,5 @@
 # home-pplx: pplx-decider-flash-v1.3 Q4_K_S on the home server's AMD card through llama.cpp,
-# 05:05-07:00 Cairo time, waiting between windows. Production since 2026-11-27
+# 10:05-12:00 Cairo time, waiting between windows. Production since 2026-11-27
 # (docs/ai/decision-review.md, "Production switch"). Its judge is the "pplx" model of the
 # stack's llama.cpp router (compose.yml, service "llamacpp"), which this worker loads on its
 # window's first lease with jobs: the 4 GB card holds one model, and the router swaps Kev's out.
@@ -27,11 +27,14 @@ llamacpp_url = "http://llamacpp:8080"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
 # Refuse to load unless the card's clock limit is applied (re-read at every load).
 require_clock_limit = true
+# No lease and no request while the card's voltage is above this (another app on its video
+# engine lifts it past the clock limit; docs/ai/worker.md, "The card's voltage"). The default.
+max_vddgfx_mv = 1000
 nice = 10
 
 [schedule]
 # After Kev's window: the card holds one model, and the router swaps pplx in when this one asks.
-windows = ["05:05-07:00"]
+windows = ["10:05-12:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
 on_empty = "exit"

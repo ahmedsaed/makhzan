@@ -819,7 +819,7 @@ prepared statement goes generic (the sixth run on a connection).
 
 The home server runs the two workers as one compose stack
 (`ml/deploy/home-server/`, `docs/ai/worker.md`): each waits for its window
-(first judge 01:00–05:00, pplx 05:05–07:00 Africa/Cairo), with a broker-only proxy
+(first judge 06:00–10:00, pplx 10:05–12:00 Africa/Cairo), with a broker-only proxy
 as its sole egress. Since 2026-11-27 both judges run on the server's 4 GB AMD
 card through one llama.cpp router in the stack (H2O-Lightning Q4_K_M since D25,
 Kev Q4_K_M before it; pplx Q4_K_S; `policy.MODELS`, Kev's llama.cpp version kept
@@ -828,7 +828,12 @@ time: each worker loads its own on its window's first lease. The stack is
 containers only (owner's rule: no host timers or scripts); the host's one
 setting is the udev rule `99-amdgpu-clock-limit.rules`, which holds the card to
 clock states 0–2: at higher states its SATA-adapter power feed hard-resets the
-whole server, and the router refuses to start without it. CI builds, smoke-tests and
+whole server, and the router refuses to start without it. The limit cannot hold
+the card's video engine: another app on it (Jellyfin, Plex, Pitlane) lifts the
+voltage to 1,150 mV, which reset the server under pplx on 2026-11-28, so each
+worker leases and sends nothing while the card reads above `max_vddgfx_mv`
+(1,000 mV). That leaves the request in flight exposed; a proper supply is the
+fix. CI builds, smoke-tests and
 publishes their images to GHCR and tags `latest` only after the checks pass;
 GPU images are local builds. A backlog scored on the GPU enters production
 through `./makhzan ai import`, which refuses any line from a judge other than

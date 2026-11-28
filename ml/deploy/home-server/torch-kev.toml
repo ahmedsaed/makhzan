@@ -2,7 +2,7 @@
 # 2026-11-27. The broker refuses it (version) unless the policy is moved back to the torch
 # versions (policy.TORCH_MODELS, pins.ACTIVE_BACKEND; docs/ai/decision-review.md). To use it,
 # mount it as the kev service's worker.toml.
-# home-kev: Kev on the home server's CPU, 01:00-05:00 Cairo time, waiting between windows.
+# home-kev: Kev on the home server's CPU, 06:00-10:00 Cairo time, waiting between windows.
 # The broker is reached through the compose stack's broker proxy (compose.yml).
 [worker]
 name = "home-kev"
@@ -25,7 +25,7 @@ weights_cache = "/models"
 
 [schedule]
 # One model at a time on this machine: home-pplx starts 5 minutes after this window ends.
-windows = ["01:00-05:00"]
+windows = ["06:00-10:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
 # An empty queue ends this window's session and frees the model until the next window;

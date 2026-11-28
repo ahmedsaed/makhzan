@@ -1,8 +1,8 @@
 # home-h2o: H2O-Lightning-4B Q4_K_M, the match pipeline's first judge since D25 (owner,
 # 2026-11-27; docs/ai/decision-review.md), on the home server's AMD card through llama.cpp,
-# 01:00-05:00 Cairo time, waiting between windows. Its judge is the "h2o" model of the stack's
+# 06:00-10:00 Cairo time, waiting between windows. Its judge is the "h2o" model of the stack's
 # llama.cpp router (compose.yml, service "llamacpp"), which this worker loads on its window's first
-# lease with jobs: the 4 GB card holds one model, and pplx's worker swaps it out at 05:05.
+# lease with jobs: the 4 GB card holds one model, and pplx's worker swaps it out at 10:05.
 [worker]
 name = "home-h2o"
 broker_url = "http://broker-proxy:8100/ai/v1"
@@ -23,10 +23,13 @@ llamacpp_url = "http://llamacpp:8080"
 gguf_path = "/models/h2o-lightning-4b-Q4_K_M.gguf"
 # Refuse to load unless the card's clock limit is applied (re-read at every load).
 require_clock_limit = true
+# No lease and no request while the card's voltage is above this (another app on its video
+# engine lifts it past the clock limit; docs/ai/worker.md, "The card's voltage"). The default.
+max_vddgfx_mv = 1000
 nice = 10
 
 [schedule]
-windows = ["01:00-05:00"]
+windows = ["06:00-10:00"]
 timezone = "Africa/Cairo"
 outside_window = "wait"
 on_empty = "exit"

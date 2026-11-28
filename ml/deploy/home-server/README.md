@@ -9,14 +9,14 @@ kernel settings only the host can make. The reference is `docs/ai/worker.md`.
 
 | Service | What it is |
 |---|---|
-| `h2o` | `home-h2o`: H2O-Lightning-4B Q4_K_M, the first judge since D25 (2026-11-27; Kev before), window 01:00–05:00 (Africa/Cairo), judge: the router's `h2o` |
-| `pplx` | `home-pplx`: pplx-decider Q4_K_S, window 05:05–07:00 (Africa/Cairo), judge: the router's `pplx` |
+| `h2o` | `home-h2o`: H2O-Lightning-4B Q4_K_M, the first judge since D25 (2026-11-27; Kev before), window 06:00–10:00 (Africa/Cairo), judge: the router's `h2o` |
+| `pplx` | `home-pplx`: pplx-decider Q4_K_S, window 10:05–12:00 (Africa/Cairo), judge: the router's `pplx` |
 | `llamacpp` | llama.cpp's router on the AMD card: the judges' GGUFs (and Kev's, for the rollback), one loaded at a time, asleep when idle |
 | `broker-proxy` | our own TCP forwarder (`makhzan_ml.worker.proxy`), the workers' only way out |
 
 The 4 GB card holds one model. The router (`--models-max 1`) loads whichever a worker asks for,
 swapping the other out: H2O's worker loads `h2o` on its window's first lease with jobs (from
-01:00), pplx's loads `pplx` the same way (from 05:05). Idle for 10 minutes, the model sleeps and the card is free for Plex, Jellyfin and
+06:00), pplx's loads `pplx` the same way (from 10:05). Idle for 10 minutes, the model sleeps and the card is free for Plex, Jellyfin and
 Pitlane. Plain `docker compose up -d` starts all four services. The torch configurations
 production ran until 2026-11-27 are kept as `torch-kev.toml` and `torch-pplx.toml`, and Kev's
 llama.cpp worker, first judge until D25, is the rollback of D25 (below).
@@ -99,10 +99,24 @@ the router answers a load with HTTP 500 "model limit reached"; the worker retrie
 (`require_clock_limit = true` in `home-*.toml`) and refuses unless it reads `manual`: the router
 checks only at its own start and may run for weeks.
 
-**Concurrent use.** Plex, Jellyfin and Pitlane can use the card during a window: their video
-encode and decode run on separate engines, and a 1080p hardware transcode beside pplx at full
-load ran at real time with about 665 MB of the card's memory to spare (2026-11-27). pplx was about
-15% slower meanwhile.
+**Concurrent use, and the card's voltage.** Plex, Jellyfin and Pitlane can share the card's
+memory with a judge (a 1080p hardware transcode beside pplx left about 665 MB to spare,
+2026-11-27), but not its power: their video engine lifts the card's voltage to the top state's
+1,150 mV whatever the clock limit, and full compute load at that voltage resets the server (it did
+at 05:05 on 2026-11-28, Jellyfin's trickplay task beside pplx). So each worker reads the card's
+voltage (`max_vddgfx_mv`, 1,000 mV by default with `require_clock_limit`) before every lease and
+every request: above it, it gives back what it holds unscored and waits, reading every 5 s, until
+the card has read low for a minute on end (`vddgfx_clear_s`), so a gap between a trickplay job's
+items does not end the wait (`docs/ai/worker.md`, "The card's voltage").
+
+Its limits:
+- It leaves the request in flight exposed when another app starts on the card.
+- It reads the highest voltage of every amdgpu card on the host: on this server, the one card.
+  A host with an AMD APU beside the card would wait whenever the APU reads high too.
+- A failed read is retried twice; only when no amdgpu card can be read does the session end.
+
+Keep the media servers' scheduled jobs (Jellyfin's trickplay and Plex's maintenance) out of the
+windows. The real fix is a power supply that feeds the card properly.
 
 **No CPU fallback is set up.** The router runs only on the card (`-dev Vulkan0`, and its guard
 needs the clock limit). Scoring pplx on the CPU with the same GGUF (the same model version) would
@@ -156,9 +170,9 @@ the deploy. Nothing breaks in between; that night's first window is simply lost.
       urllib.request as u; print(u.urlopen('http://llamacpp:8080/models').read()[:400])"` lists
       `h2o`, `kev` and `pplx`.
 6. **Revoke the old worker**, in production: `./makhzan ai worker revoke home-kev`.
-7. **The first night:** `docker compose logs -f h2o` from 01:00 (the router loads `h2o`; requests
-   at about Kev's 4–5 s on this card), then pplx from 05:05; `./makhzan ai status` the next
-   morning (the queue at `match.h2o`, and the audit per model). Check the card's memory during
+7. **The first windows** (06:00–12:00, Cairo time): `docker compose logs -f h2o` from 06:00 (the router loads `h2o`; requests
+   at about Kev's 4–5 s on this card), then pplx from 10:05; `./makhzan ai status` after
+   noon (the queue at `match.h2o`, and the audit per model). Check the card's memory during
    H2O's window once (`cat /sys/class/drm/card1/device/mem_info_vram_used`): on the 3060 H2O Q4
    used about 3.8–3.9 GB.
 8. **The catch-up** is the owner's, as at the production switch: the re-scores of every standing
@@ -211,9 +225,9 @@ No host timers were installed.
    5. A dry check outside the windows: `docker compose logs llamacpp` shows the router listening
       (and no guard refusal); `docker compose exec -T kev python -c "import urllib.request as u;
       print(u.urlopen('http://llamacpp:8080/models').read()[:300])"` lists `kev` and `pplx`.
-3. **The first night:** `docker compose logs -f kev` from 01:00 (the router loads `kev`, requests
-   at about 4–5 s), and pplx from 05:05 (the swap, then requests); `./makhzan ai status` the next
-   morning. Check the card's memory during Kev's window once
+3. **The first windows** (Cairo time): `docker compose logs -f kev` from 06:00 (the router loads `kev`, requests
+   at about 4–5 s), and pplx from 10:05 (the swap, then requests); `./makhzan ai status` after
+   noon. Check the card's memory during Kev's window once
    (`cat /sys/class/drm/card1/device/mem_info_vram_used`): on the 3060 Kev grew to about 4.1 GB
    while scoring (NVIDIA's driver); on this card the soak at the same settings stayed inside 4 GB.
 
@@ -233,7 +247,7 @@ them), `docker compose stop llamacpp`, and `docker compose up -d kev pplx broker
   loads the model on the first lease with jobs, scores, and stops gracefully at the window's
   end (finishes the request in flight, submits, releases the rest, ends the session, unloads).
   The child then exits, so all of the model's memory goes back to the system. The log says
-  `sleeping until 01:00 (Africa/Cairo)`, `window open`, `window closed; model unloaded`.
+  `sleeping until 06:00 (Africa/Cairo)`, `window open`, `window closed; model unloaded`.
 - **An empty queue** (`on_empty = "exit"`) ends that window's session early and frees the
   model until the next window. Set `on_empty = "wait"` to keep polling every `poll_s` until
   the window's end instead, with the model held once loaded.

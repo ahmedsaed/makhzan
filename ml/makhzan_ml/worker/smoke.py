@@ -136,7 +136,9 @@ def config(model: str, url: str, backend: str = "torch") -> dict:
     if backend == "llamacpp":
         compute = {"backend": "llamacpp", "device": "gpu", "dtype": LLAMACPP_DTYPES[model][0],
                    "llamacpp_url": "http://127.0.0.1:9",
-                   "gguf_path": f"/models/{pin_for(model, 'llamacpp').gguf_file}", "nice": 0}  # fmt: skip
+                   "gguf_path": f"/models/{pin_for(model, 'llamacpp').gguf_file}", "nice": 0,
+                   # The runner has no AMD card to read; the guard has its own tests.
+                   "max_vddgfx_mv": 0}  # fmt: skip
     return {
         "worker": {"name": f"smoke-{model}", "broker_url": url, "token": TOKEN, "model": model},
         "compute": compute,

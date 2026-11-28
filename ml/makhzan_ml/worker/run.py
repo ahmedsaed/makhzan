@@ -85,6 +85,13 @@ EXIT_UNDELIVERED = 6  # the session ended, but some scores could not be delivere
 #: would otherwise turn the whole queue into failed attempts. One job failing again and
 #: again is that job's problem: the broker makes it dead at max_attempts (a poison job).
 MAX_CONSECUTIVE_ERRORS = 3
+#: max_vddgfx_mv: how often a worker waiting for the card's voltage reads it (often enough that a
+#: busy spell rarely falls between two readings), how long after a reading above the limit the
+#: second, confirming one is taken, and the retries of a failed read before it is fatal.
+CARD_SAMPLE_S = 5.0
+CARD_CONFIRM_S = 0.5
+CARD_READ_TRIES = 3
+CARD_RETRY_S = 1.0
 
 
 def canonical_json(request: object) -> str:
@@ -193,6 +200,8 @@ class Worker:
         self.stages: dict[str, str] = {}  # "pipeline/stage" -> prompt version, from hello
         self.failed_jobs: set[int] = set()  # distinct jobs failed since the last success
         self.scored = 0
+        self.card_wait_s = 0.0  # time spent waiting for the card's voltage (max_vddgfx_mv)
+        self._card_high_at: float | None = None  # monotonic time of the last reading above it
         self._hb_thread: threading.Thread | None = None
         self._hb_stop = threading.Event()
         self._window_timer: threading.Timer | None = None
@@ -301,6 +310,8 @@ class Worker:
                 code,
                 self.scored,
             )
+            if self.card_wait_s:
+                log.info("waited %.0f s in all for the card's voltage", self.card_wait_s)
         return code
 
     def _end_session(self) -> None:
@@ -473,6 +484,8 @@ class Worker:
         must stop ("stop"). A lease asks for up to `max_jobs`: no time is sent, and what the
         window's end interrupts goes back gracefully."""
         while self._may_continue():
+            if not self._wait_for_card():
+                return "stop"
             if self._too_late():
                 self.request_stop(
                     f"no new lease in the window's last {self.cfg.schedule.no_new_lease_s:.0f} s"
@@ -503,6 +516,93 @@ class Worker:
             self._check_prompts(key, jobs)
             self._process_lease(key, lease["lease_id"], jobs)
         return "stop"
+
+    # -- the card's voltage ----------------------------------------------------------------
+
+    def _read_card(self) -> int | None:
+        """The card's voltage, a failed read retried CARD_READ_TRIES times CARD_RETRY_S apart.
+        None when a stop came meanwhile. Still unreadable: the session ends (_Fatal), since
+        with the check on, scoring blind is what it exists to prevent."""
+        for attempt in range(CARD_READ_TRIES):
+            try:
+                return judges.read_vddgfx_mv()
+            except judges.SensorUnavailable as e:
+                if attempt + 1 == CARD_READ_TRIES:
+                    raise _Fatal(
+                        EXIT_CONFIG,
+                        f"max_vddgfx_mv = {self.cfg.max_vddgfx_mv} is set but the card's voltage "
+                        f"cannot be read ({e}); refusing to score on the card",
+                    ) from None
+                log.warning("reading the card's voltage failed (%s); trying again", e)
+                if self.clock.wait(CARD_RETRY_S, self.stop):
+                    return None
+        return None  # unreachable
+
+    def _card_busy(self) -> tuple[int | None, bool]:
+        """(the card's voltage in mV, whether the card counts as busy); (None, False) with the
+        check off. Busy: above max_vddgfx_mv now (confirmed by a second reading CARD_CONFIRM_S
+        later, so a voltage passing through on a state change does not count), or at any reading
+        in the last vddgfx_clear_s. The hold is what keeps a job of many short video runs (one
+        ffmpeg per item, the engine idle for a second between them) from looking finished in a
+        gap. A stop during the reading counts as busy: nothing new starts."""
+        limit = self.cfg.max_vddgfx_mv
+        if not limit:
+            return None, False
+        mv = self._read_card()
+        if mv is None:
+            return None, True
+        if mv > limit:
+            if self.clock.wait(CARD_CONFIRM_S, self.stop):
+                return mv, True
+            again = self._read_card()
+            if again is None:
+                return mv, True
+            mv = min(mv, again)
+        now = self.clock.monotonic()
+        if mv > limit:
+            self._card_high_at = now
+            return mv, True
+        held = self._card_high_at is not None and now - self._card_high_at < self.cfg.vddgfx_clear_s
+        return mv, held
+
+    def _wait_for_card(self) -> bool:
+        """Before a lease: while the card counts as busy (_card_busy), wait, holding no lease,
+        reading it every CARD_SAMPLE_S, until it has read at most max_vddgfx_mv for
+        vddgfx_clear_s on end. False when the session must stop (a stop, the window's end)."""
+        mv, busy = self._card_busy()
+        if not busy:
+            return True
+        limit = self.cfg.max_vddgfx_mv
+        log.warning(
+            "the card is at %s mV (above max_vddgfx_mv = %d now or in the last %.0f s: another "
+            "app is using its video engine): waiting, holding no lease",
+            mv,
+            limit,
+            self.cfg.vddgfx_clear_s,
+        )
+        t0 = self.clock.monotonic()
+        try:
+            while True:
+                wait = CARD_SAMPLE_S
+                left = self._seconds_to_window_end()
+                if left is not None:
+                    wait = min(wait, left)
+                if self.clock.wait(wait, self.stop) or not self._may_continue():
+                    log.info("stopped while waiting for the card (%s)", self.stop_reason)
+                    return False
+                mv, busy = self._card_busy()
+                if not busy:
+                    log.info(
+                        "the card has read at most %d mV for %.0f s (now %s mV), after %.0f s: "
+                        "scoring again",
+                        limit,
+                        self.cfg.vddgfx_clear_s,
+                        mv,
+                        self.clock.monotonic() - t0,
+                    )
+                    return True
+        finally:
+            self.card_wait_s += self.clock.monotonic() - t0
 
     # -- one lease -------------------------------------------------------------------------
 
@@ -663,6 +763,24 @@ class Worker:
             if not self._may_continue():
                 # The window ended or a stop came: drop the job here. Its finished orders
                 # are posted; the rest goes back with the lease, gracefully.
+                self._submit(lease_id, job_id, scores, final=False)
+                return False
+            try:
+                mv, busy = self._card_busy()
+            except _Fatal:
+                self._submit(lease_id, job_id, scores, final=False)
+                raise
+            if busy:
+                # Another app took the card's video engine mid-job (now, or within the hold):
+                # no request at that voltage. As for a stop between orders, the finished ones
+                # are posted and the job goes back with the lease, gracefully; the next lease
+                # waits for the card.
+                log.warning(
+                    "job %s: the card is at %s mV, busy (max_vddgfx_mv = %d): giving it back",
+                    job_id,
+                    mv,
+                    self.cfg.max_vddgfx_mv,
+                )
                 self._submit(lease_id, job_id, scores, final=False)
                 return False
             payload = req.get("payload")
