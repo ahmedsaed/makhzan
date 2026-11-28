@@ -106,11 +106,12 @@ def test_a_busy_card_is_waited_for_before_any_lease(broker, sleeps, sysfs):
     orig = worker.broker.lease
     worker.broker.lease = lambda body: (leased_at.append(clock.mono), orig(body))[1]
     assert worker.run() == run.EXIT_OK
-    # Nothing leased while the card was busy: the first lease came after the reading cleared.
-    assert leased_at and leased_at[0] >= 90
+    # Nothing leased while the card was busy, nor until it had read low for the hold (60 s)
+    # after its last high reading (at most one sample before the transcode ended at 90 s).
+    assert leased_at and leased_at[0] >= 90 - run.CARD_SAMPLE_S + 60
     assert all(j.status == "done" for j in jobs) and len(fake.scored) == 4
-    assert run.CARD_CONFIRM_S in clock.waits and run.CARD_POLL_S in clock.waits
-    assert worker.card_wait_s >= 90 - run.CARD_CONFIRM_S
+    assert run.CARD_CONFIRM_S in clock.waits and run.CARD_SAMPLE_S in clock.waits
+    assert worker.card_wait_s >= leased_at[0] - run.CARD_CONFIRM_S - 1
 
 
 def test_one_high_reading_not_confirmed_is_not_a_busy_card(broker, sleeps, sysfs):
@@ -123,7 +124,7 @@ def test_one_high_reading_not_confirmed_is_not_a_busy_card(broker, sleeps, sysfs
     clock = HookedClock(datetime(2026, 11, 17, 6, 0, tzinfo=CAIRO), hook)
     worker, fake, _ = guarded(broker, sleeps, clock=clock)
     assert worker.run() == run.EXIT_OK
-    assert len(fake.scored) == 2 and run.CARD_POLL_S not in clock.waits
+    assert len(fake.scored) == 2 and run.CARD_SAMPLE_S not in clock.waits
     assert worker.card_wait_s == 0
 
 
@@ -155,6 +156,7 @@ def test_a_card_taken_mid_job_gives_the_job_back_then_waits(broker, sleeps, sysf
     root = sysfs(950)
     job = broker.add_job("kev", pair(1))
     busy_from: list[float] = []
+    leased_at: list[float] = []
 
     def hook(elapsed):
         if busy_from and elapsed - busy_from[0] >= 60:
@@ -162,6 +164,8 @@ def test_a_card_taken_mid_job_gives_the_job_back_then_waits(broker, sleeps, sysf
 
     clock = HookedClock(datetime(2026, 11, 17, 6, 0, tzinfo=CAIRO), hook)
     worker, fake, _ = guarded(broker, sleeps, clock=clock)
+    orig = worker.broker.lease
+    worker.broker.lease = lambda body: (leased_at.append(clock.mono), orig(body))[1]
 
     def on_score(i):
         if i == 0:  # Jellyfin starts during the first order
@@ -177,7 +181,75 @@ def test_a_card_taken_mid_job_gives_the_job_back_then_waits(broker, sleeps, sysf
     assert graceful[0]["reason"] == "graceful"
     assert job.attempts == 0 and job.last_error is None and job.status == "done"
     assert len(fake.scored) == 2 and len(broker.bodies("/lease")) >= 2
-    assert not worker.failed_jobs and worker.card_wait_s >= 60 - 2 * run.CARD_CONFIRM_S
+    # Back only once the card had read low for the hold after the transcode ended (60 s on).
+    assert not worker.failed_jobs and worker.card_wait_s > 0
+    assert leased_at[1] >= busy_from[0] + 60 - run.CARD_SAMPLE_S + 60
+
+
+def test_a_gap_between_video_runs_does_not_end_the_wait(broker, sleeps, sysfs):
+    """Trickplay runs one ffmpeg per item and the video engine idles a second or two between
+    them: a low reading in a gap is not the end of the job."""
+    root = sysfs(1150)
+    broker.add_job("kev", pair(1))
+    busy = [(0, 40), (42, 80), (81, 125), (127, 200)]  # four items, short gaps between
+    last_busy_end = busy[-1][1]
+    leased_at: list[float] = []
+
+    def hook(elapsed):
+        set_mv(root, 1150 if any(a <= elapsed < b for a, b in busy) else 900)
+
+    clock = HookedClock(datetime(2026, 11, 17, 6, 0, tzinfo=CAIRO), hook)
+    worker, fake, _ = guarded(broker, sleeps, clock=clock)
+    orig = worker.broker.lease
+    worker.broker.lease = lambda body: (leased_at.append(clock.mono), orig(body))[1]
+    assert worker.run() == run.EXIT_OK
+    # A lease came only after a full hold of low readings past the last item.
+    assert leased_at and leased_at[0] >= last_busy_end + 60 - run.CARD_SAMPLE_S
+    assert len(fake.scored) == 2
+
+
+def test_a_failed_read_is_retried_before_it_is_fatal(broker, sleeps, sysfs, monkeypatch):
+    sysfs(950)
+    broker.add_job("kev", pair(1))
+    real, fails = judges.read_vddgfx_mv, [2]  # two failures, then a reading
+
+    def flaky(root=None):
+        if fails[0]:
+            fails[0] -= 1
+            raise judges.SensorUnavailable("EIO")
+        return real(root)
+
+    monkeypatch.setattr(judges, "read_vddgfx_mv", flaky)
+    clock = FakeClock(datetime(2026, 11, 17, 6, 0, tzinfo=CAIRO))
+    worker, fake, _ = guarded(broker, sleeps, clock=clock)
+    assert worker.run() == run.EXIT_OK and len(fake.scored) == 2
+    assert clock.waits.count(run.CARD_RETRY_S) == 2
+
+
+def test_a_suspended_card_reads_idle(tmp_path):
+    root = card(tmp_path, 1150)
+    (root / "class/drm/card1/device/power").mkdir()
+    (root / "class/drm/card1/device/power/runtime_status").write_text("suspended\n")
+    assert judges.read_vddgfx_mv(root) == 0
+
+
+def test_an_unreadable_hwmon_is_skipped_while_another_amdgpu_card_reads(tmp_path):
+    root = card(tmp_path, 950)
+    # card0: an APU's amdgpu hwmon without in0_input, and another hwmon whose name is unreadable.
+    apu = root / "class/drm/card0/device/hwmon"
+    (apu / "hwmon0").mkdir(parents=True)
+    (apu / "hwmon0" / "name").write_text("amdgpu\n")
+    (apu / "hwmon1").mkdir()  # no name file at all
+    assert judges.read_vddgfx_mv(root) == 950
+
+
+def test_the_highest_amdgpu_card_counts(tmp_path):
+    root = card(tmp_path, 950)
+    apu = root / "class/drm/card0/device/hwmon/hwmon0"
+    apu.mkdir(parents=True)
+    (apu / "name").write_text("amdgpu\n")
+    (apu / "in0_input").write_text("1200\n")
+    assert judges.read_vddgfx_mv(root) == 1200
 
 
 @pytest.mark.parametrize("mv", [None, 900])
@@ -224,6 +296,18 @@ def test_the_default_follows_the_clock_limit(tmp_path, compute, want):
     if data["compute"]["device"] == "cpu":
         data["compute"]["dtype"] = "q4_k_m"
     assert parse(data).max_vddgfx_mv == want
+
+
+@pytest.mark.parametrize("value", [-1, 3601, True, "60"])
+def test_a_bad_clear_time_is_refused(tmp_path, value):
+    with pytest.raises(ConfigError, match="vddgfx_clear_s"):
+        parse(llamacpp("http://127.0.0.1:8100/ai/v1", tmp_path, vddgfx_clear_s=value))
+
+
+def test_the_clear_time_defaults_to_a_minute(tmp_path):
+    assert parse(llamacpp("http://127.0.0.1:8100/ai/v1", tmp_path)).vddgfx_clear_s == 60
+    data = llamacpp("http://127.0.0.1:8100/ai/v1", tmp_path, vddgfx_clear_s=120)
+    assert parse(data).vddgfx_clear_s == 120
 
 
 @pytest.mark.parametrize("value", [-1, 2001, True, 1000.0, "1000"])

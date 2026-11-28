@@ -742,22 +742,37 @@ class SensorUnavailable(RuntimeError):
 
 
 def read_vddgfx_mv(root: Path | None = None) -> int:
-    """The AMD card's core voltage now, in mV (the highest, with several amdgpu cards): the
-    hwmon `in0_input` whose `name` is amdgpu. The clock-limit rule holds compute to 950 mV, but
-    another app using the card's video engine (Jellyfin, Plex, Pitlane) raises it to the top
-    state's 1,150 mV whatever the limit, and full compute load there tripped the card's power
-    feed and reset the server (2026-11-28). Raises SensorUnavailable when nothing can be read."""
+    """The AMD cards' core voltage now, in mV: the highest over every amdgpu hwmon's `in0_input`
+    (an APU beside the card counts too, so a host with both waits on either). The clock-limit
+    rule holds compute to 950 mV, but another app using the card's video engine (Jellyfin, Plex,
+    Pitlane) raises it to the top state's 1,150 mV whatever the limit, and full compute load
+    there tripped the card's power feed and reset the server (2026-11-28).
+
+    A card whose device is runtime-suspended reads 0 (idle, and reading it would wake it). An
+    hwmon that is not amdgpu, or whose files cannot be read, is skipped while another amdgpu
+    card reads fine; SensorUnavailable only when no amdgpu card's voltage can be read."""
     root = SYSFS if root is None else root
-    readings = []
+    readings: list[int] = []
+    errors: list[str] = []
     for hw in sorted(root.glob("class/drm/card*/device/hwmon/hwmon*")):
         try:
             if (hw / "name").read_text().strip() != "amdgpu":
                 continue
+        except OSError:
+            continue  # not one we can identify: never the reason to stop
+        try:
+            if (hw.parent.parent / "power" / "runtime_status").read_text().strip() == "suspended":
+                readings.append(0)
+                continue
+        except OSError:
+            pass  # no runtime PM on this device: read it
+        try:
             readings.append(int((hw / "in0_input").read_text().strip()))
         except (OSError, ValueError) as e:
-            raise SensorUnavailable(f"cannot read the card's voltage in {hw}: {e}") from None
+            errors.append(f"{hw}: {e}")
     if not readings:
-        raise SensorUnavailable(f"no amdgpu hwmon with in0_input under {root}/class/drm")
+        why = "; ".join(errors) or "no amdgpu hwmon"
+        raise SensorUnavailable(f"cannot read the card's voltage under {root}/class/drm ({why})")
     return max(readings)
 
 

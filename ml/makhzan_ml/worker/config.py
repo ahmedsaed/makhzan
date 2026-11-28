@@ -191,6 +191,9 @@ class Config:
     #: voltage past the clock limit (docs/ai/worker.md, "The card's voltage"). 0 is off. On by
     #: default (1000) wherever require_clock_limit is.
     max_vddgfx_mv: int = 0
+    #: With max_vddgfx_mv: after any reading above it, the card counts as busy until it has read
+    #: at most the limit for this many seconds on end.
+    vddgfx_clear_s: float = 60.0
     source: Path | None = None
 
     @property
@@ -236,6 +239,7 @@ _SCHEMA: dict[str, set[str]] = {
         "gguf_path",
         "require_clock_limit",
         "max_vddgfx_mv",
+        "vddgfx_clear_s",
     },
     "schedule": {"windows", "timezone", "on_empty", "poll_s", "outside_window", "no_new_lease_s"},
     "leases": {"max_jobs", "lease_s", "heartbeat_s", "retry_max_s"},
@@ -491,6 +495,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
     llamacpp_url = gguf_path = None
     require_clock_limit = False
     max_vddgfx_mv = 0
+    vddgfx_clear_s = 60.0
     if backend == "llamacpp":
         require_clock_limit = _typed(
             "compute", "require_clock_limit", compute.get("require_clock_limit", device == "gpu"),
@@ -502,6 +507,10 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         )  # fmt: skip
         if not 0 <= max_vddgfx_mv <= 2000:
             raise ConfigError(f"[compute] max_vddgfx_mv {max_vddgfx_mv}: 0 (off) to 2000 mV")
+        vddgfx_clear_s = float(_typed("compute", "vddgfx_clear_s",
+                                      compute.get("vddgfx_clear_s", 60), (int, float)))  # fmt: skip
+        if not 0 <= vddgfx_clear_s <= 3600:
+            raise ConfigError(f"[compute] vddgfx_clear_s {vddgfx_clear_s}: 0 to 3600 s")
         if "llamacpp_url" not in compute or "gguf_path" not in compute:
             raise ConfigError(
                 '[compute] backend = "llamacpp" needs llamacpp_url (the sidecar) and gguf_path '
@@ -513,7 +522,8 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             if key in compute:
                 raise ConfigError(f'[compute] {key} is not read with backend = "llamacpp"')
     else:
-        for key in ("llamacpp_url", "gguf_path", "require_clock_limit", "max_vddgfx_mv"):
+        for key in ("llamacpp_url", "gguf_path", "require_clock_limit", "max_vddgfx_mv",
+                    "vddgfx_clear_s"):  # fmt: skip
             if key in compute:
                 raise ConfigError(f'[compute] {key} is only read with backend = "llamacpp"')
     threads = compute.get("threads")
@@ -619,6 +629,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         gguf_path=gguf_path,
         require_clock_limit=require_clock_limit,
         max_vddgfx_mv=max_vddgfx_mv,
+        vddgfx_clear_s=vddgfx_clear_s,
         source=source,
     )
 

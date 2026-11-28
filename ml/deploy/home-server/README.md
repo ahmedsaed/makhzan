@@ -105,11 +105,18 @@ memory with a judge (a 1080p hardware transcode beside pplx left about 665 MB to
 1,150 mV whatever the clock limit, and full compute load at that voltage resets the server (it did
 at 05:05 on 2026-11-28, Jellyfin's trickplay task beside pplx). So each worker reads the card's
 voltage (`max_vddgfx_mv`, 1,000 mV by default with `require_clock_limit`) before every lease and
-every request: above it, it gives back what it holds unscored and waits, re-reading every 30 s,
-until the other app is done (`docs/ai/worker.md`, "The card's voltage"). It leaves the request in
-flight exposed when another app starts; keep the media servers' scheduled jobs (Jellyfin's
-trickplay and Plex's maintenance) out of the windows, and the real fix is a power supply that
-feeds the card properly.
+every request: above it, it gives back what it holds unscored and waits, reading every 5 s, until
+the card has read low for a minute on end (`vddgfx_clear_s`), so a gap between a trickplay job's
+items does not end the wait (`docs/ai/worker.md`, "The card's voltage").
+
+Its limits:
+- It leaves the request in flight exposed when another app starts on the card.
+- It reads the highest voltage of every amdgpu card on the host: on this server, the one card.
+  A host with an AMD APU beside the card would wait whenever the APU reads high too.
+- A failed read is retried twice; only when no amdgpu card can be read does the session end.
+
+Keep the media servers' scheduled jobs (Jellyfin's trickplay and Plex's maintenance) out of the
+windows. The real fix is a power supply that feeds the card properly.
 
 **No CPU fallback is set up.** The router runs only on the card (`-dev Vulkan0`, and its guard
 needs the clock limit). Scoring pplx on the CPU with the same GGUF (the same model version) would
@@ -163,9 +170,9 @@ the deploy. Nothing breaks in between; that night's first window is simply lost.
       urllib.request as u; print(u.urlopen('http://llamacpp:8080/models').read()[:400])"` lists
       `h2o`, `kev` and `pplx`.
 6. **Revoke the old worker**, in production: `./makhzan ai worker revoke home-kev`.
-7. **The first night:** `docker compose logs -f h2o` from 06:00 (the router loads `h2o`; requests
-   at about Kev's 4–5 s on this card), then pplx from 10:05; `./makhzan ai status` the next
-   morning (the queue at `match.h2o`, and the audit per model). Check the card's memory during
+7. **The first windows** (06:00–12:00, Cairo time): `docker compose logs -f h2o` from 06:00 (the router loads `h2o`; requests
+   at about Kev's 4–5 s on this card), then pplx from 10:05; `./makhzan ai status` after
+   noon (the queue at `match.h2o`, and the audit per model). Check the card's memory during
    H2O's window once (`cat /sys/class/drm/card1/device/mem_info_vram_used`): on the 3060 H2O Q4
    used about 3.8–3.9 GB.
 8. **The catch-up** is the owner's, as at the production switch: the re-scores of every standing
@@ -218,9 +225,9 @@ No host timers were installed.
    5. A dry check outside the windows: `docker compose logs llamacpp` shows the router listening
       (and no guard refusal); `docker compose exec -T kev python -c "import urllib.request as u;
       print(u.urlopen('http://llamacpp:8080/models').read()[:300])"` lists `kev` and `pplx`.
-3. **The first night:** `docker compose logs -f kev` from 06:00 (the router loads `kev`, requests
-   at about 4–5 s), and pplx from 10:05 (the swap, then requests); `./makhzan ai status` the next
-   morning. Check the card's memory during Kev's window once
+3. **The first windows** (Cairo time): `docker compose logs -f kev` from 06:00 (the router loads `kev`, requests
+   at about 4–5 s), and pplx from 10:05 (the swap, then requests); `./makhzan ai status` after
+   noon. Check the card's memory during Kev's window once
    (`cat /sys/class/drm/card1/device/mem_info_vram_used`): on the 3060 Kev grew to about 4.1 GB
    while scoring (NVIDIA's driver); on this card the soak at the same settings stayed inside 4 GB.
 

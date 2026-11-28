@@ -308,6 +308,7 @@ this image can load the model key, and exits.
 | `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
 | `require_clock_limit` | `true` on a GPU | `backend = "llamacpp"` only: refuse to load unless every AMD card's `power_dpm_force_performance_level` reads `manual` (the home server's udev clock limit), re-read at every load. Set `false` on a machine whose GPU is not that card (the desktop's NVIDIA card) |
 | `max_vddgfx_mv` | `1000` where `require_clock_limit` is on, else `0` (off) | `backend = "llamacpp"` only: score only while the AMD card's core voltage (the amdgpu hwmon's `in0_input`) is at most this many mV, checked before every lease and every request; above it, another app is using the card's video engine. An unreadable sensor ends the session (exit 2). "The card's voltage" below |
+| `vddgfx_clear_s` | `60` | With `max_vddgfx_mv`: after any reading above it, the card counts as busy until it has read at most the limit for this many seconds on end (0 to 3600) |
 
 With `backend = "llamacpp"`, `dtype` is the pinned GGUF's: `"q4_k_m"` for H2O and Kev, `"q4_k_s"`
 for pplx (the only accepted values), and `mmap` and `weights_cache` are refused (the worker holds no
@@ -814,8 +815,9 @@ in router mode (compose service `llamacpp`) serves both, from the preset
   another app on the card's video engine lifts its voltage past what the clock limit allows ("The
   card's voltage" below).
 - **`--sleep-idle-seconds 600`:** idle for 10 minutes, the model sleeps (its memory released,
-  ~190 MB kept); the next request wakes it in about 6 s. The card is free for Plex, Jellyfin and
-  Pitlane by day.
+  ~190 MB kept); the next request wakes it in about 6 s. Outside the windows the card's compute
+  is free; within them Plex, Jellyfin and Pitlane can still start on its video engine, which the
+  workers wait out ("The card's voltage").
 - **The guard:** the router's entrypoint (`llamacpp-guard.sh`) refuses to start unless every AMD
   card reads `manual` performance mode (the udev clock limit), read from the host's `/sys`, which
   containers see read-only. A refusal repeats under `restart: unless-stopped`: a restart loop with
@@ -845,19 +847,27 @@ pplx's window, opening at 05:05 while Jellyfin was still at work, reset the serv
 
 So a worker with `max_vddgfx_mv` set (1,000 mV by default wherever `require_clock_limit` is on)
 reads the card's voltage from the host's `/sys` (read-only in the container: the amdgpu hwmon's
-`in0_input`, the highest if there are several cards):
+`in0_input`, the highest of every amdgpu card: a host with an AMD APU beside the card waits on
+either, since the reading cannot tell them apart; a runtime-suspended card reads 0):
 
-- **Before every lease.** Above the limit, it takes no lease and waits, holding nothing, reading
-  again every 30 s (`run.CARD_POLL_S`), until the voltage is back down, a stop comes or the window
-  ends. It logs once when it starts waiting and once when it scores again, with the reading, and
-  the session's last line says how long it waited in all.
-- **Before every request.** Above the limit mid-job, the order in flight has already finished and
-  is posted; the job goes back gracefully (no attempt counted), like a stop between orders, and the
+- **Busy, with a hold.** The card counts as busy from any reading above the limit until it has
+  read at most the limit for `vddgfx_clear_s` (60 s by default) on end. A trickplay job runs one
+  ffmpeg per item and the video engine idles a second or two between them; without the hold a
+  reading in such a gap would end the wait, and the worker would load and score beside the next
+  item.
+- **Before every lease.** While busy, it takes no lease and waits, holding nothing, reading every
+  5 s (`run.CARD_SAMPLE_S`), until the hold has passed, a stop comes or the window ends. It logs
+  once when it starts waiting and once when it scores again, with the reading, and the session's
+  last line says how long it waited in all.
+- **Before every request.** Busy mid-job: the order in flight has already finished and is
+  posted; the job goes back gracefully (no attempt counted), like a stop between orders, and the
   next lease waits as above.
 - **A reading above the limit is confirmed** by a second one 0.5 s later (`run.CARD_CONFIRM_S`),
   so a voltage passing through on a state change is not taken for another app's work.
-- **An unreadable sensor ends the session** (exit 2, the lease handed back): with the check on,
-  scoring blind is what it exists to prevent.
+- **A failed read is retried** twice, 1 s apart (`run.CARD_READ_TRIES`, `CARD_RETRY_S`). An
+  hwmon that is not amdgpu, or an amdgpu one without a readable voltage while another card reads
+  fine, is skipped. Only when no amdgpu card's voltage can be read does the session end (exit 2,
+  the lease handed back): with the check on, scoring blind is what it exists to prevent.
 
 **What it does not do.** It narrows the exposure to the request in flight when another app starts
 (about 4–5 s here); it does not make the card safe. A video job that starts during a request runs
@@ -973,7 +983,7 @@ clock states 0–2: 4.4 s a request, about 20–27x the CPU worker.
 - **The router has not run on the card in production yet.** It ran under the stack's full
   hardening (non-root, read-only, no capabilities) on the desktop's 3060 (2026-11-27: parity
   within 0.016 for Kev and bit-identical for pplx, swaps in 6–9 s), and the card soaks ran the
-  same image and settings with `docker run`. The first night's logs are the check, and the card's
+  same image and settings with `docker run`. The first windows' logs are the check, and the card's
   memory during Kev's window (on the 3060 Kev grew to about 4.1 GB while scoring).
 
 ## pplx on a llama.cpp sidecar (production since 2026-11-27)
@@ -1227,13 +1237,15 @@ no model. CI runs it with the ingestion suite.
   the supervisor only for `"wait"`, and imports neither torch nor a thread.
 - **One model at a time, enforced**, on a fake clock: no session, lease or load inside
   `no_new_lease_s` (a lease taken just before it goes back uncharged with nothing loaded); a
-  real child that ignores SIGTERM killed at the window's end plus 4.5 minutes (05:04:30,
-  before pplx's 05:05); the deadline the supervisor sets; a stop seen before the fork forks
+  real child that ignores SIGTERM killed at the window's end plus 4.5 minutes (05:04:30 in the
+  test's own 01:00–05:00 fixture, before its second window's 05:05); the deadline the supervisor sets; a stop seen before the fork forks
   nothing, one recorded during it reaches the child; the signal handler only records. The
   compose file: the proxy listens on its internal address only, workers have `pids_limit`.
 - **The card's voltage** (`test_worker_card_voltage.py`), on a fake sysfs and clock: no lease
-  while the card reads above `max_vddgfx_mv`, scoring once it clears; one unconfirmed high reading
-  is not a busy card; the window's end or a stop while waiting leases nothing; a card taken
+  while the card reads above `max_vddgfx_mv`, scoring once it has read low for the hold; a trace
+  of short video runs with gaps between them does not end the wait; one unconfirmed high reading
+  is not a busy card; a failed read retried; a suspended card reads idle; an unreadable or
+  foreign hwmon skipped beside a readable card, and the highest card counts; the window's end or a stop while waiting leases nothing; a card taken
   mid-job posts the finished order and gives the job back gracefully, then waits; an unreadable
   sensor refuses (exit 2); the configuration's default and refusals.
 - **The broker proxy** (`test_worker_proxy.py`): bytes forwarded both ways, a `CONNECT` or
