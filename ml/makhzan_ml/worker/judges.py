@@ -277,6 +277,8 @@ class Runtime:
     #: llamacpp on a GPU: refuse to load unless every AMD card reads "manual" performance mode
     #: (the home server's udev clock limit), checked at every load (config: require_clock_limit).
     require_clock_limit: bool = False
+    #: llamacpp: the image the sidecar runs, as configured (informational; config.py).
+    llamacpp_image: str | None = None
 
 
 def prepare_environment(rt: Runtime) -> None:
@@ -942,10 +944,15 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
     served = Path(str(props.get("model_path") or "")).name
     if served != pin.gguf_file:
         raise LoadError(f"{who}: the sidecar serves {served!r}, pinned {pin.gguf_file!r}")
+    # The judge is the GGUF, the llama.cpp build and the temperature (D26): any official image
+    # of that build (Vulkan, CUDA, CPU) serves the same judge. The build is read from the
+    # sidecar; its backend cannot be (b12767's /props does not say), so the configured image is
+    # recorded with every score, as device and dtype are.
     build = str(props.get("build_info") or "")
     want_build = pin.model_version.split("+llama.cpp-", 1)[1].split("-", 1)[0]
     if not build.startswith(want_build + "-"):
         raise LoadError(f"{who}: the sidecar is llama.cpp {build!r}, pinned {want_build}")
+    serving = {"backend": "llamacpp", "build": build, "image": rt.llamacpp_image}
 
     def score(payload: dict) -> tuple[float, dict]:
         q = question_key(payload)
@@ -997,6 +1004,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
             raise RuntimeError(
                 f"llama.cpp's answer has no answers.{q}.noul: {str(body)[:300]}"
             ) from None
+        extra["serving"] = dict(serving)
         try:
             return rescale(calibrated, pin.gguf_temperature, pin.temperature), extra
         except ValueError as e:
@@ -1014,7 +1022,7 @@ def _load_llamacpp(key: str, rt: Runtime, pin: Pin) -> Judge:
         "slots": props.get("total_slots"),
         "router": router,
         "request_timeout_s": request_timeout,
-        "image": pin.code,
+        "image": rt.llamacpp_image,
     }
     return Judge(key, score, info)
 

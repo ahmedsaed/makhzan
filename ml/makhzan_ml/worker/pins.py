@@ -96,7 +96,12 @@ KEV_GGUF_FILE = "Kev-4B-Q4_K_M.gguf"
 KEV_GGUF_SHA256 = "33ae6b18926502b2209a1bf7d3b61a350d65938441515c686bb87d226a19eff9"
 #: `qwen35.decision.temperature.noul` in that file (Kev-4B's fitted temperature, 2.406).
 KEV_GGUF_TEMPERATURE = 2.406049966812134
-#: llama.cpp's official server-vulkan image, build 12767, by digest: the "code" of this pin.
+#: llama.cpp's official server-vulkan image, build 12767, by digest: the image the home server
+#: runs. Its digest's first 12 characters are in the llama.cpp model versions below, but only as
+#: a historical label (D26, owner, 2026-11-28): the judge is the GGUF, the build and the
+#: temperature, so any official image of build b12767 (Vulkan, CUDA, CPU) serves the same
+#: version. The worker checks the build from the sidecar and records the configured image
+#: (`[compute] llamacpp_image`) with every score, as device and dtype are (P8).
 LLAMACPP_IMAGE = (
     "ghcr.io/ggml-org/llama.cpp@sha256:"
     "87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"

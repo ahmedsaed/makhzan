@@ -300,11 +300,31 @@ def test_load_checks_everything_then_scores_raw(tmp_path, sidecar):
     judge = judges._load_llamacpp("kev", rt(side.url, gguf), pin)
     p, extra = judge.score(PAYLOAD)
     assert p == pytest.approx(1 / (1 + math.exp(-2.0)))
-    assert extra == {}
+    # The serving backend is recorded with every score, never part of the version (D26).
+    assert extra == {"serving": {"backend": "llamacpp", "build": "b12767-a8ad690ca", "image": None}}
     assert side.requests == [{"model": "kev", **PAYLOAD}]
     info = judge.info
     assert info["backend"] == "llamacpp" and info["gguf_sha256"] == pin.gguf_sha256
     assert info["llamacpp_build"] == "b12767-a8ad690ca" and info["temperature"] == 1.0
+    assert info["image"] is None
+
+
+def test_the_configured_image_is_recorded_with_every_score(tmp_path, sidecar):
+    """Any official image of the pinned build serves the same judge (D26): the configured
+    image (say the server-cuda one) is recorded on each score, the version is unchanged."""
+    gguf = kev_gguf(tmp_path)
+    side = sidecar()
+    image = "ghcr.io/ggml-org/llama.cpp@sha256:" + "d3" * 32
+    r = judges.Runtime("gpu", "q4_k_m", None, False, None, "llamacpp", side.url, gguf, None,
+                       False, image)  # fmt: skip
+    pin = pin_of(gguf)
+    judge = judges._load_llamacpp("kev", r, pin)
+    _, extra = judge.score(PAYLOAD)
+    assert extra["serving"] == {"backend": "llamacpp", "build": "b12767-a8ad690ca", "image": image}
+    assert judge.info["image"] == image
+    # A second score gets its own copy, so one score's extra never aliases another's.
+    _, again = judge.score(PAYLOAD)
+    assert again["serving"] == extra["serving"] and again["serving"] is not extra["serving"]
 
 
 def test_load_through_the_registry_needs_no_torch(tmp_path, sidecar, monkeypatch):
@@ -514,6 +534,9 @@ def test_a_llamacpp_config_parses():
     )  # fmt: skip
     assert cfg.pin is pins.ALTERNATIVES[("kev", "llamacpp")]
     assert parse(llamacpp_cfg(llamacpp_url="http://127.0.0.1:8130")).llamacpp_url
+    assert cfg.llamacpp_image is None
+    image = "ghcr.io/ggml-org/llama.cpp@sha256:" + "d3" * 32
+    assert parse(llamacpp_cfg(llamacpp_image=image)).llamacpp_image == image
 
 
 @pytest.mark.parametrize(
@@ -527,6 +550,9 @@ def test_a_llamacpp_config_parses():
         ({"llamacpp_url": "http://kev-llamacpp:8080/v1"}, "no path"),
         ({"mmap": False}, "mmap is not read"),
         ({"weights_cache": "/models"}, "weights_cache is not read"),
+        ({"llamacpp_image": ""}, "llamacpp_image is empty"),
+        ({"llamacpp_image": "two words"}, "an image reference"),
+        ({"llamacpp_image": 5}, "llamacpp_image"),
     ],
 )
 def test_a_bad_llamacpp_config_is_refused(compute, match):
@@ -541,6 +567,9 @@ def test_llamacpp_keys_need_the_backend_and_the_backend_needs_them():
         parse(data)
     torch = llamacpp_cfg()
     torch["compute"] = {"llamacpp_url": "http://kev-llamacpp:8080"}
+    with pytest.raises(ConfigError, match="only read with backend"):
+        parse(torch)
+    torch["compute"] = {"llamacpp_image": "ghcr.io/ggml-org/llama.cpp:server-cuda-b12767"}
     with pytest.raises(ConfigError, match="only read with backend"):
         parse(torch)
     pplx = llamacpp_cfg(dtype="q4_k_m")  # Kev's precision, for pplx

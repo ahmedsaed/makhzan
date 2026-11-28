@@ -148,6 +148,7 @@ is the decision that should have come back to the owner.
 | D20 | Quantisation | Rejected unless proven harmless. Amended 2026-11-26: Kev-4B Q4_K_M and pplx-decider-flash-v1.3 Q4_K_S (llama.cpp) accepted on the label test (see "Kev quantisation" and "pplx quantisation" below) | Owner | serving | settled |
 | D24 | Serving | Production switch 2026-11-27: both judges served by llama.cpp (Kev-4B Q4_K_M, pplx Q4_K_S) on the home server's AMD card, taking turns (Kev 01:00–05:00, pplx 05:05–07:00), the card held to clock states 0–2; the judge-version catch-up drained by the owner (see "Production switch" below) | Owner | serving | settled |
 | D25 | Models | First judge: H2O-Lightning-4B Q4_K_M (llama.cpp) replaces Kev, at 0.578 on its raw scale; pplx Q4_K_S ≥ 0.95 stays second, same K2 payload; policy p2. Its group-check floor (P14's role) is 0.19, proposed by the session and confirmed by the owner, 2026-11-27 (see "H2O first" below) | Owner | pipeline, group check, audit | settled |
+| D26 | Serving | A llama.cpp judge is the GGUF (sha256), the llama.cpp build (b12767) and the temperature. Any official image of that build (Vulkan, CUDA, CPU) serves the same judge; the serving image is recorded with every score (`extra.serving`), as device and dtype are (P8). The image digest in the version strings stays as a historical label, byte-identical, so nothing re-scores. Owner, 2026-11-28 (see "The backend is not the judge" below) | Owner | worker, desktop backlog | settled |
 | D21 | Serving | Workers on CPU servers (the CPU worker 03:00–06:00, 6 threads, Kev phase then pplx phase, no mmap, 20 GB); desktop for backlogs. Refined 2026-11-17 (§6, Global, P9, P10): one worker per model if wanted, each worker's own config sets its window, threads and models; no broker rule against two models on one machine | Owner | pipeline | settled |
 | D22 | Data | Labels kept in git-ignored `ml/out/labels/`; now in the private configuration's `labels/` (versioned) | Owner rule, after loss | — | settled |
 | D23 | Benchmark | CPU benchmark of the chosen setup (`ml/models/bench_cpu.py`): 60 pairs drawn (`N_PAIRS`); CPU/GPU parity holds when every request is within 0.05 (`--tolerance`) and no pair flips at its threshold | Session | the CPU-worker parity verdict | **owner review** (measurement parameters, not merge rules) |
@@ -484,7 +485,8 @@ below).*
   amended), and the worker's `pins.ACTIVE_BACKEND` is `llamacpp` for both.
   - The torch versions stay as `policy.TORCH_MODELS` and `pins.PINS`, the rollback.
   - The llama.cpp image digest is part of each version, so any machine serving them, the desktop
-    included, runs that one image.
+    included, runs that one image. *Superseded 2026-11-28 by D26: the build, not the image, is
+    the judge.*
 - **The card:** the 4 GB card holds one model, so the two judges take turns on it (option (b) of
   three; the others were pplx on the CPU, and llama.cpp's router mode, then set aside for an open
   concurrency bug).
@@ -509,7 +511,8 @@ below).*
 - **The catch-up.** The switch makes every standing decision's judge stale, so they are re-queued
   at the amended P8 priorities (35 "same", 30 "not same"), after new pairs and the backlog. The
   owner drains them, with wider windows and the desktop (whose workers must now run the
-  llama.cpp backend with the same image digest; `worker.md`).
+  llama.cpp backend with the same image digest; `worker.md`). *Since D26 (2026-11-28), any
+  official image of build b12767.*
 - **Not done:**
   - **A proper power supply** for the card (the clock limit is the workaround).
   - ~~A CPU route for pplx requests over 4,096 tokens~~, about 1 pair in 3,000: superseded the
@@ -582,3 +585,47 @@ long description irrelevant, so:
 
 Request hashes and prompt versions are unchanged. Details: `worker.md`, "Requests too long for
 the context".
+
+### The backend is not the judge (owner, 2026-11-28, D26)
+
+**A llama.cpp judge is its GGUF, its llama.cpp build and its temperature; the image that serves
+it is recorded, not versioned.** The owner asked: "why are we locking versions on backend? I
+believe the backend shouldn't change the results", and approved aligning the llama.cpp versions
+with P8 ("GPU and CPU are the same version, device and dtype recorded on each row").
+
+- **How it got there.** Putting the image digest into the version (Production switch, above)
+  was the session's choice, not an owner decision. It over-tightened P8: P8 already treats a
+  device and a precision of the same weights and code as one version, and a Vulkan or CUDA build
+  of the same llama.cpp source is the same code on another backend.
+- **What changes:**
+  - The version strings are kept byte-identical, so no decision re-scores and nothing changes on
+    the broker or in the policy. Their `-87d189d403fd` is now a historical label.
+  - The worker already checked only the build (`build_info` from the sidecar's `/props` must be
+    `b12767-…`); it no longer claims an image it cannot see. b12767's `/props` does not name its
+    backend, so the image comes from the worker's configuration (`[compute] llamacpp_image`) and
+    is recorded with every score as `extra.serving` (`backend`, `build`, `image`), next to the
+    device and dtype the results already carry.
+- **The backend noise, measured** (raw scale; h2o's GGUF temperature undone, pplx as served):
+
+  | Comparison | Requests | max \|Δp\| | mean \|Δp\| | Stage decisions moved |
+  |---|---|---|---|---|
+  | AMD card (Vulkan) vs 3060 (Vulkan), Kev and pplx Q4 | 1,800 each | ≤ 0.038 | | not counted |
+  | Batch 512 vs 2048, h2o Q4 on the 3060 (Vulkan) | 500 | 0.023 | 0.0015 | 0 |
+  | CUDA vs Vulkan, h2o Q4, 3060, batch 2048 | 500 | 0.035 | 0.0043 | 2 of 250 at 0.578 |
+  | CUDA vs Vulkan, pplx Q4_K_S, 3060 | 500 | 0.045 | 0.0034 | 1 of 250 at 0.95 |
+
+  - The three moved pairs sat at the threshold: h2o E0154 0.5766 → 0.5888 and E0226
+    0.5798 → 0.5728; pplx E0141 0.9500 → 0.9486. All three are labelled "same".
+  - **The two-judge rule (p2) decides the same 63 of 250 pairs** on both backends, the same
+    merges exactly, so no final decision moved on this sample.
+  - Speed on the 3060: h2o 3.50 requests/s on CUDA against 3.07–3.11 on Vulkan (two of five
+    Vulkan runs fell to 0.95, unexplained; Vulkan's scores are deterministic, bit-identical
+    between a slow and a fast run); pplx 2.99 against 2.70. Parallel slots gained nothing
+    (`ml/out/desktop-speed`, 2026-11-28).
+  - The session's bar for moving the desktop to CUDA (no stage decision moved, more than 15%
+    faster) is not met on this sample: 3 borderline stage moves, 14% and 11% faster. So the
+    desktop runs the Vulkan image until the owner says otherwise. D26 itself does not depend on
+    that bar.
+- **Scope:** any machine. Today that is the desktop's backlog runs; the home server's AMD card
+  stays on the Vulkan image (CUDA does not run there).
+
