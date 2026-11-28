@@ -77,8 +77,10 @@ PPLX_TEMPERATURE = 1.3303
 
 
 #: The llama.cpp versions (worker `pins.ALTERNATIVES`): GGUF files pinned by sha256, served by
-#: llama.cpp's server-vulkan image, build b12767, by digest. The digest is part of the version:
-#: any machine serving these must run that same image (it runs on NVIDIA cards too).
+#: llama.cpp build b12767. The server-vulkan image's digest prefix in the version strings is a
+#: historical label, kept byte-identical so nothing re-scores: any official image of build
+#: b12767 (Vulkan, CUDA, CPU) serves the same judge, and the serving image is recorded with
+#: each score (D26, owner, 2026-11-28; P8: device and dtype are recorded, not versioned).
 LLAMACPP_BUILD = "b12767"
 LLAMACPP_IMAGE_DIGEST = "87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
 KEV_GGUF_REPO = "ggml-org/Kev-4B-GGUF"

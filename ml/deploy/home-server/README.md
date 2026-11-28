@@ -49,6 +49,11 @@ Update to the latest tested images with `docker compose pull && docker compose u
 roll back, set `H2O_IMAGE` / `PPLX_IMAGE` in `.env` to an older `sha-<commit>` tag. A build
 whose pins changed is refused by the TOMLs' `expect_version` until they follow.
 
+**Pull before copying configs that use a new key.** A worker refuses a configuration key its
+image does not know, so a TOML carrying a new key (such as `llamacpp_image`, D26, which records
+the router's image with every score) deploys only after the image that accepts it: `docker
+compose pull` first, then copy the TOMLs, then `docker compose up -d`.
+
 ## The llama.cpp router on the AMD card
 
 **The clock limit comes first.** The card is held to clock states 0–2 (max 753 MHz) by the udev

@@ -306,6 +306,7 @@ this image can load the model key, and exits.
 | `backend` | `"torch"` | `"torch"`: the model's own code in this process. `"llamacpp"`: the model on a llama.cpp sidecar (see "Kev on a llama.cpp sidecar" and "pplx on a llama.cpp sidecar") |
 | `llamacpp_url` | none | `backend = "llamacpp"` only, and required there: the sidecar's base URL, plain `http://` to a compose service name or a loopback address |
 | `gguf_path` | none | `backend = "llamacpp"` only, and required there: the GGUF the sidecar serves, mounted read-only into the worker too, which checks it against the pin before scoring |
+| `llamacpp_image` | none | `backend = "llamacpp"` only, informational: the image the sidecar runs (any official image of the pinned build: `server-vulkan`, `server-cuda`, CPU), by digest. Recorded with every score in `extra.serving`, next to the build the worker reads from the sidecar. The backend is not part of the version (D26) |
 | `require_clock_limit` | `true` on a GPU | `backend = "llamacpp"` only: refuse to load unless every AMD card's `power_dpm_force_performance_level` reads `manual` (the home server's udev clock limit), re-read at every load. Set `false` on a machine whose GPU is not that card (the desktop's NVIDIA card) |
 | `max_vddgfx_mv` | `1000` where `require_clock_limit` is on, else `0` (off) | `backend = "llamacpp"` only: score only while the AMD card's core voltage (the amdgpu hwmon's `in0_input`) is at most this many mV, checked before every lease and every request; above it, another app is using the card's video engine. An unreadable sensor ends the session (exit 2). "The card's voltage" below |
 | `vddgfx_clear_s` | `60` | With `max_vddgfx_mv`: after any reading above it, the card counts as busy until it has read at most the limit for this many seconds on end (0 to 3600) |
@@ -429,21 +430,38 @@ heartbeat_s = 60
 ```
 
 The desktop's GPU workers, for a backlog. They run until the queue is empty. Each needs its
-sidecar on the desktop first, run from **the same image digest** as the home server's: the
-digest is part of the model version, so a CUDA build would be a different version and the broker
-would refuse its scores. The server-vulkan image runs on the 3060 too (H2O Q4 at batch 2048:
-2.72 requests/s there). One at a time:
+sidecar on the desktop first, from any official llama.cpp image of the pinned build, b12767: the
+judge is the GGUF, the build and the temperature, and the backend is recorded with each score,
+not versioned (D26, owner, 2026-11-28; the digest prefix in the version strings is a historical
+label). On the 3060, measured 2026-11-28 (`ml/out/desktop-speed`): H2O Q4 at batch 2048 runs
+3.5 requests/s on `server-cuda` and 3.1 on `server-vulkan` (two of five Vulkan runs fell to
+0.95, unexplained; CUDA held 3.5 in all three); pplx 3.0 against 2.7. Parallel slots (`-np 2`,
+`4`) gained nothing on either.
+Set `llamacpp_image` in the worker's configuration to the image the sidecar runs, so each score
+records it. Both models fit on the 12 GB card at once (about 3.6 and 4.2 GB), so the two
+sidecars can run side by side on two ports:
 
 ```bash
+# The home server's server-vulkan image, build b12767 (pins.LLAMACPP_IMAGE)
+IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
 docker run -d --name desk-h2o-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 \
-  ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486 \
+  -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 "$IMAGE" \
   -m /models/h2o-lightning-4b-Q4_K_M.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 2048 -ub 2048 \
   --host 0.0.0.0 --port 8080
-# pplx: -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 4096 -ub 4096 -fa on
+docker run -d --name desk-pplx-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -v <models dir>:/models:ro -p 127.0.0.1:8131:8080 "$IMAGE" \
+  -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 4096 -ub 4096 -fa on \
+  --host 0.0.0.0 --port 8080
 ```
 
-`-dev Vulkan0` makes a missing card a startup error rather than a silent CPU run. H2O runs here at
+**CUDA is allowed under D26, pending the owner's choice.** The `server-cuda` image of the same
+build serves the same judge: `IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:d3160910fcaebaf9a6223a5cb7ca8305b5530af2c740884b0ec3789761580273`
+with `-dev CUDA0`, and the same image in `llamacpp_image`. On the 3060 it measured 11–14% faster
+with 3 borderline stage moves in 250 pairs (D26), short of the bar the session set for switching,
+so the desktop runs Vulkan until the owner chooses.
+
+The `-dev` flag (`Vulkan0`, or `CUDA0`) makes a missing card a startup error rather than a silent
+CPU run. H2O runs here at
 batch 2048, where the home server's preset uses 512 (2048 not yet tested on the 4 GB card). H2O is
 causal, like Kev, so the batch changes speed (3.1x on the 3060), not scores: measured for Kev on
 the 3060, Q4 at 2048 against 512 over 200 requests differed by at most 0.014 (calibrated; 0.030
@@ -470,6 +488,7 @@ device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://127.0.0.1:8130"
 gguf_path = "/models/h2o-lightning-4b-Q4_K_M.gguf"
+llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
 # The desktop's NVIDIA card is not the home server's clock-limited AMD card.
 require_clock_limit = false
 
@@ -498,8 +517,9 @@ expect_version = "pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-8
 backend = "llamacpp"
 device = "gpu"
 dtype = "q4_k_s"
-llamacpp_url = "http://127.0.0.1:8130"
+llamacpp_url = "http://127.0.0.1:8131"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
 # The desktop's NVIDIA card is not the home server's clock-limited AMD card.
 require_clock_limit = false
 
@@ -754,12 +774,12 @@ The owner decides when a backlog runs (P10). A desktop GPU worker connects to th
 drains the queue.
 
 **Since the production switch (2026-11-27) the desktop must run the llama.cpp backend too**:
-the broker refuses the torch versions at hello. Start the sidecar first, from the same image
-digest as the home server's (the digest is part of the version), as under "Example
-configurations" (`desk-kev.toml`, `desk-pplx.toml`), then the worker with `--network host` and
+the broker refuses the torch versions at hello. Start the sidecar first, from any official
+llama.cpp image of build b12767 (D26; `server-cuda` is 11–14% faster on the 3060), as under
+"Example configurations" (`desk-h2o.toml`, `desk-pplx.toml`), then the worker with `--network host` and
 the GGUFs at `/models`. Any worker image runs the llama.cpp backend (it needs no torch); the
-steps below are the torch ones, kept for a rollback. Only one 4B model fits on the 12 GB card,
-so run Kev first, then pplx:
+steps below are the torch ones, kept for a rollback. Under torch (bf16) only one 4B model fits
+on the 12 GB card, so run Kev first, then pplx:
 
 1. Make sure nothing else holds the card: `docker ps` and `nvidia-smi`. Stop any
    `ml/docker-compose.yml` model services.
@@ -922,7 +942,8 @@ clock states 0–2: 4.4 s a request, about 20–27x the CPU worker.
 - **The pin** is `pins.ALTERNATIVES[("kev", "llamacpp")]`, which `pins.production_pin("kev")`
   returns since `pins.ACTIVE_BACKEND` names llama.cpp:
   - the GGUF `ggml-org/Kev-4B-GGUF@f4624b6…`, file `Kev-4B-Q4_K_M.gguf`, sha256 `33ae6b18…`;
-  - llama.cpp's `server-vulkan` image, build b12767, by digest (`pins.LLAMACPP_IMAGE`);
+  - llama.cpp build b12767, served on the home server by the `server-vulkan` image
+    (`pins.LLAMACPP_IMAGE`); any official image of that build serves the same version (D26);
   - model version `kev-4b-Q4_K_M@33ae6b189265+llama.cpp-b12767-87d189d403fd+T1.0`.
 
   The policy's `MODELS["kev"]` names this version; the torch pin (`PINS["kev"]`,
@@ -996,7 +1017,7 @@ the same way as Kev above, with these differences.
   - **The GGUF:** our own conversion of the pinned checkpoint (`ml/models/convert_pplx_v13.py`),
     `pplx-flash-v1.3-Q4_K_S.gguf`, sha256 `819a9ad0f8f4…`, decision type `pplx-decider`,
     temperature 1.3302961587905884.
-  - **The image:** the same llama.cpp image digest as Kev's.
+  - **The build:** llama.cpp b12767, as Kev's; any official image of it (D26).
   - **The model version:** `pplx-decider-flash-v1.3-Q4_K_S@819a9ad0f8f4+llama.cpp-b12767-87d189d403fd+T1.3303`.
     The broker refuses it until the policy names it.
 - **No uncalibration.** llama.cpp applies pplx's own temperature, the scale of every validated

@@ -182,6 +182,11 @@ class Config:
     #: too so the worker can check it is the pinned file.
     llamacpp_url: str | None = None
     gguf_path: Path | None = None
+    #: llamacpp only, informational: the image the sidecar runs (e.g. the server-cuda or
+    #: server-vulkan image of the pinned build, by digest), recorded with every score. The judge
+    #: is the GGUF, the llama.cpp build and the temperature; the backend is recorded like device
+    #: and dtype, never part of the version (D26). The build itself is read from the sidecar.
+    llamacpp_image: str | None = None
     #: llamacpp on a GPU: refuse to load unless the AMD card's clock limit is applied (every
     #: card's power_dpm_force_performance_level reads "manual"). On by default there; off for a
     #: machine whose GPU is not the limited card (the desktop's NVIDIA card).
@@ -237,6 +242,7 @@ _SCHEMA: dict[str, set[str]] = {
         "backend",
         "llamacpp_url",
         "gguf_path",
+        "llamacpp_image",
         "require_clock_limit",
         "max_vddgfx_mv",
         "vddgfx_clear_s",
@@ -492,7 +498,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             f"[compute] dtype {dtype!r} on {device} ({backend}): only {list(dtypes)} is "
             "validated against the stored scores"
         )
-    llamacpp_url = gguf_path = None
+    llamacpp_url = gguf_path = llamacpp_image = None
     require_clock_limit = False
     max_vddgfx_mv = 0
     vddgfx_clear_s = 60.0
@@ -518,12 +524,18 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
             )
         llamacpp_url = _llamacpp_url(compute["llamacpp_url"])
         gguf_path = base / _nonempty("compute", "gguf_path", compute["gguf_path"])
+        if "llamacpp_image" in compute:
+            llamacpp_image = _nonempty("compute", "llamacpp_image", compute["llamacpp_image"])
+            if len(llamacpp_image) > 200 or any(c.isspace() for c in llamacpp_image):
+                raise ConfigError(
+                    f"[compute] llamacpp_image {llamacpp_image!r}: an image reference"
+                )
         for key in ("mmap", "weights_cache"):
             if key in compute:
                 raise ConfigError(f'[compute] {key} is not read with backend = "llamacpp"')
     else:
-        for key in ("llamacpp_url", "gguf_path", "require_clock_limit", "max_vddgfx_mv",
-                    "vddgfx_clear_s"):  # fmt: skip
+        for key in ("llamacpp_url", "gguf_path", "llamacpp_image", "require_clock_limit",
+                    "max_vddgfx_mv", "vddgfx_clear_s"):  # fmt: skip
             if key in compute:
                 raise ConfigError(f'[compute] {key} is only read with backend = "llamacpp"')
     threads = compute.get("threads")
@@ -627,6 +639,7 @@ def parse(data: dict, *, base: Path = Path("."), source: Path | None = None) -> 
         backend=backend,
         llamacpp_url=llamacpp_url,
         gguf_path=gguf_path,
+        llamacpp_image=llamacpp_image,
         require_clock_limit=require_clock_limit,
         max_vddgfx_mv=max_vddgfx_mv,
         vddgfx_clear_s=vddgfx_clear_s,
