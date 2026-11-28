@@ -442,20 +442,26 @@ records it. Both models fit on the 12 GB card at once (about 3.6 and 4.2 GB), so
 sidecars can run side by side on two ports:
 
 ```bash
-# server-cuda, build b12767 (or the home server's server-vulkan image, with -dev Vulkan0:
-# ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486)
-CUDA=ghcr.io/ggml-org/llama.cpp@sha256:d3160910fcaebaf9a6223a5cb7ca8305b5530af2c740884b0ec3789761580273
+# The home server's server-vulkan image, build b12767 (pins.LLAMACPP_IMAGE)
+IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486
 docker run -d --name desk-h2o-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 "$CUDA" \
-  -m /models/h2o-lightning-4b-Q4_K_M.gguf -ngl 99 -dev CUDA0 -np 1 -c 4096 -b 2048 -ub 2048 \
+  -v <models dir>:/models:ro -p 127.0.0.1:8130:8080 "$IMAGE" \
+  -m /models/h2o-lightning-4b-Q4_K_M.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 2048 -ub 2048 \
   --host 0.0.0.0 --port 8080
 docker run -d --name desk-pplx-llamacpp --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -v <models dir>:/models:ro -p 127.0.0.1:8131:8080 "$CUDA" \
-  -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -dev CUDA0 -np 1 -c 4096 -b 4096 -ub 4096 -fa on \
+  -v <models dir>:/models:ro -p 127.0.0.1:8131:8080 "$IMAGE" \
+  -m /models/pplx-flash-v1.3-Q4_K_S.gguf -ngl 99 -dev Vulkan0 -np 1 -c 4096 -b 4096 -ub 4096 -fa on \
   --host 0.0.0.0 --port 8080
 ```
 
-`-dev Vulkan0` makes a missing card a startup error rather than a silent CPU run. H2O runs here at
+**CUDA is allowed under D26, pending the owner's choice.** The `server-cuda` image of the same
+build serves the same judge: `IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:d3160910fcaebaf9a6223a5cb7ca8305b5530af2c740884b0ec3789761580273`
+with `-dev CUDA0`, and the same image in `llamacpp_image`. On the 3060 it measured 11–14% faster
+with 3 borderline stage moves in 250 pairs (D26), short of the bar the session set for switching,
+so the desktop runs Vulkan until the owner chooses.
+
+The `-dev` flag (`Vulkan0`, or `CUDA0`) makes a missing card a startup error rather than a silent
+CPU run. H2O runs here at
 batch 2048, where the home server's preset uses 512 (2048 not yet tested on the 4 GB card). H2O is
 causal, like Kev, so the batch changes speed (3.1x on the 3060), not scores: measured for Kev on
 the 3060, Q4 at 2048 against 512 over 200 requests differed by at most 0.014 (calibrated; 0.030
@@ -482,7 +488,7 @@ device = "gpu"
 dtype = "q4_k_m"
 llamacpp_url = "http://127.0.0.1:8130"
 gguf_path = "/models/h2o-lightning-4b-Q4_K_M.gguf"
-llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:d3160910fcaebaf9a6223a5cb7ca8305b5530af2c740884b0ec3789761580273"
+llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
 # The desktop's NVIDIA card is not the home server's clock-limited AMD card.
 require_clock_limit = false
 
@@ -513,7 +519,7 @@ device = "gpu"
 dtype = "q4_k_s"
 llamacpp_url = "http://127.0.0.1:8131"
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
-llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:d3160910fcaebaf9a6223a5cb7ca8305b5530af2c740884b0ec3789761580273"
+llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
 # The desktop's NVIDIA card is not the home server's clock-limited AMD card.
 require_clock_limit = false
 
@@ -772,8 +778,8 @@ the broker refuses the torch versions at hello. Start the sidecar first, from an
 llama.cpp image of build b12767 (D26; `server-cuda` is 11–14% faster on the 3060), as under
 "Example configurations" (`desk-h2o.toml`, `desk-pplx.toml`), then the worker with `--network host` and
 the GGUFs at `/models`. Any worker image runs the llama.cpp backend (it needs no torch); the
-steps below are the torch ones, kept for a rollback. Only one 4B model fits on the 12 GB card,
-so run Kev first, then pplx:
+steps below are the torch ones, kept for a rollback. Under torch (bf16) only one 4B model fits
+on the 12 GB card, so run Kev first, then pplx:
 
 1. Make sure nothing else holds the card: `docker ps` and `nvidia-smi`. Stop any
    `ml/docker-compose.yml` model services.

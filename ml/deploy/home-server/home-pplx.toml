@@ -25,6 +25,8 @@ llamacpp_url = "http://llamacpp:8080"
 # The same file the router serves, mounted read-only into the worker too: it is checked
 # against the pin (sha256, decision type, temperature) before anything is scored.
 gguf_path = "/models/pplx-flash-v1.3-Q4_K_S.gguf"
+# The image the router runs (compose.yml), recorded with every score (D26).
+llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:87d189d403fda2a612a23c9dcd35c482967f48586e93d812a01e7a1f5e3a1486"
 # Refuse to load unless the card's clock limit is applied (re-read at every load).
 require_clock_limit = true
 # No lease and no request while the card's voltage is above this (another app on its video

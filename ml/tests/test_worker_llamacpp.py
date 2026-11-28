@@ -1265,3 +1265,27 @@ def test_a_state_not_in_the_renderers_shape_fails_saying_so(tmp_path, sidecar):
     with pytest.raises(RuntimeError, match="not in the expected shape; nothing cut"):
         judge.score(PAYLOAD | {"state": "Listing A " + "x " * 50})
     assert len(side.requests) == 1
+
+
+def test_a_llamacpp_config_without_its_image_warns_at_startup(tmp_path, caplog):
+    """No llamacpp_image: the worker still starts, but says scores will record no image."""
+    from makhzan_ml.worker import __main__ as entry
+
+    def write(extra: str) -> Path:
+        path = tmp_path / "w.toml"
+        path.write_text(
+            '[worker]\nname = "amd-kev"\nbroker_url = "https://b.example.test/ai/v1"\n'
+            'token = "t"\nmodel = "kev"\n'
+            '[compute]\nbackend = "llamacpp"\ndevice = "gpu"\n'
+            'llamacpp_url = "http://kev-llamacpp:8080"\n'
+            'gguf_path = "/models/Kev-4B-Q4_K_M.gguf"\nrequire_clock_limit = false\n' + extra
+        )
+        return path
+
+    caplog.set_level("WARNING")
+    assert entry.main(["--config", str(write("")), "--check"]) == run.EXIT_OK
+    assert "llamacpp_image is not set" in caplog.text
+    caplog.clear()
+    image = 'llamacpp_image = "ghcr.io/ggml-org/llama.cpp@sha256:' + "d3" * 32 + '"\n'
+    assert entry.main(["--config", str(write(image)), "--check"]) == run.EXIT_OK
+    assert "llamacpp_image is not set" not in caplog.text

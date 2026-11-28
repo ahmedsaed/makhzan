@@ -28,6 +28,13 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as e:
         logging.error("configuration: %s", e)
         return run.EXIT_CONFIG
+    if cfg.backend == "llamacpp" and cfg.llamacpp_image is None:
+        # Any official image of the pinned build serves the judge (D26); without the key each
+        # score records its serving image as null.
+        logging.warning(
+            "configuration: [compute] llamacpp_image is not set, so scores record no serving "
+            "image; set it to the image the sidecar runs (docs/ai/worker.md)"
+        )
     if args.check:
         from makhzan_ml.worker.judges import importable
 
